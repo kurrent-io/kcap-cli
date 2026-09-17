@@ -25,17 +25,25 @@ offer the flow.
   failed). Watermark state is known **before** any import work.
 - **Capture scope**: the profile's `allowed_paths` / `allowed_repos` / excluded lists, applied to
   classifications after the probe by `CaptureScope.ApplyAsync` (`ImportCommand.cs:1189`). A session
-  the scope withholds is stamped, not deleted; `CaptureScope.Actionable` names the sessions this run
-  could still send.
+  the scope withholds is stamped, not deleted; `CaptureScope.Actionable` (`New`, `Partial`,
+  `AlreadyLoaded`) names the sessions this run could still send.
 - **Importable set**: actionable classifications with status `New` or `Partial`, after capture
-  scope. `AlreadyLoaded` / `TooShort` / `Excluded` / `InternalSubSession` are terminal skips and never
-  enter it. `ProbeError` is *unknown work*: not importable this run, not proven done.
+  scope. `TooShort` / `Excluded` / `InternalSubSession` are terminal skips and never enter it.
+  `ProbeError` is *unknown work*: not importable this run, not proven done.
+- **Replay rows**: routed `AlreadyLoaded` classifications. `kcap import` deliberately includes them
+  in the routed plan (`ImportCommand.cs:1305-1315`) so a vendor source can re-assert lifecycle hooks,
+  backfill the repository node, or attach a previously unloaded nested child. They are actionable
+  work, not new sessions.
 - **Run candidate set**: every session id this setup run may cause to land — the importable set
   (selected and unselected) plus `ProbeError` ids. Known in full at classification time. The eval-watch
-  cohort (§5) is this set.
+  cohort (§5) is this set. Replay rows are not candidates: they are already on the server.
 - **Chain**: file-based sessions (Claude, Codex) sharing a transcript slug, ordered ascending so
-  `previous_session_id` continuation links hold. Routed sessions (the other seven vendors) are
-  imported in a second phase and never chain.
+  `previous_session_id` continuation links hold.
+- **Routed unit**: one routed session, or a Cursor parent together with its correlated subagent
+  children (`SourceMeta["SubagentChildren"]` / `IsSubagentChild` + `ParentSessionId`). Children are
+  imported inline by their parent and their own call returns `ImportOutcome.Skipped`, so the unit is
+  the smallest thing that can be selected whole.
+- **Selection unit**: a chain or a routed unit.
 
 ## Goals
 
@@ -86,7 +94,7 @@ slug-less solo chains by session id. Change:
   (`ChainTimestamp`, `ImportCommand.cs:2059`: `Meta.FirstTimestamp`, else file mtime, else
   `DateTimeOffset.MinValue`). Slug-less solo chains merge into the same descending order by their own
   `ChainTimestamp`.
-- Routed-source sessions get the same descending `ChainTimestamp` sort before their
+- Routed units get the same descending sort — a unit's timestamp is its parent's — before their
   `Parallel.ForEachAsync`.
 - **Tie-breakers, fully deterministic:**
   - Cross-chain: equal max timestamps break descending by the chain's **maximum session id**
@@ -105,6 +113,13 @@ is dispatched first but imports its oldest member first; four workers make compl
 from dispatch order. User-facing text says "most recent sessions are prioritized", never "arrive
 newest-first". Today's cross-chain order is arbitrary, so nothing can depend on it.
 
+**Candidate order (cohort, not dispatch).** The handoff file (§3) needs one total order over every
+candidate — chain members, routed sessions and `ProbeError` classifications alike — independent of
+the two dispatch phases. `CandidateTimestamp(c)` = `Meta.FirstTimestamp`, else the transcript file's
+mtime when `FilePath` is set, else `MinValue`. Candidates sort descending by `CandidateTimestamp`,
+ties descending by session id (ordinal), `MinValue` last then by the same key. This comparator is a
+pure static function with its own tests; it changes nothing about dispatch.
+
 ### 2. Step 6 in the terminal
 
 **Entry.** `RunImportStepAsync` (`SetupCommand.cs:1194`) keeps its first branch: a browser
@@ -122,11 +137,11 @@ It prints three figures under the step's rule: repositories, sessions attributed
 matching none. When the total is zero the step prints one line and ends without a prompt.
 
 **The prompt.** `Import past sessions from this machine?`, default yes. Decline prints the
-`kcap import --all` hint and the step ends. `--no-prompt` answers yes and runs today's full
-synchronous import over `ImportScope.All` with no cap, no child, no handoff. This is the one
-behaviour change unattended callers see — `kcap setup --no-prompt` now uploads the machine's history
-rather than the current repository's — and the README says so where it said so for the repo-scoped
-change.
+`kcap import --all` hint and the step ends; nothing else in this section runs. `--no-prompt` answers
+yes and runs today's full synchronous import over `ImportScope.All` with no cap: **no child, no
+handoff file, no picker**. This is the one behaviour change unattended callers see —
+`kcap setup --no-prompt` now uploads the machine's history rather than the current repository's —
+and the README says so where it said so for the repo-scoped change.
 
 **The invocation.** `ImportInvocation` (`ImportInvocation.cs`) becomes:
 
@@ -148,36 +163,54 @@ against the server this run chose (`ChosenServerHttp.For`), unchanged.
 
 **Foreground selection.** `HandleImport` gains an internal `maxSessions` parameter (default null;
 plain `kcap import` never sets it). When set, selection happens **after classification and after
-capture scope**, and **before any import work starts**:
+capture scope**, and **before any import work starts**, over selection units:
 
 1. Take whole chains in the §1 descending order, accumulating their importable-session counts, until
    the total reaches `maxSessions`. Chains are never split; the boundary chain is taken whole, so the
    selection may overshoot by at most that chain's remaining length. A pathological 50-session chain
-   means a 50-session foreground pass — accepted; chain integrity and determinism beat cap exactness.
-2. If chains yield fewer than `maxSessions`, extend the selection with routed sessions in descending
-   order until the total is reached or the importable set is exhausted.
+   means a 50-session foreground pass — accepted; unit integrity and determinism beat cap exactness.
+2. If chains yield fewer than `maxSessions`, extend the selection with routed units in descending
+   order until the total is reached or the importable set is exhausted. A routed unit counts its
+   parent and every `New`/`Partial` child; it is taken whole.
 
-`AlreadyLoaded` is a classification, not a runtime discovery, so watermarked sessions never consume
-selection slots: a corpus whose five newest sessions are watermarked selects the five newest
-*importable* ones. Because selection precedes execution there is no dispatch/completion race and no
+Only `New`/`Partial` classifications are selectable. Replay rows are never selected and never run in
+the foreground: they belong to the background child, which runs the full plan exactly as
+`kcap import --all` does today. `AlreadyLoaded` is a classification, not a runtime discovery, so
+watermarked sessions never consume selection slots: a corpus whose five newest sessions are
+watermarked selects the five newest *importable* ones.
+
+Selection narrows the routed plan **before** `ReconcileOrphanedCursorSubagentChildren`
+(`ImportCommand.cs:1325`), so the reconcile sees exactly the selected set: a selected child whose
+parent was not selected cannot happen (units are whole), and a selected parent cannot import an
+unselected child. Because selection precedes execution there is no dispatch/completion race and no
 shared counter: the pass imports exactly the selected set through the existing pool, phases and
 renderer, and nothing else. `SelectForeground` is a pure static function over the ordered chains and
-routed list, unit-tested on its own.
+routed units, unit-tested on its own.
+
+**Terminal partition of the selected set.** Every selected session's own import call ends in exactly
+one of `Loaded`, `Resumed`, `Skipped` or `Failed` (`ImportOutcome`, `IImportSource.cs:78`).
+`Skipped` is a real runtime outcome, not a classification: a Cursor child imported inline by its
+parent, a session quarantined after classification, a routed session with no sendable content. The
+selection therefore partitions into **Succeeded** (`Loaded` + `Resumed`), **Skipped** and **Failed**,
+and the run records which ids fell where. `ResolveRoutedOutcomeForCounting` (`ImportCommand.cs:522`)
+keeps governing the Done-grid *counts*; the per-id partition is recorded from the raw outcome before
+that suppression, so the two never disagree about an id.
 
 **Reporting the selection.** `ImportRunOutcome` (`ImportCommand.cs:664`) gains a nullable
 `ImportRunSelection`:
 
 ```
 ImportRunSelection(
-    IReadOnlyList<string> RunCandidateIds,   // importable + ProbeError, §1 order
+    IReadOnlyList<string> RunCandidateIds,   // importable + ProbeError, candidate order (§1)
     IReadOnlyList<string> SelectedIds,
-    IReadOnlyList<string> SucceededIds,      // loaded + resumed
+    IReadOnlyList<string> SucceededIds,      // own call returned Loaded or Resumed
+    IReadOnlyList<string> SkippedIds,        // own call returned Skipped
     IReadOnlyList<string> FailedIds,
-    int                   RemainderCount)    // importable − selected
+    bool                  ActionableRemainder) // any actionable classification not selected, or any ProbeError
 ```
 
-Populated only when `maxSessions` was set; `onFinished` delivers it. Ids in these lists are the
-same normalized session ids the server receives.
+Populated only when `maxSessions` was set; `onFinished` delivers it. Ids are the same normalized
+session ids the server receives.
 
 **Totalized outcome.** From the runner's exit code, the `ImportRunOutcome` (captured via
 `onFinished`) and any exception, setup builds a `ForegroundImportOutcome` and never lets an exception
@@ -188,28 +221,35 @@ ForegroundImportOutcome {
   Certainty:        Complete | Incomplete,   // Incomplete = an exception interrupted the pass
   Selected:         int,
   Succeeded:        int,
+  Skipped:          int,
   Failed:           int,
-  RemainderExists:  bool,                    // RemainderCount > 0 || any ProbeError
+  RemainderExists:  bool,                    // ActionableRemainder
   RunCandidateIds:  string[] | null          // null when classification never completed
 }
 ```
 
-On `Complete`, `Selected == Succeeded + Failed`: every selected session ended as exactly one of the
-two, since all skip reasons are classification statuses excluded before selection. On `Incomplete`,
-`Succeeded + Failed <= Selected`; a session in flight when the exception hit is counted in the gap,
-and the background child covers it. A throw after classification keeps `RunCandidateIds`; a throw
-before or during yields `null`.
+On `Complete`, `Selected == Succeeded + Skipped + Failed`: every selected session's own call ended
+in exactly one of the three. On `Incomplete`, `Succeeded + Skipped + Failed <= Selected`; a session in
+flight when the exception hit is counted in the gap, and the background child covers it. A throw
+after classification keeps `RunCandidateIds`; a throw before or during yields `null`.
 
 **Background child.** After the foreground pass and before any picker, setup spawns a detached
-child **iff** `RemainderExists || Failed > 0 || Certainty == Incomplete`. Full success over a fully
-selected importable set with no probe errors — including the all-watermarked rerun — spawns nothing.
+child **iff** `RemainderExists || Failed > 0 || Certainty == Incomplete`. Because replay rows count
+toward `RemainderExists`, an all-watermarked corpus with routed replay work still spawns the child —
+the repairs `kcap import --all` performs today are not lost to the cap. Nothing spawns only when every
+actionable classification was selected, none failed, no probe errored and the pass completed.
 
 - Command: `kcap import --all --yes --skip-title`, executable `Environment.ProcessPath`, working
   directory the current directory.
-- Environment: `KCAP_IMPORT_DETACHED_LOG=<config dir>/import-<utc-timestamp>.log`, plus
-  `KCAP_URL` and `KCAP_PROFILE` (`ProfileOverrides.UrlVar` / `ProfileVar`) set to the server and
-  profile this run chose, so the child imports against the same server the foreground did. No other
-  environment is added or removed.
+- Environment, following the detached-process precedent in `RefreshTokenHandoff`
+  (`RefreshTokenHandoff.cs:49-53`): set `KCAP_CONFIG_DIR` (`ConfigRoot.ConfigDirEnvVar`) to this
+  run's config directory, set `KCAP_PROFILE` (`ProfileOverrides.ProfileVar`) to the profile setup
+  just saved, **remove** `KCAP_URL` (`ProfileOverrides.UrlVar`) — a URL override outranks the profile
+  pin in `ProfileResolver` and resolves to *no* profile, which would let the child's allow lists and
+  default visibility come from somewhere other than the profile setup wrote — and set
+  `KCAP_IMPORT_DETACHED_LOG=<config dir>/import-<utc-timestamp>.log`. Setup persists the profile
+  (server URL, visibility, capture lists) before step 6, so the persisted profile is authoritative
+  for the child. No other environment is added or removed.
 - Child-side contract: when `KCAP_IMPORT_DETACHED_LOG` is present, `kcap import` opens that file
   itself (append, `FileShare.ReadWrite`), points its console output there, treats output as non-TTY
   line mode, and calls `ProcessHelpers.DetachFromControllingTerminal()` (setsid; no-op on Windows).
@@ -240,10 +280,12 @@ share a console.
 
 ### 3. Handoff file
 
-Written after the spawn decision to `<config dir>/import-handoff-{run_id}.json`, `run_id` a fresh
-GUID in N format. Temp file plus atomic rename, so a crash cannot leave a parseable partial. On each
-write, files older than seven days are pruned. Nothing earlier shipped, so `schema_version` starts at
-1.
+Written **iff the foreground pass ran** — an interactive run whose prompt was accepted. A declined
+prompt, `--skip-import`, an unauthenticated skip and `--no-prompt` write nothing. Location:
+`<config dir>/import-handoff-{run_id}.json`, where the config dir is `KCAP_CONFIG_DIR` when set,
+else `~/.config/kcap`; `run_id` is a fresh GUID in N format. Temp file plus atomic rename, so a
+crash cannot leave a parseable partial. On each write, files older than seven days are pruned.
+Nothing earlier shipped, so `schema_version` starts at 1.
 
 ```json
 {
@@ -252,34 +294,47 @@ write, files older than seven days are pruned. Nothing earlier shipped, so `sche
   "written_at":               "<utc iso-8601>",
   "handoff_offered":          true,
   "foreground_certainty":     "complete | incomplete",
-  "server_url":               "<config server_url, no trailing slash>",
+  "server_url":               "<profile server_url, no trailing slash>",
   "scope":                    "all",
   "cohort":                   "exact | partial_exact | unknown",
-  "session_ids":              ["<run candidate set, §1 order>"],
-  "foreground_succeeded_ids": ["..."],
+  "session_ids":              ["<run candidate set, candidate order>"],
+  "foreground_succeeded_ids": ["<own-call Loaded/Resumed ids>"],
   "unattributed_count":       1552,
   "background":               "not_needed | running | exited_zero | failed",
   "background_log":           "<path or null>"
 }
 ```
 
-- `cohort: "exact"` — `session_ids` is the complete run candidate set.
-- `cohort: "partial_exact"` — the candidate set exceeded **500**; `session_ids` holds the newest 500
-  in §1 order. The skill watches exactly those and says so.
+- `cohort: "exact"` — `session_ids` is the complete run candidate set in candidate order (§1).
+- `cohort: "partial_exact"` — the candidate set exceeded **500**; `session_ids` holds the first 500 in
+  candidate order, so the cut is deterministic across chains, routed sessions and probe errors alike.
+  The skill watches exactly those and says so.
 - `cohort: "unknown"` — `Certainty == Incomplete` with `RunCandidateIds == null`; `session_ids` is
   empty and meaningless; the skill uses heuristic mode.
+- `foreground_succeeded_ids` lists own-call successes only. A Cursor child landed inline by its
+  parent is a candidate (it is in `session_ids`) but not listed here; the field's only consumer is
+  the no-work branch below, which does not need it.
 - `unattributed_count` is discovery's repo-less figure, so the skill can say how many watched sessions
   will show no repository.
-- Every run writes its file; `handoff_offered` records §4's gating outcome.
+- `handoff_offered` records §4's gating outcome.
 
 Write failure is best-effort: warn, skip the file, continue. The skill has a documented fallback.
 
 ### 4. Agent handoff (setup only)
 
-**When.** Offered iff the import step ran and `Succeeded ≥ 1 || background ∈ {Running, ExitedZero}`.
-`Failed` background with zero successes offers nothing — the warning already gave the retry. A rerun
-where everything was already imported (`NotNeeded`, `Succeeded == 0`) ends setup as today.
-`--no-prompt` never shows it.
+**When.** Offered iff the foreground pass ran, the candidate set is non-empty or unknown
+(`RunCandidateIds is null || RunCandidateIds.Length > 0`), and
+`Succeeded ≥ 1 || background ∈ {Running, ExitedZero}`. An empty exact candidate set — a replay-only
+or all-watermarked rerun — offers nothing whatever the background did, since there are no new
+sessions to watch; setup ends as today. `Failed` background with zero successes offers nothing — the
+warning already gave the retry. `--no-prompt` never shows it.
+
+**Plan gate.** The eval-watch skill reads analytics, which the server denies to Free tenants
+(`analytics_not_in_plan`). Setup consults the cached entitlement the CLI already keeps from the
+`X-Kcap-Plan` response header (`PlanEntitlementStore.Get(serverUrl, …).Allows(PlanEntitlements.Analytics)`).
+A cached denial → no picker and no paste block; the Next-steps panel shows the guided-tour offer
+alone. Unknown or allowed → the handoff proceeds. The skill still handles the denial itself (§5),
+because the cache can be stale.
 
 **Who is offered.** `HarnessRegistry.Identities` in registry order, filtered to vendors that are
 `Detected(id)` **and** whose skills location holds the eval-watch skill after step 4 — the same on-disk
@@ -346,6 +401,22 @@ New skill `kcap/skills/eval-watch/SKILL.md`, added to `AgentsSkillsInstaller.Sou
 `Resources/help-plugin.txt` (both test-pinned), so it installs everywhere guided-tour does. Trigger:
 the pinned prompt `Follow my kcap import` in the frontmatter description.
 
+**Session-id grammar.** One anchored grammar covers every importer's normalized id space — dashless
+GUIDs from Claude, Codex, Cursor, Copilot, Gemini, Kiro and Pi, Antigravity's ids, and OpenCode's raw
+`ses_…` ids (`OpenCodeImportSource.cs:77`, deliberately not GUID-normalized):
+
+```
+^[A-Za-z0-9_-]{1,128}$
+```
+
+The analytics MCP takes SQL text with no parameter binding, so this grammar is also the SQL safety
+boundary: every id the skill puts in an `IN (…)` list is validated against it first and emitted as a
+single-quoted literal. The character class excludes quotes, whitespace, backslash, comment and
+statement delimiters, so no escaping is needed and none is attempted; an id that fails the grammar is
+never placed in SQL. Fixtures include a `ses_…` id, an id at the length bound, and hostile ids
+(embedded quote, `;`, `--`, whitespace, non-ASCII, over-length), each of which must degrade the file
+per layer B below and never reach a query.
+
 **Correlation source — the handoff file.** Validation is layered; a failure in a lower layer never
 re-opens selection:
 
@@ -355,8 +426,8 @@ re-opens selection:
   draft's cwd-repository match is gone: the run spans repositories. Failure → not selectable.
 - **Layer B — cohort payload** (may its ids drive *exact data*?): `cohort`, `background` and
   `foreground_certainty` are known enum values; every entry of `session_ids` and
-  `foreground_succeeded_ids` matches the session-id grammar (hex/uuid); `unattributed_count` is a
-  non-negative integer. Failure → data drops to heuristic, disclosed; the file stays selected.
+  `foreground_succeeded_ids` matches the session-id grammar; `unattributed_count` is a non-negative
+  integer. Failure → data drops to heuristic, disclosed; the file stays selected.
 - **Layer C — link payload**: an invalid `server_url` (not http/https) cuts file-sourced links **and**
   makes the binding below unverifiable, so data drops to heuristic too. `background_log`, when shown,
   must be a plausible path (no control characters, bounded length) rendered as plain text, never a
@@ -364,6 +435,9 @@ re-opens selection:
 
 An unknown future `schema_version` fails layer A. Unvalidated values are never spliced into SQL,
 paths or links.
+
+**Locating the files.** The skill reads `import-handoff-*.json` from `KCAP_CONFIG_DIR` when that
+variable is set in its environment, else `~/.config/kcap` — the same rule `ConfigRoot` applies.
 
 **Server binding.** The analytics MCP queries the active profile's server, so the skill runs
 `kcap whoami` and compares its server URL to the file's under canonicalization: scheme and host
@@ -374,14 +448,18 @@ stays distinct), trailing slash trimmed, path compared as-is. A mismatch or a `w
 **Resolution, first action of the skill:**
 
 1. A `(run: <id>)` line in the invoking prompt: the token must match the GUID-N grammar **before**
-   being used as a filename component. A locator-valid file is selected. If it is a no-handoff file
-   (`handoff_offered: false`), branch on the recorded outcome and close with the closing block:
-   *proven no-work* (layer B fully valid, `foreground_certainty: "complete"`, `cohort: "exact"` with
-   empty `session_ids`, background `not_needed`) → "nothing to watch — that import had no new work";
-   anything else → "that import did not get running" (or "its record is unreadable"), naming the
-   `kcap import --all --yes` retry and the `background_log` when displayable. Locator failure →
-   explain and fall to step 2.
-2. No valid run id: among `import-handoff-*.json`, the newest locator-valid file with
+   being used as a filename component. **A valid run id binds the skill to that run and only that
+   run.** Its file, when locator-valid, is selected. When the file is missing or fails layer A (for
+   example the write failed), the skill says so and enters heuristic mode *for that run* — it never
+   falls through to another run's file, because disclosure would not make another cohort's results
+   belong to the requested run. If the selected file is a no-handoff file (`handoff_offered: false`),
+   branch on the recorded outcome and close with the closing block: *proven no-work* (layer B fully
+   valid, `foreground_certainty: "complete"`, `cohort: "exact"` with empty `session_ids`) → "nothing
+   to watch — that import found no new sessions" (a running background here is replay work, not new
+   sessions); anything else → "that import did not get running" (or "its record is unreadable"),
+   naming the `kcap import --all --yes` retry and the `background_log` when displayable. A malformed
+   run token is treated as no token.
+2. No run id: among `import-handoff-*.json`, the newest locator-valid file with
    `handoff_offered: true`. More than one → the skill says it picked the newest and names the others.
    Matches disagreeing on `server_url` with no provable binding → the newest supplies links, the
    ambiguity is disclosed, data is heuristic.
@@ -393,21 +471,25 @@ stays distinct), trailing slash trimmed, path compared as-is. A mismatch or a `w
 - **Exact**: the file's `session_ids` — the run candidate set, so sessions the background child lands
   before the skill's first snapshot are counted, and sessions imported concurrently by anything else
   are not. Completed eval rows already present at the first snapshot count.
-- **Partial-exact**: identical mechanics over the newest 500; the skill opens by saying it watches the
-  newest 500 sessions of this import and that older ones may land and evaluate unobserved. Omitted
-  candidates are invisible to the bounded queries and are never labelled unrelated.
+- **Partial-exact**: identical mechanics over the listed 500; the skill opens by saying it watches the
+  500 most recent sessions of this import and that older ones may land and evaluate unobserved.
+  Omitted candidates are invisible to the bounded queries and are never labelled unrelated.
 - **Heuristic**: the skill says it is watching recent activity rather than a specific import —
   completed-eval arrivals after the first snapshot plus runs with `evaluated_at` in the ten minutes
   before start, tenant-wide. Another user's sessions can be counted — accepted and disclosed.
+
+**Plan denial.** An analytics response of HTTP 403 `analytics_not_in_plan` is a terminal degrade
+recognised on sight, not a poll failure: the skill closes immediately with the closing block and says
+that Insights is not in this tenant's plan, that the import continues regardless, and that evals
+appear in the server UI. No polling, no retry, no wait.
 
 **Data contract — every query under `scope: 'global'`.** The `kcap-analytics` MCP defaults to the
 cwd repository and refuses to widen silently (`McpAnalyticsServer.BuildQueryBody`,
 `McpAnalyticsServer.cs:275`), so the skill passes `scope: 'global'` on every call: the cohort spans
 repositories and includes repo-less sessions, whose `repo_hash` is null.
 
-- Cohort arrivals: `SELECT session_id, repo_hash FROM v_an_sessions WHERE session_id IN (…)` in
-  batches of at most 100 ids — presence is membership, complete and cap-safe. `repo_hash` is kept
-  per session for the links.
+- Cohort arrivals: `SELECT session_id, repo_hash FROM v_an_sessions WHERE session_id IN (…)` over a
+  batch of ids — presence is membership. `repo_hash` is kept per session for the links.
 - Cohort completions: `SELECT session_id, eval_run_id, evaluated_at, overall_score, judge_model
   FROM v_an_eval_summaries WHERE session_id IN (…)`, same batching.
 - Displayed import progress: `SELECT COUNT(*) FROM v_an_sessions` — one row, shown as a total, never
@@ -423,11 +505,21 @@ repositories and includes repo-less sessions, whose `repo_hash` is null.
 - There is deliberately no repo-wide id diff and no unlisted-arrival narration: identifying non-cohort
   rows would need exactly the unbounded scan this contract forbids.
 
+**Batching and truncation.** The server clamps every query to its own configured row maximum, and a
+capped result is a *successful* response flagged `truncated: true` (the MCP appends a warning trailer).
+A truncated required response is therefore never complete and is never committed. Each membership or
+summary batch requests `max_rows` equal to its size; the initial batch size is 100. When a required
+response comes back truncated, the skill halves the batch size (floor 10) and re-issues the batch
+within the same logical poll. If a batch of 10 still truncates, the poll fails, the skill says the
+server's row cap is below what exact watching needs, and data drops to heuristic for the rest of the
+run. The chosen batch size persists across polls.
+
 **Logical-poll atomicity.** One poll = every required query (all membership and summary batches; in
-heuristic mode the capped summary read). Any required-query failure discards the whole poll — no
-baseline, dedup or completion state commits from it — and counts as one error toward the two-failure
-stop. Each successful poll recomputes cohort state from its own full results. Enrichment queries are
-optional: their failure degrades summary content, never poll success or stop logic.
+heuristic mode the capped summary read), each non-truncated. Any required-query failure — an error,
+or a truncation the halving could not clear — discards the whole poll: no baseline, dedup or
+completion state commits from it, and it counts as one error toward the two-failure stop. Each
+successful poll recomputes cohort state from its own full results. Enrichment queries are optional:
+their failure degrades summary content, never poll success or stop logic.
 
 **Stop rules**, evaluated after each successful poll, its state committed first:
 
@@ -447,8 +539,8 @@ optional: their failure degrades summary content, never poll success or stop log
 No idle early-stop: quiet polls are normal. Cadence: first snapshot immediately, then every 30
 seconds.
 
-**Links.** `server_url` with any trailing slash trimmed; `repo_hash` (16 hex) and session ids
-(hex/uuid) need no encoding.
+**Links.** `server_url` with any trailing slash trimmed; `repo_hash` (16 hex) and session ids (the
+grammar above) need no encoding.
 
 - Per session with a repo hash: `{server_url}/repo/{repo_hash}/sessions/{session_id}?tab=evaluation`.
 - Per session without one: `{server_url}/sessions/{session_id}?tab=evaluation`.
@@ -475,6 +567,8 @@ absent entirely, the skill closes immediately with the block above.
   eval agent and the minimum event count. Nothing here dispatches evals.
 - `v_an_sessions`, `v_an_eval_summaries` and `v_an_eval_scores` carry `session_id` and `repo_hash`,
   and the global analytics route returns repo-less rows.
+- The import's own HTTP traffic refreshes the cached `X-Kcap-Plan` entitlement, so by step 6 the
+  cache reflects the server setup just talked to; a stale or missing entry reads as allowed.
 
 ## Error handling
 
@@ -482,48 +576,63 @@ absent entirely, the skill closes immediately with the block above.
   child, writes `cohort: "unknown"` when the candidate set is untrusted.
 - Background `Failed`: warn with the exit code when there is one and `kcap import --all --yes`;
   continue. `ExitedZero` is reported without claiming completeness.
-- Handoff-file write failure: warn, continue; the skill falls back to its heuristic cohort.
+- Handoff-file write failure: warn, continue; a later run-id reference enters heuristic mode for that
+  run.
 - Agent launch failure (no executable, or non-zero exit within 2000ms): warn, paste block, continue.
-- Skill: analytics MCP absent → immediate close with the block; failed binding → file links,
-  heuristic data, disclosed; two consecutive failed polls → early stop with the block.
+- Skill: analytics MCP absent → immediate close with the block; `analytics_not_in_plan` → immediate
+  close with the plan sentence; failed binding → file links, heuristic data, disclosed; two
+  consecutive failed polls → early stop with the block.
 
 ## Testing
 
 **Ordering** (`BuildImportChains`, routed sort): descending by max `ChainTimestamp`; within-chain
 ascending preserved with `MinValue` first; slug-less merge; tie-breakers; identical output on a
-repeated corpus; a newer routed session still lands in phase two.
+repeated corpus; a newer routed session still lands in phase two. **Candidate comparator**: a mixed
+corpus of chain members, routed sessions and probe errors, including `MinValue` and equal timestamps,
+yields one deterministic order; the 500 cut over a >500 mixed corpus is stable across runs.
 
-**Selection** (`SelectForeground`): whole chains to the cap; boundary-chain overshoot; routed top-up;
-importable ≤ cap selects everything; all-watermarked selects nothing; newest sessions `AlreadyLoaded`
-→ newest importable selected; selection computed after capture scope and before any import (seam
-ordering); `ImportRunSelection` carries candidate, selected, succeeded and failed ids plus the
-remainder count.
+**Selection** (`SelectForeground`): whole chains to the cap; boundary-chain overshoot; routed units
+taken whole (parent plus children); importable ≤ cap selects everything; all-watermarked selects
+nothing; newest sessions `AlreadyLoaded` → newest importable selected; replay rows never selected;
+selection computed after capture scope, before reconcile and before any import (seam ordering); a
+selected Cursor parent never imports an unselected child and no selected child lacks its parent.
+
+**Terminal partition**: a Cursor child imported inline by its parent lands in `SkippedIds`; a
+quarantined session lands in `SkippedIds`; own-call `Loaded`/`Resumed` land in `SucceededIds`;
+`Complete ⇒ Selected == Succeeded + Skipped + Failed`; the per-id partition is taken from the raw
+outcome and disagrees with nothing the Done grid counts.
 
 **Outcome totalization**: throw before classification → `Incomplete`, `RunCandidateIds == null`,
 spawn, `cohort: "unknown"`; throw after classification → `Incomplete` with ids; partial foreground
-success → `Succeeded + Failed < Selected`; `Complete` ⇒ equality; nothing escapes to setup.
+success → `Succeeded + Skipped + Failed < Selected`; nothing escapes to setup.
 
-**Spawn decision and status** through `IBackgroundImportSpawner`'s fake: remainder → spawn; probe
-errors alone → spawn; failures alone → spawn; clean full pass → no spawn; each of the four statuses
-prints its pinned line and lands its file value; `ExitedZero` output claims no completeness; the
-child's argv is `import --all --yes --skip-title`; the contributed environment carries
-`KCAP_IMPORT_DETACHED_LOG`, `KCAP_URL`, `KCAP_PROFILE` (assert contributed values, never absence —
-the repo's `.envrc` pollutes).
+**Spawn decision and status** through `IBackgroundImportSpawner`'s fake: importable remainder →
+spawn; replay rows alone (all-watermarked routed corpus) → spawn; probe errors alone → spawn;
+failures alone → spawn; clean full pass with nothing actionable left → no spawn; each of the four
+statuses prints its pinned line and lands its file value; `ExitedZero` output claims no completeness;
+the child's argv is `import --all --yes --skip-title`; the contributed environment carries
+`KCAP_CONFIG_DIR`, `KCAP_PROFILE` and `KCAP_IMPORT_DETACHED_LOG` with the chosen profile when it
+differs from the active one, and `KCAP_URL` is removed from a parent environment that carries it
+(the removal is the behaviour under test; the repo's `.envrc` is what makes the parent carry it).
 
 **Child env contract**: variable set → log file written, non-TTY output, detach called; unset →
 behaviour identical to today; parent closes all three streams.
 
-**Handoff file**: per-run filename; atomic write leaves no parseable partial; §3 shape;
-`handoff_offered: false` for the all-watermarked run; >500 candidates → newest 500,
+**Handoff file**: written iff the foreground pass ran (accepted prompt → file; declined, skipped,
+unauthenticated and `--no-prompt` → no file); per-run filename under `KCAP_CONFIG_DIR` when set;
+atomic write leaves no parseable partial; §3 shape; `handoff_offered: false` with empty exact
+`session_ids` for the replay-only run; >500 candidates → first 500 in candidate order,
 `partial_exact`; two concurrent runs → two files; >7-day files pruned on write; write failure warns
 and continues.
 
-**Handoff gating and picker**: `Succeeded ≥ 1` → offered; `Running`/`ExitedZero` → offered; `Failed`
-with zero successes → not; `NotNeeded` with zero successes → not; `--no-prompt` → no handoff,
-unbounded import, no spawn; eligibility per vendor (detected, skill present, executable resolves vs
-not); IDE-only Kiro and Antigravity print the paste block; every recipe's argv pinned per vendor with
-the two-line prompt as a single element; Skip and cancel print the paste block; launch failure
-(non-zero < 2000ms) falls back; zero exit < 2000ms and any exit ≥ 2000ms proceed silently.
+**Handoff gating and picker**: `Succeeded ≥ 1` → offered; `Running`/`ExitedZero` with a non-empty
+cohort → offered; empty exact cohort → not offered whatever the background; `Failed` with zero
+successes → not; `--no-prompt` → no handoff, unbounded import, no spawn, no file; cached analytics
+denial → no picker and no paste block, guided tour alone; eligibility per vendor (detected, skill
+present, executable resolves vs not); IDE-only Kiro and Antigravity print the paste block; every
+recipe's argv pinned per vendor with the two-line prompt as a single element; Skip and cancel print
+the paste block; launch failure (non-zero < 2000ms) falls back; zero exit < 2000ms and any exit ≥
+2000ms proceed silently.
 
 **Step 6 sequence**, end to end through the fakes: discovery → figures → prompt → foreground →
 spawn decision → handoff file → picker/paste → agent wait → summary, including each failure branch;
@@ -532,12 +641,16 @@ the "no origin remote" run now imports; the browser-answered run is untouched.
 **Prompt pinning**: exact `Follow my kcap import`; panel item composition; verbatim presence in the
 skill's frontmatter description; `eval-watch` in `SourceNames` and `help-plugin.txt`.
 
-**Skill acceptance** (scripted fixtures behind recorded `query_analytics` responses): run-id and
-bare-phrase resolution including non-GUID rejection and stale-file fall-through; no-handoff files by
-outcome; the layered validation cases; `scope: 'global'` on every query; repo-less members counted
-and linked without a repo hash; partial-exact over 500 with a listed arrival a capped scan would miss;
-poll atomicity and recovery; each stop rule at its boundary; deterministic first-three under ties;
-the whoami-failure no-link closing variant; the `unattributed_count` sentence.
+**Skill acceptance** (scripted fixtures behind recorded `query_analytics` responses): run-id
+resolution including non-GUID rejection, a missing named file beside a newer unrelated file
+(heuristic for that run, the other file untouched), and a custom `KCAP_CONFIG_DIR`; bare-phrase
+newest-match with disclosure; no-handoff files by outcome; the layered validation cases including the
+`ses_…` and hostile-id fixtures; `scope: 'global'` on every query; repo-less members counted and
+linked without a repo hash; partial-exact over 500 with a listed arrival a capped scan would miss;
+truncation handling with a server cap below 100 (halving within the poll, floor-10 failure to
+heuristic); `analytics_not_in_plan` closing immediately without polling; poll atomicity and recovery;
+each stop rule at its boundary; deterministic first-three under ties; the whoami-failure no-link
+closing variant; the `unattributed_count` sentence.
 
 **README**: setup section rewritten for the machine-wide default, the figures, the background
 import, the picker and the paste block; the `--no-prompt` behaviour-change callout updated; the import
