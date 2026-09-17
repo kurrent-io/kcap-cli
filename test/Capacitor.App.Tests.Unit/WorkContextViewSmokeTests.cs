@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -324,6 +325,36 @@ public class WorkContextViewSmokeTests {
             await Assert.That(name.Bounds.Right).IsLessThanOrEqualTo(tag.Bounds.Left);
             await Assert.That(name.Bounds.Right).IsLessThanOrEqualTo(state.Bounds.Left);
             await Assert.That(state.Bounds.Right).IsLessThanOrEqualTo(host.Window.Bounds.Width);
+        });
+    }
+
+    /// A local "Copied" would otherwise stick as the tip. ClearValue restores the bound full id.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Copying_the_session_id_keeps_the_full_id_on_the_next_hover() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            host.Vm.ToggleSessionCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+
+            var button = host.Find<Button>("SessionIdButton");
+            await Assert.That(button.IsEffectivelyVisible).IsTrue();
+            var origin = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(origin);
+            host.Window.MouseDown(origin, MouseButton.Left);
+            host.Window.MouseUp(origin, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+
+            var whileCopied = ToolTip.GetTip(button) as string;
+            await Assert.That(whileCopied).IsEqualTo("Copied");
+
+            host.Window.MouseMove(new Point(1, 1));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(ToolTip.GetTip(button) as string).IsEqualTo(SessionA);
         });
     }
 }

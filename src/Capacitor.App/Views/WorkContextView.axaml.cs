@@ -37,14 +37,28 @@ public partial class WorkContextView : UserControl {
         if (clipboard is null) return;
         await clipboard.SetTextAsync(text);
         if (control is null) return;
-        var previous = ToolTip.GetTip(control);
+        // Restore the copied string, not GetTip(): a visual tip SetTip replaced cannot be
+        // reparented, and ClearValue leaves an empty bubble.
+        ClearCopyFlash();
+        _copyRestoreText = text;
         ToolTip.SetTip(control, "Copied");
         ToolTip.SetIsOpen(control, true);
-        void Restore(object? s, PointerEventArgs args) {
-            control.PointerExited -= Restore;
-            ToolTip.SetIsOpen(control, false);
-            ToolTip.SetTip(control, previous);
-        }
-        control.PointerExited += Restore;
+        _copyTarget = control;
+        _copyRestore = (_, _) => ClearCopyFlash();
+        control.PointerExited += _copyRestore;
+    }
+
+    Control? _copyTarget;
+    string? _copyRestoreText;
+    EventHandler<PointerEventArgs>? _copyRestore;
+
+    void ClearCopyFlash() {
+        if (_copyTarget is not null && _copyRestore is not null)
+            _copyTarget.PointerExited -= _copyRestore;
+        if (_copyTarget is not null && _copyRestoreText is not null)
+            ToolTip.SetTip(_copyTarget, _copyRestoreText);
+        _copyTarget = null;
+        _copyRestoreText = null;
+        _copyRestore = null;
     }
 }

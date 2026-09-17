@@ -435,13 +435,8 @@
                     <TextBlock Grid.Row="5" Grid.Column="0" Text="ID" Classes="factLabel" />
                     <Button x:Name="SessionIdButton" Grid.Row="5" Grid.Column="1" Classes="copyValue" Click="OnSessionIdClick"
                             IsVisible="{Binding CanCopySessionId}"
-                            AutomationProperties.Name="Copy session ID">
-                        <ToolTip.Tip>
-                            <StackPanel Spacing="2">
-                                <TextBlock Text="{Binding SessionIdText}" FontFamily="Menlo, Monaco, Consolas, monospace" />
-                                <TextBlock Text="Click to copy" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                            </StackPanel>
-                        </ToolTip.Tip>
+                            AutomationProperties.Name="Copy session ID"
+                            ToolTip.Tip="{Binding SessionIdText}">
                         <TextBlock Text="{Binding SessionIdDisplay}" Classes="factValue" />
                     </Button>
                     <SelectableTextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SessionIdText}" Classes="factValue"
@@ -482,13 +477,7 @@
                                     <TextBlock Text="{Binding Initial}" />
                                 </Border>
                                 <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
-                                        HorizontalAlignment="Stretch">
-                                    <ToolTip.Tip>
-                                        <StackPanel Spacing="2">
-                                            <TextBlock Text="{Binding Name}" />
-                                            <TextBlock Text="Click to copy" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                                        </StackPanel>
-                                    </ToolTip.Tip>
+                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
                                     <StackPanel>
                                         <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
@@ -505,13 +494,7 @@
                         <TextBlock Text="{Binding RequesterInitial}" />
                     </Border>
                     <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
-                            HorizontalAlignment="Stretch">
-                        <ToolTip.Tip>
-                            <StackPanel Spacing="2">
-                                <TextBlock Text="{Binding Requester}" />
-                                <TextBlock Text="Click to copy" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                            </StackPanel>
-                        </ToolTip.Tip>
+                            HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}">
                         <StackPanel>
                             <TextBlock Text="{Binding RequesterDisplay}" FontSize="13" FontWeight="SemiBold"
                                        Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
