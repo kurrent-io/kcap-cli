@@ -46,9 +46,10 @@ offer the flow.
   is **eligible** for foreground selection only when its parent is `New` or `Partial`; a unit whose
   parent is a replay row is left whole to the background child, however its children are classified.
 - **Selection unit**: a chain or an eligible routed unit.
-- **Remainder**: unselected `New`/`Partial` classifications, routed replay rows, and `ProbeError`
-  classifications. File-based `AlreadyLoaded` rows are not remainder: nothing in `kcap import` runs
-  them.
+- **Remainder**: unselected `New`/`Partial` classifications, routed replay rows that no selected unit
+  carries (§2), and `ProbeError` classifications. File-based `AlreadyLoaded` rows are not remainder:
+  nothing in `kcap import` runs them. A replay child carried by a selected parent is executed in the
+  foreground and is not remainder either.
 
 ## Goals
 
@@ -166,6 +167,24 @@ ImportInvocation(
 `HandleImport` with `skipConfirmation: true`, `nested: true`, and everything else as today. It runs
 against the server this run chose (`ChosenServerHttp.For`), unchanged.
 
+**The runner's result.** `ISetupImportRunner.RunAsync` returns a `SetupImportRun` instead of a bare
+exit code, and never throws:
+
+```
+SetupImportRun(
+    int                 ExitCode,
+    ImportRunSelection? Selection,   // published at the selection checkpoint; null if never reached
+    ImportRunOutcome?   Outcome,     // published by onFinished; null if the pass did not finish
+    Exception?          Fault)       // whatever escaped HandleImport, caught by the runner
+```
+
+`HandleImport` reports at two points. `onSelected(ImportRunSelection)` — a new callback, fired once
+**after** selection and **before** any import work — carries the candidate and selected ids, so a
+throw during execution still leaves setup holding them. `onFinished(ImportRunOutcome)` fires as
+today at the end of a completed pass (`ImportCommand.cs:2042`) and carries the partition. Nothing
+else changes about when `onFinished` fires: a throw before or during classification reaches neither
+callback, and the runner's `Fault` is the only record of it.
+
 **Foreground selection.** `HandleImport` gains an internal `maxSessions` parameter (default null;
 plain `kcap import` never sets it). When set, selection happens **after classification and after
 capture scope**, and **before any import work starts**, over selection units:
@@ -208,42 +227,43 @@ and the run records which ids fell where. `ResolveRoutedOutcomeForCounting` (`Im
 keeps governing the Done-grid *counts*; the per-id partition is recorded from the raw outcome before
 that suppression, so the two never disagree about an id.
 
-**Reporting the selection.** `ImportRunOutcome` (`ImportCommand.cs:664`) gains a nullable
-`ImportRunSelection`:
+**Reporting the selection and the partition.** Two records, one per checkpoint:
 
 ```
-ImportRunSelection(
+ImportRunSelection(                          // onSelected, after selection, before execution
     IReadOnlyList<string> RunCandidateIds,   // importable + ProbeError, candidate order (§1)
     IReadOnlyList<string> SelectedIds,
+    bool                  RemainderExists)   // Terms "Remainder"
+
+ImportRunPartition(                          // on ImportRunOutcome, via onFinished
     IReadOnlyList<string> SucceededIds,      // own call returned Loaded or Resumed
     IReadOnlyList<string> SkippedIds,        // own call returned Skipped
-    IReadOnlyList<string> FailedIds,
-    bool                  RemainderExists)     // Terms: unselected New/Partial, routed replay rows, ProbeError
+    IReadOnlyList<string> FailedIds)
 ```
 
-Populated only when `maxSessions` was set; `onFinished` delivers it. Ids are the same normalized
-session ids the server receives.
+`ImportRunOutcome` (`ImportCommand.cs:664`) gains a nullable `Partition`. Both are populated only
+when `maxSessions` was set. Ids are the same normalized session ids the server receives.
 
-**Totalized outcome.** From the runner's exit code, the `ImportRunOutcome` (captured via
-`onFinished`) and any exception, setup builds a `ForegroundImportOutcome` and never lets an exception
-escape the step:
+**Totalized outcome.** From the `SetupImportRun`, setup builds a `ForegroundImportOutcome` and never
+lets an exception escape the step:
 
 ```
 ForegroundImportOutcome {
-  Certainty:        Complete | Incomplete,   // Incomplete = an exception interrupted the pass
-  Selected:         int,
+  Certainty:        Complete | Incomplete,   // Complete iff Fault is null and Outcome is non-null
+  Selected:         int,                     // Selection.SelectedIds.Count, 0 when Selection is null
   Succeeded:        int,
   Skipped:          int,
   Failed:           int,
-  RemainderExists:  bool,                    // the selection's RemainderExists
-  RunCandidateIds:  string[] | null          // null when classification never completed
+  RemainderExists:  bool,                    // Selection.RemainderExists; true when Selection is null
+  RunCandidateIds:  string[] | null          // Selection.RunCandidateIds; null when Selection is null
 }
 ```
 
 On `Complete`, `Selected == Succeeded + Skipped + Failed`: every selected session's own call ended
-in exactly one of the three. On `Incomplete`, `Succeeded + Skipped + Failed <= Selected`; a session in
-flight when the exception hit is counted in the gap, and the background child covers it. A throw
-after classification keeps `RunCandidateIds`; a throw before or during yields `null`.
+in exactly one of the three. On `Incomplete`, the partition is whatever `Outcome` carried (nothing,
+when the pass never finished), so `Succeeded + Skipped + Failed <= Selected`; every unaccounted
+session is treated as not landed, and the background child covers it. A `Fault` after the selection
+checkpoint keeps `RunCandidateIds`; a `Fault` before it yields `null` and `RemainderExists = true`.
 
 **Background child.** After the foreground pass and before any picker, setup spawns a detached
 child **iff** `RemainderExists || Failed > 0 || Certainty == Incomplete`. Because routed replay rows
@@ -310,6 +330,15 @@ else `~/.config/kcap`; `run_id` is a fresh GUID in N format. Temp file plus atom
 crash cannot leave a parseable partial. On each write, files older than seven days are pruned.
 Nothing earlier shipped, so `schema_version` starts at 1.
 
+**Owner-only on disk.** The file lists up to 500 session ids, the tenant URL and a local log path, and
+the detached log carries repository and path diagnostics. Both are created owner-only the way
+`TokenStore` creates `tokens.json` (`TokenStore.cs:136-158`): `FileStreamOptions.UnixCreateMode =
+UserRead | UserWrite` on the temp file, so the rename carries 0600 onto the final name, and the same
+mode on the log at creation; an existing log is opened for append and its mode re-asserted. On Windows
+both inherit the user-profile ACLs. Neither path follows a symlink into place: the temp file is
+created with `FileMode.CreateNew`, and the log with `FileMode.Append` on a path the CLI generated
+itself.
+
 ```json
 {
   "schema_version":           1,
@@ -319,6 +348,7 @@ Nothing earlier shipped, so `schema_version` starts at 1.
   "handoff_suppressed":       null,
   "foreground_certainty":     "complete | incomplete",
   "server_url":               "<profile server_url, no trailing slash>",
+  "profile":                  "<saved profile name>",
   "scope":                    "all",
   "cohort":                   "exact | partial_exact | unknown",
   "session_ids":              ["<run candidate set, candidate order>"],
@@ -336,42 +366,54 @@ Nothing earlier shipped, so `schema_version` starts at 1.
 - `cohort: "unknown"` — `Certainty == Incomplete` with `RunCandidateIds == null`; `session_ids` is
   empty and meaningless; the skill uses heuristic mode.
 - `foreground_succeeded_ids` lists own-call successes only. A Cursor child landed inline by its
-  parent is a candidate (it is in `session_ids`) but not listed here; the field's only consumer is
-  the no-work branch below, which does not need it.
+  parent is a candidate (it is in `session_ids`) but not listed here. Its consumer is the skill's
+  opening snapshot ("N sessions were imported before you were handed off"); nothing else reads it.
+- `profile` is the saved profile name the two child processes are pinned to, so the skill can name it
+  in a remediation (§5 "Server binding").
 - `unattributed_count` is discovery's repo-less figure, so the skill can say how many watched sessions
   will show no repository.
-- `handoff_offered` records §4's gating outcome. When it is `false`, `handoff_suppressed` names why,
-  one of `"no_new_sessions"` (empty exact candidate set), `"import_failed"` (`Failed` background with
-  zero successes, or `Incomplete` with nothing landed), `"analytics_not_in_plan"` (the cached plan
-  denied analytics; the import itself ran). When `handoff_offered` is `true` it is `null`. The skill
-  branches on this field rather than inferring the reason.
+- `handoff_offered` records §4's gating outcome. When it is `false`, `handoff_suppressed` names why
+  with one value from the closed set §4 defines; when `true` it is `null`. The skill branches on this
+  field rather than inferring the reason.
 
 Write failure is best-effort: warn, skip the file, continue. The skill has a documented fallback.
 
 ### 4. Agent handoff (setup only)
 
-**When.** Offered iff the foreground pass ran, the candidate set is non-empty or unknown
-(`RunCandidateIds is null || RunCandidateIds.Length > 0`), and
-`Succeeded ≥ 1 || background ∈ {Running, ExitedZero}`. An empty exact candidate set — a replay-only
-or all-watermarked rerun — offers nothing whatever the background did, since there are no new
-sessions to watch; setup ends as today. `Failed` background with zero successes offers nothing — the
-warning already gave the retry. `--no-prompt` never shows it.
+**When — one decision, evaluated top to bottom after the foreground pass ran.** The first row that
+matches decides; `--no-prompt` never reaches this table.
 
-**Plan gate.** The eval-watch skill reads analytics, which the server denies to Free tenants
+| # | Condition | `handoff_offered` | `handoff_suppressed` |
+|---|---|---|---|
+| 1 | `Certainty == Incomplete` and `Succeeded == 0` | false | `import_failed` |
+| 2 | background `Failed` and `Succeeded == 0` | false | `import_failed` |
+| 3 | `RunCandidateIds` known and empty | false | `no_new_sessions` |
+| 4 | `Succeeded == 0` and background `NotNeeded` (every selected call was `Skipped`, nothing left) | false | `nothing_landed` |
+| 5 | cached plan denies analytics (below) | false | `analytics_not_in_plan` |
+| 6 | no vendor is eligible (below) and at least one is detected | false | `skill_not_installed` |
+| 7 | no vendor is detected | false | `no_agent_detected` |
+| 8 | otherwise (`Succeeded ≥ 1` or background ∈ {`Running`, `ExitedZero`}, with a watchable cohort) | true | `null` |
+
+The import's own outcome outranks the plan gate, so a denied plan never masks a failed import and the
+skill's retry advice is only ever given when a retry is warranted. Rows 1–4 print nothing beyond what
+the step already said; rows 5–7 print one line naming the reason; row 8 proceeds to the picker. Rows
+1–7 leave the Next-steps panel with the guided-tour item alone (itself gated as today).
+
+**Plan gate (row 5).** The eval-watch skill reads analytics, which the server denies to Free tenants
 (`analytics_not_in_plan`). Setup consults the cached entitlement the CLI already keeps from the
 `X-Kcap-Plan` response header (`PlanEntitlementStore.Get(serverUrl, …).Allows(PlanEntitlements.Analytics)`).
-A cached denial → no picker and no paste block; the file records
-`handoff_suppressed: "analytics_not_in_plan"`; the Next-steps panel shows the guided-tour offer
-alone. Unknown or allowed → the handoff proceeds. The skill still handles the denial itself (§5),
-because the cache can be stale.
+Unknown or allowed passes the row. The skill still handles the denial itself (§5), because the cache
+can be stale.
 
-**Who is offered.** `HarnessRegistry.Identities` in registry order, filtered to vendors that are
-`Detected(id)` **and** whose skills location holds the eval-watch skill after step 4 — the same on-disk
-oracle `ShouldOfferGuidedTour` (`SetupCommand.cs:1111`) applies to the guided-tour skill, evaluated
-per vendor: Claude through the registered plugin marketplace path, Kiro and Antigravity through their
-own skills directories, every other vendor through the shared `~/.agents/skills` tree. A vendor
-without the skill would receive a prompt nothing answers. Zero eligible vendors → no picker; the paste
-block prints directly.
+**Who is eligible (rows 6–8).** `HarnessRegistry.Identities` in registry order, filtered to vendors
+that are `Detected(id)` **and** whose skills location holds the eval-watch skill after step 4 — the
+same on-disk oracle `ShouldOfferGuidedTour` (`SetupCommand.cs:1111`) applies to the guided-tour
+skill, evaluated per vendor: Claude through the registered plugin marketplace path, Kiro and
+Antigravity through their own skills directories, every other vendor through the shared
+`~/.agents/skills` tree. A vendor without the skill would receive a prompt nothing answers, so when
+the user declined step 4 or its install failed there is no paste block either: row 6 prints one line
+naming `kcap plugin install` (with the vendor flag) as the way to get the skill, and setup ends as
+today.
 
 **The picker.** A `SelectionPrompt` over the eligible vendors plus an always-present **Skip**. Skip
 and cancelling the prompt behave identically: print the paste block, continue to the summary.
@@ -397,7 +439,9 @@ prompt position) beside the harness modules. The executable comes from
 `HarnessRegistry.ResolveExecutable(id)` (`HarnessRegistry.cs:124`), which already returns null for an
 IDE-only Kiro or Antigravity install, so those fall to the paste block with no special case.
 **Launchable** = eligible and the executable resolves; an eligible vendor whose CLI is not on the
-search path is listed and prints the paste block on selection.
+search path is listed and prints the paste block on selection. The paste block is only ever printed
+for an eligible vendor — one whose skill is installed — so what it asks the user to paste is always
+answerable by the agent they paste it into.
 
 **Launch semantics.** The agent runs as a foreground child of setup: resolved path as `FileName`,
 `UseShellExecute=false`, no stream redirection, same process group (Ctrl-C reaches the agent; setup
@@ -466,9 +510,9 @@ re-opens selection:
   `unattributed_count` is a non-negative integer. Failure → data drops to heuristic, disclosed; the
   file stays selected.
 - **Layer C — link payload**: an invalid `server_url` (not http/https) cuts file-sourced links **and**
-  makes the binding below unverifiable, so data drops to heuristic too. `background_log`, when shown,
-  must be a plausible path (no control characters, bounded length) rendered as plain text, never a
-  link; otherwise omitted.
+  makes the binding below unverifiable, so no query runs. `background_log` and `profile`, when shown,
+  must be plausible (no control characters, bounded length) and are rendered as plain text, never as
+  a link or a command to run; otherwise omitted.
 
 An unknown future `schema_version` fails layer A. Unvalidated values are never spliced into SQL,
 paths or links.
@@ -476,11 +520,20 @@ paths or links.
 **Locating the files.** The skill reads `import-handoff-*.json` from `KCAP_CONFIG_DIR` when that
 variable is set in its environment, else `~/.config/kcap` — the same rule `ConfigRoot` applies.
 
-**Server binding.** The analytics MCP queries the active profile's server, so the skill runs
-`kcap whoami` and compares its server URL to the file's under canonicalization: scheme and host
-lowercased, the scheme's own default port elided (80 for http, 443 for https, so `http://host:443`
-stays distinct), trailing slash trimmed, path compared as-is. A mismatch or a `whoami` failure over a
-*valid* `server_url` keeps file-sourced links with heuristic data, disclosed.
+**Server binding — fail closed.** The analytics MCP queries whatever server the agent's own `kcap`
+environment resolves, and a handoff file cannot repoint a running MCP. So before any query the
+skill runs `kcap whoami` and compares its server URL to the file's under canonicalization: scheme
+and host lowercased, the scheme's own default port elided (80 for http, 443 for https, so
+`http://host:443` stays distinct), trailing slash trimmed, path compared as-is. On a match, exact
+data is allowed. On a mismatch, or when `whoami` fails, **the skill issues no analytics query at
+all**: querying the wrong tenant and labelling it heuristic would still summarize someone else's
+sessions under this import's links. It closes with the closing block, file-sourced links, and a
+remediation that names the file's `profile`: start the agent from a shell where `kcap whoami` reports
+the file's server — for example with `KCAP_PROFILE=<profile>` set and no `KCAP_URL`, and with
+`KCAP_CONFIG_DIR` set when kcap uses a custom config directory — then re-prompt. A launched agent
+(§4) never hits this path, because setup pinned its environment; the paste-block path can, and this
+is what it gets instead of wrong data. Heuristic mode therefore exists only for a *bound* agent with
+no usable cohort, never as a substitute for binding.
 
 **Resolution, first action of the skill:**
 
@@ -493,16 +546,22 @@ stays distinct), trailing slash trimmed, path compared as-is. A mismatch or a `w
    branch on `handoff_suppressed` — a layer-B-valid file is required to make any claim; otherwise
    close as "its record is unreadable" — and close with the closing block:
    `"no_new_sessions"` → "nothing to watch — that import found no new sessions" (a running background
-   here is replay work); `"analytics_not_in_plan"` → the plan sentence below — the import ran and no
-   retry is suggested; `"import_failed"` → "that import did not get running", naming the
-   `kcap import --all --yes` retry and the `background_log` when displayable. A malformed run token
-   is treated as no token.
-2. No run id: among `import-handoff-*.json`, the newest locator-valid file with
-   `handoff_offered: true`. More than one → the skill says it picked the newest and names the others.
+   here is replay work); `"nothing_landed"` → "the sessions that import selected were skipped at
+   import time", pointing at `kcap import --all` for the per-session reasons, no retry implied;
+   `"analytics_not_in_plan"` → the plan sentence below — the import ran and no retry is suggested;
+   `"skill_not_installed"` / `"no_agent_detected"` → the import ran, watching was not offered because
+   no agent had this skill, and the user has evidently got it now, so the skill **continues as if
+   offered** with the file's cohort; `"import_failed"` → "that import did not get running", naming
+   the `kcap import --all --yes` retry and the `background_log` when displayable. A malformed run
+   token is treated as no token.
+2. No run id: among `import-handoff-*.json`, the newest locator-valid file that is watchable —
+   `handoff_offered: true`, or `handoff_suppressed` ∈ {`skill_not_installed`, `no_agent_detected`}.
+   More than one → the skill says it picked the newest and names the others.
    Matches disagreeing on `server_url` with no provable binding → the newest supplies links, the
    ambiguity is disclosed, data is heuristic.
-3. Nothing qualifies → **heuristic cohort**. A selected file with `cohort: "unknown"` routes its
-   *data* here; its layer-C fields still serve the links.
+3. Nothing qualifies → **heuristic cohort**, provided `kcap whoami` succeeds (that server is then
+   the one being watched, and the skill says so). A selected file with `cohort: "unknown"` routes its
+   *data* here once bound; its layer-C fields still serve the links.
 
 **Cohorts.**
 
@@ -630,8 +689,8 @@ absent entirely, the skill closes immediately with the block above.
   run.
 - Agent launch failure (no executable, or non-zero exit within 2000ms): warn, paste block, continue.
 - Skill: analytics MCP absent → immediate close with the block; `analytics_not_in_plan` → immediate
-  close with the plan sentence; failed binding → file links, heuristic data, disclosed; two
-  consecutive failed polls → early stop with the block.
+  close with the plan sentence; binding mismatch or `whoami` failure → no query, file links, the
+  profile remediation; two consecutive failed polls → early stop with the block.
 
 ## Testing
 
@@ -656,14 +715,20 @@ quarantined session lands in `SkippedIds`; own-call `Loaded`/`Resumed` land in `
 `Complete ⇒ Selected == Succeeded + Skipped + Failed`; the per-id partition is taken from the raw
 outcome and disagrees with nothing the Done grid counts.
 
-**Outcome totalization**: throw before classification → `Incomplete`, `RunCandidateIds == null`,
-spawn, `cohort: "unknown"`; throw after classification → `Incomplete` with ids; partial foreground
-success → `Succeeded + Skipped + Failed < Selected`; nothing escapes to setup.
+**Runner contract and totalization**, through the real `ISetupImportRunner` interface: a throw before
+classification → `Selection == null`, `Outcome == null`, `Fault` set → `Incomplete`,
+`RunCandidateIds == null`, `RemainderExists`, spawn, `cohort: "unknown"`; a throw after the
+selection checkpoint and before execution → `Selection` set, `Outcome == null` → `Incomplete` with
+ids, counts all zero, spawn; a throw during execution → same, with any partition `Outcome` carried;
+a completed pass → `Fault == null`, `Outcome.Partition` set, `Complete ⇒ Selected == Succeeded +
+Skipped + Failed`; `onSelected` fires exactly once and before the first import call (seam ordering);
+nothing escapes `RunAsync`.
 
 **Spawn decision and status** through `IBackgroundImportSpawner`'s fake: importable remainder →
 spawn; routed replay rows alone (all-watermarked Cursor corpus) → spawn; file-based `AlreadyLoaded`
-alone (all-watermarked Claude/Codex corpus) → **no** spawn; probe errors alone → spawn; failures
-alone → spawn; clean full pass with an empty remainder → no spawn; each of the four statuses prints
+alone (all-watermarked Claude/Codex corpus) → **no** spawn; a single selected `New` parent with an
+`AlreadyLoaded` child and nothing else → **no** spawn (the carried child is not remainder); probe
+errors alone → spawn; failures alone → spawn; clean full pass with an empty remainder → no spawn; each of the four statuses prints
 its pinned line and lands its file value; `ExitedZero` output claims no completeness; the child's
 argv is `import --all --yes --skip-title`; the contributed environment carries `KCAP_CONFIG_DIR`,
 `KCAP_PROFILE`, `KCAP_IMPORT_DETACHED_LOG` and `KCAP_IMPORT_DEFAULT_VISIBILITY` with the chosen
@@ -683,17 +748,21 @@ pass sends and the stamp the child sends are the same value.
 
 **Handoff file**: written iff the foreground pass ran (accepted prompt → file; declined, skipped,
 unauthenticated and `--no-prompt` → no file); per-run filename under `KCAP_CONFIG_DIR` when set;
-atomic write leaves no parseable partial; §3 shape; `handoff_suppressed` is `"no_new_sessions"` with
-empty exact `session_ids` for the replay-only run, `"import_failed"` for a failed background with zero
-successes, `"analytics_not_in_plan"` for a cached denial over a successful pass, and `null` whenever
-`handoff_offered` is true; >500 candidates → first 500 in candidate order, `partial_exact`; two
-concurrent runs → two files; >7-day files pruned on write; write failure warns and continues.
+atomic write leaves no parseable partial; temp, final and log files carry owner-only mode on Unix
+(asserted with `File.GetUnixFileMode`), and an existing log has its mode re-asserted on append; §3
+shape including `profile`; `handoff_suppressed` takes each value of the §4 table from a fixture
+built for that row, `null` whenever `handoff_offered` is true, and the precedence cases — failed
+import **and** cached denial → `import_failed`; empty cohort **and** cached denial →
+`no_new_sessions`; all-skipped pass with nothing left → `nothing_landed` — resolve as the table says;
+>500 candidates → first 500 in candidate order, `partial_exact`; two concurrent runs → two files;
+>7-day files pruned on write; write failure warns and continues.
 
-**Handoff gating and picker**: `Succeeded ≥ 1` → offered; `Running`/`ExitedZero` with a non-empty
-cohort → offered; empty exact cohort → not offered whatever the background; `Failed` with zero
-successes → not; `--no-prompt` → no handoff, unbounded import, no spawn, no file; cached analytics
-denial → no picker and no paste block, guided tour alone; eligibility per vendor (detected, skill
-present, executable resolves vs not); IDE-only Kiro and Antigravity print the paste block; every
+**Handoff gating and picker**: each row of the §4 table has a fixture and the first matching row wins;
+`--no-prompt` → no handoff, unbounded import, no spawn, no file; a cached analytics denial over a
+successful pass → no picker, no paste block, one line, guided tour alone; no eligible vendor with one
+detected (step 4 declined or failed) → no picker, no paste block, the `kcap plugin install` line;
+eligibility per vendor (detected, skill present, executable resolves vs not); IDE-only Kiro and
+Antigravity with the skill installed print the paste block; every
 recipe's argv pinned per vendor with the two-line prompt as a single element; Skip and cancel print
 the paste block; launch failure (non-zero < 2000ms) falls back; zero exit < 2000ms and any exit ≥
 2000ms proceed silently.
@@ -714,7 +783,11 @@ the `ses_…`, `--` and hostile-id fixtures; `scope: 'global'` on every query; r
 and linked without a repo hash; partial-exact over 500 with a listed arrival a capped scan would miss;
 exact-mode truncation with a server cap below 100 (halving within the poll, floor-10 failure to
 heuristic) and heuristic-mode truncation committed as a window with the size disclosed;
-`analytics_not_in_plan` from the server closing immediately without polling; poll atomicity and recovery;
+`analytics_not_in_plan` from the server closing immediately without polling; **binding fails closed**:
+a `whoami` server that differs from the file's issues zero queries and closes with links plus the
+profile remediation, a `whoami` failure does the same, and a bound agent with no usable cohort is the
+only route into heuristic mode; `skill_not_installed` and `no_agent_detected` files continue as if
+offered; poll atomicity and recovery;
 each stop rule at its boundary; deterministic first-three under ties; the whoami-failure no-link
 closing variant; the `unattributed_count` sentence.
 
