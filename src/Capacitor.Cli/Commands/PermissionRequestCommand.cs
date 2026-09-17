@@ -174,6 +174,8 @@ class PermissionRequestCommand(
         if (agentId is not null) payload["agent_id"] = agentId;
         if (node["cwd"] is JsonValue cwd && cwd.TryGetValue<string>(out var c)) payload["cwd"] = c;
         if (node["tool_use_id"] is JsonValue toolUse && toolUse.TryGetValue<string>(out var id)) payload["tool_use_id"] = id;
+        // The hook's agent_id is the subagent's; agent_id on this wire is the hosted agent.
+        if (node["agent_id"] is JsonValue sub && sub.TryGetValue<string>(out var subagentId) && subagentId.Length > 0) payload["subagent_id"] = subagentId;
         return payload;
     }
 

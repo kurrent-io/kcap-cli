@@ -102,6 +102,8 @@ public class PermissionWiringTests {
             await Assert.That(ReferenceEquals(bridge.BrokerForTest, broker)).IsTrue();
             await Assert.That(ReferenceEquals(orchestrator.PermissionBrokerForTest, broker)).IsTrue();
             await Assert.That(ReferenceEquals(ipc.BrokerForTest, broker)).IsTrue();
+            await Assert.That(bridge.InputWaitHandler).IsNotNull();
+            await Assert.That(bridge.ToolSettledHandler).IsNotNull();
 
             await Assert.That(bridge.DecisionLogForTest).IsNotNull();
             await Assert.That(ReferenceEquals(

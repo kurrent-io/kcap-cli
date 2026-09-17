@@ -6,6 +6,31 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A prompt answered in the terminal is retired by the daemon
+
+A hosted Claude session's permission prompt (an `AskUserQuestion` included) reaches the daemon
+through the parked `PermissionRequest` hook, and an answer given in the session's own terminal is
+invisible to it: the hook stays parked, the broker keeps the request pending, the server's copy
+stays open, and every app view but the one chat tab that tails that transcript keeps its badge.
+The daemon now hears the answer's consequences from hooks it already runs, over one new loopback
+route, `tool-settled`, beside `input-wait`. `PostToolUse` and `PostToolUseFailure` name the
+finished tool by its id, which retires exactly that prompt. The main agent's `Stop` names nothing,
+which retires every prompt of the turn: a terminal *deny* runs no tool, so no tool event reports
+it, and `PermissionDenied` fires only for auto mode. `SubagentStop` names the subagent, because a
+background subagent's prompt legitimately outlives the parent's turn and the turn backstop must
+not answer it; for that scoping the permission hook now forwards its own `agent_id` as
+`subagent_id`, held on the broker's entry and never on the wire. Every hosted agent posts on the
+one shared token, so a notice retires only what its own session registered under the agent it
+names, and the route admits that token alone: an unattended reviewer has no prompt a human could
+have answered. All three settle through the
+withdraw path the chat tab already used, outcome `withdrawn`, source `tool_settled`, so the parked
+hook gets its deny, the server leg closes the request and every subscriber sees Resolved; the tab's
+own correlation stays as a fast path the broker dedups. The two tool events are async in the
+manifest and end in the hook before any server work: the server has no route for them and the
+transcript watcher already carries the result, so a session nobody hosts spends a process spawn
+and nothing else. An older daemon answers the route with 404 and the relay drops it silently.
+Codex PTY prompts are untouched: their permission hook carries no tool id.
+
 ## One remap rule covers a family of deleted worktrees
 
 A `from` may carry one `*` standing as a whole path segment, and the cwd's remainder past that
