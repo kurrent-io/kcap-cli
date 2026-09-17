@@ -452,6 +452,38 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             Adapter.extra_env["leak"] = "1"
 
+    def test_fake_session_resume_and_defaults(self):
+        from harness.base import Adapter, Session
+        a = FakeAdapter()
+        self.assertFalse(Adapter.can_resume)
+        self.assertIsNone(Adapter().open_session(None, "daemon"))
+        sb = new_sandbox("FAKE_HOME", None, [])
+        try:
+            skill = ProbeSkill.fresh()
+            s = a.open_session(sb, "daemon")
+            self.assertIsInstance(s, Session)
+            self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
+            write_skill(sb.repo / ".fake" / "skills", skill)
+            self.assertIn(skill.body_token, s.ask(single_prompt(skill)).reply_text)
+            s.close()
+            frozen = a.__class__()
+            frozen.live_catalogue = False
+            fs = frozen.open_session(sb, "daemon")
+            other = ProbeSkill.fresh()
+            write_skill(sb.repo / ".fake" / "skills", other)
+            self.assertNotIn(other.body_token, fs.ask(single_prompt(other)).reply_text)
+            self.assertEqual(fs.reload(), "/reload")
+            self.assertIn(other.body_token, fs.ask(single_prompt(other)).reply_text)
+            fs.close()
+            res = a.ask(sb, "print", single_prompt(skill))
+            self.assertEqual(a.session_id(res), "fake-session")
+            self.assertTrue(a.can_resume)
+            resumed = a.resume(sb, "fake-session", single_prompt(skill))
+            self.assertIn(skill.body_token, resumed.reply_text)
+            self.assertIn("--resume", resumed.argv)
+        finally:
+            sb.cleanup()
+
 
 import probe  # noqa: E402
 from lib.recorder import load_runs as _load  # noqa: E402
@@ -881,9 +913,12 @@ from lib.acp_driver import acp_ask  # noqa: E402
 SERVERS = KIT / "selftest_servers.py"
 
 
-def _fake_repo(d: str, skill: ProbeSkill) -> Path:
+def _fake_repo(d: str, skill: ProbeSkill | None) -> Path:
     repo = Path(d) / "repo"
-    write_skill(repo / ".fake" / "skills", skill)
+    if skill is not None:
+        write_skill(repo / ".fake" / "skills", skill)
+    else:
+        repo.mkdir(parents=True, exist_ok=True)
     return repo
 
 
@@ -920,6 +955,25 @@ class AcpDriverTests(unittest.TestCase):
                           Path(d) / "acp.stderr.log", timeout=30)
             self.assertIn("tools_used=1", res.notes)
             self.assertIn(skill.body_token, res.reply_text)
+
+    def test_session_takes_two_turns(self):
+        from lib.acp_driver import AcpSession
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, None)
+            s = AcpSession([sys.executable, str(SERVERS), "acp"], repo, dict(os.environ), Path(d) / "acp.stderr.log", timeout=30)
+            s.start()
+            try:
+                first = s.ask(single_prompt(skill))
+                self.assertIn(NO_SKILL, first.reply_text)
+                write_skill(repo / ".fake" / "skills", skill)
+                second = s.ask(single_prompt(skill))
+                self.assertIn(skill.body_token, second.reply_text)
+                self.assertNotIn(skill.body_token, first.reply_text)
+                self.assertGreater(second.first_request_at, first.first_request_at)
+                self.assertIn("tools_used=0", second.notes)
+            finally:
+                s.close()
 
 
 from lib.appserver_driver import appserver_ask, hook_state_override  # noqa: E402
@@ -1014,6 +1068,34 @@ class JsonlDriversTests(unittest.TestCase):
                             Path(d) / "sf.stderr.log", timeout=5)
             self.assertIsNone(res.exit_code)
             self.assertIn("exception=", res.notes)
+
+    def test_appserver_session_takes_two_turns(self):
+        from lib.appserver_driver import AppServerSession
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, None)
+            s = AppServerSession(str(SERVERS), repo, dict(os.environ), Path(d) / "as.stderr.log", timeout=30)
+            s.start()
+            try:
+                self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
+                write_skill(repo / ".fake" / "skills", skill)
+                self.assertIn(skill.body_token, s.ask(single_prompt(skill)).reply_text)
+            finally:
+                s.close()
+
+    def test_pirpc_session_takes_two_turns(self):
+        from lib.pirpc_driver import PiRpcSession
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, None)
+            s = PiRpcSession([sys.executable, str(SERVERS), "pirpc"], repo, dict(os.environ), Path(d) / "pi.stderr.log", timeout=30)
+            s.start()
+            try:
+                self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
+                write_skill(repo / ".fake" / "skills", skill)
+                self.assertIn(skill.body_token, s.ask(single_prompt(skill)).reply_text)
+            finally:
+                s.close()
 
 
 from harness import ENTRIES  # noqa: E402

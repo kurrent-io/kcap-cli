@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from harness.base import AskResult
+from harness.base import AskResult, Session
 from lib.procs import kill_group
 
 KIT = Path(__file__).resolve().parent.parent
@@ -91,37 +91,68 @@ def tool_calls(frames: list[dict]) -> int:
     return n
 
 
-async def _turn(argv, cwd, env, prompt, stderr_path, timeout) -> AskResult:
-    client = IsolatedAcpClient(argv, str(cwd), env, stderr_path)
-    started = time.time()
-    first = started
-    text, notes = "", []
-    try:
-        await client.start()
-        await client.request("initialize", INIT_PARAMS, timeout=90)
-        new = await client.request("session/new", {"cwd": str(cwd), "mcpServers": []}, timeout=120)
-        sid = (new.get("result") or {}).get("sessionId")
-        if not sid:
-            notes.append(f"session/new failed: {json.dumps(new)[:500]}")
-        else:
-            first = time.time()
-            resp = await client.request(
-                "session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": prompt}]}, timeout=timeout)
-            notes.append(f"stopReason={(resp.get('result') or {}).get('stopReason')}")
-            if "error" in resp:
-                notes.append(f"error={json.dumps(resp['error'])[:500]}")
-            text = agent_text(client.frames)
-    except Exception as ex:  # noqa: BLE001
-        notes.append(f"exception={ex!r}")
-    finally:
-        await client.shutdown()
-    # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
-    notes.append(f"tools_used={tool_calls(client.frames)}")
-    exit_code = client.proc.returncode if client.proc is not None else None
-    return AskResult(reply_text=text, raw=json.dumps(client.frames), argv=list(argv), started_at=started,
-                     first_request_at=first, stderr_path=str(stderr_path), exit_code=exit_code,
-                     notes=" ".join(notes))
+class AcpSession(Session):
+    """One ACP agent process holding one session across prompts."""
+
+    def __init__(self, argv: list[str], cwd: Path, env: dict, stderr_path: Path, timeout: float = 180.0) -> None:
+        self.argv = list(argv)
+        self.cwd = Path(cwd)
+        self.stderr_path = stderr_path
+        self.timeout = timeout
+        self.loop = asyncio.new_event_loop()
+        self.client = IsolatedAcpClient(self.argv, str(self.cwd), env, stderr_path)
+        self.sid: str | None = None
+        self.notes: list[str] = []
+        self.started_at = time.time()
+
+    def start(self) -> None:
+        self.loop.run_until_complete(self._start())
+
+    async def _start(self) -> None:
+        await self.client.start()
+        await self.client.request("initialize", INIT_PARAMS, timeout=90)
+        new = await self.client.request("session/new", {"cwd": str(self.cwd), "mcpServers": []}, timeout=120)
+        self.sid = (new.get("result") or {}).get("sessionId")
+        if not self.sid:
+            self.notes.append(f"session/new failed: {json.dumps(new)[:500]}")
+
+    def ask(self, prompt: str) -> AskResult:
+        first = time.time()
+        before = len(self.client.frames)
+        notes = list(self.notes)
+        text = ""
+        try:
+            if self.sid:
+                resp = self.loop.run_until_complete(self.client.request(
+                    "session/prompt", {"sessionId": self.sid, "prompt": [{"type": "text", "text": prompt}]},
+                    timeout=self.timeout))
+                notes.append(f"stopReason={(resp.get('result') or {}).get('stopReason')}")
+                if "error" in resp:
+                    notes.append(f"error={json.dumps(resp['error'])[:500]}")
+                text = agent_text(self.client.frames[before:])
+        except Exception as ex:  # noqa: BLE001
+            notes.append(f"exception={ex!r}")
+        # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
+        notes.append(f"tools_used={tool_calls(self.client.frames[before:])}")
+        exit_code = self.client.proc.returncode if self.client.proc is not None else None
+        return AskResult(reply_text=text, raw=json.dumps(self.client.frames), argv=list(self.argv),
+                         started_at=self.started_at, first_request_at=first, stderr_path=str(self.stderr_path),
+                         exit_code=exit_code, notes=" ".join(notes))
+
+    def close(self) -> None:
+        try:
+            self.loop.run_until_complete(self.client.shutdown())
+        finally:
+            self.loop.close()
 
 
 def acp_ask(argv: list[str], cwd: Path, env: dict, prompt: str, stderr_path: Path, timeout: float = 180.0) -> AskResult:
-    return asyncio.run(_turn(argv, cwd, env, prompt, stderr_path, timeout))
+    session = AcpSession(argv, cwd, env, stderr_path, timeout)
+    try:
+        try:
+            session.start()
+        except Exception as ex:  # noqa: BLE001
+            session.notes.append(f"exception={ex!r}")
+        return session.ask(prompt)
+    finally:
+        session.close()

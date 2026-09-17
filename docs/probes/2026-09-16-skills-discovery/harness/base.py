@@ -28,6 +28,20 @@ class AskResult:
     notes: str = ""
 
 
+class Session:
+    """A live vendor session that takes more than one prompt."""
+
+    def ask(self, prompt: str) -> AskResult:
+        raise NotImplementedError
+
+    def reload(self) -> str | None:
+        """Ask the vendor to rebuild its skill catalogue: the command used, or None if it has none."""
+        return None
+
+    def close(self) -> None:
+        return None
+
+
 class Adapter:
     entry: str = ""
     harness: str = ""
@@ -43,6 +57,13 @@ class Adapter:
     flat_skill_layout: bool = False
     modes: tuple[str, ...] = ("print", "daemon")
     turn_timeout: float = 180.0
+    can_resume: bool = False
+    # Interactive launch: (regex on the stripped screen, keys to send) pairs for the vendor's
+    # dialogs, the slash command that rebuilds its catalogue, the keys that end it.
+    tui_dialogs: tuple[tuple[str, str], ...] = ()
+    tui_reload: str | None = None
+    tui_exit: tuple[str, ...] = ("\x03", "\x03", "\x04")
+    tui_ready: float = 4.0
 
     def binary_path(self) -> str | None:
         return shutil.which(self.binary)
@@ -72,6 +93,28 @@ class Adapter:
 
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         raise NotImplementedError
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "tui":
+            return None
+        argv = self.tui_argv(sb)
+        if argv is None:
+            return None
+        from lib.pty_driver import PtySession
+        session = PtySession(argv, sb.cwd, sb.env, sb.root / f"{self.harness}-tui.log", dialogs=self.tui_dialogs,
+                             reload_command=self.tui_reload, exit_keys=self.tui_exit, ready_idle=self.tui_ready,
+                             timeout=self.turn_timeout)
+        session.start()
+        return session
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return None
+
+    def session_id(self, res: AskResult) -> str | None:
+        return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return None
 
     def list_catalogue(self, sb: Sandbox) -> str | None:
         return None
