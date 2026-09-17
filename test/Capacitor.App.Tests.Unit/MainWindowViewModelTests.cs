@@ -168,16 +168,7 @@ public class MainWindowViewModelTests {
         await Assert.That(MainWindowViewModel.StripBuildMetadata(raw)).IsEqualTo(expected);
     }
 
-    [Test]
-    [Arguments("1.2.3+abc", "daemon 1.2.3")]
-    [Arguments("1.2.3", "daemon 1.2.3")]
-    [Arguments("", "")]
-    [Arguments(null, "")]
-    public async Task VersionLabelForRail_prefixes_the_stripped_semver(string? raw, string expected) {
-        await Assert.That(MainWindowViewModel.VersionLabelForRail(raw)).IsEqualTo(expected);
-    }
-
-    // ---- ConnectionDisplay / StatusDotBrush (local attach State first, daemon Connection only
+    // ---- ConnectionDisplay / StatusBrush (local attach State first, daemon Connection only
     // once Connected — see MainWindowViewModel.ConnectionDisplayFor's doc comment) ----
 
     [Test]
@@ -225,20 +216,20 @@ public class MainWindowViewModelTests {
     [Arguments(AttachState.Connected, null, "connecting", "#FFB300")]
     [Arguments(AttachState.Connected, null, "reconnecting", "#FFB300")]
     [Arguments(AttachState.Connected, null, "disconnected", "#E53935")]
-    public async Task StatusDotFor_maps_to_the_matching_bucket_color(
+    public async Task StatusBrushFor_maps_to_the_matching_bucket_color(
             AttachState state, string? reason, string daemonConnection, string expectedHex) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (SolidColorBrush)MainWindowViewModel.StatusDotFor(status, daemonConnection);
+        var brush = (SolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
     }
 
     [Test]
     [Arguments(AttachState.Connected, null, "reconnecting")]
     [Arguments(AttachState.Connecting, null, "connected")]
-    public async Task StatusDotFor_signed_out_uses_the_disrupted_color(
+    public async Task StatusBrushFor_signed_out_uses_the_disrupted_color(
             AttachState state, string? reason, string daemonConnection) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (SolidColorBrush)MainWindowViewModel.StatusDotFor(status, daemonConnection, signInExpired: true);
+        var brush = (SolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
     }
 
@@ -264,7 +255,7 @@ public class MainWindowViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
             await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
-            var brush = (SolidColorBrush)vm.StatusDotBrush;
+            var brush = (SolidColorBrush)vm.StatusBrush;
             await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
         });
     }
@@ -292,14 +283,14 @@ public class MainWindowViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task VersionDisplay_is_the_prefixed_daemon_semver() {
+    public async Task VersionDisplay_is_the_daemon_semver_without_build_metadata() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var vm = NewVm(service);
             using var activation = vm.Activator.Activate();
 
             service.SnapshotsSubject.OnNext(Snap(version: "1.2.3+abc"));
-            await Assert.That(vm.VersionDisplay).IsEqualTo("daemon 1.2.3");
+            await Assert.That(vm.VersionDisplay).IsEqualTo("1.2.3");
             await Assert.That(vm.DaemonVersion).IsEqualTo("1.2.3+abc");
         });
     }
@@ -377,7 +368,7 @@ public class MainWindowViewModelTests {
             // Retention is the SERVICE's concern (spec §5) — the fake never clears its snapshot
             // on disconnect either; the VM merely stops RENDERING the count.
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            await Assert.That(vm.AgentCountText).IsEqualTo("—");
+            await Assert.That(vm.AgentCountText).IsEmpty();
         });
     }
 

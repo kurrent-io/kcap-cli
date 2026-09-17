@@ -68,8 +68,16 @@
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
-        <Style Selector="TextBlock.agentCount[Text=—]">
-            <Setter Property="IsVisible" Value="False" />
+        <!-- U+00B7 sits at mid x-height by design, so the glyph centres itself against the
+             fragments it separates. It is enlarged by a render transform rather than a FontSize,
+             which would give it a taller line box than the row and drop its baseline below the
+             fragments'; the transform is laid out at 11 and scaled about the box centre, so the
+             glyph grows in place. -->
+        <Style Selector="TextBlock.footerDot">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Text" Value="·" />
+            <Setter Property="RenderTransform" Value="scale(1.5)" />
         </Style>
         <Style Selector="Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
@@ -115,34 +123,36 @@
                 </Button>
             </StackPanel>
 
-            <!-- Status, server, then who + help. The disc is an inline so it shares the
-                 label's line box instead of a separate layout slot. -->
+            <!-- Two rows split by what each fact belongs to: the org and how we stand with it,
+                 then the daemon on this machine and what it is running. The server URL rides the
+                 org's hover — at rail width it wraps to two lines and outweighs its neighbours. -->
             <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
-                <StackPanel Margin="16,10,16,10" Spacing="6">
+                <StackPanel Margin="16,10,16,10" Spacing="2">
                     <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7"
                                 ToolTip.Tip="{Binding ConnectionTip}">
-                        <TextBlock Classes="footerValue" VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis">
-                            <InlineUIContainer BaselineAlignment="Center">
-                                <Ellipse Width="7" Height="7" Fill="{Binding StatusDotBrush}" Margin="0,0,7,0" />
-                            </InlineUIContainer>
-                            <Run Text="{Binding ConnectionDisplay}" />
+                        <!-- The word IS the indicator: it takes StatusBrush itself, so the status
+                             colour needs no disc with a line box of its own to align against.
+                             Both fragments draw their size from footerValue and override only the
+                             brush, so the row cannot end up with two sizes and two baselines. -->
+                        <TextBlock Text="{Binding ConnectionDisplay}" Classes="footerValue"
+                                   Foreground="{Binding StatusBrush}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" Classes="footerValue"
+                                   Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis"
+                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding ServerUrl}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.ServerUrlTip}"
+                                               FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
+                                </StackPanel>
+                            </ToolTip.Tip>
                         </TextBlock>
-                        <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta agentCount"
-                                   VerticalAlignment="Center" />
-                        <TextBlock Text="update pending" Classes="footerMeta" VerticalAlignment="Center"
-                                   ToolTip.Tip="{Binding RestartPendingText}"
-                                   IsVisible="{Binding RestartPending}" />
                     </StackPanel>
-                    <TextBlock x:Name="RailServerUrlText" Text="{Binding ServerUrl}" Classes="footerValue"
-                               TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
-                               ToolTip.Tip="{x:Static vm:MainWindowViewModel.ServerUrlTip}"
-                               IsVisible="{Binding ServerUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <DockPanel>
                         <Button x:Name="RailHelpButton" DockPanel.Dock="Right" Classes="kcapChip"
                                 Width="22" Height="22" Padding="0" CornerRadius="6" Margin="10,0,0,0"
                                 ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support"
-                                VerticalAlignment="Center">
+                                VerticalAlignment="Bottom">
                             <PathIcon Width="14" Height="14" Foreground="{StaticResource KcapMutedBrush}"
                                       Data="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zm0 3.2a3 3 0 0 0-3 3h1.8a1.2 1.2 0 1 1 1.7 1.1c-.9.4-1.4 1.1-1.4 2.2h1.8c0-.5.2-.8.7-1a3 3 0 0 0-1.6-5.3zM11 15.5v1.8h1.8v-1.8z" />
                             <Button.Flyout>
@@ -169,18 +179,30 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                            <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" Classes="footerMeta"
-                                       TextTrimming="CharacterEllipsis"
-                                       ToolTip.Tip="{x:Static vm:MainWindowViewModel.TenantTip}"
-                                       IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <!-- Bottom, not Center: the fragments and the button share the row's
+                             bottom edge, so the text line and the button agree on one line. One
+                             font size across the row, so the baselines coincide outright.
+                             Each dot repeats the visibility of the fragment to its RIGHT, so a
+                             fragment takes its separator with it rather than leaving it dangling. -->
+                        <StackPanel x:Name="RailDaemonRow" Orientation="Horizontal" Spacing="5"
+                                    VerticalAlignment="Bottom">
                             <TextBlock x:Name="RailDaemonNameText" Text="{Binding DaemonName}" Classes="footerMeta"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip.Tip="{x:Static vm:MainWindowViewModel.DaemonNameTip}"
                                        IsVisible="{Binding DaemonName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Classes="footerDot"
+                                       IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay}" Classes="footerMeta"
                                        ToolTip.Tip="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
                                        IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Classes="footerDot"
+                                       IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
+                                       IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Classes="footerDot" IsVisible="{Binding RestartPending}" />
+                            <TextBlock Text="update pending" Classes="footerMeta"
+                                       ToolTip.Tip="{Binding RestartPendingText}"
+                                       IsVisible="{Binding RestartPending}" />
                         </StackPanel>
                     </DockPanel>
                 </StackPanel>

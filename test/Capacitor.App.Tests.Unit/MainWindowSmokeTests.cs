@@ -13,12 +13,13 @@ using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;
 
 /// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
-/// connection and agent count, the server URL, then tenant, daemon, and version on one line.
+/// connection and tenant on one line, then the daemon's name, version and agent count.
 public class MainWindowSmokeTests {
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
@@ -79,10 +80,10 @@ public class MainWindowSmokeTests {
 
         await Assert.That(rendered).Contains("Connected");
         await Assert.That(rendered).Contains("1 of 5 agents");
-        await Assert.That(rendered).Contains("http://localhost:9999");
+        await Assert.That(rendered).DoesNotContain("http://localhost:9999");
         await Assert.That(rendered).Contains("kurrent");
         await Assert.That(rendered).Contains("daemon-a");
-        await Assert.That(rendered).Contains("daemon 1.2.3");
+        await Assert.That(rendered).Contains("1.2.3");
         await Assert.That(rendered).DoesNotContain("SERVER");
         await Assert.That(rendered).DoesNotContain("ORG");
         await Assert.That(rendered).DoesNotContain("DAEMON");
@@ -736,9 +737,10 @@ public class MainWindowSmokeTests {
         }
     });
 
-    /// Hover copy names what each footer fragment is. The visible strings (org slug, daemon
-    /// name, semver, URL) do not. Same dispatcher scheduler as the compact-footer render test:
-    /// an immediate OAPH notifies before its value is readable and a binding keeps the stale one.
+    /// Hover copy names what each footer fragment is, and carries the server URL the footer no
+    /// longer prints. The visible strings (org slug, daemon name, semver) do not. Same dispatcher
+    /// scheduler as the compact-footer render test: an immediate OAPH notifies before its value
+    /// is readable and a binding keeps the stale one.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_footer_tooltips_identify_org_daemon_version_and_server() {
@@ -756,15 +758,19 @@ public class MainWindowSmokeTests {
 
             var rail = window.FindDescendantOfType<SessionRailView>()!;
             var connection = rail.FindControl<StackPanel>("RailConnectionStatus")!;
-            var url = rail.FindControl<TextBlock>("RailServerUrlText")!;
             var tenant = rail.FindControl<TextBlock>("RailTenantText")!;
             var daemon = rail.FindControl<TextBlock>("RailDaemonNameText")!;
             var version = rail.FindControl<TextBlock>("RailVersionText")!;
+            // The org hover is a two-line panel, not a string: the URL on top, its caption under.
+            // Opened first — a tip's bindings only resolve once it is parented to its adorner.
+            ToolTip.SetIsOpen(tenant, true);
+            Dispatcher.UIThread.RunJobs();
+            var tenantLines = (ToolTip.GetTip(tenant) as StackPanel)!.Children
+                .OfType<TextBlock>().Select(t => t.Text ?? "").ToArray();
+            ToolTip.SetIsOpen(tenant, false);
             var result = (
                 Connection: ToolTip.GetTip(connection) as string,
-                UrlTip: ToolTip.GetTip(url) as string,
-                UrlText: url.Text,
-                TenantTip: ToolTip.GetTip(tenant) as string,
+                TenantLines: tenantLines,
                 TenantText: tenant.Text,
                 DaemonTip: ToolTip.GetTip(daemon) as string,
                 DaemonText: daemon.Text,
@@ -777,15 +783,52 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(tips.Connection).IsEqualTo(MainWindowViewModel.AttachStatusTip);
-        await Assert.That(tips.UrlTip).IsEqualTo(MainWindowViewModel.ServerUrlTip);
-        await Assert.That(tips.UrlText).IsNotEqualTo(MainWindowViewModel.ServerUrlTip);
-        await Assert.That(tips.TenantTip).IsEqualTo(MainWindowViewModel.TenantTip);
+        await Assert.That(tips.TenantLines).IsEquivalentTo(
+            new[] { "http://localhost:9999", MainWindowViewModel.ServerUrlTip }, CollectionOrdering.Matching);
         await Assert.That(tips.TenantText).IsEqualTo("kurrent");
         await Assert.That(tips.DaemonTip).IsEqualTo(MainWindowViewModel.DaemonNameTip);
         await Assert.That(tips.DaemonText).IsEqualTo("daemon-a");
-        await Assert.That(tips.VersionText).IsEqualTo("daemon 1.2.3");
+        await Assert.That(tips.VersionText).IsEqualTo("1.2.3");
         await Assert.That(tips.VersionTip).IsEqualTo(MainWindowViewModel.VersionIdentityTip);
         await Assert.That(tips.VersionTip).DoesNotContain("1.2.3+abc");
+    }
+
+    /// A dot belongs BETWEEN two fragments, never dangling: the count drops out the moment the
+    /// attach does (the service keeps its snapshot, so name and version stay), and its separator
+    /// has to leave with it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
+        var (connected, detached) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "daemon-a", version: "1.2.3", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 1, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent");
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var row = window.FindDescendantOfType<SessionRailView>()!.FindControl<StackPanel>("RailDaemonRow")!;
+            string[] Fragments() => row.Children.OfType<TextBlock>()
+                .Where(t => t.IsVisible).Select(t => t.Text ?? "").ToArray();
+
+            var whileConnected = Fragments();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            Dispatcher.UIThread.RunJobs();
+            var whileDetached = Fragments();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (whileConnected, whileDetached);
+        });
+
+        await Assert.That(connected).IsEquivalentTo(
+            new[] { "daemon-a", "\u00b7", "1.2.3", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
+        await Assert.That(detached).IsEquivalentTo(
+            new[] { "daemon-a", "\u00b7", "1.2.3" }, CollectionOrdering.Matching);
     }
 
     /// 310 of rail plus 400 of pane must never squeeze the center column to nothing.

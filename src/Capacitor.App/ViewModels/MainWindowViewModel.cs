@@ -52,10 +52,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // affinity enforced the moment the renderer references it; caching one as a shared
     // `static readonly` field would tie its affinity to whichever thread happens to trigger this
     // type's static initializer FIRST (e.g. a plain unit test calling a static helper off the UI
-    // thread) and then poison every later render that reuses the same cached instance. DotBrush
+    // thread) and then poison every later render that reuses the same cached instance. Paint
     // below constructs a fresh instance per call instead — cheap, and always on whatever thread
     // the caller is on.
-    static IBrush DotBrush(string hex) => new SolidColorBrush(Color.Parse(hex));
+    static IBrush Paint(string hex) => new SolidColorBrush(Color.Parse(hex));
 
     readonly IDaemonClientService _service;
 
@@ -67,8 +67,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _daemonVersion;
     public string DaemonVersion => _daemonVersion?.Value ?? "";
 
-    // Compact rail label: "daemon {semver}". The prefix is the identity — a bare 1.2.3 next to
-    // the org and daemon name reads as the app's version. Build metadata stays off the line.
+    // Compact rail label: the daemon semver alone — build metadata stays off the line.
     ObservableAsPropertyHelper<string>? _versionDisplay;
     public string VersionDisplay => _versionDisplay?.Value ?? "";
 
@@ -87,15 +86,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _connectionDisplay;
     public string ConnectionDisplay => _connectionDisplay?.Value ?? "";
 
-    // Status-dot color for ConnectionDisplay's same bucket — kept as a single source of truth so
-    // the dot and the word can never disagree.
-    ObservableAsPropertyHelper<IBrush>? _statusDotBrush;
-    public IBrush StatusDotBrush => _statusDotBrush?.Value ?? DotBrush(StatusColors.Unavailable);
+    // The color ConnectionDisplay is painted in — the word itself carries the status, so this
+    // and the text come from parallel switches over one bucketing.
+    ObservableAsPropertyHelper<IBrush>? _statusBrush;
+    public IBrush StatusBrush => _statusBrush?.Value ?? Paint(StatusColors.Unavailable);
 
     // "n of m agents" only while Connected — active_agents is a display count, never capacity.
-    // "—" otherwise; the service still retains the last snapshot across disconnects.
+    // Empty otherwise, which is what hides it: the service still retains the last snapshot
+    // across disconnects, so a count would go on reading as live.
     ObservableAsPropertyHelper<string>? _agentCountText;
-    public string AgentCountText => _agentCountText?.Value ?? "—";
+    public string AgentCountText => _agentCountText?.Value ?? "";
 
     internal const string RestartPendingMessage = "Daemon update pending — it restarts once no agents are running.";
 
@@ -125,11 +125,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public string ConnectionTip => _connectionTip?.Value ?? AttachStatusTip;
 
     public const string AttachStatusTip = "Attach status to the daemon on this machine";
-    public const string TenantTip = "Signed-in organization";
     public const string DaemonNameTip = "Name of the daemon on this machine";
-    public const string ServerUrlTip = "Capacitor server this daemon talks to";
-    public const string VersionIdentityTip =
-        "Version of the kcap daemon on this machine, not this app";
+
+    /// Caption under the URL in the org label's hover — the org is what you point at, the
+    /// server it talks to is what the hover tells you.
+    public const string ServerUrlTip = "Capacitor server for this organization";
+    public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
 
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
 
@@ -369,7 +370,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.DaemonVersion, "")
                 .DisposeWith(disposables);
 
-            _versionDisplay = snapshots.Select(s => VersionLabelForRail(s.Daemon.Version))
+            _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))
                 .ToProperty(this, x => x.VersionDisplay, "")
                 .DisposeWith(disposables);
 
@@ -402,16 +403,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusDotBrush = status.CombineLatest(daemonConnection, signInExpired, StatusDotFor)
-                .ToProperty(this, x => x.StatusDotBrush, DotBrush(StatusColors.Unavailable))
+            _statusBrush = status.CombineLatest(daemonConnection, signInExpired, StatusBrushFor)
+                .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
             _agentCountText = status.CombineLatest(snapshots, (st, snap) => (st, snap))
-                .Select(t => t.st.State != AttachState.Connected ? "—"
+                .Select(t => t.st.State != AttachState.Connected ? ""
                     : t.snap.Daemon.MaxAgents == 0
                         ? $"{t.snap.Daemon.ActiveAgents} agents (unlimited)"
                         : $"{t.snap.Daemon.ActiveAgents} of {t.snap.Daemon.MaxAgents} agents")
-                .ToProperty(this, x => x.AgentCountText, "—")
+                .ToProperty(this, x => x.AgentCountText, "")
                 .DisposeWith(disposables);
 
             // Only while attached: a marker left by a daemon we cannot reach says nothing about
@@ -642,11 +643,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         return plus < 0 ? version : version[..plus];
     }
 
-    internal static string VersionLabelForRail(string? version) {
-        var semver = StripBuildMetadata(version);
-        return string.IsNullOrEmpty(semver) ? "" : $"daemon {semver}";
-    }
-
     static string Capitalize(string word) => word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..];
 
     /// Named profiles stay visible beside Connected; the built-in "default" profile does not —
@@ -676,19 +672,19 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     }
 
     // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
-    // so a future wording tweak there can never silently detune the dot's color.
-    internal static IBrush StatusDotFor(
+    // so a future wording tweak there can never silently detune the color.
+    internal static IBrush StatusBrushFor(
             AttachStatus status, string daemonConnection, bool signInExpired = false) {
-        if (signInExpired) return DotBrush(StatusColors.Disrupted);
-        if (status.State == AttachState.Connecting) return DotBrush(StatusColors.InProgress);
+        if (signInExpired) return Paint(StatusColors.Disrupted);
+        if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? DotBrush(StatusColors.Disrupted) : DotBrush(StatusColors.Unavailable);
+            return status.Reason == IncompatibleReason ? Paint(StatusColors.Disrupted) : Paint(StatusColors.Unavailable);
 
         return daemonConnection switch {
-            "connected" => DotBrush(StatusColors.Connected),
-            "connecting" or "reconnecting" => DotBrush(StatusColors.InProgress),
-            "disconnected" => DotBrush(StatusColors.Disrupted),
-            _ => DotBrush(StatusColors.Unavailable),
+            "connected" => Paint(StatusColors.Connected),
+            "connecting" or "reconnecting" => Paint(StatusColors.InProgress),
+            "disconnected" => Paint(StatusColors.Disrupted),
+            _ => Paint(StatusColors.Unavailable),
         };
     }
 

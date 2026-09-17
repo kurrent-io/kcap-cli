@@ -1,9 +1,9 @@
 namespace Capacitor.App;
 
 /// Hex-only constants (plain strings, not Brush instances) shared by MainWindowViewModel's
-/// status line dot and TrayIconRenderer's per-state tray-icon overlay, so the window and the
+/// status word and TrayIconRenderer's per-state tray-icon overlay, so the window and the
 /// tray icon can never disagree about what a color means. Callers build their own Brush per
-/// use (see MainWindowViewModel.DotBrush) rather than caching one here, for the same
+/// use (see MainWindowViewModel.Paint) rather than caching one here, for the same
 /// UI-thread-affinity reason documented there.
 public static class StatusColors {
     public const string Connected   = "#4CAF50";
