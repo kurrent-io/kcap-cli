@@ -79,6 +79,23 @@
             <Setter Property="Text" Value="·" />
             <Setter Property="RenderTransform" Value="scale(1.5)" />
         </Style>
+        <!-- WrapPanel Center matches layout boxes, not glyph baselines, so a padded 11px
+             chip sits the vendor word high of 12.5px meta. One line box and Bottom
+             put the chip labels and the running-time on the same baseline. -->
+        <Style Selector="Border.railChip">
+            <Setter Property="VerticalAlignment" Value="Bottom" />
+        </Style>
+        <Style Selector="TextBlock.railChipLabel">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="LineHeight" Value="16" />
+        </Style>
+        <Style Selector="TextBlock.railMeta">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="LineHeight" Value="16" />
+            <Setter Property="Padding" Value="0,2,0,2" />
+            <Setter Property="VerticalAlignment" Value="Bottom" />
+            <Setter Property="Margin" Value="0,0,0,3" />
+        </Style>
         <Style Selector="Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
@@ -313,28 +330,29 @@
                                                                                          name is unusually long. Each label is also individually width-capped and
                                                                                          trims, so no single chip can push a line past the rail either. -->
                                                                                     <WrapPanel>
-                                                                                        <Border IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
-                                                                                                Padding="6,2" Margin="0,0,6,3" VerticalAlignment="Center"
+                                                                                        <Border Classes="railChip" IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
+                                                                                                Padding="6,2" Margin="0,0,6,3"
                                                                                                 Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
-                                                                                            <TextBlock Text="{Binding Vendor}" FontSize="11" FontWeight="SemiBold"
+                                                                                            <TextBlock Text="{Binding Vendor}" Classes="railChipLabel"
+                                                                                                       FontWeight="SemiBold"
                                                                                                        TextTrimming="CharacterEllipsis"
                                                                                                        Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
                                                                                         </Border>
-                                                                                        <Border IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
-                                                                                                Padding="6,2" Margin="0,0,6,3" VerticalAlignment="Center"
+                                                                                        <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
+                                                                                                Padding="6,2" Margin="0,0,6,3"
                                                                                                 Background="{StaticResource KcapInfoDimBrush}">
-                                                                                            <TextBlock Text="{Binding Model}" FontSize="11"
+                                                                                            <TextBlock Text="{Binding Model}" Classes="railChipLabel"
                                                                                                        Foreground="{StaticResource KcapInfoBrush}"
                                                                                                        TextTrimming="CharacterEllipsis" />
                                                                                         </Border>
-                                                                                        <Border IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                                                        <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
                                                                                                 Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
-                                                                                                CornerRadius="3" Padding="4,0" Margin="0,0,6,3" VerticalAlignment="Center">
-                                                                                            <TextBlock Text="{Binding MachineBadge}" FontSize="11"
+                                                                                                CornerRadius="3" Padding="4,2" Margin="0,0,6,3">
+                                                                                            <TextBlock Text="{Binding MachineBadge}" Classes="railChipLabel"
                                                                                                        TextTrimming="CharacterEllipsis"
                                                                                                        Foreground="{StaticResource KcapFaintBrush}" />
                                                                                         </Border>
-                                                                                        <TextBlock Text="{Binding Meta}" FontSize="12.5" VerticalAlignment="Center"
+                                                                                        <TextBlock Text="{Binding Meta}" Classes="railMeta"
                                                                                                    Foreground="{StaticResource KcapFaintBrush}" />
                                                                                     </WrapPanel>
                                                                                 </StackPanel>

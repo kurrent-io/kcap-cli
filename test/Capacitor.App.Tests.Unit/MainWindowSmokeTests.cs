@@ -4,6 +4,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -618,6 +619,43 @@ public class MainWindowSmokeTests {
             await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
             await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
             await Assert.That(seen.TitleTip).IsEqualTo("Fix the flaky test");
+        });
+    }
+
+    /// WrapPanel Center matches the chip and meta boxes, not the glyph baselines — a padded
+    /// 11px vendor chip then sits the vendor word high of a larger running-time. One line box
+    /// and Bottom keep them on the same baseline.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Vendor_chip_and_running_time_share_a_baseline() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow();
+                var row = RailRow(window, "Fix the flaky test");
+                var chip = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("railChip"));
+                var label = chip.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railChipLabel"));
+                var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var result = (
+                    ChipAlign: chip.VerticalAlignment,
+                    MetaAlign: meta.VerticalAlignment,
+                    LabelSize: label.FontSize,
+                    MetaSize: meta.FontSize,
+                    LabelLine: label.LineHeight,
+                    MetaLine: meta.LineHeight,
+                    ChipPadTop: chip.Padding.Top,
+                    ChipPadBottom: chip.Padding.Bottom,
+                    MetaPadTop: meta.Padding.Top,
+                    MetaPadBottom: meta.Padding.Bottom);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.ChipAlign).IsEqualTo(VerticalAlignment.Bottom);
+            await Assert.That(seen.MetaAlign).IsEqualTo(VerticalAlignment.Bottom);
+            await Assert.That(seen.LabelSize).IsEqualTo(seen.MetaSize);
+            await Assert.That(seen.LabelLine).IsEqualTo(seen.MetaLine);
+            await Assert.That(seen.ChipPadTop).IsEqualTo(seen.MetaPadTop);
+            await Assert.That(seen.ChipPadBottom).IsEqualTo(seen.MetaPadBottom);
         });
     }
 
