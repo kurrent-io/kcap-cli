@@ -671,10 +671,15 @@ with `Retry-After`. Both bounds shape the batching:
 
 - A cohort batch asks "which of these ids are present and which completed"; a truncated answer is
   incomplete and is never committed. Each batch requests `max_rows` equal to its size.
-- **Budget: at most 20 cohort queries per poll, including the first.** With a poll every 30 seconds
-  that is 40 starts a minute, leaving room for the enrichment queries (at most six over the whole
-  run) and a retry. The smallest batch the budget allows is `floor = ceil(N / 20)` where `N` is the
-  cohort size — 25 for 500 ids, 10 for 200, 5 for 100.
+- **Budget: at most 20 cohort queries per poll, including the first, issued one at a time.** With a
+  poll every 30 seconds that is 40 starts a minute, leaving room for the enrichment queries (at most
+  six over the whole run) and a retry. The smallest batch the budget allows is
+  `floor = ceil(N / 20)` where `N` is the cohort size — 25 for 500 ids, 10 for 200, 5 for 100.
+  **Serial dispatch is mandatory:** the server also caps queries in flight per user
+  (`AnalyticsQueryOptions.MaxConcurrentPerUser`, default 2, configurable down to 1) and answers the
+  excess with a 429 whose detail carries no `retry after` phrase. The skill therefore never has more
+  than one analytics call outstanding — each batch, and each enrichment query, waits for the previous
+  one to return — so a healthy server never rejects a poll for concurrency.
 - **No probing.** The first poll runs at batch size `floor` exactly, so it spends at most 20
   queries. Every successful query body carries the server's effective `max_rows` (the same field the
   MCP reads for its truncation trailer), so after the first poll the skill knows the cap. **The cap,
@@ -885,7 +890,9 @@ cohort's first poll runs at batch 25 and issues exactly 20 queries, no probe; wi
 of 10 and a **sparse** first snapshot (every batch returns fewer than 10 rows, `truncated: false`,
 `max_rows: 10`) that first poll fails closed on the reported cap and says so, having spent 20
 requests and never tripping the 60-per-minute limit; with a cap of 25 the first poll succeeds in 20
-queries and later polls stay at 25; with a cap of 300 later polls rise to batch 100 and 5 queries; a 429 whose detail says `retry
+queries and later polls stay at 25; with a cap of 300 later polls rise to batch 100 and 5 queries;
+**serial dispatch**: a 20-batch poll against a fake enforcing a per-user concurrency limit of 1
+completes with no 429, and the fixture asserts no two analytics calls overlap; a 429 whose detail says `retry
 after 37s` delays the next poll 37 seconds, one without the phrase delays it 60; a truncated
 enrichment response omits that session's detail; `analytics_not_in_plan` from the server closing immediately without
 polling; **binding fails closed**: a `whoami` server that differs from the file's issues zero queries
