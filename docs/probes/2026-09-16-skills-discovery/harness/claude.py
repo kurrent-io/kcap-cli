@@ -94,7 +94,7 @@ class ClaudeAdapter(Adapter):
                 raise ValueError(f"is_error: {json.dumps(obj)[:300]}")
             return obj.get("result") or ""
 
-        res = print_ask(self.print_argv(sb, prompt), sb.repo, sb.env, sb.root / "claude.stderr.log",
+        res = print_ask(self.print_argv(sb, prompt), sb.cwd, sb.env, sb.root / "claude.stderr.log",
                         self.turn_timeout, extract=extract)
         res.notes = (res.notes + f" config={'real' if self.real_config else 'isolated'}").strip()
         return res

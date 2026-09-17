@@ -92,13 +92,13 @@ class KiroAdapter(Adapter):
         binary = self.binary_path() or self.binary
         agent = ["--agent", self.agent_name] if self.agent_name else []
         if mode == "daemon":
-            res = acp_ask([binary, "acp", "--trust-all-tools", *agent], sb.repo, sb.env, prompt,
+            res = acp_ask([binary, "acp", "--trust-all-tools", *agent], sb.cwd, sb.env, prompt,
                           sb.root / "kiro-acp.stderr.log", self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_kiro_tools(res.raw)).strip()
             return res
         argv = [binary, "chat", "--no-interactive", "--trust-all-tools", *agent, prompt]
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "kiro.stderr.log", self.turn_timeout)
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "kiro.stderr.log", self.turn_timeout)
         # Plain chat output carries the answer only, so tool use is unobservable in this mode.
         res.notes = (res.notes + " tools=unobserved").strip()
         return res

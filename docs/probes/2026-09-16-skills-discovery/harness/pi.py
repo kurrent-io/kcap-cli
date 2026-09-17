@@ -75,7 +75,7 @@ class PiAdapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = pirpc_ask([binary, "--mode", "rpc", "--approve"], sb.repo, sb.env, prompt,
+            res = pirpc_ask([binary, "--mode", "rpc", "--approve"], sb.cwd, sb.env, prompt,
                             sb.root / "pi-rpc.stderr.log", self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_pi_tools(frame_events(res.raw))).strip()
@@ -94,7 +94,7 @@ class PiAdapter(Adapter):
             return "\n".join(texts)
 
         argv = [binary, "-p", "--mode", "json", "--approve", "--", prompt]
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "pi.stderr.log", self.turn_timeout, extract=extract)
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "pi.stderr.log", self.turn_timeout, extract=extract)
         res.notes = (res.notes + " " + classify_pi_tools(json_lines(res.raw))).strip()
         return res
 

@@ -92,7 +92,7 @@ class OpenCodeV1Adapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = acp_ask([binary, "acp", *self.extra_argv], sb.repo, sb.env, prompt,
+            res = acp_ask([binary, "acp", *self.extra_argv], sb.cwd, sb.env, prompt,
                           sb.root / "opencode-acp.stderr.log", self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_acp_tools(res.raw)).strip()
@@ -111,7 +111,7 @@ class OpenCodeV1Adapter(Adapter):
             return "\n".join(texts) if texts else raw
 
         argv = [binary, "run", *self.extra_argv, "--format", "json", prompt]
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "opencode.stderr.log", self.turn_timeout, extract=extract)
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "opencode.stderr.log", self.turn_timeout, extract=extract)
         if "USAGE" in res.reply_text and "FLAGS" in res.reply_text:
             # The CLI printed its usage instead of running: an invocation error, not an answer.
             res.reply_text = ""

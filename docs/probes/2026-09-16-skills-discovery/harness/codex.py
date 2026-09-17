@@ -40,7 +40,7 @@ class CodexAdapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = appserver_ask(binary, sb.repo, sb.env, prompt, sb.root / "codex-appserver.stderr.log",
+            res = appserver_ask(binary, sb.cwd, sb.env, prompt, sb.root / "codex-appserver.stderr.log",
                                 self.turn_timeout)
             # The driver's flat tool count is replaced by the classification that knows a listed read.
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
@@ -64,7 +64,7 @@ class CodexAdapter(Adapter):
                     texts.append(item.get("text", ""))
             return "\n".join(texts)
 
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "codex.stderr.log", self.turn_timeout,
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "codex.stderr.log", self.turn_timeout,
                         stdin_text=prompt, extract=extract)
         res.notes = (res.notes + " " + classify_tool_items(exec_items(res.raw))).strip()
         return res

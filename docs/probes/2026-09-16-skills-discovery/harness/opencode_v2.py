@@ -53,7 +53,7 @@ class OpenCodeV2Adapter(OpenCodeV1Adapter):
             return super().ask(sb, mode, prompt)
         binary = self.binary_path() or self.binary
         try:
-            res = acp_ask([binary, "acp"], sb.repo, sb.env, prompt, sb.root / "opencode-acp.stderr.log",
+            res = acp_ask([binary, "acp"], sb.cwd, sb.env, prompt, sb.root / "opencode-acp.stderr.log",
                           self.turn_timeout)
         finally:
             subprocess.run([binary, "service", "stop"], env=sb.env, capture_output=True, text=True, timeout=60)

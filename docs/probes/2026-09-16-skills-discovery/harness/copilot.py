@@ -47,7 +47,7 @@ class CopilotAdapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = acp_ask([binary, "--acp", "--stdio"], sb.repo, sb.env, prompt, sb.root / "copilot-acp.stderr.log",
+            res = acp_ask([binary, "--acp", "--stdio"], sb.cwd, sb.env, prompt, sb.root / "copilot-acp.stderr.log",
                           self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_copilot_tools(acp_tool_calls(res.raw))).strip()
@@ -67,7 +67,7 @@ class CopilotAdapter(Adapter):
                         texts.append(content)
             return "\n".join(texts)
 
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "copilot.stderr.log", self.turn_timeout, extract=extract)
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "copilot.stderr.log", self.turn_timeout, extract=extract)
         res.notes = (res.notes + " " + classify_copilot_tools(print_tool_calls(res.raw))).strip()
         return res
 

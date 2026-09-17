@@ -130,6 +130,19 @@ class IsolationTests(unittest.TestCase):
             finally:
                 sb.cleanup()
 
+    def test_cwd_defaults_to_repo_and_worktree_is_linked(self):
+        from lib.isolation import add_worktree
+        sb = new_sandbox("FAKE_HOME", None, [])
+        try:
+            self.assertEqual(sb.cwd, sb.repo)
+            wt = add_worktree(sb)
+            self.assertTrue((wt / ".git").is_file())
+            self.assertEqual(git(wt, "branch", "--show-current").strip(), "wt-b")
+            self.assertEqual(git(sb.repo, "branch", "--show-current").strip(), "main")
+            self.assertTrue((wt / "README.md").is_file())
+        finally:
+            sb.cleanup()
+
 
 from lib.git_exclusion import EXCLUSIONS, apply, assert_untracked_state  # noqa: E402
 
@@ -183,6 +196,20 @@ class GitExclusionTests(unittest.TestCase):
             self.assertEqual(written, written.resolve())
             self.assertEqual(assert_untracked_state(wt, rel, "info-exclude"), "")
             self.assertIn(EXCLUSIONS[2], "info-exclude")
+
+    def test_info_exclude_in_linked_worktree_resolves_to_common_dir(self):
+        from lib.isolation import add_worktree
+        sb = new_sandbox("FAKE_HOME", None, [])
+        try:
+            wt = add_worktree(sb)
+            d = wt / ".x" / "skills" / "kcap-probe-abc"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text("x\n")
+            target = apply(wt, "info-exclude", ".x/skills/kcap-probe-abc")
+            self.assertEqual(target, (sb.repo / ".git" / "info" / "exclude").resolve())
+            assert_untracked_state(wt, ".x/skills/kcap-probe-abc", "info-exclude")
+        finally:
+            sb.cleanup()
 
 
 from lib.probe_skill import Reply  # noqa: E402

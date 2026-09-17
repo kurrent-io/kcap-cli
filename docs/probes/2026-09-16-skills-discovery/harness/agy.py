@@ -69,9 +69,9 @@ class AgyAdapter(Adapter):
         text = f"/{named.group(0)} {prompt}" if named else prompt
         # The current directory alone is not the workspace in print mode; --add-dir makes it one.
         argv = [self.binary_path() or self.binary, "-p", text, "--output-format", "stream-json",
-                "--dangerously-skip-permissions", "--print-timeout", "180s", "--add-dir", str(sb.repo)]
+                "--dangerously-skip-permissions", "--print-timeout", "180s", "--add-dir", str(sb.cwd)]
         try:
-            res = print_ask(argv, sb.repo, sb.env, sb.root / "agy.stderr.log", self.turn_timeout, extract=extract)
+            res = print_ask(argv, sb.cwd, sb.env, sb.root / "agy.stderr.log", self.turn_timeout, extract=extract)
         finally:
             self.cleanup_hook(sb)
         if named:

@@ -68,7 +68,7 @@ class CursorAdapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = acp_ask([binary, "acp", "--trust"], sb.repo, sb.env, prompt, sb.root / "cursor-acp.stderr.log",
+            res = acp_ask([binary, "acp", "--trust"], sb.cwd, sb.env, prompt, sb.root / "cursor-acp.stderr.log",
                           self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_cursor_tools(res.raw)).strip()
@@ -93,7 +93,7 @@ class CursorAdapter(Adapter):
         # json and text formats then print nothing, while stream-json has already streamed the
         # answer, so the answer is read from the stream and the exit code is recorded beside it.
         argv = [binary, "-p", "--output-format", "stream-json", "--trust", "--force", prompt]
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "cursor.stderr.log", self.turn_timeout, extract=extract)
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "cursor.stderr.log", self.turn_timeout, extract=extract)
         res.notes = (res.notes + " " + classify_cursor_stream(res.raw)).strip()
         return res
 

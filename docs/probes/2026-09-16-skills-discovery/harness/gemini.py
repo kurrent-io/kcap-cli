@@ -52,10 +52,10 @@ class GeminiAdapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            return acp_ask([binary, "--experimental-acp", "--skip-trust", "--approval-mode", "yolo"], sb.repo, sb.env,
+            return acp_ask([binary, "--experimental-acp", "--skip-trust", "--approval-mode", "yolo"], sb.cwd, sb.env,
                            prompt, sb.root / "gemini-acp.stderr.log", self.turn_timeout)
         argv = [binary, "-p", prompt, "-o", "json", "--approval-mode", "yolo"]
-        return print_ask(argv, sb.repo, sb.env, sb.root / "gemini.stderr.log", self.turn_timeout,
+        return print_ask(argv, sb.cwd, sb.env, sb.root / "gemini.stderr.log", self.turn_timeout,
                          extract=lambda raw: json.loads(raw).get("response") or "")
 
     def list_catalogue(self, sb: Sandbox) -> str | None:
