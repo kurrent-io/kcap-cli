@@ -73,13 +73,23 @@ def load_runs(outdir: Path) -> list[RunRecord]:
     return runs
 
 
+def _evidence(path: Path, target: Path) -> str:
+    try:
+        return str(path.relative_to(target.parent))
+    except ValueError:
+        return str(path)
+
+
 def emit_matrix(outdir: Path, target: Path) -> list[dict]:
     runs = load_runs(outdir)
     groups: dict[tuple, list[RunRecord]] = {}
     for r in runs:
         # Version is part of the key: runs from two versions of one entry are never averaged,
         # and the older measurement keeps its own row rather than disappearing.
-        groups.setdefault((r.entry, r.version, r.mode, r.scenario, r.arm, r.root or "", r.exclusion), []).append(r)
+        # The operating system is part of the key: two machines' runs are two findings, not an
+        # average of one.
+        groups.setdefault((r.entry, r.version, r.os, r.mode, r.scenario, r.arm, r.root or "", r.exclusion),
+                          []).append(r)
     rows = []
     for key in sorted(groups):
         members = groups[key]
@@ -90,7 +100,7 @@ def emit_matrix(outdir: Path, target: Path) -> list[dict]:
             "mode": first.mode, "scenario": first.scenario, "arm": first.arm, "root": first.root,
             "exclusion": first.exclusion, "verdict": verdict, "flaky": flaky, "runs": len(members),
             "mechanism": (first.hook or {}).get("mechanism"),
-            "evidence": [str(m._path.relative_to(target.parent)) for m in members],  # type: ignore[attr-defined]
+            "evidence": [_evidence(m._path, target) for m in members],  # type: ignore[attr-defined]
             "notes": "; ".join(dict.fromkeys(m.notes for m in members if m.notes)),
         })
     target.write_text(json.dumps(rows, indent=2) + "\n")

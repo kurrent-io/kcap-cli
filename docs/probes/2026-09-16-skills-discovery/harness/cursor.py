@@ -5,8 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from harness.base import Adapter, AskResult, HookInfo
-from lib.acp_driver import acp_ask
+from harness.base import Adapter, AskResult, ClassifiedSession, HookInfo, Session
+from lib.acp_driver import AcpSession, acp_ask
 from lib.isolation import Sandbox
 from lib.print_driver import print_ask
 
@@ -22,6 +22,9 @@ class CursorAdapter(Adapter):
     lever = "CURSOR_PROBE_UNUSED"
     native_root = ".cursor/skills"
     documented_roots = frozenset({".cursor/skills", ".agents/skills", ".claude/skills", ".codex/skills"})
+    modes = ("print", "daemon", "tui")
+    can_resume = True
+    tui_exit = ("/exit\r", "\x03", "\x03")
 
     def real_root(self) -> Path | None:
         return Path.home()
@@ -63,16 +66,46 @@ class CursorAdapter(Adapter):
         script.chmod(0o755)
         self._hooks(sb).write_text(json.dumps({"version": 1, "hooks": {"workspaceOpen": [{"command": str(script)}]}},
                                               indent=2) + "\n")
-        return HookInfo(mechanism="project .cursor/hooks.json workspaceOpen pluginPaths", config_path=str(self._hooks(sb)))
+        return HookInfo(mechanism="project .cursor/hooks.json workspaceOpen pluginPaths",
+                        config_path=str(self._hooks(sb)), target=target)
+
+    def acp_argv(self) -> list[str]:
+        return [self.binary_path() or self.binary, "acp", "--trust"]
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary, "--trust"]
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "daemon":
+            return super().open_session(sb, mode)
+        inner = AcpSession(self.acp_argv(), sb.cwd, sb.env, sb.root / "cursor-acp.stderr.log", self.turn_timeout)
+        inner.start()
+        return ClassifiedSession(inner, lambda r: classify_cursor_tools(r.raw))
+
+    def session_id(self, res: AskResult) -> str | None:
+        for line in res.raw.splitlines():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj.get("session_id"), str):
+                return obj["session_id"]
+        return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._print(sb, prompt, [f"--resume={session_id}"])
 
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
-        binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = acp_ask([binary, "acp", "--trust"], sb.repo, sb.env, prompt, sb.root / "cursor-acp.stderr.log",
+            res = acp_ask(self.acp_argv(), sb.cwd, sb.env, prompt, sb.root / "cursor-acp.stderr.log",
                           self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_cursor_tools(res.raw)).strip()
             return res
+        return self._print(sb, prompt)
+
+    def _print(self, sb: Sandbox, prompt: str, extra: list[str] = ()) -> AskResult:
+        binary = self.binary_path() or self.binary
 
         def extract(raw: str) -> str:
             texts = []
@@ -92,8 +125,8 @@ class CursorAdapter(Adapter):
         # Print mode ends every tool-using turn with "WritableIterable is closed" and exit 1; the
         # json and text formats then print nothing, while stream-json has already streamed the
         # answer, so the answer is read from the stream and the exit code is recorded beside it.
-        argv = [binary, "-p", "--output-format", "stream-json", "--trust", "--force", prompt]
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "cursor.stderr.log", self.turn_timeout, extract=extract)
+        argv = [binary, "-p", "--output-format", "stream-json", "--trust", "--force", *extra, prompt]
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "cursor.stderr.log", self.turn_timeout, extract=extract)
         res.notes = (res.notes + " " + classify_cursor_stream(res.raw)).strip()
         return res
 
@@ -132,7 +165,10 @@ class CursorUserHooksAdapter(CursorAdapter):
         info = super().install_registration(sb, skill_file, body)
         script = json.loads(Path(info.config_path).read_text())["hooks"]["workspaceOpen"][0]["command"]
         Path(info.config_path).unlink()
-        return self._merge(sb, "workspaceOpen", script)
+        merged = self._merge(sb, "workspaceOpen", script)
+        # The plugin directory the hook writes into is the same one either file points at.
+        merged.target = info.target
+        return merged
 
     def cleanup_hook(self, sb: Sandbox) -> None:
         if not self._touched:

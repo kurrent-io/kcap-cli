@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from harness.base import AskResult
+from harness.base import AskResult, Session
 from lib.jsonl_child import JsonlChild
 
 
@@ -58,69 +58,108 @@ def hook_state_override(hooks: list[dict]) -> str | None:
     return f"hooks.state={{{entries}}}"
 
 
-def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: Path,
-                  timeout: float = 180.0, extra_argv: list[str] = ()) -> AskResult:
-    started = time.time()
-    argv = [binary, "app-server", *extra_argv]
-    notes = []
-    text = ""
-    tools = 0
-    first = started
-    child = JsonlChild(argv, cwd, env, stderr_path)
-    prior_frames: list[dict] = []
-    try:
-        child.start()
-        rpc = _Rpc(child)
+class AppServerSession(Session):
+    def __init__(self, binary: str, cwd: Path, env: dict, stderr_path: Path, timeout: float = 180.0,
+                 extra_argv: list[str] = ()) -> None:
+        self.argv = [binary, "app-server", *extra_argv]
+        self.cwd = Path(cwd)
+        self.env = env
+        self.stderr_path = stderr_path
+        self.timeout = timeout
+        self.child = JsonlChild(self.argv, self.cwd, env, stderr_path)
+        self.rpc: _Rpc | None = None
+        self.tid: str | None = None
+        self.notes: list[str] = []
+        self._raw_from = 0
+        self.prior_frames: list[dict] = []
+        self.started_at = time.time()
+
+    def start(self) -> None:
+        try:
+            self._start()
+        except BaseException:
+            # The child is already spawned, and a caller that never got the session cannot close it.
+            self.close()
+            raise
+
+    def _start(self) -> None:
+        self.child.start()
+        self.rpc = _Rpc(self.child)
         init = {"clientInfo": {"name": "kcap-probe", "version": "1"}, "capabilities": {}}
-        rpc.request("initialize", init, 60)
-        listed = rpc.request("hooks/list", {}, 60).get("result") or {}
+        self.rpc.request("initialize", init, 60)
+        listed = self.rpc.request("hooks/list", {}, 60).get("result") or {}
         # The app-server groups hooks per cwd under `data`; a flat `hooks` list is kept for safety.
         hooks = list(listed.get("hooks") or [])
         for group in listed.get("data") or []:
             hooks += list(group.get("hooks") or [])
         override = hook_state_override(hooks)
         if override:
-            child.stop()
-            prior_frames = list(child.frames)
-            argv = [*argv, "-c", override]
-            child = JsonlChild(argv, cwd, env, stderr_path)
-            child.start()
-            rpc = _Rpc(child)
-            rpc.request("initialize", init, 60)
-            notes.append("hook_trust=seeded")
+            self.child.stop()
+            self.prior_frames = list(self.child.frames)
+            self.argv = [*self.argv, "-c", override]
+            self.child = JsonlChild(self.argv, self.cwd, self.env, self.stderr_path)
+            self.child.start()
+            self.rpc = _Rpc(self.child)
+            self.rpc.request("initialize", init, 60)
+            self.notes.append("hook_trust=seeded")
         elif not hooks:
-            notes.append("hook_trust=none")
+            self.notes.append("hook_trust=none")
         elif any(h.get("trustStatus") == "trusted" for h in hooks):
-            notes.append("hook_trust=trusted")
+            self.notes.append("hook_trust=trusted")
         else:
-            notes.append("hook_trust=untrusted-unseedable")
-        thread = rpc.request("thread/start", {
-            "cwd": str(cwd), "sandbox": "read-only", "approvalPolicy": "never", "approvalsReviewer": "user",
+            self.notes.append("hook_trust=untrusted-unseedable")
+        thread = self.rpc.request("thread/start", {
+            "cwd": str(self.cwd), "sandbox": "read-only", "approvalPolicy": "never", "approvalsReviewer": "user",
         }, 120)
-        tid = ((thread.get("result") or {}).get("thread") or {}).get("id")
-        if not tid:
-            notes.append(f"thread/start failed: {json.dumps(thread)[:500]}")
-        else:
-            first = time.time()
-            rpc.request("turn/start", {
-                "threadId": tid, "input": [{"type": "text", "text": prompt}],
-                "sandboxPolicy": {"type": "readOnly"}, "approvalPolicy": "never", "approvalsReviewer": "user",
-            }, timeout)
-            done = rpc.wait_notification("turn/completed", timeout)
-            notes.append(f"turn={(((done or {}).get('params') or {}).get('turn') or {}).get('status')}")
-            items = [(n.get("params") or {}).get("item") or {} for n in rpc.notifications
-                     if n.get("method") == "item/completed"]
-            completed = [i["text"] for i in items if i.get("type") == "agentMessage" and isinstance(i.get("text"), str)]
-            tools = sum(1 for i in items
-                        if i.get("type") and i["type"] not in ("agentMessage", "reasoning", "userMessage"))
-            deltas = [n["params"].get("delta", "") for n in rpc.notifications if n.get("method") == "item/agentMessage/delta"]
-            text = "\n".join(completed) if completed else "".join(deltas)
-    except Exception as ex:  # noqa: BLE001
-        notes.append(f"exception={ex!r}")
+        self.tid = ((thread.get("result") or {}).get("thread") or {}).get("id")
+        if not self.tid:
+            self.notes.append(f"thread/start failed: {json.dumps(thread)[:500]}")
+
+    def ask(self, prompt: str) -> AskResult:
+        first = time.time()
+        notes = list(self.notes)
+        text, tools = "", 0
+        before = len(self.rpc.notifications) if self.rpc is not None else 0
+        try:
+            if self.tid and self.rpc is not None:
+                self.rpc.request("turn/start", {
+                    "threadId": self.tid, "input": [{"type": "text", "text": prompt}],
+                    "sandboxPolicy": {"type": "readOnly"}, "approvalPolicy": "never", "approvalsReviewer": "user",
+                }, self.timeout)
+                done = self.rpc.wait_notification("turn/completed", self.timeout)
+                notes.append(f"turn={(((done or {}).get('params') or {}).get('turn') or {}).get('status')}")
+                fresh = self.rpc.notifications[before:]
+                items = [(n.get("params") or {}).get("item") or {} for n in fresh if n.get("method") == "item/completed"]
+                completed = [i["text"] for i in items if i.get("type") == "agentMessage" and isinstance(i.get("text"), str)]
+                tools = sum(1 for i in items
+                            if i.get("type") and i["type"] not in ("agentMessage", "reasoning", "userMessage"))
+                deltas = [n["params"].get("delta", "") for n in fresh if n.get("method") == "item/agentMessage/delta"]
+                text = "\n".join(completed) if completed else "".join(deltas)
+        except Exception as ex:  # noqa: BLE001
+            notes.append(f"exception={ex!r}")
+        # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
+        notes.append(f"tools_used={tools}")
+        # Each turn's raw stream starts where the previous one ended (the first includes the
+        # startup exchange), so a reply parsed from raw cannot credit an earlier turn's token.
+        stream = self.prior_frames + self.child.frames
+        raw = json.dumps(stream[self._raw_from:])
+        self._raw_from = len(stream)
+        return AskResult(reply_text=text, raw=raw, argv=list(self.argv),
+                         started_at=self.started_at, first_request_at=first, stderr_path=str(self.stderr_path),
+                         exit_code=self.child.returncode, notes=" ".join(notes))
+
+    def close(self) -> None:
+        self.child.stop()
+
+
+def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: Path,
+                  timeout: float = 180.0, extra_argv: list[str] = ()) -> AskResult:
+    session = AppServerSession(binary, cwd, env, stderr_path, timeout, extra_argv)
+    try:
+        try:
+            session.start()
+        except Exception as ex:  # noqa: BLE001
+            session.notes.append(f"exception={ex!r}")
+        return session.ask(prompt)
     finally:
-        child.stop()
-    # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
-    notes.append(f"tools_used={tools}")
-    return AskResult(reply_text=text, raw=json.dumps(prior_frames + child.frames), argv=argv, started_at=started,
-                     first_request_at=first, stderr_path=str(stderr_path), exit_code=child.returncode,
-                     notes=" ".join(notes))
+        session.close()

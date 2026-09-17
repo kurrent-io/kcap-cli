@@ -38,6 +38,13 @@ class Sandbox:
     # Logs already copied out of this sandbox, source path to destination, so a sandbox that
     # yields several rows copies each log once.
     copied_logs: dict[str, str] = field(default_factory=dict)
+    # Where the vendor is launched: the repo unless an arm moves it into a subdirectory or a
+    # linked worktree. Hooks and plugins installed per project stay under `repo`.
+    cwd: Path = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.cwd is None:
+            self.cwd = self.repo
 
     def cleanup(self) -> None:
         if not self.keep:
@@ -82,3 +89,11 @@ def new_sandbox(
     if extra_env:
         env.update(extra_env)
     return Sandbox(root=root, repo=repo, config_root=config_root, env=env, keep=keep)
+
+
+def add_worktree(sb: Sandbox, name: str = "wt-b") -> Path:
+    """A linked worktree beside the repo on its own branch: its `.git` is a file pointing into the
+    main checkout, and git resolves its `info/exclude` to the shared common directory."""
+    path = sb.root / name
+    git(sb.repo, "worktree", "add", "-q", "-b", name, str(path))
+    return path.resolve()

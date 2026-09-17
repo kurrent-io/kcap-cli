@@ -18,7 +18,7 @@ class KitLayoutTests(unittest.TestCase):
 
 
 from lib.probe_skill import (  # noqa: E402
-    NO_SKILL, ProbeSkill, multi_prompt, parse_reply, single_prompt, write_skill,
+    NO_SKILL, TOKEN_RE, ProbeSkill, multi_prompt, parse_reply, single_prompt, write_skill,
 )
 
 
@@ -65,6 +65,37 @@ class ProbeSkillTests(unittest.TestCase):
         r = parse_reply(f"The skill listed is {other.name}, not {s.name}.", "", name=s.name)
         self.assertTrue(r.skill_named)
         r = parse_reply(f"Only {other.name} is available.", "", name=s.name)
+        self.assertFalse(r.skill_named)
+
+    def test_a_marked_prompt_ignores_an_earlier_reply(self):
+        from lib.probe_skill import extract_tui_reply, tui_prompt
+        s = ProbeSkill.fresh()
+        later = tui_prompt(s, again=True)
+        self.assertIn("PROBE-MARK-", later)
+        # The transcript a vendor redraws still holds the previous turn's answer.
+        screen = "PROBE-REPLY: NO-SKILL\n" + later + "\nPROBE-REPLY: " + later.split("PROBE-REPLY: ")[1][:15]
+        self.assertEqual(extract_tui_reply(screen, later), "")
+        mark = re.search(r"PROBE-MARK-[0-9a-f]{4}", later).group(0)
+        answered = screen + f"\nPROBE-REPLY: {mark} {s.body_token}\n"
+        self.assertEqual(extract_tui_reply(answered, later), f"PROBE-REPLY: {s.body_token}")
+        self.assertEqual(extract_tui_reply(answered, tui_prompt(s)), "PROBE-REPLY: NO-SKILL")
+
+    def test_variant_and_tui_prompt(self):
+        from lib.probe_skill import TUI_REPLY_RE, extract_tui_reply, tui_prompt
+        s = ProbeSkill.fresh()
+        v = s.variant()
+        self.assertEqual(v.name, s.name)
+        self.assertNotEqual(v.token, s.token)
+        prompt = tui_prompt(s)
+        self.assertNotIn(s.token, prompt)
+        self.assertIn(s.name, prompt)
+        self.assertEqual(extract_tui_reply(prompt), "")
+        screen = f"> {prompt}\n\n  **PROBE-REPLY: {s.body_token}**\n> "
+        self.assertEqual(extract_tui_reply(screen), f"PROBE-REPLY: {s.body_token}")
+        self.assertEqual(extract_tui_reply("PROBE-REPLY: NO-SKILL\n"), "PROBE-REPLY: NO-SKILL")
+        self.assertIsNotNone(TUI_REPLY_RE.search("PROBE-REPLY:  NO-SKILL"))
+        r = parse_reply(extract_tui_reply(screen), "", s.name)
+        self.assertIn(s.token, r.tokens)
         self.assertFalse(r.skill_named)
 
 
@@ -130,6 +161,19 @@ class IsolationTests(unittest.TestCase):
             finally:
                 sb.cleanup()
 
+    def test_cwd_defaults_to_repo_and_worktree_is_linked(self):
+        from lib.isolation import add_worktree
+        sb = new_sandbox("FAKE_HOME", None, [])
+        try:
+            self.assertEqual(sb.cwd, sb.repo)
+            wt = add_worktree(sb)
+            self.assertTrue((wt / ".git").is_file())
+            self.assertEqual(git(wt, "branch", "--show-current").strip(), "wt-b")
+            self.assertEqual(git(sb.repo, "branch", "--show-current").strip(), "main")
+            self.assertTrue((wt / "README.md").is_file())
+        finally:
+            sb.cleanup()
+
 
 from lib.git_exclusion import EXCLUSIONS, apply, assert_untracked_state  # noqa: E402
 
@@ -184,6 +228,20 @@ class GitExclusionTests(unittest.TestCase):
             self.assertEqual(assert_untracked_state(wt, rel, "info-exclude"), "")
             self.assertIn(EXCLUSIONS[2], "info-exclude")
 
+    def test_info_exclude_in_linked_worktree_resolves_to_common_dir(self):
+        from lib.isolation import add_worktree
+        sb = new_sandbox("FAKE_HOME", None, [])
+        try:
+            wt = add_worktree(sb)
+            d = wt / ".x" / "skills" / "kcap-probe-abc"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text("x\n")
+            target = apply(wt, "info-exclude", ".x/skills/kcap-probe-abc")
+            self.assertEqual(target, (sb.repo / ".git" / "info" / "exclude").resolve())
+            assert_untracked_state(wt, ".x/skills/kcap-probe-abc", "info-exclude")
+        finally:
+            sb.cleanup()
+
 
 from lib.probe_skill import Reply  # noqa: E402
 from lib.verdict import (  # noqa: E402
@@ -222,6 +280,22 @@ class VerdictTests(unittest.TestCase):
         self.assertFalse(needs_third_run(["not_visible"]))
         for v in VERDICTS:
             self.assertEqual(combine([v]), (v, False))
+
+    def test_judge_update_and_delete(self):
+        from lib.verdict import judge_delete, judge_update
+        new, old = "a" * 12, "b" * 12
+        r = lambda text: parse_reply(text, text, "kcap-probe-abcdef")  # noqa: E731
+        self.assertEqual(judge_update(new, old, r(f"PROBE-BODY-{new}"), live=True), "visible_live")
+        self.assertEqual(judge_update(new, old, r(f"PROBE-BODY-{new}"), live=False), "visible_first_turn")
+        self.assertEqual(judge_update(new, old, r(f"PROBE-BODY-{old}"), live=True), "stale")
+        self.assertEqual(judge_update(new, None, r("NO-SKILL"), live=True), "not_visible")
+        self.assertEqual(judge_update(new, None, r("kcap-probe-abcdef is listed but empty"), live=True), "catalogue_only")
+        self.assertEqual(judge_delete(old, r("NO-SKILL")), "revoked")
+        self.assertEqual(judge_delete(old, r(f"PROBE-BODY-{old}")), "stale")
+        self.assertEqual(judge_delete(old, r("kcap-probe-abcdef exists but I cannot read it")), "stale")
+        self.assertEqual(judge_delete(old, r("I have no idea")), "not_visible")
+        for v in ("visible_live", "stale", "revoked"):
+            self.assertIn(v, VERDICTS)
 
 
 import json  # noqa: E402
@@ -330,9 +404,55 @@ class HookScriptTests(unittest.TestCase):
             self.assertIsNotNone(read_stamp(stamp))
 
 
-from harness.base import Adapter, AskResult, HookInfo  # noqa: E402
+from harness.base import Adapter, AskResult, HookInfo, Session  # noqa: E402
 from harness.fake import FakeAdapter  # noqa: E402
 from lib.print_driver import print_ask  # noqa: E402
+
+
+class HookOnATerminalTests(unittest.TestCase):
+    def test_hook_survives_a_closed_stdin(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            script = write_hook_script(root, root / "skills" / "x" / "SKILL.md", "body\n", stamp_path(root))
+            # `exec` is a special builtin: a redirection it cannot perform would end the shell.
+            out = subprocess.run(["/bin/sh", "-c", "exec 0<&- ; '" + str(script) + "'"],
+                                 capture_output=True, text=True, timeout=20)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stderr.strip(), "")
+            self.assertTrue((root / "skills" / "x" / "SKILL.md").exists())
+
+    def test_delete_removes_the_skill_not_the_root(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            flat = root / "skills" / "kcap-probe-abc.md"
+            flat.parent.mkdir(parents=True)
+            flat.write_text("body\n")
+            script = write_hook_script(root, flat, "", stamp_path(root), delete=True, delete_path=flat)
+            subprocess.run([str(script)], input="{}", capture_output=True, text=True, timeout=20)
+            self.assertFalse(flat.exists())
+            # A flat layout shares its root with every other skill the vendor owns.
+            self.assertTrue(flat.parent.is_dir())
+
+
+    def test_hook_leaves_a_terminal_alone(self):
+        import pty as _pty
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            script = write_hook_script(root, root / "skills" / "x" / "SKILL.md", "body\n", stamp_path(root))
+            master, slave = _pty.openpty()
+            try:
+                started = time.time()
+                out = subprocess.run([str(script)], stdin=slave, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, timeout=20)
+                elapsed = time.time() - started
+            finally:
+                os.close(master)
+                os.close(slave)
+            self.assertEqual(out.returncode, 0)
+            self.assertTrue((root / "skills" / "x" / "SKILL.md").exists())
+            # A terminal's input belongs to the vendor's UI, so the hook neither reads nor waits.
+            self.assertFalse((Path(str(stamp_path(root)) + ".stdin")).exists())
+            self.assertLess(elapsed, 2.0)
 
 
 class AdapterTests(unittest.TestCase):
@@ -391,6 +511,38 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             Adapter.extra_env["leak"] = "1"
 
+    def test_fake_session_resume_and_defaults(self):
+        from harness.base import Adapter, Session
+        a = FakeAdapter()
+        self.assertFalse(Adapter.can_resume)
+        self.assertIsNone(Adapter().open_session(None, "daemon"))
+        sb = new_sandbox("FAKE_HOME", None, [])
+        try:
+            skill = ProbeSkill.fresh()
+            s = a.open_session(sb, "daemon")
+            self.assertIsInstance(s, Session)
+            self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
+            write_skill(sb.repo / ".fake" / "skills", skill)
+            self.assertIn(skill.body_token, s.ask(single_prompt(skill)).reply_text)
+            s.close()
+            frozen = a.__class__()
+            frozen.live_catalogue = False
+            fs = frozen.open_session(sb, "daemon")
+            other = ProbeSkill.fresh()
+            write_skill(sb.repo / ".fake" / "skills", other)
+            self.assertNotIn(other.body_token, fs.ask(single_prompt(other)).reply_text)
+            self.assertEqual(fs.reload(), "/reload")
+            self.assertIn(other.body_token, fs.ask(single_prompt(other)).reply_text)
+            fs.close()
+            res = a.ask(sb, "print", single_prompt(skill))
+            self.assertEqual(a.session_id(res), "fake-session")
+            self.assertTrue(a.can_resume)
+            resumed = a.resume(sb, "fake-session", single_prompt(skill))
+            self.assertIn(skill.body_token, resumed.reply_text)
+            self.assertIn("--resume", resumed.argv)
+        finally:
+            sb.cleanup()
+
 
 import probe  # noqa: E402
 from lib.recorder import load_runs as _load  # noqa: E402
@@ -411,6 +563,27 @@ class _CountingAdapter(FakeAdapter):
     def ask(self, sb, mode, prompt):
         self.calls += 1
         return super().ask(sb, mode, prompt)
+
+
+class _FrozenAdapter(FakeAdapter):
+    live_catalogue = False
+
+
+class _AncestorAdapter(FakeAdapter):
+    """A vendor anchored at the git root: reads the repo's roots wherever it is launched."""
+
+    def catalogue(self, sb):
+        lines = []
+        for root in self.read_roots:
+            for skill_md in sorted((sb.repo / root).glob("kcap-probe-*/SKILL.md")):
+                m = TOKEN_RE.search(skill_md.read_text())
+                if m:
+                    lines.append(f"{skill_md.parent.name}=PROBE-BODY-{m.group(1)}")
+        return lines
+
+
+class _NoResumeAdapter(_CountingAdapter):
+    can_resume = False
 
 
 class _RaisingAdapter(FakeAdapter):
@@ -480,6 +653,22 @@ class _FailingVendorAdapter(FakeAdapter):
                          stderr_path=str(log), exit_code=41)
 
 
+class _RaisingFreePhaseAdapter(FakeAdapter):
+    """The vendor could not even be inspected."""
+
+    def prepare(self, sb):
+        raise RuntimeError("no such vendor")
+
+
+class _UnparseableAdapter(FakeAdapter):
+    """The vendor printed something its adapter could not read as an answer."""
+
+    def ask(self, sb, mode, prompt):
+        body = '{"stop_reason": "refusal", "is_error": true}'
+        return AskResult(reply_text=body, raw=body, argv=["fake"], started_at=0.0, first_request_at=0.0,
+                         stderr_path=None, exit_code=0, notes="extract failed: ValueError('is_error')")
+
+
 class _OddLogNameAdapter(FakeAdapter):
     """A driver that names its stderr file outside the *.stderr.log pattern."""
 
@@ -505,12 +694,12 @@ class _LeakyControlAdapter(FakeAdapter):
 
 
 class RunnerTests(unittest.TestCase):
-    def _runner(self, d, runs=2):
-        return probe.Runner(FakeAdapter(), Path(d) / "out", runs=runs, base=Path(d))
+    def _runner(self, d, adapter=None, runs=1):
+        return probe.Runner(adapter or FakeAdapter(), Path(d) / "out", runs=runs, base=Path(d))
 
     def test_s0_and_s1(self):
         with tempfile.TemporaryDirectory() as d:
-            r = self._runner(d)
+            r = self._runner(d, runs=2)
             recs = r.run_scenario("print", "S0")
             self.assertEqual([x.verdict for x in recs], ["not_visible", "not_visible"])
             recs = r.run_scenario("print", "S1")
@@ -545,7 +734,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_s4_roots_and_confirmation(self):
         with tempfile.TemporaryDirectory() as d:
-            r = self._runner(d)
+            r = self._runner(d, runs=2)
             r.run_scenario("print", "S1")
             recs = r.run_scenario("print", "S4")
             all_rows = [x for x in recs if x.arm == "S4/all-roots"]
@@ -705,7 +894,7 @@ class RunnerTests(unittest.TestCase):
             out = Path(d) / "out"
             recs = probe.Runner(_FailingVendorAdapter(), out, runs=1, base=Path(d)).run_scenario("print", "S1")
             self.assertEqual(recs[0].verdict, "untested")
-            self.assertIn("vendor exit 41", recs[0].notes)
+            self.assertIn("no reply read from the output; exit 41", recs[0].notes)
             self.assertIn("IneligibleTierError", recs[0].notes)
             self.assertTrue(Path(recs[0].stderr_path).exists())
 
@@ -718,6 +907,29 @@ class RunnerTests(unittest.TestCase):
             recs = probe.Runner(_ProtocolFailure(), Path(d) / "out", runs=1, base=Path(d)).run_scenario("print", "S1")
             self.assertEqual(recs[0].verdict, "untested")
             self.assertIn("session/new failed", recs[0].notes)
+
+    def test_interactive_log_is_kept_when_the_screen_failed(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            a = FakeAdapter()
+
+            class _NoAnswerSession(Session):
+                def __init__(self, sb):
+                    (sb.root / "fake-tui.log").write_text("the screen as it was\n")
+
+                def ask(self, prompt):
+                    return AskResult(reply_text="", raw="", argv=["fake"], started_at=0.0, first_request_at=0.0,
+                                     stderr_path=None, exit_code=None, notes="timeout")
+
+                def close(self):
+                    return None
+
+            a.open_session = lambda sb, mode: _NoAnswerSession(sb)
+            recs = probe.Runner(a, out, runs=1, base=Path(d)).run_scenario("tui", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            # The screen is the only evidence a failed interactive turn leaves.
+            kept = out / "fake" / "tui" / "S1" / "S1_native" / "run1.fake-tui.log"
+            self.assertEqual(kept.read_text(), "the screen as it was\n")
 
     def test_odd_log_name_is_still_kept(self):
         with tempfile.TemporaryDirectory() as d:
@@ -757,7 +969,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_third_run_on_disagreement(self):
         with tempfile.TemporaryDirectory() as d:
-            r = self._runner(d)
+            r = self._runner(d, runs=2)
             calls = {"n": 0}
 
             def flaky():
@@ -772,6 +984,166 @@ class RunnerTests(unittest.TestCase):
             recs = r.run_arm(flaky, "print", "S1", "S1/native", None, "none")
             self.assertEqual(len(recs), 3)
 
+    def test_s5_live_catalogue(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("daemon", "S5")
+            self.assertEqual({r.arm: r.verdict for r in recs},
+                             {"S5/add": "visible_live", "S5/update": "visible_live", "S5/delete": "revoked"})
+            self.assertTrue(all("turn1=" in r.notes for r in recs))
+            self.assertTrue((Path(d) / "out" / "fake" / "daemon" / "S5" / "S5_add" / "run1.prior.raw.txt").is_file())
+
+    def test_s5_frozen_catalogue_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _FrozenAdapter()).run_scenario("daemon", "S5")
+            self.assertEqual({r.arm: r.verdict for r in recs},
+                             {"S5/add": "not_visible", "S5/update": "stale", "S5/delete": "stale"})
+
+    def test_s5_without_a_session_is_untested_without_a_turn(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = _CountingAdapter()
+            a.open_session = lambda sb, mode: None
+            recs = self._runner(d, a).run_scenario("daemon", "S5")
+            self.assertEqual({r.verdict for r in recs}, {"untested"})
+            self.assertEqual(a.calls, 0)
+
+    def test_s6_startup_mutation(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S6")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S6/update": "visible_first_turn", "S6/delete": "revoked"})
+            self.assertTrue(all(r.hook and r.hook["fired_at"] for r in recs))
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _NoFireAdapter()).run_scenario("print", "S6")
+            self.assertEqual({r.verdict for r in recs}, {"untested"})
+            self.assertTrue(all("hook never fired" in r.notes for r in recs))
+
+    def test_s7_resume(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S7")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S7/add": "visible_first_turn", "S7/update": "visible_first_turn"})
+            self.assertTrue(all("session=fake-session" in r.notes and "--resume" in r.argv for r in recs))
+        with tempfile.TemporaryDirectory() as d:
+            a = _NoResumeAdapter()
+            recs = self._runner(d, a).run_scenario("print", "S7")
+            self.assertEqual({r.verdict for r in recs}, {"untested"})
+            self.assertEqual(a.calls, 0)
+
+    def test_s8_nested_cwd(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S8")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S8/ancestor": "not_visible", "S8/local": "visible_first_turn"})
+            self.assertTrue(all("cwd=sub/dir" in r.notes for r in recs))
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _AncestorAdapter()).run_scenario("print", "S8")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S8/ancestor": "visible_first_turn", "S8/local": "not_visible"})
+
+    def test_s9_worktrees(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S9")
+            self.assertEqual({r.arm: r.verdict for r in recs},
+                             {"S9/linked-own": "visible_first_turn", "S9/linked-other": "not_visible"})
+            self.assertTrue(all(r.exclusion == "info-exclude" for r in recs))
+
+    def test_s10_peer_hook(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("daemon", "S10")
+            self.assertEqual([(r.arm, r.verdict) for r in recs], [("S10/hook-from-peer", "visible_live")])
+            self.assertIn("peer=visible_first_turn", recs[0].notes)
+            self.assertIn("turn1=not_visible", recs[0].notes)
+
+    def test_tui_mode_runs_controls_hook_and_live_arms(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            self.assertEqual([x.verdict for x in r.run_scenario("tui", "S0")], ["not_visible"])
+            self.assertEqual([x.verdict for x in r.run_scenario("tui", "S1")], ["visible_first_turn"])
+            recs = r.run_scenario("tui", "S2")
+            self.assertEqual({x.arm: x.verdict for x in recs}, {"S2/hook-adds-skill": "visible_first_turn"})
+            recs = r.run_scenario("tui", "S5")
+            self.assertEqual({x.arm: x.verdict for x in recs}, {"S5/add": "visible_live", "S5/reload": "visible_after_reload"})
+            self.assertEqual([x.hook["mechanism"] for x in recs if x.arm == "S5/reload"], ["/reload"])
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _FrozenAdapter()).run_scenario("tui", "S5")
+            self.assertEqual({x.arm: x.verdict for x in recs}, {"S5/add": "not_visible", "S5/reload": "visible_after_reload"})
+
+    def test_tui_asks_for_the_marked_line_and_untested_without_one(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KCAP_FAKE_TUI_BARE": "1"}):
+            # A vendor that answers with a bare token is unreadable on a screen that echoes the
+            # prompt: that is a failure to measure, not a skill that was not there.
+            recs = self._runner(d).run_scenario("tui", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            self.assertEqual(recs[0].tokens_found, [])
+            self.assertIn("no reply read from the screen", recs[0].notes)
+
+    def test_recorded_row_reads_the_screen_under_the_same_rule_as_the_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            skill = ProbeSkill.fresh()
+            res = AskResult(reply_text="", raw=f"tool panel showed {skill.body_token}", argv=[],
+                            started_at=0.0, first_request_at=0.0, stderr_path=None, exit_code=None)
+            tui = r.record("tui", "S1", "S1/native", ".fake/skills", "none", res, "not_visible", {},
+                           name=skill.name)
+            self.assertEqual(tui.tokens_found, [])
+            printed = r.record("print", "S1", "S1/native", ".fake/skills", "none", res, "not_visible", {},
+                               name=skill.name)
+            self.assertEqual(printed.tokens_found, [skill.token])
+
+    def test_an_answerless_run_is_untested_not_a_negative(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _UnparseableAdapter()).run_scenario("print", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            self.assertIn("no reply read from the output", recs[0].notes)
+            self.assertEqual(recs[0].tokens_found, [])
+
+    def test_a_later_turn_asks_for_the_token_the_skill_carries_now(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            skill = ProbeSkill.fresh()
+            self.assertNotIn("again", r._prompt("print", skill))
+            self.assertIn("again", r._prompt("print", skill, again=True))
+            self.assertIn("PROBE-REPLY", r._prompt("tui", skill, again=True))
+
+    def test_reload_arm_costs_nothing_without_a_reload_command(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = _CountingAdapter()
+            a.tui_reload = None
+            recs = self._runner(d, a).run_scenario("tui", "S5", arms=["reload"])
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            self.assertIn("no reload command", recs[0].notes)
+            self.assertEqual(a.calls, 0)
+
+    def test_a_later_scenario_still_stands_behind_the_control(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            # A failed control recorded by an earlier sweep still gates a scenario asked for alone.
+            a = _CountingAdapter()
+            probe.Runner(a, out, runs=1, base=Path(d)).run_scenario("print", "S1")
+            arm = out / "fake" / "print" / "S1" / "S1_native"
+            data = json.loads((arm / "run1.json").read_text())
+            data["verdict"] = "not_visible"
+            (arm / "run1.json").write_text(json.dumps(data))
+            fresh = _CountingAdapter()
+            recs = probe.Runner(fresh, out, runs=1, base=Path(d)).run_scenario("print", "S3")
+            self.assertEqual({x.verdict for x in recs}, {"untested"})
+            self.assertTrue(all("S1 failed" in x.notes for x in recs))
+            self.assertEqual(fresh.calls, 0)
+
+    def test_one_aborted_harness_fails_the_sweep(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(probe.ENTRIES, {"fake": _RaisingFreePhaseAdapter}):
+            ok = probe.main(["--harness", "fake", "--mode", "print", "--outdir", str(Path(d) / "out"),
+                             "--base", str(d)])
+            # A sweep that could not run one of its harnesses did not succeed.
+            self.assertEqual(ok, 1)
+
+    def test_mode_scenario_table_and_blocked_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            self.assertEqual(r.run_scenario("print", "S5"), [])
+            self.assertEqual(r.run_scenario("tui", "S4"), [])
+            self.assertEqual({x.scenario for x in r.record_blocked("tui", "nope")}, {"S0", "S1", "S2", "S5"})
+            self.assertEqual({x.scenario for x in r.record_blocked("daemon", "nope")},
+                             {"S0", "S1", "S2", "S3", "S4", "S5", "S6", "S10"})
+            self.assertEqual({x.scenario for x in r.record_blocked("print", "nope")},
+                             {"S0", "S1", "S2", "S3", "S4", "S6", "S7", "S8", "S9"})
+
     def test_cli_records_untested_rows_without_a_binary(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "out"
@@ -780,16 +1152,17 @@ class RunnerTests(unittest.TestCase):
                                    "--outdir", str(out), "--base", d])
             self.assertEqual(code, 0)
             recs = _load(out)
-            self.assertEqual(len(recs), 8)
+            self.assertEqual(len(recs), 16)
             with mock.patch.dict(probe.ENTRIES, {"nobin": _NoBinaryAdapter}):
                 probe.main(["--harness", "nobin", "--mode", "print", "--turn",
                             "--outdir", str(out), "--base", d])
-            self.assertEqual(len(_load(out)), 8)
+            self.assertEqual(len(_load(out)), 16)
             self.assertEqual({r.verdict for r in recs}, {"untested"})
             self.assertEqual({r.notes for r in recs}, {"binary not installed"})
             self.assertEqual({r.arm for r in recs}, {
-                "S0/none", "S1/native", "S2/hook-creates-root", "S2/hook-adds-skill",
-                "S2/registration", "S3/gitignore", "S3/info-exclude", "S4/all-roots"})
+                "S0/none", "S1/native", "S2/hook-creates-root", "S2/hook-adds-skill", "S2/registration",
+                "S3/gitignore", "S3/info-exclude", "S4/all-roots", "S6/update", "S6/delete", "S7/add",
+                "S7/update", "S8/ancestor", "S8/local", "S9/linked-own", "S9/linked-other"})
 
     def test_cli_stops_the_entry_on_a_prompt_design_failure(self):
         with tempfile.TemporaryDirectory() as d:
@@ -820,9 +1193,12 @@ from lib.acp_driver import acp_ask  # noqa: E402
 SERVERS = KIT / "selftest_servers.py"
 
 
-def _fake_repo(d: str, skill: ProbeSkill) -> Path:
+def _fake_repo(d: str, skill: ProbeSkill | None) -> Path:
     repo = Path(d) / "repo"
-    write_skill(repo / ".fake" / "skills", skill)
+    if skill is not None:
+        write_skill(repo / ".fake" / "skills", skill)
+    else:
+        repo.mkdir(parents=True, exist_ok=True)
     return repo
 
 
@@ -859,6 +1235,28 @@ class AcpDriverTests(unittest.TestCase):
                           Path(d) / "acp.stderr.log", timeout=30)
             self.assertIn("tools_used=1", res.notes)
             self.assertIn(skill.body_token, res.reply_text)
+
+    def test_session_takes_two_turns(self):
+        from lib.acp_driver import AcpSession
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, None)
+            s = AcpSession([sys.executable, str(SERVERS), "acp"], repo, dict(os.environ), Path(d) / "acp.stderr.log", timeout=30)
+            s.start()
+            try:
+                first = s.ask(single_prompt(skill))
+                self.assertIn(NO_SKILL, first.reply_text)
+                write_skill(repo / ".fake" / "skills", skill)
+                second = s.ask(single_prompt(skill))
+                self.assertIn(skill.body_token, second.reply_text)
+                self.assertNotIn(skill.body_token, first.reply_text)
+                self.assertGreater(second.first_request_at, first.first_request_at)
+                self.assertIn("tools_used=0", second.notes)
+                self.assertIn("initialize", first.raw)
+                self.assertNotIn("initialize", second.raw)
+                self.assertEqual(second.raw.count("session/prompt"), 1)
+            finally:
+                s.close()
 
 
 from lib.appserver_driver import appserver_ask, hook_state_override  # noqa: E402
@@ -953,6 +1351,155 @@ class JsonlDriversTests(unittest.TestCase):
                             Path(d) / "sf.stderr.log", timeout=5)
             self.assertIsNone(res.exit_code)
             self.assertIn("exception=", res.notes)
+
+    def test_appserver_session_takes_two_turns(self):
+        from lib.appserver_driver import AppServerSession
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, None)
+            s = AppServerSession(str(SERVERS), repo, dict(os.environ), Path(d) / "as.stderr.log", timeout=30)
+            s.start()
+            try:
+                first = s.ask(single_prompt(skill))
+                self.assertIn(NO_SKILL, first.reply_text)
+                write_skill(repo / ".fake" / "skills", skill)
+                second = s.ask(single_prompt(skill))
+                self.assertIn(skill.body_token, second.reply_text)
+                self.assertIn("thread/start", first.raw)
+                self.assertNotIn("thread/start", second.raw)
+                self.assertEqual(second.raw.count("turn/start"), 1)
+            finally:
+                s.close()
+
+    def test_pirpc_session_takes_two_turns(self):
+        from lib.pirpc_driver import PiRpcSession
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, None)
+            s = PiRpcSession([sys.executable, str(SERVERS), "pirpc"], repo, dict(os.environ), Path(d) / "pi.stderr.log", timeout=30)
+            s.start()
+            try:
+                self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
+                write_skill(repo / ".fake" / "skills", skill)
+                second = s.ask(single_prompt(skill))
+                self.assertIn(skill.body_token, second.reply_text)
+                self.assertEqual(second.raw.count('"type": "prompt"'), 1)
+            finally:
+                s.close()
+
+
+from lib.pty_driver import PtySession, strip_ansi  # noqa: E402
+from lib.probe_skill import tui_prompt  # noqa: E402
+
+
+class PtyDriverTests(unittest.TestCase):
+    def _session(self, d, skill=None, env=None, **kw):
+        repo = _fake_repo(d, skill)
+        argv = [sys.executable, str(SERVERS), "tui"]
+        s = PtySession(argv, repo, dict(os.environ, **(env or {})), Path(d) / "fake-tui.log", ready_idle=0.3,
+                       timeout=15, **kw)
+        s.start()
+        return repo, s
+
+    def test_strip_ansi(self):
+        self.assertEqual(strip_ansi("\x1b[1mbold\x1b[0m\r\n\x1b]0;title\x07x"), "bold\nx")
+
+    def test_a_split_control_sequence_survives(self):
+        from lib.pty_driver import Terminal
+        whole = "line\r\n\x1b[2;1H\x1b[KPROBE-REPLY: NO-SKILL\x1b]0;title\x07 tail"
+        want = Terminal(6, 60)
+        want.feed(whole)
+        for cut in range(1, len(whole)):
+            with self.subTest(cut=cut):
+                # The operating system splits a read wherever it likes, including mid-sequence.
+                t = Terminal(6, 60)
+                t.feed(whole[:cut])
+                t.feed(whole[cut:])
+                self.assertEqual(t.text(), want.text())
+        self.assertIn("PROBE-REPLY: NO-SKILL tail", want.text())
+
+    def test_ask_reads_the_reply_not_the_echoed_prompt(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo, s = self._session(d, skill)
+            try:
+                res = s.ask(tui_prompt(skill))
+                self.assertEqual(res.reply_text, f"PROBE-REPLY: {skill.body_token}")
+                self.assertIn("PROBE-REPLY: <value>", res.raw)
+                self.assertGreaterEqual(res.first_request_at, res.started_at)
+                other = ProbeSkill.fresh()
+                self.assertEqual(s.ask(tui_prompt(other)).reply_text, "PROBE-REPLY: NO-SKILL")
+            finally:
+                s.close()
+            self.assertIsNotNone(s.proc.poll())
+            self.assertTrue((Path(d) / "fake-tui.log").stat().st_size > 0)
+
+    def test_dialog_is_answered_before_the_prompt(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo, s = self._session(d, skill, env={"KCAP_FAKE_TUI_DIALOG": "1"},
+                                    dialogs=((r"trust this folder", "y\r"),))
+            try:
+                res = s.ask(tui_prompt(skill))
+                self.assertEqual(res.reply_text, f"PROBE-REPLY: {skill.body_token}")
+                self.assertIn("dialog=", res.notes)
+                self.assertNotIn("dialog=", s.ask(tui_prompt(skill)).notes)
+            finally:
+                s.close()
+
+    def test_a_failed_start_leaves_no_child(self):
+        with tempfile.TemporaryDirectory() as d:
+            # A vendor that draws nothing never becomes ready, and nobody holds the session to close.
+            s = PtySession([sys.executable, "-c", "import time; time.sleep(60)"], Path(d), dict(os.environ),
+                           Path(d) / "t.log", ready_idle=0.3, timeout=2)
+            with self.assertRaises(TimeoutError):
+                s.start()
+            self.assertIsNotNone(s.proc.poll())
+            self.assertTrue(s._log.closed)
+
+    def test_spawn_failure_releases_the_terminal(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = PtySession(["/nonexistent/kcap-probe-binary"], Path(d), dict(os.environ), Path(d) / "t.log",
+                           ready_idle=0.3, timeout=2)
+            with self.assertRaises(OSError):
+                s.start()
+            s.close()
+            self.assertTrue(s._log.closed)
+            with self.assertRaises(OSError):
+                os.fstat(s.master)
+
+    def test_reload_refreshes_a_frozen_catalogue(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo, s = self._session(d, None, env={"KCAP_FAKE_TUI_FROZEN": "1"}, reload_command="/reload")
+            try:
+                self.assertEqual(s.ask(tui_prompt(skill)).reply_text, "PROBE-REPLY: NO-SKILL")
+                write_skill(repo / ".fake" / "skills", skill)
+                self.assertEqual(s.ask(tui_prompt(skill)).reply_text, "PROBE-REPLY: NO-SKILL")
+                self.assertEqual(s.reload(), "/reload")
+                self.assertEqual(s.ask(tui_prompt(skill)).reply_text, f"PROBE-REPLY: {skill.body_token}")
+            finally:
+                s.close()
+
+    def test_silent_process_times_out_and_is_killed(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = PtySession([sys.executable, "-c", "import time; time.sleep(60)"], Path(d), dict(os.environ),
+                           Path(d) / "t.log", ready_idle=0.3, timeout=2)
+            with self.assertRaises(TimeoutError):
+                s.start()
+            s.close()
+            self.assertIsNotNone(s.proc.poll())
+
+    def test_no_reply_line_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, s = self._session(d, None)
+            try:
+                s.timeout = 3
+                res = s.ask("hello")
+                self.assertEqual(res.reply_text, "")
+                self.assertIn("no PROBE-REPLY line", res.notes)
+            finally:
+                s.close()
 
 
 from harness import ENTRIES  # noqa: E402
@@ -1063,6 +1610,12 @@ class CopilotAdapterTests(unittest.TestCase):
                          "tools_used=1 skill_loads=1 searches=0")
 
 
+def _row(entry, scenario, arm, root, verdict, mode, mechanism=None):
+    return dict(entry=entry, harness=entry, version="1.0", os="o", mode=mode, scenario=scenario, arm=arm,
+                root=root, exclusion="none", verdict=verdict, flaky=False, runs=2, mechanism=mechanism,
+                evidence=[], notes="")
+
+
 class ReportTests(unittest.TestCase):
     def test_summary_columns(self):
         import report
@@ -1077,8 +1630,10 @@ class ReportTests(unittest.TestCase):
             dict(base, scenario="S4", arm="S4/all-roots", root=".x/skills", verdict="visible_first_turn"),
             dict(base, scenario="S4", arm="S4/all-roots", root=".agents/skills", verdict="visible_first_turn"),
             dict(base, scenario="S4", arm="S4/all-roots", root=".y/skills", verdict="leaked"),
-            dict(base, entry="y", scenario="S4", arm="S4/all-roots", root=".agents/skills", verdict="visible_first_turn"),
-            dict(base, entry="y", scenario="S1", arm="S1/native", root=".y/skills", verdict="untested", notes="binary not installed"),
+            dict(base, entry="y", harness="y", scenario="S4", arm="S4/all-roots", root=".agents/skills",
+                 verdict="visible_first_turn"),
+            dict(base, entry="y", harness="y", scenario="S1", arm="S1/native", root=".y/skills",
+                 verdict="untested", notes="binary not installed"),
         ]
         summary = {s["Entry"]: s for s in report.summarise(rows)}
         x = summary["x"]
@@ -1092,6 +1647,69 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(summary["y"]["Minimum version"], "—")
         text = report.render(list(summary.values()))
         self.assertIn("| x | 1.0 |", text)
+
+    def test_two_entries_of_one_vendor_are_one_consumer(self):
+        rows = [
+            _row("v1", "S1", "S1/native", ".v/skills", "visible_first_turn", "print"),
+            _row("v1", "S4", "S4/all-roots", ".v/skills", "visible_first_turn", "print"),
+            _row("v2", "S1", "S1/native", ".v/skills", "visible_first_turn", "print"),
+            _row("v2", "S4", "S4/all-roots", ".v/skills", "visible_first_turn", "print"),
+            _row("other", "S1", "S1/native", ".o/skills", "visible_first_turn", "print"),
+            _row("other", "S4", "S4/all-roots", ".v/skills", "leaked", "print"),
+        ]
+        for r in rows:
+            r["harness"] = "theirs" if r["entry"] == "other" else "ours"
+        import report
+        s = {r["Entry"]: r for r in report.summarise(rows)}
+        # Two configurations of one CLI are one consumer; a vendor that leaks into the root is not.
+        self.assertEqual(s["v1"]["Vendor-isolated destination"], "none")
+        for r in rows:
+            if r["entry"] == "other" and r["scenario"] == "S4":
+                r["root"] = ".o/skills"
+        s = {r["Entry"]: r for r in report.summarise(rows)}
+        self.assertEqual(s["v1"]["Vendor-isolated destination"], ".v/skills")
+        self.assertEqual(s["v2"]["Vendor-isolated destination"], ".v/skills")
+
+    def test_minimum_version_is_the_earliest_proven_one(self):
+        rows = [
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "print"),
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "print"),
+            _row("x", "S1", "S1/native", ".x/skills", "untested", "print"),
+        ]
+        rows[0]["version"], rows[1]["version"], rows[2]["version"] = "1.10.0", "1.9.0", "0.1.0"
+        import report
+        s = {r["Entry"]: r for r in report.summarise(rows)}["x"]
+        # Ordered by number, not by text, and only versions the control actually passed on.
+        self.assertEqual(s["Minimum version"], "1.9.0")
+
+    def test_lifecycle_columns(self):
+        rows = [
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "print"),
+            _row("x", "S5", "S5/add", ".x/skills", "visible_live", "daemon"),
+            _row("x", "S5", "S5/delete", ".x/skills", "revoked", "daemon"),
+            _row("x", "S6", "S6/update", ".x/skills", "stale", "print"),
+            _row("x", "S6", "S6/update", ".x/skills", "stale", "daemon"),
+            _row("x", "S7", "S7/add", ".x/skills", "untested", "print"),
+            _row("x", "S9", "S9/linked-other", ".x/skills", "not_visible", "print"),
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "tui"),
+            _row("x", "S5", "S5/reload", ".x/skills", "visible_after_reload", "tui", mechanism="/reload"),
+            _row("y", "S1", "S1/native", ".y/skills", "visible_first_turn", "print"),
+            _row("y", "S5", "S5/add", ".y/skills", "visible_live", "tui"),
+        ]
+        import report
+        by_entry = {r["Entry"]: r for r in report.summarise(rows)}
+        # S5 ran only interactively: the daemon-mode column must not read as a measured "none".
+        self.assertEqual(by_entry["y"]["Live catalogue"], "n/a (not run)")
+        self.assertEqual(by_entry["y"]["Interactive"], "add=visible_live")
+        s = by_entry["x"]
+        self.assertEqual(s["Live catalogue"], "add=visible_live; delete=revoked")
+        self.assertEqual(s["Startup rewrite"], "update=stale")
+        self.assertEqual(s["Resume"], "n/a (not run)")
+        self.assertEqual(s["Nested cwd"], "n/a (not run)")
+        self.assertEqual(s["Worktree"], "linked-other=not_visible")
+        self.assertEqual(s["Interactive"], "S1=visible_first_turn; reload=visible_after_reload")
+        self.assertIn("/reload", s["Reload path"])
+        self.assertIn("tui", s["Modes"])
 
 
 class CursorAdapterTests(unittest.TestCase):
@@ -1137,6 +1755,30 @@ class CursorAdapterTests(unittest.TestCase):
             self.assertEqual(hooks.read_text(), original)
 
 
+class CursorRegistrationTests(unittest.TestCase):
+    def test_registration_names_the_path_it_writes(self):
+        from harness.cursor import CursorAdapter, CursorUserHooksAdapter
+        for cls in (CursorAdapter, CursorUserHooksAdapter):
+            with self.subTest(entry=cls.entry), tempfile.TemporaryDirectory() as d:
+                a = cls()
+                sb = new_sandbox(a.lever, None, [], base=Path(d))
+                try:
+                    skill = ProbeSkill.fresh()
+                    arm_target = a.skill_file(sb, a.native_root, skill.name)
+                    info = a.install_registration(sb, arm_target, skill.render())
+                    # The hook writes into a plugin directory, not the arm's own path, and the arm
+                    # checks the path the mechanism names.
+                    self.assertIsNotNone(info.target)
+                    self.assertNotEqual(info.target, arm_target)
+                    subprocess.run([json.loads(Path(info.config_path).read_text())["hooks"]["workspaceOpen"][0]["command"]],
+                                   capture_output=True, text=True, timeout=20)
+                    self.assertTrue(info.target.exists())
+                    self.assertIn(skill.body_token, info.target.read_text())
+                finally:
+                    getattr(a, "cleanup_hook", lambda _sb: None)(sb)
+                    sb.cleanup()
+
+
 class KiroAdapterTests(unittest.TestCase):
     def test_acp_read_of_the_listed_file_is_the_native_load(self):
         from harness.kiro import classify_kiro_tools
@@ -1179,6 +1821,107 @@ class PiAdapterTests(unittest.TestCase):
             self.assertIn(json.dumps(str(sb.repo / ".pi" / "skills")), ext)
             self.assertIn(json.dumps(str(sb.config_root / "probe-hook.sh")), ext)
             self.assertTrue((sb.config_root / "probe-hook.sh").exists())
+
+
+import importlib  # noqa: E402
+import re  # noqa: E402
+
+from harness import ENTRIES  # noqa: E402
+
+# (entry, the module holding its print driver, the flags a resumed launch must carry)
+RESUME_CASES = (
+    ("claude", "harness.claude", ["--resume", "sid-1"]),
+    ("codex", "harness.codex", ["resume", "sid-1"]),
+    ("copilot", "harness.copilot", ["--resume=sid-1"]),
+    ("pi", "harness.pi", ["--session", "sid-1"]),
+    ("kiro", "harness.kiro", ["--resume"]),
+    ("cursor", "harness.cursor", ["--resume=sid-1"]),
+    ("opencode-v1", "harness.opencode_v1", ["--session", "sid-1"]),
+    ("agy", "harness.agy", ["--conversation", "sid-1"]),
+    ("gemini", "harness.gemini", ["--resume", "sid-1"]),
+)
+
+SESSION_ID_CASES = (
+    ("claude", '{"session_id": "cl-1", "result": "hi"}', "cl-1"),
+    ("codex", '{"type": "thread.started", "thread_id": "cx-1"}\n{"type": "item.completed"}', "cx-1"),
+    ("copilot", '{"type": "assistant.message"}\n{"type": "result", "sessionId": "co-1"}', "co-1"),
+    ("pi", '{"type": "session", "id": "pi-1"}\n{"type": "agent_start"}', "pi-1"),
+    ("cursor", '{"type": "system", "session_id": "cu-1"}', "cu-1"),
+    ("opencode-v1", '{"part": {"sessionID": "oc-1", "type": "text"}}', "oc-1"),
+    ("agy", '{"event": "step_update", "conversation_id": "ag-1"}', "ag-1"),
+)
+
+
+class AdapterPassTwoTests(unittest.TestCase):
+
+    def _stub(self, d: str):
+        sb = new_sandbox("PROBE_UNUSED_LEVER", None, [], base=Path(d))
+        self.addCleanup(sb.cleanup)
+        return sb
+
+    def test_resume_launch_carries_the_session(self):
+        for entry, module_name, expected in RESUME_CASES:
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as d:
+                module = importlib.import_module(module_name)
+                a = ENTRIES[entry]()
+                sb = self._stub(d)
+                a.prepare(sb)
+                seen: list[tuple[list[str], str]] = []
+
+                def fake_print_ask(argv, cwd, env, stderr_path, timeout, stdin_text=None, extract=None):
+                    seen.append((list(argv), stdin_text or ""))
+                    return AskResult(reply_text="", raw="", argv=list(argv), started_at=0.0,
+                                     first_request_at=0.0, stderr_path=None, exit_code=0)
+
+                with mock.patch.object(module, "print_ask", fake_print_ask):
+                    a.resume(sb, "sid-1", "prompt")
+                argv, stdin_text = seen[0]
+                for flag in expected:
+                    self.assertIn(flag, argv)
+                # Codex reads its prompt from stdin; the others carry it in the command line.
+                self.assertIn("prompt", " ".join(argv) + stdin_text)
+
+    def test_session_id_is_read_from_the_vendor_stream(self):
+        for entry, raw, expected in SESSION_ID_CASES:
+            with self.subTest(entry=entry):
+                a = ENTRIES[entry]()
+                res = AskResult(reply_text="", raw=raw, argv=[], started_at=0.0, first_request_at=0.0,
+                                stderr_path=None, exit_code=0)
+                self.assertEqual(a.session_id(res), expected)
+                blank = AskResult(reply_text="", raw="not json", argv=[], started_at=0.0,
+                                  first_request_at=0.0, stderr_path=None, exit_code=0)
+                self.assertIsNone(a.session_id(blank))
+
+    def test_kiro_resumes_the_launch_directory_without_an_id(self):
+        a = ENTRIES["kiro"]()
+        res = AskResult(reply_text="ok", raw="", argv=[], started_at=0.0, first_request_at=0.0,
+                        stderr_path=None, exit_code=0)
+        # Its non-interactive output carries no id, so the arm must still have something to resume.
+        self.assertTrue(a.session_id(res))
+
+    def test_every_declared_mode_has_a_launch(self):
+        with tempfile.TemporaryDirectory() as d:
+            sb = self._stub(d)
+            for entry, cls in ENTRIES.items():
+                with self.subTest(entry=entry):
+                    a = cls()
+                    if "tui" in a.modes:
+                        argv = a.tui_argv(sb)
+                        self.assertTrue(argv, f"{entry} declares tui with no argv")
+                        self.assertNotIn("-p", argv)
+                        self.assertNotIn("--print", argv)
+                    if a.can_resume:
+                        self.assertIsNot(type(a).resume, Adapter.resume, f"{entry} cannot resume")
+                        self.assertIsNot(type(a).session_id, Adapter.session_id, f"{entry} reads no id")
+
+    def test_dialog_answers_are_one_key_at_a_time(self):
+        from lib.pty_driver import KEY_RE
+        for entry, cls in ENTRIES.items():
+            for pattern, keys in cls.tui_dialogs:
+                with self.subTest(entry=entry, dialog=pattern):
+                    self.assertTrue(re.compile(pattern))
+                    # An arrow and its Enter must survive as two keystrokes, not one write.
+                    self.assertEqual("".join(KEY_RE.findall(keys)), keys)
 
 
 if __name__ == "__main__":

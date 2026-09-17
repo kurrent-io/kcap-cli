@@ -4,8 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from harness.base import Adapter, AskResult, HookInfo
-from lib.appserver_driver import appserver_ask
+from harness.base import Adapter, AskResult, ClassifiedSession, HookInfo, Session
+from lib.appserver_driver import AppServerSession, appserver_ask
 from lib.isolation import Sandbox
 from lib.print_driver import print_ask
 
@@ -17,6 +17,10 @@ class CodexAdapter(Adapter):
     credential_files = ("auth.json",)
     native_root = ".agents/skills"
     documented_roots = frozenset({".agents/skills", ".codex/skills"})
+    modes = ("print", "daemon", "tui")
+    can_resume = True
+    # A linear transcript is easier to read back than an alternate-screen redraw.
+    tui_exit = ("\x03", "\x03", "\x04")
 
     def real_root(self) -> Path | None:
         return Path.home() / ".codex"
@@ -37,18 +41,55 @@ class CodexAdapter(Adapter):
         ]}}, indent=2) + "\n")
         return HookInfo(mechanism="hooks.json SessionStart", config_path=str(hooks))
 
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        # The same hook-trust bypass the headless modes pass: without it an unsigned hook is
+        # silently not run, which reads as a harness that has no startup hook at all.
+        return [self.binary_path() or self.binary, "--sandbox", "read-only", "-a", "never",
+                "--dangerously-bypass-hook-trust", "--no-alt-screen"]
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "daemon":
+            return super().open_session(sb, mode)
+        inner = AppServerSession(self.binary_path() or self.binary, sb.cwd, sb.env,
+                                 sb.root / "codex-appserver.stderr.log", self.turn_timeout)
+        inner.start()
+        return ClassifiedSession(inner, lambda r: classify_tool_items(appserver_items(r.raw)))
+
+    def session_id(self, res: AskResult) -> str | None:
+        for line in res.raw.splitlines():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("thread_id"):
+                return obj["thread_id"]
+        return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._exec(sb, prompt, resume=session_id)
+
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = appserver_ask(binary, sb.repo, sb.env, prompt, sb.root / "codex-appserver.stderr.log",
+            res = appserver_ask(binary, sb.cwd, sb.env, prompt, sb.root / "codex-appserver.stderr.log",
                                 self.turn_timeout)
             # The driver's flat tool count is replaced by the classification that knows a listed read.
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_tool_items(appserver_items(res.raw))).strip()
             return res
+        return self._exec(sb, prompt)
+
+    def _exec(self, sb: Sandbox, prompt: str, resume: str | None = None) -> AskResult:
+        binary = self.binary_path() or self.binary
         last = sb.root / "last-message.txt"
-        argv = [binary, "exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
-                "--dangerously-bypass-hook-trust", "--output-last-message", str(last), "-"]
+        # A file left by an earlier turn would be read as this turn's answer.
+        last.unlink(missing_ok=True)
+        # `exec resume` takes a narrower flag set than `exec`: the sandbox and colour flags it
+        # rejects outright, and the session's own recorded sandbox applies instead.
+        head = [binary, "exec", *(["resume", resume] if resume else [])]
+        sandbox = [] if resume else ["--sandbox", "read-only", "--color", "never"]
+        argv = head + ["--json", "--skip-git-repo-check", *sandbox,
+                       "--dangerously-bypass-hook-trust", "--output-last-message", str(last), "-"]
 
         def extract(raw: str) -> str:
             if last.exists():
@@ -64,7 +105,7 @@ class CodexAdapter(Adapter):
                     texts.append(item.get("text", ""))
             return "\n".join(texts)
 
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "codex.stderr.log", self.turn_timeout,
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "codex.stderr.log", self.turn_timeout,
                         stdin_text=prompt, extract=extract)
         res.notes = (res.notes + " " + classify_tool_items(exec_items(res.raw))).strip()
         return res

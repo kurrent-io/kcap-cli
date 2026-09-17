@@ -5,8 +5,8 @@ import os
 import shutil
 from pathlib import Path
 
-from harness.base import Adapter, AskResult, HookInfo
-from lib.acp_driver import acp_ask
+from harness.base import Adapter, AskResult, ClassifiedSession, HookInfo, Session
+from lib.acp_driver import AcpSession, acp_ask
 from lib.hook_script import stamp_path, write_hook_script
 from lib.isolation import Sandbox
 from lib.print_driver import print_ask
@@ -41,6 +41,9 @@ class OpenCodeV1Adapter(Adapter):
     lever = "OPENCODE_CONFIG_DIR"
     native_root = ".opencode/skills"
     documented_roots = frozenset({".opencode/skills", ".claude/skills", ".agents/skills"})
+    modes = ("print", "daemon", "tui")
+    can_resume = True
+    tui_exit = ("\x03", "\x03", "\x04")
     # Flags a version accepts only after its subcommand.
     extra_argv: tuple[str, ...] = ()
 
@@ -89,14 +92,44 @@ class OpenCodeV1Adapter(Adapter):
         path.write_text(V1_TRANSFORM_PLUGIN.format(script=json.dumps(str(script))))
         return HookInfo(mechanism="plugin experimental.chat.system.transform", config_path=str(path))
 
+    def acp_argv(self) -> list[str]:
+        return [self.binary_path() or self.binary, "acp", *self.extra_argv]
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary, *self.extra_argv]
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "daemon":
+            return super().open_session(sb, mode)
+        inner = AcpSession(self.acp_argv(), sb.cwd, sb.env, sb.root / "opencode-acp.stderr.log", self.turn_timeout)
+        inner.start()
+        return ClassifiedSession(inner, lambda r: classify_acp_tools(r.raw))
+
+    def session_id(self, res: AskResult) -> str | None:
+        for line in res.raw.splitlines():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for holder in (obj, obj.get("part") if isinstance(obj.get("part"), dict) else {}):
+                if isinstance(holder.get("sessionID"), str):
+                    return holder["sessionID"]
+        return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._print(sb, prompt, ["--session", session_id])
+
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
-        binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = acp_ask([binary, "acp", *self.extra_argv], sb.repo, sb.env, prompt,
+            res = acp_ask(self.acp_argv(), sb.cwd, sb.env, prompt,
                           sb.root / "opencode-acp.stderr.log", self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_acp_tools(res.raw)).strip()
             return res
+        return self._print(sb, prompt)
+
+    def _print(self, sb: Sandbox, prompt: str, extra: list[str] = ()) -> AskResult:
+        binary = self.binary_path() or self.binary
 
         def extract(raw: str) -> str:
             texts = []
@@ -110,8 +143,8 @@ class OpenCodeV1Adapter(Adapter):
                     texts.append(part["text"])
             return "\n".join(texts) if texts else raw
 
-        argv = [binary, "run", *self.extra_argv, "--format", "json", prompt]
-        res = print_ask(argv, sb.repo, sb.env, sb.root / "opencode.stderr.log", self.turn_timeout, extract=extract)
+        argv = [binary, "run", *self.extra_argv, *extra, "--format", "json", prompt]
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "opencode.stderr.log", self.turn_timeout, extract=extract)
         if "USAGE" in res.reply_text and "FLAGS" in res.reply_text:
             # The CLI printed its usage instead of running: an invocation error, not an answer.
             res.reply_text = ""

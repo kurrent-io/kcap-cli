@@ -4,7 +4,8 @@ from collections import Counter
 
 from lib.probe_skill import Reply
 
-VERDICTS = ("visible_first_turn", "visible_after_reload", "catalogue_only", "not_visible", "leaked", "untested")
+VERDICTS = ("visible_first_turn", "visible_after_reload", "visible_live", "catalogue_only", "not_visible",
+            "stale", "revoked", "leaked", "untested")
 
 
 class PromptDesignFailure(Exception):
@@ -41,4 +42,29 @@ def combine(verdicts: list[str]) -> tuple[str, bool]:
 
 
 def needs_third_run(verdicts: list[str]) -> bool:
+    # A run that failed to measure is not a disagreement to break: the arm is cleared and
+    # measured again from scratch, and a third turn here would be spent on nothing.
+    if "untested" in verdicts:
+        return False
     return len(verdicts) == 2 and verdicts[0] != verdicts[1]
+
+
+def judge_update(new_token: str, old_token: str | None, reply: Reply, live: bool) -> str:
+    if new_token in reply.tokens:
+        return "visible_live" if live else "visible_first_turn"
+    if old_token is not None and old_token in reply.tokens:
+        return "stale"
+    if reply.skill_named and not reply.no_skill:
+        return "catalogue_only"
+    return "not_visible"
+
+
+def judge_delete(old_token: str, reply: Reply) -> str:
+    if old_token in reply.tokens:
+        return "stale"
+    if reply.no_skill and not reply.tokens:
+        return "revoked"
+    # Still listed after the delete, even if unreadable: the catalogue did not follow the file.
+    if reply.skill_named:
+        return "stale"
+    return "not_visible"
