@@ -117,8 +117,7 @@ public class BinaryProbeTests {
         using var path = EnvScope.Exclusive("PATH", tmp.Path);
 
         await Assert.That(BinaryProbe.FromEnvironment().Resolve("envprobe")).IsEqualTo(staged, PathCasing);
-        await Assert.That(BinaryProbe.OnPath("envprobe")).IsTrue();
-        await Assert.That(BinaryProbe.OnPath($"kcap-absent-{Guid.NewGuid():N}")).IsFalse();
+        await Assert.That(BinaryProbe.FromEnvironment().Finds($"kcap-absent-{Guid.NewGuid():N}")).IsFalse();
     }
 
     // ── Unix launch rules ──
