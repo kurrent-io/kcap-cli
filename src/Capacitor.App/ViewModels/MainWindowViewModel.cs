@@ -67,9 +67,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _daemonVersion;
     public string DaemonVersion => _daemonVersion?.Value ?? "";
 
-    // SEMVER-only projection of DaemonVersion (everything from the first '+' is build metadata —
-    // never meaningful to a human glancing at the status line); the untruncated value still lives
-    // on DaemonVersion for the version TextBlock's ToolTip.Tip.
+    // Compact rail label: "daemon {semver}". The prefix is the identity — a bare 1.2.3 next to
+    // the org and daemon name reads as the app's version. Build metadata stays off the line.
     ObservableAsPropertyHelper<string>? _versionDisplay;
     public string VersionDisplay => _versionDisplay?.Value ?? "";
 
@@ -117,9 +116,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public string? Reason => _reason?.Value;
 
     // The server lane's silent-deafness diagnostic — informational only, never blocking; null
-    // while the lane is healthy or absent.
+    // while the lane is healthy or absent. ConnectionTip is what the footer actually hovers:
+    // this diagnostic when present, otherwise copy that names the attach (not the visible word).
     ObservableAsPropertyHelper<string?>? _serverLaneTip;
     public string? ServerLaneTip => _serverLaneTip?.Value;
+
+    ObservableAsPropertyHelper<string>? _connectionTip;
+    public string ConnectionTip => _connectionTip?.Value ?? AttachStatusTip;
+
+    public const string AttachStatusTip = "Attach status to the daemon on this machine";
+    public const string TenantTip = "Signed-in organization";
+    public const string DaemonNameTip = "Name of the daemon on this machine";
+    public const string ServerUrlTip = "Capacitor server this daemon talks to";
+    public const string VersionIdentityTip =
+        "Version of the kcap daemon on this machine, not this app";
 
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
 
@@ -254,8 +264,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// caller that predates it keeps working the way it always has.
     /// </param>
     /// <param name="laneStatus">
-    /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic.
-    /// Null means the tip never sets — every existing caller without a live lane.
+    /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic
+    /// and the connection row's hover. Null means the hover stays on AttachStatusTip.
     /// </param>
     /// <param name="restartPending">
     /// DaemonRestartPendingWatcher.Pending. Null means the indicator never shows.
@@ -359,7 +369,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.DaemonVersion, "")
                 .DisposeWith(disposables);
 
-            _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))
+            _versionDisplay = snapshots.Select(s => VersionLabelForRail(s.Daemon.Version))
                 .ToProperty(this, x => x.VersionDisplay, "")
                 .DisposeWith(disposables);
 
@@ -429,10 +439,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.Reason, (string?)null)
                 .DisposeWith(disposables);
 
-            _serverLaneTip = (laneStatus ?? Observable.Empty<ServerLaneStatus>())
+            var lane = (laneStatus ?? Observable.Empty<ServerLaneStatus>())
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+
+            _serverLaneTip = lane
                 .Select(s => s.Diagnostic)
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .ToProperty(this, x => x.ServerLaneTip, (string?)null)
+                .DisposeWith(disposables);
+
+            _connectionTip = lane
+                .Select(s => string.IsNullOrWhiteSpace(s.Diagnostic) ? AttachStatusTip : s.Diagnostic)
+                .ToProperty(this, x => x.ConnectionTip, AttachStatusTip)
                 .DisposeWith(disposables);
 
             status.Where(s => s.State == AttachState.Connected)
@@ -623,6 +640,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (string.IsNullOrEmpty(version)) return version ?? "";
         var plus = version.IndexOf('+');
         return plus < 0 ? version : version[..plus];
+    }
+
+    internal static string VersionLabelForRail(string? version) {
+        var semver = StripBuildMetadata(version);
+        return string.IsNullOrEmpty(semver) ? "" : $"daemon {semver}";
     }
 
     static string Capitalize(string word) => word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..];

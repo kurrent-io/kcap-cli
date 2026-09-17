@@ -2,6 +2,7 @@ using System.Reactive.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -17,8 +18,7 @@ using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 namespace Capacitor.App.Tests.Unit;
 
 /// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
-/// the connection word, tenant, and daemon version; daemon name and server URL stay on the
-/// hover tooltip. MainWindowViewModelTests covers the same properties in isolation.
+/// connection and agent count, the server URL, then tenant, daemon, and version on one line.
 public class MainWindowSmokeTests {
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
@@ -43,7 +43,7 @@ public class MainWindowSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task MainWindow_renders_connection_tenant_and_version_not_daemon_name_or_url() {
+    public async Task MainWindow_renders_compact_footer_with_server_daemon_and_version() {
         // Rendered text, so no immediate scheduler: an OAPH delivered immediately notifies
         // before its value is readable, and a binding that reads on the notification keeps the
         // stale one. The dispatcher scheduler sets the value first, as it does in the app.
@@ -67,7 +67,9 @@ public class MainWindowSmokeTests {
 
             var texts = string.Join('\n', window.GetVisualDescendants()
                 .OfType<TextBlock>()
-                .Select(t => t.Text ?? ""));
+                .Select(t => t.Text is { Length: > 0 } text
+                    ? text
+                    : string.Concat((t.Inlines ?? []).OfType<Run>().Select(r => r.Text ?? ""))));
 
             window.Close();
             Dispatcher.UIThread.RunJobs(); // flush the deferred Unloaded post so the VM's WhenActivated-scoped subscriptions actually get disposed before the next test runs
@@ -76,10 +78,14 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(rendered).Contains("Connected");
+        await Assert.That(rendered).Contains("1 of 5 agents");
+        await Assert.That(rendered).Contains("http://localhost:9999");
         await Assert.That(rendered).Contains("kurrent");
-        await Assert.That(rendered).Contains("1.2.3");
-        await Assert.That(rendered).DoesNotContain("daemon-a");
-        await Assert.That(rendered).DoesNotContain("http://localhost:9999");
+        await Assert.That(rendered).Contains("daemon-a");
+        await Assert.That(rendered).Contains("daemon 1.2.3");
+        await Assert.That(rendered).DoesNotContain("SERVER");
+        await Assert.That(rendered).DoesNotContain("ORG");
+        await Assert.That(rendered).DoesNotContain("DAEMON");
     }
 
     /// Regression coverage for a Critical bug found in review: canStart/canRetry were built
@@ -577,7 +583,8 @@ public class MainWindowSmokeTests {
     }
 
     /// A selected row must read as selected next to a hovered one: hover paints the raised surface
-    /// brush, so the selection needs its own background, an accent edge and a heavier title.
+    /// brush, so the selection needs its own background and a heavier title, not a leading edge
+    /// that would inset that row past its siblings.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Selected_row_is_distinct_from_a_hovered_row() {
@@ -605,7 +612,7 @@ public class MainWindowSmokeTests {
             });
             await Assert.That(seen.SelectedBackground).IsNotNull();
             await Assert.That(seen.SelectedBackground).IsNotEqualTo(seen.Hover);
-            await Assert.That(seen.SelectedEdge).IsGreaterThanOrEqualTo(3);
+            await Assert.That(seen.SelectedEdge).IsEqualTo(0);
             await Assert.That(seen.SiblingEdge).IsEqualTo(0);
             await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
             await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
@@ -728,6 +735,58 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
         }
     });
+
+    /// Hover copy names what each footer fragment is. The visible strings (org slug, daemon
+    /// name, semver, URL) do not. Same dispatcher scheduler as the compact-footer render test:
+    /// an immediate OAPH notifies before its value is readable and a binding keeps the stale one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_footer_tooltips_identify_org_daemon_version_and_server() {
+        var tips = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "daemon-a", version: "1.2.3+abc", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 1, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent");
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var connection = rail.FindControl<StackPanel>("RailConnectionStatus")!;
+            var url = rail.FindControl<TextBlock>("RailServerUrlText")!;
+            var tenant = rail.FindControl<TextBlock>("RailTenantText")!;
+            var daemon = rail.FindControl<TextBlock>("RailDaemonNameText")!;
+            var version = rail.FindControl<TextBlock>("RailVersionText")!;
+            var result = (
+                Connection: ToolTip.GetTip(connection) as string,
+                UrlTip: ToolTip.GetTip(url) as string,
+                UrlText: url.Text,
+                TenantTip: ToolTip.GetTip(tenant) as string,
+                TenantText: tenant.Text,
+                DaemonTip: ToolTip.GetTip(daemon) as string,
+                DaemonText: daemon.Text,
+                VersionText: version.Text,
+                VersionTip: ToolTip.GetTip(version) as string);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return result;
+        });
+
+        await Assert.That(tips.Connection).IsEqualTo(MainWindowViewModel.AttachStatusTip);
+        await Assert.That(tips.UrlTip).IsEqualTo(MainWindowViewModel.ServerUrlTip);
+        await Assert.That(tips.UrlText).IsNotEqualTo(MainWindowViewModel.ServerUrlTip);
+        await Assert.That(tips.TenantTip).IsEqualTo(MainWindowViewModel.TenantTip);
+        await Assert.That(tips.TenantText).IsEqualTo("kurrent");
+        await Assert.That(tips.DaemonTip).IsEqualTo(MainWindowViewModel.DaemonNameTip);
+        await Assert.That(tips.DaemonText).IsEqualTo("daemon-a");
+        await Assert.That(tips.VersionText).IsEqualTo("daemon 1.2.3");
+        await Assert.That(tips.VersionTip).IsEqualTo(MainWindowViewModel.VersionIdentityTip);
+        await Assert.That(tips.VersionTip).DoesNotContain("1.2.3+abc");
+    }
 
     /// 310 of rail plus 400 of pane must never squeeze the center column to nothing.
     [Test]

@@ -47,6 +47,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<string> _statusBadge;
     public string StatusBadge => _statusBadge.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
+    public bool ShowsIdleBadge => _showsIdleBadge.Value;
+
     readonly CompositeDisposable _disposables = new();
 
     public RailSessionViewModel(
@@ -85,8 +88,12 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
             .DisposeWith(_disposables);
         _statusBadge = agentsWithPending.Select(set => row.Status == "Failed" || set.Contains(row.Id)
-                ? "!" : SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
-            .ToProperty(this, x => x.StatusBadge, initialValue: SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
+                ? "!" : "")
+            .ToProperty(this, x => x.StatusBadge, initialValue: "")
+            .DisposeWith(_disposables);
+        _showsIdleBadge = agentsWithPending.Select(set =>
+                SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed" && !set.Contains(row.Id))
+            .ToProperty(this, x => x.ShowsIdleBadge, initialValue: SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed")
             .DisposeWith(_disposables);
 
         _isStale = (IsRemote ? remoteStale : Observable.Return(false))

@@ -39,6 +39,9 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<string> _statusBadge;
     public string StatusBadge => _statusBadge.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
+    public bool ShowsIdleBadge => _showsIdleBadge.Value;
+
     readonly ObservableAsPropertyHelper<bool> _holdsSelected;
     public bool HoldsSelected => _holdsSelected.Value;
 
@@ -123,9 +126,14 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
 
         _statusBadge = sessionsCache.Connect().QueryWhenChanged()
             .CombineLatest(agentsWithPending, (q, set) =>
-                q.Items.Any(r => r.Status == "Failed" || set.Contains(r.Id)) ? "!"
-                : q.Items.Any(SessionStatusDots.WaitsOnUser) ? "zzz" : "")
+                q.Items.Any(r => r.Status == "Failed" || set.Contains(r.Id)) ? "!" : "")
             .ToProperty(this, x => x.StatusBadge, initialValue: "")
+            .DisposeWith(_disposables);
+        _showsIdleBadge = sessionsCache.Connect().QueryWhenChanged()
+            .CombineLatest(agentsWithPending, (q, set) =>
+                q.Items.Any(SessionStatusDots.WaitsOnUser)
+                && !q.Items.Any(r => r.Status == "Failed" || set.Contains(r.Id)))
+            .ToProperty(this, x => x.ShowsIdleBadge, initialValue: false)
             .DisposeWith(_disposables);
 
         _holdsSelected = sessionsCache.Connect().QueryWhenChanged()

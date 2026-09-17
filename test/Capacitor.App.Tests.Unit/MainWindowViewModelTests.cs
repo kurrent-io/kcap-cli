@@ -168,6 +168,15 @@ public class MainWindowViewModelTests {
         await Assert.That(MainWindowViewModel.StripBuildMetadata(raw)).IsEqualTo(expected);
     }
 
+    [Test]
+    [Arguments("1.2.3+abc", "daemon 1.2.3")]
+    [Arguments("1.2.3", "daemon 1.2.3")]
+    [Arguments("", "")]
+    [Arguments(null, "")]
+    public async Task VersionLabelForRail_prefixes_the_stripped_semver(string? raw, string expected) {
+        await Assert.That(MainWindowViewModel.VersionLabelForRail(raw)).IsEqualTo(expected);
+    }
+
     // ---- ConnectionDisplay / StatusDotBrush (local attach State first, daemon Connection only
     // once Connected — see MainWindowViewModel.ConnectionDisplayFor's doc comment) ----
 
@@ -257,6 +266,41 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
             var brush = (SolidColorBrush)vm.StatusDotBrush;
             await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ConnectionTip_uses_the_lane_diagnostic_otherwise_names_attach() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System, laneStatus: lane.Status);
+            using var activation = vm.Activator.Activate();
+
+            await Assert.That(vm.ConnectionTip).IsEqualTo(MainWindowViewModel.AttachStatusTip);
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
+            await Assert.That(vm.ConnectionTip).IsEqualTo("diagnostic-marker");
+            await Assert.That(vm.ServerLaneTip).IsEqualTo("diagnostic-marker");
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(vm.ConnectionTip).IsEqualTo(MainWindowViewModel.AttachStatusTip);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task VersionDisplay_is_the_prefixed_daemon_semver() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service);
+            using var activation = vm.Activator.Activate();
+
+            service.SnapshotsSubject.OnNext(Snap(version: "1.2.3+abc"));
+            await Assert.That(vm.VersionDisplay).IsEqualTo("daemon 1.2.3");
+            await Assert.That(vm.DaemonVersion).IsEqualTo("1.2.3+abc");
         });
     }
 

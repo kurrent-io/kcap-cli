@@ -10,6 +10,12 @@
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="FontWeight" Value="Bold" />
             <Setter Property="LetterSpacing" Value="1.2" />
+            <Setter Property="LineHeight" Value="16" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.sectionMeta">
+            <Setter Property="FontSize" Value="11" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
@@ -126,6 +132,14 @@
             <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Margin" Value="0,14,0,14" />
         </Style>
+        <!-- Expanded body hangs off the header the same way rail sessions hang off a worktree:
+             a left rule plus indent, not a sibling in the pane flow. -->
+        <Style Selector="Border.sectionBody">
+            <Setter Property="BorderThickness" Value="1,0,0,0" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Margin" Value="6,2,0,0" />
+            <Setter Property="Padding" Value="12,8,0,2" />
+        </Style>
         <!-- Header refresh: a square hit target, not a 13px orphan path. -->
         <Style Selector="Button.iconButton">
             <Setter Property="Background" Value="Transparent" />
@@ -157,7 +171,7 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
         </Style>
         <Style Selector="Path.chevron">
-            <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" />
             <Setter Property="StrokeThickness" Value="1.8" />
             <Setter Property="StrokeLineCap" Value="Round" />
             <Setter Property="StrokeJoin" Value="Round" />
@@ -267,17 +281,19 @@
 
                             <StackPanel IsVisible="{Binding HasParts}">
                                 <Button x:Name="PartsToggle" Command="{Binding TogglePartsCommand}" Classes="sectionHeader expandable">
-                                    <DockPanel>
-                                        <Panel DockPanel.Dock="Right" Width="12" Height="12" VerticalAlignment="Center">
-                                            <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PartsExpanded}" />
-                                            <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PartsExpanded}" />
-                                        </Panel>
-                                        <TextBlock DockPanel.Dock="Right" Text="{Binding PartsHeader}" FontSize="12"
-                                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                                         <TextBlock Text="PARTS" Classes="eyebrow" />
-                                    </DockPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding PartsHeader}" Classes="sectionMeta" />
+                                            <Panel Width="12" Height="12">
+                                                <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PartsExpanded}" />
+                                                <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PartsExpanded}" />
+                                            </Panel>
+                                        </StackPanel>
+                                    </Grid>
                                 </Button>
-                                <ItemsControl x:Name="PartsList" ItemsSource="{Binding Parts}" Margin="0,8,0,0" IsVisible="{Binding PartsExpanded}">
+                                <Border Classes="sectionBody" IsVisible="{Binding PartsExpanded}">
+                                    <ItemsControl x:Name="PartsList" ItemsSource="{Binding Parts}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
                                             <StackPanel Spacing="8" />
@@ -287,20 +303,27 @@
                                         <DataTemplate x:DataType="vm:WorkContextPartViewModel">
                                             <StackPanel Orientation="Horizontal" Spacing="9">
                                                 <!-- Settled is green (outcome). This session is purple like IN FLIGHT — location, not done. -->
-                                                <Panel Width="12" Height="12" VerticalAlignment="Center">
-                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5" IsVisible="{Binding !IsSettled}" />
-                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5" IsVisible="{Binding IsThisSession}" />
-                                                    <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}" IsVisible="{Binding IsThisSession}" />
-                                                    <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" IsVisible="{Binding IsSettled}" />
+                                                <Panel Width="12" Height="16" VerticalAlignment="Center">
+                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
+                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !IsSettled}" />
+                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
+                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
+                                                    <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
+                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
+                                                    <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
+                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsSettled}" />
                                                     <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
-                                                          Data="M3,6 L5.2,8.2 L9,4" IsVisible="{Binding IsSettled}" />
+                                                          Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                          IsVisible="{Binding IsSettled}" />
                                                 </Panel>
-                                                <TextBlock Text="{Binding Title}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center"
-                                                           Foreground="{StaticResource KcapTextBrush}" Classes.settled="{Binding IsSettled}" />
+                                                <TextBlock Text="{Binding Title}" FontSize="13" LineHeight="16" TextWrapping="Wrap"
+                                                           VerticalAlignment="Center" Foreground="{StaticResource KcapTextBrush}"
+                                                           Classes.settled="{Binding IsSettled}" />
                                             </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                                </Border>
                             </StackPanel>
                         </StackPanel>
 
@@ -367,19 +390,22 @@
                 </StackPanel>
 
                 <!-- Session facts. -->
+                <StackPanel>
                 <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
-                    <DockPanel>
-                        <Panel DockPanel.Dock="Right" Width="12" Height="12" VerticalAlignment="Center">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBlock Text="SESSION" Classes="eyebrow" />
+                        <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
                             <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SessionExpanded}" />
                             <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SessionExpanded}" />
                         </Panel>
-                        <TextBlock Text="SESSION" Classes="eyebrow" />
-                    </DockPanel>
+                    </Grid>
                 </Button>
+                <Border Classes="sectionBody">
+                    <Panel>
                 <TextBlock x:Name="SessionSummaryText" Text="{Binding SessionSummaryLine}" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
-                           Margin="0,8,0,0" IsVisible="{Binding !SessionExpanded}" />
+                           IsVisible="{Binding !SessionExpanded}" />
                 <Grid x:Name="SessionFacts" ColumnDefinitions="108,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
-                      RowSpacing="8" Margin="0,8,0,0"
+                      RowSpacing="8"
                       IsVisible="{Binding SessionExpanded}">
                     <Grid.Styles>
                         <Style Selector="TextBlock.factLabel">
@@ -429,25 +455,31 @@
                     <SelectableTextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SessionIdText}" Classes="factValue"
                                          IsVisible="{Binding !CanCopySessionId}" />
                 </Grid>
+                    </Panel>
+                </Border>
+                </StackPanel>
 
                 <Border Classes="sectionRule" />
 
                 <!-- Who's on it: names stay visible; the chevron only appears when the list is longer than the cap. -->
+                <StackPanel>
                 <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader"
                         Classes.expandable="{Binding PeopleOverflows}">
-                    <DockPanel>
-                        <Panel DockPanel.Dock="Right" Width="12" Height="12" VerticalAlignment="Center"
-                               IsVisible="{Binding PeopleOverflows}">
-                            <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
-                            <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
-                        </Panel>
-                        <TextBlock x:Name="WhoCountText" DockPanel.Dock="Right" Text="{Binding WhoCountText}" FontSize="12"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0"
-                                   IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <TextBlock Text="WHO'S ON IT" Classes="eyebrow" />
-                    </DockPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock x:Name="WhoCountText" Text="{Binding WhoCountText}" Classes="sectionMeta"
+                                       IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <Panel Width="12" Height="12" IsVisible="{Binding PeopleOverflows}">
+                                <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
+                                <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
+                            </Panel>
+                        </StackPanel>
+                    </Grid>
                 </Button>
-                <ItemsControl x:Name="ContributorList" ItemsSource="{Binding VisibleContributors}" Margin="0,8,0,0" IsVisible="{Binding HasContributors}">
+                <Border Classes="sectionBody">
+                    <Panel>
+                <ItemsControl x:Name="ContributorList" ItemsSource="{Binding VisibleContributors}" IsVisible="{Binding HasContributors}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <StackPanel Spacing="8" />
@@ -478,7 +510,7 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,8,0,0" IsVisible="{Binding !HasContributors}">
+                <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" IsVisible="{Binding !HasContributors}">
                     <Border Classes="avatar" VerticalAlignment="Center">
                         <TextBlock Text="{Binding RequesterInitial}" />
                     </Border>
@@ -497,6 +529,9 @@
                         </StackPanel>
                     </Button>
                 </Grid>
+                    </Panel>
+                </Border>
+                </StackPanel>
             </StackPanel>
         </ScrollViewer>
     </Border>
