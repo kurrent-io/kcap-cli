@@ -175,7 +175,7 @@ public class GitHubMarkdownViewTests {
     public async Task A_multi_line_source_tag_lays_out_and_still_reads_as_source(CancellationToken _) {
         await RunOnUiAsync(async () => {
             foreach (var flavor in new[] { MarkdownFlavor.Chat, MarkdownFlavor.GitHub }) {
-                var view = new MarkdownView { Flavor = flavor, Text = "a <span\n title=\"x\">b</span> c\n\nd <b\nclass=\"x\">z", Width = 400 };
+                var view = new MarkdownView { Flavor = flavor, Text = "a <span\ntitle=\"x\">b</span> c\n\nd <b\nclass=\"x\">z", Width = 400 };
                 var window = new Window { Content = new ScrollViewer { Content = new StackPanel { Children = { view } } }, Width = 500, Height = 400 };
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
@@ -184,7 +184,7 @@ public class GitHubMarkdownViewTests {
                     await Assert.That(view.Bounds.Height).IsGreaterThan(0);
                     await Assert.That(Runs(view).Any(r => r.Text!.Contains('\n') || r.Text!.Contains('\r'))).IsFalse();
                     var texts = Paragraphs(view).Select(p => Reads(p).ReplaceLineEndings("\n")).ToList();
-                    await Assert.That(texts).Contains("a <span\n title=\"x\">b</span> c");
+                    await Assert.That(texts).Contains("a <span\ntitle=\"x\">b</span> c");
                     await Assert.That(texts).Contains("d <b\nclass=\"x\">z");
                 } finally { window.Close(); }
             }
