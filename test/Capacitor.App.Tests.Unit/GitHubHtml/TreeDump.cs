@@ -18,7 +18,7 @@ static class TreeDump {
         switch (node) {
             case MarkdownDocument document: Blocks(builder, "doc", document); break;
             case DetailsBlock details:
-                builder.Append(details.IsOpen ? "details+" : "details").Append('#').Append(details.Ordinal).Append('{');
+                builder.Append(details.StartsOpen ? "details+" : "details").Append('#').Append(details.Ordinal).Append('{');
                 Inlines(builder, details.Summary);
                 builder.Append('}');
                 Blocks(builder, "", details);

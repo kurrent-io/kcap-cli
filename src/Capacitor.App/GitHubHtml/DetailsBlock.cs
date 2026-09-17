@@ -10,7 +10,7 @@ public sealed class DetailsBlock : ContainerBlock {
 
     public ContainerInline Summary { get; set; } = new();
 
-    public new bool IsOpen { get; set; }
+    public bool StartsOpen { get; set; }
 
     public int Ordinal { get; set; }
 }

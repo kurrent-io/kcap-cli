@@ -29,6 +29,7 @@ static class DetailsFolder {
         public DetailsBlock? Node => node;
         /// The levels the details node occupies, itself included.
         public int Reach { get; set; } = 1;
+        public List<Block> Children { get; } = [];
     }
 
     /// Returns the reach of the container's children.
@@ -109,6 +110,7 @@ static class DetailsFolder {
         var frames = new Stack<Frame>();
         var reach = 0;
         var pending = apply ? new List<Block>() : null;
+        var completed = apply ? new List<Frame>() : null;
 
         foreach (var item in items) {
             if (!item.Converts) {
@@ -120,8 +122,7 @@ static class DetailsFolder {
             foreach (var part in item.Plan!.Parts) {
                 switch (part.Kind) {
                     case HtmlBlockPartKind.DetailsOpen: {
-                        var node = apply ? new DetailsBlock { IsOpen = part.IsOpen } : null;
-                        if (node is not null) AddToTarget(node);
+                        var node = apply ? new DetailsBlock { StartsOpen = part.IsOpen } : null;
                         frames.Push(new Frame(item.TagPairs[tag++]!, node));
                         break;
                     }
@@ -130,6 +131,7 @@ static class DetailsFolder {
                         var frame = frames.Pop();
                         // The node sits at depth + 1 + the frames still open around it.
                         if (!apply && depth + frames.Count + frame.Reach > GitHubHtmlPass.MaxDepth) frame.Pair.Rejected = true;
+                        if (apply) { completed!.Add(frame); AddToTarget(frame.Node!); }
                         Note(frame.Reach);
                         break;
                     }
@@ -140,6 +142,8 @@ static class DetailsFolder {
                         break;
                     }
                     default: {
+                        // Only breaks the switch: the remaining parts still run so this
+                        // block's DetailsClose pops the frames it pushed.
                         if (!apply && depth + frames.Count + part.Reach > GitHubHtmlPass.MaxDepth) { item.Plan.Rejected = true; break; }
                         if (apply) AddToTarget(Build(part));
                         Note(part.Reach);
@@ -149,16 +153,19 @@ static class DetailsFolder {
             }
         }
 
+        // The only mutation point, reached only once every InlineBuilder.Build above has
+        // already succeeded: a throw before this leaves container untouched.
         if (apply) {
             container.Clear();
+            foreach (var frame in completed!)
+                foreach (var child in frame.Children) frame.Node!.Add(child);
             foreach (var block in pending!) container.Add(block);
         }
         return reach;
 
         void AddToTarget(Block block) {
-            if (frames.Count == 0) { pending!.Add(block); return; }
-            block.Remove();
-            frames.Peek().Node!.Add(block);
+            if (frames.Count > 0) frames.Peek().Children.Add(block);
+            else pending!.Add(block);
         }
 
         void Note(int levels) {
