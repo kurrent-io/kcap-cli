@@ -79,6 +79,9 @@ class OpenCodeV2Adapter(OpenCodeV1Adapter):
                        capture_output=True, text=True, timeout=60)
 
     def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        # A service left running by an earlier sandbox leaves the interactive UI drawing nothing
+        # at all, and serves the other sandbox's catalogue to a headless session.
+        self._service_stop(sb)
         session = super().open_session(sb, mode)
         if mode != "daemon" or session is None:
             return session
@@ -87,6 +90,7 @@ class OpenCodeV2Adapter(OpenCodeV1Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         if mode != "daemon":
             return super().ask(sb, mode, prompt)
+        self._service_stop(sb)
         try:
             res = acp_ask(self.acp_argv(), sb.cwd, sb.env, prompt, sb.root / "opencode-acp.stderr.log",
                           self.turn_timeout)
