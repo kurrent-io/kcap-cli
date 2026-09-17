@@ -260,10 +260,14 @@ routed units, unit-tested on its own.
 one of `Loaded`, `Resumed`, `Skipped` or `Failed` (`ImportOutcome`, `IImportSource.cs:78`).
 `Skipped` is a real runtime outcome, not a classification: a Cursor child imported inline by its
 parent, a session quarantined after classification, a routed session with no sendable content. The
-selection therefore partitions into **Succeeded** (`Loaded` + `Resumed`), **Skipped** and **Failed**,
-and the run records which ids fell where. `ResolveRoutedOutcomeForCounting` (`ImportCommand.cs:522`)
-keeps governing the Done-grid *counts*; the per-id partition is recorded from the raw outcome before
-that suppression, so the two never disagree about an id.
+selection therefore partitions into **Succeeded**, **Skipped** and **Failed**, and the run records
+which ids fell where. Succeeded is `Loaded` or `Resumed`, **or `Skipped` with
+`ImportSessionResult.SentChildContent == true`**: a Cursor parent with no sendable root content
+whose call nonetheless posted a carried child (`CursorImportSource.cs:578-625`) has landed real work
+under its own session, and that is exactly what the flag exists to report. Skipped is `Skipped` with
+nothing sent. `ResolveRoutedOutcomeForCounting` (`ImportCommand.cs:522`) keeps governing the
+Done-grid *counts*; the per-id partition is recorded from the raw outcome and the flag before that
+suppression, so the two never disagree about an id.
 
 **Reporting the selection and the partition.** Two records, one per checkpoint:
 
@@ -274,8 +278,8 @@ ImportRunSelection(                          // onSelected, after selection, bef
     bool                  RemainderExists)   // Terms "Remainder"
 
 ImportRunPartition(                          // on ImportRunOutcome, via onFinished
-    IReadOnlyList<string> SucceededIds,      // own call returned Loaded or Resumed
-    IReadOnlyList<string> SkippedIds,        // own call returned Skipped
+    IReadOnlyList<string> SucceededIds,      // Loaded, Resumed, or Skipped with SentChildContent
+    IReadOnlyList<string> SkippedIds,        // Skipped with nothing sent
     IReadOnlyList<string> FailedIds)
 ```
 
@@ -799,8 +803,10 @@ scope, before reconcile and before any import (seam ordering); a selected Cursor
 a child outside its unit and no child in the plan lacks its parent.
 
 **Terminal partition**: a quarantined session lands in `SkippedIds`; a routed session with no
-sendable content lands in `SkippedIds`; own-call `Loaded`/`Resumed` land in `SucceededIds`; a
-carried child appears in no list;
+sendable content and no children lands in `SkippedIds`; own-call `Loaded`/`Resumed` land in
+`SucceededIds`; a `New` Cursor parent with no sendable own content whose admitted `New` child was
+posted (`Skipped`, `SentChildContent: true`) lands in `SucceededIds`, and with no remainder that run
+reaches §4 row 8, not row 4; a carried child appears in no list;
 `Complete ⇒ Selected == Succeeded + Skipped + Failed`; the per-id partition is taken from the raw
 outcome and disagrees with nothing the Done grid counts.
 
