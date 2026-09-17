@@ -40,6 +40,27 @@ public class XtermTerminalSurfaceTests {
         });
     }
 
+    /// Pins the taller-viewport correction: after a grow, the cursor is still on the line it was
+    /// on, so the repaint an agent sends on SIGWINCH lands on the tail rather than above it. The
+    /// feed must overflow the viewport first — without scrollback the emulator has no lines to
+    /// give back and there is no drift to correct.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_taller_viewport_keeps_the_cursor_on_its_line() {
+        await RunOnUiAsync(async () => {
+            var surface = new XtermTerminalSurface(40, 4);
+            for (var i = 1; i <= 12; i++) surface.Feed($"line {i}\r\n");
+            surface.Feed("prompt");
+            var buffer = surface.Model.Terminal.Buffer;
+            var line = buffer.BaseY + buffer.Y;
+
+            surface.Resize(40, 10);
+
+            await Assert.That(buffer.BaseY + buffer.Y).IsEqualTo(line);
+            await Assert.That(buffer.GetLine(line)!.TranslateToString(true)).IsEqualTo("prompt");
+        });
+    }
+
     /// Pins the keyboard-mode guard end to end: the modifyOtherKeys set Claude Code sends on
     /// every return to raw mode underlines nothing.
     [Test]
