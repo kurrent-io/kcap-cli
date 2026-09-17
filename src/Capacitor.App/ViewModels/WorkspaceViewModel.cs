@@ -58,8 +58,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     bool _showsPullRequestTab;
     public bool ShowsPullRequestTab {
         get => _showsPullRequestTab;
-        private set => this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
+            this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
+        }
     }
+    public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab;
 
     WorkspaceTab _activeTab = WorkspaceTab.Chat;
     public WorkspaceTab ActiveTab {
@@ -169,6 +173,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         var showsTerminal = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor));
         _showsTerminalTab = showsTerminal
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
+            .DisposeWith(_disposables);
+        showsTerminal.Subscribe(_ => this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch)))
             .DisposeWith(_disposables);
         // ShowTerminalCommand is unguarded — a caller can select the tab before any dto says whether
         // this agent has one — so presence clamps it back rather than leaving a blank pane in front.

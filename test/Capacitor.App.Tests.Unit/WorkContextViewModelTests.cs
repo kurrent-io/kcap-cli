@@ -75,6 +75,8 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
             await Assert.That(h.Vm.PhaseNote).IsEqualTo(WorkContextViewModel.WaitingNote);
             await Assert.That(h.Vm.SessionIdText).IsEqualTo("resolving…");
+            await Assert.That(h.Vm.SessionIdDisplay).IsEqualTo("resolving…");
+            await Assert.That(h.Vm.CanCopySessionId).IsFalse();
 
             await h.PushAsync(Dto(sessionId: null));
 
@@ -135,6 +137,8 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Source.Requested).IsEquivalentTo(new[] { SessionA });
             await Assert.That(h.Vm.HasSession).IsTrue();
             await Assert.That(h.Vm.SessionIdText).IsEqualTo(SessionA);
+            await Assert.That(h.Vm.SessionIdDisplay).IsEqualTo("aaaaaaaa…aaaaaaaa");
+            await Assert.That(h.Vm.CanCopySessionId).IsTrue();
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NoWorkItem);
             await h.Vm.TeardownAsync();
         });
@@ -907,6 +911,10 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Contributors.Select(c => c.Initial)).IsEquivalentTo(new[] { "A", "G", "👩" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.LastActivityText)).IsEquivalentTo(new[] { "2h ago", "3d ago", "" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.WhoCountText).IsEqualTo("3 people · 4 sessions");
+            await Assert.That(h.Vm.PeopleOverflows).IsFalse();
+            await Assert.That(h.Vm.VisibleContributors.Count()).IsEqualTo(3);
+            await h.Vm.TogglePeopleCommand.Execute();
+            await Assert.That(h.Vm.PeopleExpanded).IsFalse();
 
             await h.TickAsync();
             await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 person · 2 sessions");
@@ -1160,7 +1168,7 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Sections_default_open_parts_and_collapsed_people_and_session_and_toggle() {
+    public async Task Sections_default_open_parts_and_collapsed_session_and_toggle() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             await Assert.That(h.Vm.PartsExpanded).IsTrue();
@@ -1168,11 +1176,9 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.SessionExpanded).IsFalse();
 
             await h.Vm.TogglePartsCommand.Execute();
-            await h.Vm.TogglePeopleCommand.Execute();
             await h.Vm.ToggleSessionCommand.Execute();
 
             await Assert.That(h.Vm.PartsExpanded).IsFalse();
-            await Assert.That(h.Vm.PeopleExpanded).IsTrue();
             await Assert.That(h.Vm.SessionExpanded).IsTrue();
             await h.Vm.TeardownAsync();
         });
@@ -1243,6 +1249,34 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
             await h.Vm.ToggleSubagentsCommand.Execute();
             await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_long_session_id_truncates_in_the_middle() {
+        await Assert.That(WorkContextViewModel.MiddleTruncate("short")).IsEqualTo("short");
+        await Assert.That(WorkContextViewModel.MiddleTruncate("c03b8e371db44dd697732a1cf1fc3532"))
+            .IsEqualTo("c03b8e37…f1fc3532");
+        await Assert.That(new WorkContextPersonViewModel("nortonandreev-very-long-github-handle", null, null, DateTimeOffset.UnixEpoch)
+            .NameDisplay).IsEqualTo("nortonandr…b-handle");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_lists_names_and_the_chevron_only_reveals_people_past_the_cap() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var people = Enumerable.Range(1, 5).Select(i => Person($"u{i}", $"P{i}")).ToList();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with { Contributors = people, SessionCount = 5 }));
+            await h.PushAsync(Dto());
+
+            await Assert.That(h.Vm.PeopleOverflows).IsTrue();
+            await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await h.Vm.TogglePeopleCommand.Execute();
+            await Assert.That(h.Vm.PeopleExpanded).IsTrue();
+            await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4", "P5" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
             await h.Vm.TeardownAsync();
         });
     }

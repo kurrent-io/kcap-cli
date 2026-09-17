@@ -703,24 +703,26 @@ public class MainWindowSmokeTests {
             await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
             await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
 
-            // Opened, because a MenuFlyout's items only join a tree — and so only bind — once its
-            // presenter exists; unopened they all read disabled, which Documentation below catches.
-            var flyout = (MenuFlyout)help.Flyout!;
+            // Opened, because Flyout content only joins a tree — and so only binds — once its
+            // presenter exists; unopened the report rows would all read enabled from unset CanExecute.
+            var flyout = (Flyout)help.Flyout!;
             flyout.ShowAt(help);
             Dispatcher.UIThread.RunJobs();
-            var items = flyout.Items.OfType<MenuItem>().ToList();
-            await Assert.That(items.Select(i => (string)i.Header!)).IsEquivalentTo(["Documentation", "Report a bug…", "Send feedback…"]);
-            // A command's CanExecute reaches a MenuItem through IsEffectivelyEnabled; IsEnabled
-            // stays at its unset true, so reading it here would assert nothing.
-            await Assert.That(items[0].IsEffectivelyEnabled).IsTrue();
-            await Assert.That(items[1].IsEffectivelyEnabled).IsFalse();
-            await Assert.That(items[2].IsEffectivelyEnabled).IsFalse();
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var docs = rail.FindControl<Button>("RailHelpDocsButton")!;
+            var bug = rail.FindControl<Button>("RailHelpBugButton")!;
+            var feedback = rail.FindControl<Button>("RailHelpFeedbackButton")!;
+            await Assert.That(docs.Content).IsEqualTo("Documentation");
+            await Assert.That(bug.Content).IsEqualTo("Report a bug…");
+            await Assert.That(feedback.Content).IsEqualTo("Send feedback…");
+            await Assert.That(docs.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(bug.IsEffectivelyEnabled).IsFalse();
+            await Assert.That(feedback.IsEffectivelyEnabled).IsFalse();
 
-            // The class reaching the presenter is only the positive control — it lands there
-            // whether or not a style matches it. The corner radius is what pins the kit chrome.
-            var presenter = items[0].FindAncestorOfType<MenuFlyoutPresenter>()!;
+            var presenter = docs.FindAncestorOfType<FlyoutPresenter>()!;
             await Assert.That(presenter.Classes.Contains("kcapPanel")).IsTrue();
             await Assert.That(presenter.CornerRadius).IsEqualTo(new CornerRadius(12));
+            await Assert.That(docs.Classes.Contains("kcapGhost")).IsTrue();
 
             flyout.Hide();
             Dispatcher.UIThread.RunJobs();

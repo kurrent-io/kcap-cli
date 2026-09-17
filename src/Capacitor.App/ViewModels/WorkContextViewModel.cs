@@ -74,7 +74,17 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     string _transport = "—";
     public string Transport { get => _transport; private set => this.RaiseAndSetIfChanged(ref _transport, value); }
     string _sessionIdText = "resolving…";
-    public string SessionIdText { get => _sessionIdText; private set => this.RaiseAndSetIfChanged(ref _sessionIdText, value); }
+    public string SessionIdText {
+        get => _sessionIdText;
+        private set {
+            this.RaiseAndSetIfChanged(ref _sessionIdText, value);
+            this.RaisePropertyChanged(nameof(SessionIdDisplay));
+            this.RaisePropertyChanged(nameof(CanCopySessionId));
+        }
+    }
+    /// Head and tail of a long id, so a 32-hex session id stays one line in the 320px pane.
+    public string SessionIdDisplay => MiddleTruncate(_sessionIdText);
+    public bool CanCopySessionId => _sessionIdText.Length > 0 && _sessionIdText != "resolving…";
     string _sessionSummaryLine = "—";
     public string SessionSummaryLine { get => _sessionSummaryLine; private set => this.RaiseAndSetIfChanged(ref _sessionSummaryLine, value); }
 
@@ -93,6 +103,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasSubagents));
         this.RaisePropertyChanged(nameof(SubagentsHeader));
+    }
+
+    internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {
+        if (value.Length <= head + tail + 1) return value;
+        return string.Concat(value.AsSpan(0, head), "…", value.AsSpan(value.Length - tail));
     }
 
     WorkContextPhase _phase = WorkContextPhase.WaitingForSession;

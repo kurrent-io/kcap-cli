@@ -3,6 +3,7 @@ using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -95,10 +96,14 @@ public class WorkContextViewSmokeTests {
             var key = host.Find<TextBlock>("WorkContextKey");
             await Assert.That(key.Text).IsEqualTo("WK-2198");
             await Assert.That(key.IsEffectivelyVisible).IsTrue();
+            await Assert.That(ReferenceEquals(key.Foreground, host.Window.FindResource("KcapTextBrush"))).IsTrue()
+                .Because("the key is identity, not a status colour");
             await Assert.That(host.Find<TextBlock>("WorkContextTitle").IsEffectivelyVisible).IsFalse();
 
             var issueCard = host.Find<ContentControl>("IssueCard");
-            await Assert.That(host.Find<Button>("OpenWorkItemButton").IsEffectivelyVisible).IsTrue();
+            var open = host.Find<Button>("OpenWorkItemButton");
+            await Assert.That(open.IsEffectivelyVisible).IsTrue();
+            await Assert.That(open.Parent).IsSameReferenceAs(host.Find<Button>("RefreshButton").Parent);
             await Assert.That(issueCard.IsEffectivelyVisible).IsEqualTo(!inline);
             if (!inline) {
                 var linkKey = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkKey");
@@ -145,6 +150,105 @@ public class WorkContextViewSmokeTests {
             var count = host.Find<TextBlock>("WhoCountText");
             await Assert.That(count.Text).IsEqualTo("1 person · 2 sessions");
             await Assert.That(count.IsEffectivelyVisible).IsTrue();
+
+            var list = host.Find<ItemsControl>("ContributorList");
+            await Assert.That(list.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Vm.PeopleExpanded).IsFalse();
+            var name = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "Ada");
+            await Assert.That(name.IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task This_session_part_mark_is_purple_and_settled_stays_green() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var primary = new SessionWorkItemAssignmentDto { WorkItemId = "w1", Label = "WK-2198", Source = "mcp", Confidence = 1, IsPrimary = true };
+            var here = new SessionWorkItemAssignmentDto { WorkItemId = "p1", Label = "part", Source = "mcp", Confidence = 1, IsPrimary = false };
+            var item = new WorkItemDto {
+                WorkItemId = "w1",
+                Title = "WK-2198",
+                Key = new WorkItemKeyDto { ShortKey = "WK-2198", Provider = "linear", Kind = "issue", Value = "WK-2198" },
+                State = new WorkItemStateDto { Kind = "in_flight" },
+                Parts = [
+                    new WorkItemPartDto { WorkItemId = "p1", Title = "Here", Ordinal = 0 },
+                    new WorkItemPartDto { WorkItemId = "p2", Title = "Done", Ordinal = 1, IsSettled = true },
+                ],
+            };
+            await host.ShowAsync(new WorkContextRead(WorkContextReadKind.Ready, [primary, here], primary, item, null,
+                new SessionSummaryDto { SessionId = SessionA }, false, false, false, null));
+
+            var purple = host.Window.FindResource("KcapPurpleBrush");
+            var green = host.Window.FindResource("KcapSuccessBrush");
+            var marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Here");
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, purple) || ReferenceEquals(e.Fill, purple))).IsTrue();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, green) || ReferenceEquals(e.Fill, green))).IsFalse();
+
+            marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Done");
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Fill, green))).IsTrue();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, purple) || ReferenceEquals(e.Fill, purple))).IsFalse();
+        });
+    }
+
+    static Ellipse[] MarksBeside(ItemsControl list, string title) {
+        var row = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == title).Parent as StackPanel;
+        return row!.Children.OfType<Panel>().First().Children.OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToArray();
+    }
+
+    static WorkContextRead CrowdedWhoRead() {
+        var read = KeyOnlyRead();
+        var item = read.Item! with {
+            Contributors = [
+                new WorkItemContributorDto { UserId = "u1", DisplayName = "Ada" },
+                new WorkItemContributorDto { UserId = "u2", DisplayName = "Bob" },
+                new WorkItemContributorDto { UserId = "u3", DisplayName = "Cyd" },
+                new WorkItemContributorDto { UserId = "u4", DisplayName = "Dee" },
+                new WorkItemContributorDto { UserId = "u5", DisplayName = "Eve" },
+            ],
+        };
+        return read with { Item = item };
+    }
+
+    static ContentPresenter WhoPresenter(Button button) =>
+        button.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_header_has_no_hover_fill_when_the_list_does_not_overflow() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var button = host.Find<Button>("WhoToggle");
+            await Assert.That(button.Classes.Contains("expandable")).IsFalse();
+
+            var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(centre);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(button.Classes.Contains(":pointerover")).IsTrue()
+                .Because("the hover must register for the assertion to mean anything");
+            await Assert.That(Alpha(WhoPresenter(button).Background)).IsEqualTo((byte)0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_header_paints_hover_when_the_list_overflows() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(CrowdedWhoRead());
+
+            var button = host.Find<Button>("WhoToggle");
+            await Assert.That(host.Vm.PeopleOverflows).IsTrue();
+            await Assert.That(button.Classes.Contains("expandable")).IsTrue();
+
+            var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(centre);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(button.Classes.Contains(":pointerover")).IsTrue()
+                .Because("the hover must register for the assertion to mean anything");
+            await Assert.That(ReferenceEquals(WhoPresenter(button).Background, host.Window.FindResource("KcapSurfaceRaisedBrush"))).IsTrue();
         });
     }
 

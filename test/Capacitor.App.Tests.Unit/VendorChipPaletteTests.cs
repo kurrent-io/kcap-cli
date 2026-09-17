@@ -6,8 +6,8 @@ public class VendorChipPaletteTests {
     [Test]
     public async Task Known_vendor_gets_its_web_colour() {
         var claude = VendorChipPalette.For("claude");
-        await Assert.That(claude.Background).IsEqualTo("#C87B3A");
-        await Assert.That(claude.Foreground).IsEqualTo("#1E1E1E");
+        await Assert.That(claude.Background).IsEqualTo("#2E2C2A");
+        await Assert.That(claude.Foreground).IsEqualTo("#EDE8E1");
     }
 
     [Test]

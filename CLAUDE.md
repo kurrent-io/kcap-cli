@@ -80,6 +80,16 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **Desktop-app green / orange / yellow are status only.** `KcapSuccess*` is shipped, settled,
+  passing; `KcapWarning*` is blocked, stale, needs-you. Identity must not share them: a work-item
+  key, vendor chip, "this session" mark, or title in success green reads as done, and a Claude chip
+  in warning orange reads as attention. Location uses purple (in-flight, you-are-here); selection
+  uses info blue; labels and keys use text/muted/surface tokens.
+- **Desktop-app chrome is the Kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
+  in `App.axaml`; menus, flyouts, buttons, fields and list rows opt into `kcapPanel`, `kcapGhost`,
+  `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
+  canvas. Copy the launcher pickers and the rail help flyout (`kcapPanel` + ghost rows), do not add
+  an unstyled control.
 
 ## Tech stack
 
@@ -199,6 +209,17 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 
 **One type per file, named after the type.** Several types in one file is discouraged, whatever the neighbouring files do — and plenty here do. Three exceptions: an enum plus its extension methods; a closely-related hierarchy (an interface plus many small implementations); a registry of descriptors. The last two are rare — reach for them when splitting would leave files that only make sense read together, not to save a file.
 
+**Desktop app UI** lives under `src/Capacitor.App/`. Palette and control classes are in `App.axaml`.
+
+- Status tokens: `KcapSuccess*` (green) and `KcapWarning*` (orange/yellow) only on badges, pills, and
+  glyphs that mean outcome or attention. Never on keys, titles, vendor/model chips, or "you are here".
+- Location / in-flight: `KcapPurple*`. Selection / open session: `KcapInfo*`. Everything else:
+  `KcapTextBrush`, `KcapMutedBrush`, surface brushes.
+- Controls: `kcapPanel` flyouts, `kcapGhost` rows and icon buttons, `kcapChip` compact buttons,
+  `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
+  Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
+  Kcap class restyles it.
+
 ## Dos and donts
 
 - DO use `JsonElementExtensions` instead of checking JSON value kind.
@@ -215,3 +236,7 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 - **macOS AOT binary code signing** — After copying an AOT binary, run `codesign --force --sign -` to re-sign.
 - **Never read an agent-owned file with a write-denying open** — `File.ReadAllText`/`ReadAllTextAsync` open `FileShare.Read`, which *denies Write to every other handle* for the duration. On Windows that sharing is mandatory, so it stops the agent writing to its own transcript/sidecar — worst on the shutdown final drain, when it is flushing its last records. Read via `WatchCommand.ReadAllTextShared`/`ReadAllTextSharedAsync` (or your own `FileStream(..., FileShare.ReadWrite)`) for anything the agent writes: transcripts and their `{id}.json` sidecars. Config/settings files we own are fine. **This is invisible on macOS/Linux** — Unix has no mandatory sharing, so a violation passes locally and only reddens the Windows CI leg (AI-1629 was exactly this, on the one read that missed the rule while seven siblings had it).
 - **README sync on CLI changes** — Any change to user-facing CLI surface (new command, new/renamed/removed flag, changed default behavior, new prerequisite) must update `README.md` in the *same* PR. Check both the quick-start (`## Getting started`) and the per-command section under `## CLI commands`. Updating only `src/Capacitor.Cli.Core/Resources/help-*.txt` is not enough — the README is the public-facing docs. This has been missed repeatedly and has required follow-up doc-only PRs (#60, #61).
+- **Desktop menus are not Fluent MenuFlyouts** — A new rail or pane menu that uses `MenuFlyout` /
+  `MenuItem` without `kcapPanel` + `kcapGhost` lands Fluent's grey hover on the dark canvas. The
+  launcher pickers and the rail help flyout are the pattern to copy. Green/orange on a key, vendor
+  chip, or location mark is the same class of miss as painting a title with `KcapSuccessBrush`.

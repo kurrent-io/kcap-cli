@@ -81,6 +81,7 @@
             <Setter Property="CaretBrush" Value="{StaticResource KcapTextBrush}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="PlaceholderForeground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="14.5" />
         </Style>
         <Style Selector="TextBox.kcapEmbedded /template/ Border#PART_BorderElement,
                          TextBox.kcapEmbedded:focus /template/ Border#PART_BorderElement,
@@ -352,9 +353,92 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <!-- Ghost rows (picker lists, help flyout): Fluent paints the presenter, so rest and hover
+             both have to pin it — otherwise the theme's grey hover bar shows on our dark panel. -->
+        <Style Selector="Button.kcapGhost">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.kcapGhost /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
         <Style Selector="Button.kcapGhost:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.kcapGhost:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapGhost:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
+        <!-- Destructive ghost (Stop): Fluent hover paints the presenter near-white, which hides
+             the danger colour. Rest and hover both pin KcapDangerBrush. -->
+        <Style Selector="Button.kcapDanger">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="CornerRadius" Value="7" />
+        </Style>
+        <Style Selector="Button.kcapDanger /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDanger:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapDanger:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerDimBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDanger:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
+        <!-- Chat/Terminal/PR switch: a raised track with one selected cell, not underline tabs.
+             Fluent hover still paints the presenter, so rest and active both pin it. -->
+        <Style Selector="Border.kcapSegment">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="3" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapSegmentItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem.active /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapSegmentItem.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapSegmentItem.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
@@ -385,7 +469,7 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
         </Style>
         <Style Selector="TextBlock.toolKindChip">
-            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontSize" Value="11.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>

@@ -54,6 +54,7 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(DisplayTitle));
         this.RaisePropertyChanged(nameof(HasInlineIssue));
         this.RaisePropertyChanged(nameof(HasSeparateIssue));
+        this.RaisePropertyChanged(nameof(HasRelated));
     }
     string? _overview;
     public string? Overview { get => _overview; private set => this.RaiseAndSetIfChanged(ref _overview, value); }
@@ -99,6 +100,12 @@ public sealed partial class WorkContextViewModel {
     public bool HasBlockers => _blockedBy.Count > 0;
     public bool HasIssue => Issue is not null;
     public bool HasContributors => _contributors.Count > 0;
+    public bool HasRelated => HasPullRequestContext || HasSeparateIssue || (ShowsLegacyLinks && _links.Count > 0);
+    /// Names stay visible; beyond this the header chevron reveals the rest of the list.
+    internal const int VisiblePeopleCap = 4;
+    public bool PeopleOverflows => _contributors.Count > VisiblePeopleCap;
+    public IEnumerable<WorkContextPersonViewModel> VisibleContributors =>
+        PeopleExpanded || !PeopleOverflows ? _contributors : _contributors.Take(VisiblePeopleCap);
     /// People first, since that is what the section lists; the session count follows because one
     /// person can hold several. With nobody listed the session count stands alone.
     public string WhoCountText {
@@ -115,7 +122,14 @@ public sealed partial class WorkContextViewModel {
     }
 
     string _requester = "You";
-    public string Requester { get => _requester; private set => this.RaiseAndSetIfChanged(ref _requester, value); }
+    public string Requester {
+        get => _requester;
+        private set {
+            this.RaiseAndSetIfChanged(ref _requester, value);
+            this.RaisePropertyChanged(nameof(RequesterDisplay));
+        }
+    }
+    public string RequesterDisplay => MiddleTruncate(Requester, 10, 8);
     string _requesterRole = "";
     public string RequesterRole { get => _requesterRole; private set => this.RaiseAndSetIfChanged(ref _requesterRole, value); }
     string _requesterInitial = "Y";
@@ -124,7 +138,13 @@ public sealed partial class WorkContextViewModel {
     bool _partsExpanded = true;
     public bool PartsExpanded { get => _partsExpanded; private set => this.RaiseAndSetIfChanged(ref _partsExpanded, value); }
     bool _peopleExpanded;
-    public bool PeopleExpanded { get => _peopleExpanded; private set => this.RaiseAndSetIfChanged(ref _peopleExpanded, value); }
+    public bool PeopleExpanded {
+        get => _peopleExpanded;
+        private set {
+            this.RaiseAndSetIfChanged(ref _peopleExpanded, value);
+            this.RaisePropertyChanged(nameof(VisibleContributors));
+        }
+    }
     bool _sessionExpanded;
     public bool SessionExpanded { get => _sessionExpanded; private set => this.RaiseAndSetIfChanged(ref _sessionExpanded, value); }
     bool _subagentsExpanded = true;
@@ -137,7 +157,7 @@ public sealed partial class WorkContextViewModel {
 
     void InitializeProjections() {
         TogglePartsCommand   = Toggle(() => PartsExpanded = !PartsExpanded);
-        TogglePeopleCommand  = Toggle(() => PeopleExpanded = !PeopleExpanded);
+        TogglePeopleCommand  = Toggle(() => { if (PeopleOverflows) PeopleExpanded = !PeopleExpanded; });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
         ToggleSubagentsCommand = Toggle(() => SubagentsExpanded = !SubagentsExpanded);
     }
@@ -163,6 +183,7 @@ public sealed partial class WorkContextViewModel {
     void ClearServerProjections() {
         ClearCard();
         _links.Clear();
+        this.RaisePropertyChanged(nameof(HasRelated));
     }
 
     void ClearCard() {
@@ -196,7 +217,10 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(HasParts));
         this.RaisePropertyChanged(nameof(HasBlockers));
         this.RaisePropertyChanged(nameof(HasContributors));
+        this.RaisePropertyChanged(nameof(PeopleOverflows));
+        this.RaisePropertyChanged(nameof(VisibleContributors));
         this.RaisePropertyChanged(nameof(WhoCountText));
+        this.RaisePropertyChanged(nameof(HasRelated));
     }
 
     void ApplyReady(WorkContextRead read) {
@@ -311,6 +335,7 @@ public sealed partial class WorkContextViewModel {
             cards.Add(Link(number, summary.PrTitle, summary.PrUrl));
 
         Replace(_links, cards, l => (l.Key, l.Title, l.Url));
+        this.RaisePropertyChanged(nameof(HasRelated));
     }
 
     /// A poll that returns the same rows leaves the bound list alone, so the ItemsControl keeps its

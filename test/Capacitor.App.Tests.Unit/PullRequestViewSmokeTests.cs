@@ -80,6 +80,8 @@ public class PullRequestViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
             await Assert.That(card.IsVisible).IsTrue();
+            await Assert.That(vm.PullRequests.Title).IsEqualTo("");
+            await Assert.That(vm.PullRequests.Notice).IsEqualTo("No pull requests linked to this session.");
 
             source.Links = [FakePullRequestSource.Link(1)];
             time.Advance(TimeSpan.FromSeconds(16));

@@ -41,12 +41,14 @@ public sealed class WorkContextLinkViewModel {
 /// loaded: the pane draws the initial.
 public sealed class WorkContextPersonViewModel {
     public string  Name             { get; }
+    public string  NameDisplay      { get; }
     public string  Initial          { get; }
     public string? AvatarUrl        { get; }
     public string  LastActivityText { get; }
 
     public WorkContextPersonViewModel(string name, string? avatarUrl, DateTimeOffset? lastActivityAt, DateTimeOffset now) {
         Name             = name;
+        NameDisplay      = WorkContextViewModel.MiddleTruncate(name, 10, 8);
         Initial          = InitialOf(name);
         AvatarUrl        = avatarUrl;
         LastActivityText = lastActivityAt is { } at ? RelativeTime.Format(at, now) : "";

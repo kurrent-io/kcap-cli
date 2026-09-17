@@ -5,8 +5,8 @@
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0,0,0,2" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="Padding" Value="3,10" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="3,12" />
             <Setter Property="Margin" Value="0,0,14,0" />
             <Setter Property="Template">
                 <ControlTemplate>
@@ -77,16 +77,16 @@
     <Style Selector="Button.prStatusButton.success"><Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" /></Style>
     <Style Selector="TextBlock.prMuted">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontSize" Value="13" />
     </Style>
     <Style Selector="TextBlock.prNote">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontSize" Value="13" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
     <Style Selector="TextBlock.prSectionTitle">
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontSize" Value="15.5" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="Border.prRow">
