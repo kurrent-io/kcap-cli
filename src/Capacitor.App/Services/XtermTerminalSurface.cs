@@ -46,7 +46,7 @@ public sealed class XtermTerminalSurface : ITerminalSurface {
 
     public void Feed(string text) {
         if (_dumpPath is not null) File.AppendAllText(_dumpPath, text);
-        Model.Feed(_sanitizer.Sanitize(text));
+        Model.Feed(TerminalGlyphSubstitution.Apply(_sanitizer.Sanitize(text)));
         RememberCursorLine();
     }
 
