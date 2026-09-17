@@ -931,6 +931,34 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// The agent dto paints the requester email immediately. The work-item contributor for the
+    /// same person often arrives with a WorkOS user_id and no display_name (an owner with no
+    /// user row). That id is not a name — keep the email, never paint user_01….
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_workos_contributor_id_keeps_the_session_requester_display() {
+        await RunOnUiAsync(async () => {
+            const string userId = "user_01KYZ590AKWBCFFNKM1KZ1HZ2B";
+            const string email = "norton@example.com";
+            var h = new Harness();
+            h.Source.Enqueue(
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person(userId, null)] }),
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person(userId, userId)] }),
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person("user_01AAAAAAAAAAAAAAAAAAAAAAAA", null)] }));
+            await h.PushAsync(Dto() with { Requester = userId, RequesterDisplay = email });
+
+            await Assert.That(h.Vm.Requester).IsEqualTo(email);
+            await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { email }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { email }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { "Someone" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
     /// Every public field of a row takes part in the "same rows" check, or a poll that changes only
     /// that field leaves the bound row stale.
     [Test]

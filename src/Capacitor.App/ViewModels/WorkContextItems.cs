@@ -45,13 +45,15 @@ public sealed class WorkContextPersonViewModel {
     public string  Initial          { get; }
     public string? AvatarUrl        { get; }
     public string  LastActivityText { get; }
+    public string  UserId           { get; }
 
-    public WorkContextPersonViewModel(string name, string? avatarUrl, DateTimeOffset? lastActivityAt, DateTimeOffset now) {
+    public WorkContextPersonViewModel(string name, string? avatarUrl, DateTimeOffset? lastActivityAt, DateTimeOffset now, string userId = "") {
         Name             = name;
         NameDisplay      = WorkContextViewModel.MiddleTruncate(name, 10, 8);
         Initial          = InitialOf(name);
         AvatarUrl        = avatarUrl;
         LastActivityText = lastActivityAt is { } at ? RelativeTime.Format(at, now) : "";
+        UserId           = userId;
     }
 
     /// The first text element, so a surrogate pair or a combining sequence stays whole.

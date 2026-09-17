@@ -278,11 +278,39 @@ public sealed partial class WorkContextViewModel {
 
         var now = _time.GetUtcNow();
         var people = item.Contributors
-            .Select(c => new WorkContextPersonViewModel(FirstNonBlank(c.DisplayName, c.UserId) ?? "Someone", c.AvatarUrl, c.LastActivityAt, now))
+            .Select(c => new WorkContextPersonViewModel(PersonName(c), c.AvatarUrl, c.LastActivityAt, now, c.UserId))
             .ToList();
-        Replace(_contributors, people, c => (c.Name, c.AvatarUrl, c.LastActivityText));
+        Replace(_contributors, people, c => (c.UserId, c.Name, c.AvatarUrl, c.LastActivityText));
         SessionCount = item.SessionCount;
         RaiseCardCounts();
+    }
+
+    /// WorkOS user ids (`user_` + ULID) are not a display name. DisplayName is null for an owner
+    /// with no user row; the session requester's email/name stands in when it is the same person.
+    string PersonName(WorkItemContributorDto contributor) {
+        if (HumanLabel(contributor.DisplayName) is { } display) return display;
+        if (string.Equals(contributor.UserId, _dto?.Requester, StringComparison.Ordinal)
+            && HumanLabel(FirstNonBlank(_dto?.RequesterDisplay, _dto?.Requester)) is { } mine)
+            return mine;
+        if (_contributors.FirstOrDefault(p => string.Equals(p.UserId, contributor.UserId, StringComparison.Ordinal)) is { } previous
+            && HumanLabel(previous.Name) is { } kept)
+            return kept;
+        return HumanLabel(contributor.UserId) ?? "Someone";
+    }
+
+    static string? HumanLabel(string? value) {
+        var label = FirstNonBlank(value);
+        if (label is null || IsOpaqueUserId(label)) return null;
+        return label;
+    }
+
+    /// WorkOS user ids are `user_` plus a ULID. github: ids stay visible — they are the fallback
+    /// the pane already shows when a contributor has no display name.
+    static bool IsOpaqueUserId(string value) {
+        if (!value.StartsWith("user_", StringComparison.Ordinal) || value.Length < 25) return false;
+        for (var i = 5; i < value.Length; i++)
+            if (!char.IsAsciiLetterOrDigit(value[i])) return false;
+        return true;
     }
 
     static WorkContextPartMark PartMark(WorkItemPartDto part, HashSet<string> attached) =>
