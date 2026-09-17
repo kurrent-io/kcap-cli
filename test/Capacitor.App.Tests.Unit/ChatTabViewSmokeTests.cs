@@ -373,7 +373,6 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("tools.jsonl",
                 [ToolCallLine, ToolResultLine, ToolCallLine.Replace("t1", "t2"), ToolErrorLine.Replace("t1", "t2")]));
-            OnlyGroup(host).Toggle();
             host.Settle();
 
             await Assert.That(OnlyGroup(host).Calls.Select(i => i.Outcome))
@@ -661,6 +660,31 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_bubbles_carry_a_kind_chip() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("chips.jsonl", [
+                """{"type":"user","message":{"role":"user","content":"hello"}}""",
+                """{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}""",
+                """{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<summary>Agent finished</summary>\n<result>\nAll good.\n</result>\n</task-notification>"}}""",
+            ]));
+            host.Settle();
+            var chips = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible)
+                .Select(t => t.Text)
+                .ToList();
+            await Assert.That(chips).Contains("You");
+            await Assert.That(chips).Contains(host.Chat.AssistantTitle);
+            await Assert.That(chips).Contains("Note");
+            var you = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "You");
+            await Assert.That(you.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins the fold: settled calls become one summary line, live calls stay as rows, and a click
     /// on the summary reveals every call and hides them again.
     [Test]
@@ -678,11 +702,16 @@ public class ChatTabViewSmokeTests {
                 .Contains("Searched files, read a file · ls -la");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Running);
+            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
+            await Assert.That(card.Classes.Contains("folded")).IsTrue();
+            await Assert.That(card.Margin.Bottom).IsEqualTo(10);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsTrue();
             await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(3);
+            await Assert.That(card.Classes.Contains("folded")).IsFalse();
+            await Assert.That(card.Margin.Bottom).IsEqualTo(22);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsFalse();
@@ -692,7 +721,28 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// A lone settled call is the row itself — no "Ran a command" summary, but a kind chip names it.
+    /// Layout-centre of the 12×12 box is the em box (descent included). The −2 margin lifts the
+    /// stroke onto the letters' cap-height, so the chevron's mid sits a couple of pixels above
+    /// the label's layout mid.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_folded_summary_centres_the_label_on_the_chevron() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("align.jsonl", [ToolCallLine, ToolResultLine, ReadCallLine, ReadResultLine]));
+            var summary = Summary(host.View);
+            PresentAndLocate(host, summary);
+            var chevron = summary.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>()
+                .Single(p => p.IsEffectivelyVisible);
+            var label = summary.GetVisualDescendants().OfType<TextBlock>().Single(t => t.IsEffectivelyVisible);
+            var chevronMid = chevron.TranslatePoint(new Point(chevron.Bounds.Width / 2, chevron.Bounds.Height / 2), summary)!.Value.Y;
+            var labelMid = label.TranslatePoint(new Point(0, label.Bounds.Height / 2), summary)!.Value.Y;
+            await Assert.That(chevron.Bounds.Width).IsEqualTo(12);
+            await Assert.That(chevron.Bounds.Height).IsEqualTo(12);
+            await Assert.That(labelMid - chevronMid).IsGreaterThan(1).And.IsLessThan(3);
+            await host.CloseAsync();
+        });
+    }
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_single_settled_call_shows_the_row_without_a_summary() {
@@ -725,19 +775,28 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A failed group opens so the row error pills are in view; the summary header has none.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_failed_call_inside_a_multi_call_group_marks_the_summary() {
+    public async Task A_failed_call_inside_a_multi_call_group_opens_the_group() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("fail.jsonl", [
                 ToolCallLine, ToolErrorLine, ReadCallLine, ReadResultLine,
             ]));
+            var group = OnlyGroup(host);
+            await Assert.That(group.HasFailure).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
             var summary = Summary(host.View);
             await Assert.That(summary.IsVisible).IsTrue();
-            var failPill = summary.GetVisualDescendants().OfType<Border>()
-                .Single(b => b.Classes.Contains("toolStatus") && b.IsVisible);
-            await Assert.That(failPill.Background).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapDangerBrush"));
+            await Assert.That(summary.GetVisualDescendants().OfType<Border>()
+                .Count(b => b.Classes.Contains("toolStatus") && b.IsVisible)).IsEqualTo(0);
+            var pills = ToolRows(host.View)
+                .Select(row => row.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolStatus") && b.IsVisible))
+                .ToList();
+            await Assert.That(pills).Count().IsEqualTo(2);
+            await Assert.That(pills[0].Background).IsSameReferenceAs(Brush(isError: true));
+            await Assert.That(pills[1].Background).IsSameReferenceAs(Brush(isError: false));
             await host.CloseAsync();
         });
     }

@@ -268,6 +268,7 @@ public class ChatTabViewModelTests {
             await Assert.That(group.LiveCalls).IsEmpty();
             await Assert.That(group.Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(group.HasFailure).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
             await h.TeardownAsync();
         });
     }

@@ -32,12 +32,15 @@ public class ToolGroupItemTests {
             a.Outcome = ToolOutcome.Error;
             await Assert.That(group.LiveCalls).IsEmpty();
             await Assert.That(group.Summary).IsEqualTo("Ran a command, read a file");
-            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file · Bash");
             await Assert.That(group.HasFailure).IsTrue();
-            await Assert.That(group.ShowsSummaryHeader).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
+            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
+            await Assert.That(group.HasVisibleCalls).IsTrue();
 
             group.Toggle();
-            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
+            await Assert.That(group.IsExpanded).IsFalse();
+            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file · Bash");
+            await Assert.That(group.HasVisibleCalls).IsFalse();
         });
     }
 

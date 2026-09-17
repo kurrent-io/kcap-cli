@@ -217,7 +217,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     IReadOnlyList<HarnessOption> _options = HostedHarnessCatalog.Build(null);
 
     string _vendorLabel = "";
-    public string VendorLabel { get => _vendorLabel; private set => this.RaiseAndSetIfChanged(ref _vendorLabel, value); }
+    public string VendorLabel {
+        get => _vendorLabel;
+        private set {
+            if (_vendorLabel == value) return;
+            this.RaiseAndSetIfChanged(ref _vendorLabel, value);
+            this.RaisePropertyChanged(nameof(AssistantTitle));
+        }
+    }
+
+    /// Small title on assistant prose: the harness name once the session has one, else a role.
+    public string AssistantTitle => string.IsNullOrEmpty(_vendorLabel) ? "Assistant" : _vendorLabel;
 
     string _modelLabel = "default";
     public string ModelLabel { get => _modelLabel; private set => this.RaiseAndSetIfChanged(ref _modelLabel, value); }
