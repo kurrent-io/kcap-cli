@@ -235,14 +235,77 @@ undocumented one, `not_visible` for a confirmed non-consumption.
 
 ### Pass 2 (same kit, later PR)
 
-- update: the hook rewrites an existing skill body with a new token; new session must see the new
-  token, and a running session is asked again after the rewrite.
-- revocation: the hook deletes the skill; a new session must answer `NO-SKILL`.
-- resume: a skill added after the first session ended; `--resume` or `-c` asked for the token.
-- nested cwd: launch from a subdirectory; ancestor discovery of the repo root's skills.
-- worktrees: a skill in worktree A; sessions in A and B; `info/exclude` resolved per worktree.
-- concurrent sessions: two sessions in one checkout; a hook write from one while the other starts.
-- interactive mode: PTY-driven TUI for every entry, including `/skills reload` style commands.
+Pass 1 settled that discovery verdicts do not depend on the launch mode (exclusion and root
+verdicts agreed between print and daemon mode in 135 of 139 measured pairs; the four that differed
+are OpenCode V2 enumeration noise), so the discovery-only scenarios below run in print mode alone
+and the lifecycle scenarios run where a second turn exists. A third launch mode, `tui`, drives the
+vendor's interactive UI through a pseudo-terminal.
+
+**Multi-turn sessions.** A daemon or `tui` session stays open across prompts. An arm with two turns
+records one row: the second turn's reply decides, the first turn's verdict travels in the notes as
+`turn1=<verdict>`, and both turns' raw streams are kept beside the run file.
+
+Verdicts added: `visible_live` (a second turn in the same session sees a change made after the
+first), `stale` (the second turn still reports the old body, or still lists a deleted skill),
+`revoked` (`NO-SKILL` after a delete, with no token).
+
+**S5 live catalogue** (daemon; `tui` runs `add` and `reload`). Arms:
+
+- `add`: turn 1 with no skill; the kit writes the skill; turn 2. `visible_live` or `not_visible`.
+- `update`: skill pre-written; turn 1 must see it (otherwise `untested`, there is no baseline);
+  the kit rewrites the body with a fresh token under the same name; turn 2. `visible_live`,
+  `stale` or `not_visible`.
+- `delete`: skill pre-written and seen; the kit deletes it; turn 2. `revoked`, `stale` or
+  `not_visible`.
+- `reload` (`tui` only): as `add`, with the vendor's reload command sent before turn 2.
+  `visible_after_reload` names the command in the mechanism column; no command is `untested`.
+
+**S6 startup mutation** (print, daemon). Skill pre-written with token A; the startup hook rewrites
+the body to token B (`update`) or deletes the directory (`delete`); one turn. `update`:
+`visible_first_turn` (B), `stale` (A) or `not_visible`. `delete`: `revoked`, `stale` or
+`not_visible`. A hook that never fired, or a file not in the expected state after the turn, is
+`untested`.
+
+**S7 resume** (print). `add`: turn 1 in a fresh session with no skill, the vendor's session id read
+from that run's output; the kit writes the skill; the vendor's resume launch continues that session
+with the prompt. `update`: as S6 `update`, through resume instead of a hook. Verdicts as S6. Every
+vendor has a resume launch (Claude `--resume`, Codex `exec resume`, Copilot `--resume=`, Pi
+`--session`, Kiro `--resume` per directory, OpenCode `--session`, Cursor `--resume=`, Antigravity
+`--conversation`, Gemini `--resume`); an entry whose output carries no session id and has no
+per-directory resume is `untested` before any turn is spent.
+
+**S8 nested cwd** (print). Launch from `<repo>/sub/dir`. `ancestor`: skill in the repo root's
+native root. `local`: skill in `<repo>/sub/dir/<native root>`. `visible_first_turn` or
+`not_visible`; together they say whether discovery is anchored at the git root, the cwd, or both.
+
+**S9 worktrees** (print). A linked worktree beside the repo (`git worktree add`), the session
+launched in it, exclusion `info-exclude` (git resolves it to the shared common directory).
+`linked-own`: skill in the linked worktree; expected `visible_first_turn`. `linked-other`: skill in
+the main checkout only; expected `not_visible`, and `visible_first_turn` here is a finding (the
+vendor reads the main checkout from a linked worktree).
+
+**S10 concurrent sessions** (daemon A, print B). A completes turn 1 with no skill; the startup hook
+is installed and B launched in print mode, so B's start writes the skill; A is asked turn 2. A's row
+carries `visible_live` or `not_visible`, with B's own verdict in the notes. Entries without both
+modes or without a startup hook are `untested`.
+
+**Interactive mode (`tui`).** A pseudo-terminal driver launches the vendor's interactive command,
+answers the vendor's known dialogs (trust, onboarding) from a per-adapter list, waits for the screen
+to settle, types the prompt and reads the ANSI-stripped stream. The prompt asks for one line of the
+form `PROBE-REPLY: <value>`; the typed prompt spells the form with angle brackets, so only a real
+reply matches, and a tool panel that shows the skill file cannot count as a reply. A screen with no
+such line is `not_visible` with the reason in the notes, and the S1 control in this mode guards the
+format. Whether the skill was named is not observable on a screen that echoes the prompt, so
+`catalogue_only` never appears in `tui` rows. Scenarios in `tui`: S0, S1, S2 `hook-adds-skill`, S5
+`add` and `reload`. The vendor's reload command comes from its `/help` screen, read once in the free
+phase without a model turn.
+
+**Entries.** One entry per harness, the variant pass 1 showed working: `agy-dirlayout` in place of
+`agy`; `kiro` (its hooks already ride a cloned custom agent); no `cursor-userhooks`. Gemini stays
+blocked on credentials and gets `untested` rows.
+
+**Cost.** Two runs per arm, a third on disagreement, as in pass 1. About 56 turns per entry (a
+two-turn arm costs two), roughly 560 model turns over ten entries.
 
 ## Outputs
 
