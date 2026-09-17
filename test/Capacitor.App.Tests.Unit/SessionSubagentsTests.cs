@@ -123,6 +123,32 @@ public class SessionSubagentsTests {
         await Assert.That(Only(s).IsBackground).IsFalse();
     }
 
+    [Test]
+    public async Task A_finish_for_an_unseen_call_id_falls_back_to_the_bound_agent_id() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1")));
+        s.Apply(Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Detached("c1", "a")));
+        await Assert.That(Only(s).IsBackground).IsTrue();
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+
+        s.Apply(Signals(Finished("c-unknown", "a", SubagentOutcome.Done, at: T0.AddMinutes(2))));
+        await Assert.That(Only(s).State).IsEqualTo(SubagentState.Done);
+        await Assert.That(s.RunningCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task The_latest_detached_owns_the_agent_id_while_the_earlier_row_still_runs() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1"), Detached("c1", "a")));
+        s.Apply(Signals(Started("c2"), Detached("c2", "a")));
+        await Assert.That(s.RunningCount).IsEqualTo(2);
+
+        s.Apply(Signals(Finished(null, "a", SubagentOutcome.Done, at: T0.AddMinutes(2))));
+        await Assert.That(s.Rows[1].State).IsEqualTo(SubagentState.Done);
+        await Assert.That(s.Rows[0].State).IsEqualTo(SubagentState.Running);
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+    }
+
     static SessionSubagents SecondLaunch() {
         var s = new SessionSubagents(Clock());
         s.Apply(Signals(Started("c1", T0)));
