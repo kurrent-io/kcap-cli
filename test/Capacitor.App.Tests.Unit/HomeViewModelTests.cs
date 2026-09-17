@@ -1525,7 +1525,7 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
@@ -1577,7 +1577,7 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
@@ -1615,7 +1615,7 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
@@ -1643,7 +1643,7 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
@@ -1686,7 +1686,7 @@ public class HomeViewModelTests {
             };
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);

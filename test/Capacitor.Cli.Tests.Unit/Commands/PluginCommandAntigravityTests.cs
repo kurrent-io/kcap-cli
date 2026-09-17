@@ -159,6 +159,7 @@ public class PluginCommandAntigravityTests {
         Stderr:            TextWriter.Null
     ) {
         Harnesses = TestHarnesses.Under(new(fakeHome)),
+        Binaries  = TestBinaries.None,
         ResolveMcpBinaryPath = () => TestBinaryPath
     };
 }

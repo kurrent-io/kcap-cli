@@ -481,6 +481,7 @@ public class PluginCommandCodexTests {
         Stderr:            stderr ?? TextWriter.Null
     ) {
         Harnesses = TestHarnesses.Under(new(fakeHome)),
+        Binaries  = TestBinaries.None,
     };
 
     static void WriteSkill(string root, string name, string body) {
@@ -731,5 +732,6 @@ public class PluginCommandCodexInstallIntegrationTests {
         Stderr:            stderr ?? TextWriter.Null
     ) {
         Harnesses = TestHarnesses.Under(new(fakeHome)),
+        Binaries  = TestBinaries.None,
     };
 }

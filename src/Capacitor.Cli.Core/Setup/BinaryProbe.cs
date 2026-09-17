@@ -44,9 +44,6 @@ public sealed class BinaryProbe {
     /// <summary>The current process's own search path.</summary>
     public static BinaryProbe FromEnvironment() => Searching(Environment.GetEnvironmentVariable("PATH"));
 
-    /// <summary>Shorthand for the current process: is <paramref name="command"/> launchable?</summary>
-    public static bool OnPath(string? command) => FromEnvironment().Finds(command);
-
     /// <summary>Whether <paramref name="command"/> resolves to something executable.</summary>
     public bool Finds(string? command) => Resolve(command) is not null;
 

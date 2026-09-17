@@ -34,7 +34,8 @@ public class SetupCommandTests {
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System);
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
+            TestBinaries.None);
 
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>

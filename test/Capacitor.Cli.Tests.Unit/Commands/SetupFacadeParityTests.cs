@@ -84,7 +84,8 @@ public class SetupFacadeParityTests {
             Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
             Provisioning, Discovery, telemetry, AuthEndpoints.Defaults, facades,
             FakeImportRunner.Throwing(new InvalidOperationException("these tests stop before the import step")),
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System,
+            TestBinaries.None);
 
     // ── Step 1: RunDiscoveryAsync (GitHub) ──────────────────────────────────
 

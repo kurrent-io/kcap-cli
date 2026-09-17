@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Commands;
 
@@ -49,6 +50,10 @@ public sealed record PluginEnvironment(
     /// </summary>
     public required HarnessRegistry Harnesses { get; init; }
 
+    /// <summary>The search path a generated hook's bare <c>kcap</c> has to resolve on. The same probe
+    /// the registry searches vendors with, so one PATH decides both answers.</summary>
+    public required BinaryProbe Binaries { get; init; }
+
     /// <summary>The cross-vendor <c>~/.agents</c> tree. Derived from <see cref="Home"/> rather than
     /// supplied: it honours no override, so a second value could only disagree with this one — and
     /// computed per read, so a <c>with</c> rebinding <see cref="Home"/> cannot leave it at the old
@@ -56,11 +61,11 @@ public sealed record PluginEnvironment(
     public AgentsPaths Agents => new(Home);
 
     public static PluginEnvironment FromProcess(
-            ProfileConfig profiles, UserHome home, HarnessRegistry harnesses) => new(
+            ProfileConfig profiles, UserHome home, HarnessRegistry harnesses, BinaryProbe binaries) => new(
         Home:              home,
         Profiles:          profiles,
         ResolvePluginPath: () => SetupCommand.ResolvePluginPath(),
         Stdout:            Console.Out,
         Stderr:            Console.Error
-    ) { Harnesses = harnesses };
+    ) { Harnesses = harnesses, Binaries = binaries };
 }

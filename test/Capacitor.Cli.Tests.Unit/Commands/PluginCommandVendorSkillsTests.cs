@@ -20,9 +20,6 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// top a tree up, never create one. The npm postinstall runs it for every vendor on each
 /// `npm install -g`, so creating there would undo a deliberate `plugin remove --skills`.
 /// </remarks>
-// PATH is process-global: the install refuses unless `kcap` resolves through it, and every spawned
-// child inherits it.
-[NotInParallel]
 public class PluginCommandVendorSkillsTests {
     [Test]
     [MethodDataSource(nameof(Vendors))]
@@ -163,28 +160,20 @@ public class PluginCommandVendorSkillsTests {
     }
 
     /// <summary>
-    /// A fake home with the vendor's own env vars cleared, a resolvable `kcap` on PATH, and a
-    /// <see cref="PluginEnvironment"/> pointed at the shipped skills tree.
+    /// A fake home with the vendor's own env vars cleared, a resolvable `kcap` on the registry's own
+    /// search path, and a <see cref="PluginEnvironment"/> pointed at the shipped skills tree.
     /// </summary>
     sealed class VendorScope : IDisposable {
-        readonly TempHome    _home;
-        readonly TempDir         _binDir;
-        readonly List<EnvScope>  _envScopes = [];
+        readonly TempHome _home;
+        readonly TempDir  _binDir;
 
         public VendorScope(Vendor vendor) {
             _home   = new TempHome();
             _binDir = new TempDir();
 
             // The fresh path refuses to install unless `kcap` resolves — it is what the hooks it
-            // writes will invoke. Both names, because the Windows leg matches on PATHEXT.
-            foreach (var name in new[] { "kcap", "kcap.exe" }) {
-                var path = _binDir.CreateFile(name);
-                if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-            }
-
-            _envScopes.Add(EnvScope.Exclusive(
-                "PATH", _binDir.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH")));
+            // writes will invoke.
+            var binaries = TestBinaries.Searching(_binDir, "kcap");
 
             Env = new PluginEnvironment(
                 Home:     new(_home.Path),
@@ -195,7 +184,8 @@ public class PluginCommandVendorSkillsTests {
                 Stdout:            TextWriter.Null,
                 Stderr:            TextWriter.Null
             ) {
-                Harnesses = TestHarnesses.Under(new(_home.Path)),
+                Harnesses = TestHarnesses.Under(new(_home.Path), binaries),
+                Binaries  = binaries,
                 ResolveMcpBinaryPath = () => Path.Combine(_binDir.Path, "kcap")
             };
         }
@@ -204,7 +194,6 @@ public class PluginCommandVendorSkillsTests {
         public PluginEnvironment Env  { get; }
 
         public void Dispose() {
-            foreach (var scope in _envScopes) scope.Dispose();
             _binDir.Dispose();
             _home.Dispose();
         }
