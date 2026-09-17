@@ -1,13 +1,18 @@
+// src/Capacitor.Cli.Core/Harness/Claude/ClaudeChatRules.cs
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Capacitor.Models.Transcripts.Harness.Claude;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Capacitor.Cli.Core.Harness.Claude;
 
 /// What the chat hides or rewrites in Claude records: meta and sidechain records, the blocks
 /// Claude Code injects around a user turn, and the finished-background-task record it injects as
-/// if the user had spoken.
+/// if the user had spoken. Also where a subagent's launch, detachment and end are read.
 public sealed partial class ClaudeChatRules : IChatDisplayRules {
     public static readonly ClaudeChatRules Instance = new();
+
+    const string StoppedTaskMessage = "Successfully stopped task";
 
     ClaudeChatRules() { }
 
@@ -16,7 +21,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
-            || SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) == "task-notification") return null;
+            || IsTaskNotification(slug, raw)) return null;
 
         var text = raw.Text ?? "";
         var name = CommandName().Match(text).Groups[1].Value.Trim();
@@ -33,8 +38,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
         switch (envelope.Kind) {
             case AcpEventKind.UserMessage: {
-                if (SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) == "task-notification")
-                    return TaskNotificationNote(envelope);
+                if (IsTaskNotification(slug, envelope)) return TaskNotificationNote(envelope);
                 var text = StripWrappers(envelope.Text ?? "");
                 return text.Length == 0 ? null : envelope with { Text = text };
             }
@@ -47,12 +51,70 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         }
     }
 
+    /// A sidechain event is a subagent's own record, and a nested subagent is not the parent's
+    /// row. The meta flag is not consulted: a hidden row still ends its subagent.
+    public IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) {
+        var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
+        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
+
+        switch (raw.Kind) {
+            case AcpEventKind.ToolCall when raw.ToolName is "Agent" or "Task" && raw.ToolCallId is { Length: > 0 } callId: {
+                var (name, description) = SpawnFacts(raw.ToolInputJson);
+                return [new SubagentSignal.Started(callId, name, description, evt.Timestamp)];
+            }
+            case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
+                if (SchemaExtensions.Text(result, "status") == "async_launched" && SchemaExtensions.Text(result, "agentId") is { Length: > 0 } agentId)
+                    return [new SubagentSignal.Detached(callId, agentId)];
+                // The message gate keeps a TaskGet or TaskOutput probe, which carries the same
+                // task_id, from ending a running subagent.
+                if (SchemaExtensions.Text(result, "task_type") == "local_agent"
+                    && SchemaExtensions.Text(result, "task_id") is { Length: > 0 } taskId
+                    && (SchemaExtensions.Text(result, "message") ?? "").StartsWith(StoppedTaskMessage, StringComparison.Ordinal))
+                    return [new SubagentSignal.Finished(null, taskId, SubagentOutcome.Stopped, evt.Timestamp)];
+                return [];
+            }
+            case AcpEventKind.UserMessage when IsTaskNotification(slug, raw): {
+                var text = raw.Text ?? "";
+                var callId = Tag(TaskToolUseId(), text);
+                var agentId = Tag(TaskId(), text);
+                if (callId is null && agentId is null) return [];
+                var outcome = Tag(TaskStatus(), text) == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed;
+                return [new SubagentSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
+            }
+            default:
+                return [];
+        }
+    }
+
+    /// The server's events carry no origin_kind, so the text is the other way to know.
+    static bool IsTaskNotification(Struct? slug, AcpEventEnvelope raw) =>
+        SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) == "task-notification"
+        || (raw.Text ?? "").AsSpan().TrimStart().StartsWith("<task-notification>");
+
+    static Struct? ToolUseResult(Struct? slug) =>
+        slug is not null && slug.Fields.TryGetValue(ClaudeCodeExtension.ToolUseResult, out var v) && v.KindCase == Value.KindOneofCase.StructValue
+            ? v.StructValue : null;
+
+    static (string Name, string Description) SpawnFacts(string? inputJson) {
+        if (inputJson is null) return ("agent", "");
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            var input = doc.RootElement;
+            return (input.Str("subagent_type") is { Length: > 0 } type ? type : "agent", input.Str("description") ?? "");
+        } catch (JsonException) {
+            return ("agent", "");
+        }
+    }
+
+    static string? Tag(Regex tag, string text) =>
+        tag.Match(text) is { Success: true } m && m.Groups[1].Value.Trim() is { Length: > 0 } value ? value : null;
+
     // System-attributed: the summary in bold, then the result as markdown; a notification with
     // neither shows whatever is left once the wrapper tags are gone.
     static AcpEventEnvelope? TaskNotificationNote(AcpEventEnvelope envelope) {
         var raw     = envelope.Text ?? "";
-        var summary = TaskSummary().Match(raw) is { Success: true } s ? s.Groups[1].Value.Trim() : "";
-        var body    = TaskResult().Match(raw) is { Success: true } r ? r.Groups[1].Value.Trim() : "";
+        var summary = Tag(TaskSummary(), raw) ?? "";
+        var body    = Tag(TaskResult(), raw) ?? "";
         var parts   = new List<string>(2);
         if (summary.Length > 0) parts.Add($"**{summary}**");
         if (body.Length > 0) parts.Add(body);
@@ -75,6 +137,15 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     [GeneratedRegex(@"<result>(.*?)</result>", RegexOptions.Singleline)]
     private static partial Regex TaskResult();
+
+    [GeneratedRegex(@"<task-id>(.*?)</task-id>", RegexOptions.Singleline)]
+    private static partial Regex TaskId();
+
+    [GeneratedRegex(@"<tool-use-id>(.*?)</tool-use-id>", RegexOptions.Singleline)]
+    private static partial Regex TaskToolUseId();
+
+    [GeneratedRegex(@"<status>(.*?)</status>", RegexOptions.Singleline)]
+    private static partial Regex TaskStatus();
 
     [GeneratedRegex(@"</?task-notification>")]
     private static partial Regex TaskWrapper();
