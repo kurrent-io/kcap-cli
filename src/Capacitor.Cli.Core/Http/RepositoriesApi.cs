@@ -5,9 +5,9 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Capacitor.Cli.Core.Http;
 
-internal sealed class RepositoriesApi(ICapacitorHttpClient http, CapacitorServer server) : IRepositoriesApi {
+internal sealed class RepositoriesApi(ICapacitorHttpClient http, CapacitorServer server, TimeProvider time) : IRepositoriesApi {
     public async Task<List<RepoRecapEntry>> GetRecapsAsync(string repoHash, int limit, CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/repositories/{repoHash}/recaps?limit={limit}", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/repositories/{repoHash}/recaps?limit={limit}", time, ct: token), ct);
 
         if (!response.IsSuccessStatusCode) throw await FailureAsync(response);
 
@@ -19,7 +19,7 @@ internal sealed class RepositoriesApi(ICapacitorHttpClient http, CapacitorServer
     public async Task<CurationResult> GetPromotedCurationAsync(string repoHash, int limit, CancellationToken ct = default) {
         using var response = await SendAsync(
             (c, token) => c.GetWithRetryAsync(
-                $"{server.Url}/api/repositories/{repoHash}/curation?status=promoted&minWeight=1&limit={limit}", ct: token), ct);
+                $"{server.Url}/api/repositories/{repoHash}/curation?status=promoted&minWeight=1&limit={limit}", time, ct: token), ct);
 
         if (response.StatusCode == HttpStatusCode.NotFound) return new CurationResult.NotFound();
         if (!response.IsSuccessStatusCode) throw await FailureAsync(response);

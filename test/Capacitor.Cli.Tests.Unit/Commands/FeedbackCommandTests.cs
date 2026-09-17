@@ -28,7 +28,7 @@ public class FeedbackCommandTests : IDisposable {
     public void Dispose() => _server.Stop();
 
     IFeedbackApi Api(string? url = null) =>
-        new FeedbackApi(new FixedCapacitorHttpClient(), new CapacitorServer(url ?? _server.Urls[0], Config.Root, Resolutions.At(url ?? _server.Urls[0], Config.Root)));
+        new FeedbackApi(new FixedCapacitorHttpClient(), new CapacitorServer(url ?? _server.Urls[0], Config.Root, Resolutions.At(url ?? _server.Urls[0], Config.Root)), TimeProvider.System);
 
     static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(Func<Task<int>> action) {
         using var capture = ConsoleOutput.StartFullCapture("\n");

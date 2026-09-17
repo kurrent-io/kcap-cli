@@ -74,10 +74,10 @@ public class WizardCompositionHappyPathTests {
 
         var options = harness.Options() with {
             HttpFactory = new PlainHttpClientFactory(authHandler),
-            Proxy       = new AuthProxyClient(new HttpClient(authHandler, disposeHandler: false)),
+            Proxy       = new AuthProxyClient(new HttpClient(authHandler, disposeHandler: false), TimeProvider.System),
             Operation = spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
+                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints, TimeProvider.System,
                 spec.BeforeCommit), spec.Profile),
         };
 
@@ -183,7 +183,7 @@ public class WizardCompositionAbandonTests {
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel())
+                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(harness.Claims.Pending()).IsEmpty();

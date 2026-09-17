@@ -23,6 +23,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 internal sealed partial class AcpChildProcess : IAcpProcess {
     readonly Process                 _process;
     readonly ILogger                 _logger;
+    readonly TimeProvider            _time;
     readonly bool                    _debugFrames;
     readonly string                  _vendor;
     readonly CancellationTokenSource _stderrDrainCts = new();
@@ -51,9 +52,12 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
     /// on, <see cref="DrainStderrAsync"/> logs full (length-capped) stderr line text at Debug instead
     /// of just its length; cursor-agent stderr can carry paths/prompt fragments/error detail.
     /// </param>
-    public AcpChildProcess(Process process, ILogger logger, bool debugFrames = false, string vendor = "cursor") {
+    public AcpChildProcess(
+            Process process, ILogger logger, TimeProvider time, bool debugFrames = false,
+            string vendor = "cursor") {
         _process     = process;
         _logger      = logger;
+        _time        = time;
         _debugFrames = debugFrames;
         _vendor      = vendor;
 
@@ -151,7 +155,7 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
     public async Task WaitForExitAsync(TimeSpan? timeout = null) {
         try {
             if (timeout is { } t) {
-                using var cts = new CancellationTokenSource(t);
+                using var cts = new CancellationTokenSource(t, _time);
 
                 try {
                     await _process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
@@ -200,7 +204,7 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
         }
 
         try {
-            await _stderrDrainTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            await _stderrDrainTask.WaitAsync(TimeSpan.FromSeconds(2), _time).ConfigureAwait(false);
         } catch {
             // Timed out or faulted — DrainStderrAsync already swallows its expected exceptions,
             // so this is just a safety net; never let dispose hang or throw on it.

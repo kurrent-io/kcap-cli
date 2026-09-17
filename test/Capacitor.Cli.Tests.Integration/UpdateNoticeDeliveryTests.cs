@@ -65,7 +65,7 @@ public class UpdateNoticeDeliveryTests : IDisposable {
         cfgDir.CreateFile("config.json", $$$"""
             {"version":2,"active_profile":"default","profiles":{"default":{"server_url":"{{{server}}}"}},"profile_bindings":{},"cwd_remap":[]}
             """);
-        ServerVersionStore.Set(server, serverVersion, cfgDir.Root);
+        ServerVersionStore.Set(server, serverVersion, cfgDir.Root, TimeProvider.System);
 
         var r = await RunAsync(["config", "show"], cfgDir);
 

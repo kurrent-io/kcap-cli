@@ -39,7 +39,7 @@ public class SetupJoinTests {
     // every downstream surface is off by construction rather than by four separate guards.
     [Test]
     public async Task Mint_is_a_null_no_op_when_telemetry_is_disabled() {
-        var join = CliTelemetry.Disabled().Join;
+        var join = CliTelemetry.Disabled(TimeProvider.System).Join;
 
         var key = join.Mint();
 
@@ -73,7 +73,7 @@ public class SetupJoinTests {
     [Test]
     public async Task FirstHopUrl_is_null_without_a_key() {
         // A facade that is off mints nothing, so there is no key to build a hop from.
-        await Assert.That(CliTelemetry.Disabled().Join.FirstHopUrl(54321)).IsNull();
+        await Assert.That(CliTelemetry.Disabled(TimeProvider.System).Join.FirstHopUrl(54321)).IsNull();
     }
 
     // The key is the bridge token. A debug run would otherwise print it to stderr on every

@@ -13,7 +13,7 @@ switch (mode) {
         // No disposal of the spawner thread here — this whole process is a disposable one-shot
         // the outer test kills (SIGKILL) to observe PDEATHSIG, so a graceful Dispose() never runs
         // and never needs to.
-        var factory = new UnixPtyProcessFactory(new UnixSpawnerThread());
+        var factory = new UnixPtyProcessFactory(new UnixSpawnerThread(), TimeProvider.System);
         var proc    = factory.Spawn("sleep", ["30"], AppContext.BaseDirectory);
         Console.WriteLine($"PID={proc.Pid}");
         Console.Out.Flush();
@@ -53,7 +53,7 @@ switch (mode) {
         }
 
         using var spawner = new UnixSpawnerThread();
-        var factory       = new UnixPtyProcessFactory(spawner);
+        var factory       = new UnixPtyProcessFactory(spawner, TimeProvider.System);
         var child         = factory.Spawn("sleep", ["5"], AppContext.BaseDirectory);
         try {
             var childIdentity = child.StartIdentity;

@@ -72,7 +72,10 @@ if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
 // Anchored here, before dispatch: every hook ceiling is relative to it, and anchoring inside a
 // handler would inflate the budget by the pre-dispatch work (config load, spool drain) and overshoot
 // the true hook ceiling.
-var clock = new HookClock(TimeProvider.System);
+// The one clock this process runs on: resolved here and registered, so nothing downstream reads
+// the ambient one.
+var time   = TimeProvider.System;
+var clock  = new HookClock(time);
 var isHook = command == "hook";
 
 // Resolved once here and passed onward; nothing downstream resolves a root for itself.
@@ -132,7 +135,7 @@ ISessionsApi Api() => sp.GetRequiredService<ISessionsApi>();
 //
 // Deliberately ahead of the update-notice try/finally below: this is process setup, and the
 // ProcessExit handler outlives that block anyway.
-var commandStart = System.Diagnostics.Stopwatch.GetTimestamp();
+var commandStart = time.GetTimestamp();
 
 // `kcap config set telemetry off` must never activate telemetry for the very invocation that
 // opts out: without this, the facade resolves enabled from the not-yet-updated persisted
@@ -171,7 +174,7 @@ AppDomain.CurrentDomain.ProcessExit += (_, _) => {
     // once, so a leg that already sent stays silent and a process with none armed is a no-op.
     FirstRunInterruptRelinquish.RunBeforeExit(InteractiveLifetime.ExitNoticeBudget);
 
-    telemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart));
+    telemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart, time));
     telemetry.FlushAndClose().GetAwaiter().GetResult();
 };
 
@@ -657,7 +660,7 @@ switch (command) {
         // Build sources
         var explicitVendorSelection = vsel.Vendors.Count > 0;
         var sources = SetupCommand.BuildImportSources(
-            config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(),
+            config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(), time,
             explicitVendorSelection ? vsel.Vendors : null);
 
         // --- Scope resolution ---
@@ -667,7 +670,7 @@ switch (command) {
         var activeProfile = profiles.Name;
         var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;
 
-        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(sp.GetRequiredService<GitProviderRouter>(), config, workdir.Path);
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(sp.GetRequiredService<GitProviderRouter>(), config, workdir.Path, time);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
             : null;
@@ -823,11 +826,11 @@ switch (command) {
         if (!args.Contains("--codex") && baseUrl is not null) {
             var poster = new AgentHookPoster(
                 config, profiles,
-                sp.GetRequiredService<ICapacitorHttpClient>(), sp.GetRequiredService<WatcherManager>());
+                sp.GetRequiredService<ICapacitorHttpClient>(), sp.GetRequiredService<WatcherManager>(), time);
 
             await poster.DrainSpoolsAsync(
-                new HookSpool(config),
-                new TranscriptSpool(config),
+                new HookSpool(config, time),
+                new TranscriptSpool(config, time),
                 sessionId: null); // current session unknown here — reading stdin now would consume it
         }
         if (args.Contains("--claude")) {
@@ -869,7 +872,7 @@ switch (command) {
     // not in help-usage.txt — run manually against a live Cursor transcript while gathering
     // the D0 evidence; not part of the normal watch/hook/import surface.
     case "cursor-verify-appendonly":
-        return await CursorVerifyAppendOnlyCommand.RunAsync(args);
+        return await CursorVerifyAppendOnlyCommand.RunAsync(args, time);
 }
 
 Console.Error.WriteLine($"Unknown command: {command}");
@@ -885,14 +888,14 @@ return 1;
     // outside 0 and 1 to a blocked session — so a misconfigured URL must not be what blocks one.
     return CrashReporter.IsFailOpenCommand(command) ? 0 : 2;
 } catch (Exception topLevelEx) {
-    CrashReporter.Record(config, command, topLevelEx);
+    CrashReporter.Record(config, command, topLevelEx, time);
 
     return CrashReporter.ExitCode(command);
 }
 
 } finally {
-    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<NpmRegistryClient>);
-    await HarnessSetupNotice.FlushAsync(command, config, profiles, Run<HarnessRegistry>);
+    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<NpmRegistryClient>, time);
+    await HarnessSetupNotice.FlushAsync(command, config, profiles, Run<HarnessRegistry>, time);
 }
 
 static string? GetArg(string[] arguments, string flag) {

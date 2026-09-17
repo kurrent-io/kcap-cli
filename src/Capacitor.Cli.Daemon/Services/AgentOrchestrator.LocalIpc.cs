@@ -319,11 +319,14 @@ internal partial class AgentOrchestrator {
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
-            spawnedAtUtc = DateTime.UtcNow;
+            spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
             var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
-            var runtime = new PtyHostedAgentRuntime(vendor, pty);
+            var runtime = new PtyHostedAgentRuntime(vendor, pty, _time);
+
+            var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 
             agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource()) {
+                CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Every launch path must go through CreateActivityClock() so the stage-advance report
                 // wiring is attached by construction. Inert here today (a local spawn is PTY-only and
                 // stamps no stage) — but a hand-built clock is exactly how that wiring goes silently
@@ -344,7 +347,7 @@ internal partial class AgentOrchestrator {
             // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
             // spawn fails after the worktree was created (mirrors the server launch path).
             if (ownedWorktree is { } leaked) {
-                try { await WorktreeManager.RemoveAsync(leaked); } catch { /* best-effort */ }
+                try { await WorktreeManager.RemoveAsync(leaked, _time); } catch { /* best-effort */ }
             }
 
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);

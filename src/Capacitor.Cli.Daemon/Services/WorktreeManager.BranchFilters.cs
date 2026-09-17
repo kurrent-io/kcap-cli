@@ -49,7 +49,8 @@ public partial class WorktreeManager {
     /// safely expressed as an override.</exception>
     /// <exception cref="GitConfigTransportException">Thrown by the runner these overrides are passed to,
     /// when the transport carrying them does not reach git and they would be silently dropped.</exception>
-    internal static async Task<GitConfigOverride[]> BranchFilterOverridesAsync(string gitContextPath) {
+    internal static async Task<GitConfigOverride[]> BranchFilterOverridesAsync(
+            string gitContextPath, TimeProvider time) {
         // Enumerate EVERY key and match the shape here, rather than asking git to match a regex.
         //
         // Measured: git's `--get-regexp` runs through the platform regex in the ambient locale, where `.`
@@ -60,8 +61,8 @@ public partial class WorktreeManager {
         // bypass this file exists to prevent, reintroduced by trusting git to enumerate.
         //
         // `--list` takes no pattern, so there is no regex, no locale, and nothing to slip past.
-        var listed = await RunGitCaptureResult(gitContextPath, GitTimeout, sourceReadOnly: false, [],
-            "config", "--list", "--name-only", "-z");
+        var listed = await RunGitCaptureResult(gitContextPath, GitTimeout, time, sourceReadOnly: false,
+            config: [], "config", "--list", "--name-only", "-z");
 
         // No "no keys" exit code to tolerate here: `--list` succeeds on an empty config. A non-zero exit
         // means we do not KNOW what is defined, and an empty override set would run the materialisation

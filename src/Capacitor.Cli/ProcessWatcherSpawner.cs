@@ -6,7 +6,7 @@ namespace Capacitor.Cli;
 
 /// <summary>Launches the watcher as a real detached child of this process.</summary>
 public sealed class ProcessWatcherSpawner(
-        ConfigRoot config, ProfileContext profiles, WatcherPaths paths, IProcessStarter starter)
+        ConfigRoot config, ProfileContext profiles, WatcherPaths paths, IProcessStarter starter, TimeProvider time)
     : IWatcherSpawner {
     // The one URL this process resolved. The request carries no server: a watcher aimed at a
     // different one than the hook that asked for it would stream a session nothing here can see.
@@ -80,7 +80,7 @@ public sealed class ProcessWatcherSpawner(
             // within the startup grace window. Written here rather than by the watcher itself, so
             // it exists even if the child never gets far enough to touch its own heartbeat.
             try {
-                WatcherHeartbeat.Touch(paths.StartedFile(key), DateTimeOffset.UtcNow);
+                WatcherHeartbeat.Touch(paths.StartedFile(key), time.GetUtcNow());
             } catch {
                 /* best-effort — a missing marker just means IsWatcherAlive treats "now" as startupAt */
             }

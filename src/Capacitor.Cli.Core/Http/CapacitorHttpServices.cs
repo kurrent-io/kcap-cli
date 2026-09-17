@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Capacitor.Cli.Core.Http;
 
@@ -16,6 +17,7 @@ public static class CapacitorHttpServices {
         services.AddCapacitorForeignClients();
         services.AddSingleton(env);
         services.AddSingleton(machine);
+        services.TryAddSingleton(TimeProvider.System);
         // Here rather than beside ConfigRoot: the refreshes need the anonymous and WorkOS lanes, so a
         // host that never stands up HTTP is never handed a store that can reach the network.
         services.AddSingleton<TokenStore>();
@@ -146,6 +148,10 @@ public static class CapacitorHttpServices {
     /// server exists — can take them without standing up a credential source it cannot point anywhere.
     /// </summary>
     public static IServiceCollection AddCapacitorForeignClients(this IServiceCollection services) {
+        // These lanes stand up on their own — a container may take them without the authenticated
+        // ones — so the clock they resolve has to be registered here too, not only beside those.
+        services.TryAddSingleton(TimeProvider.System);
+
         // No base address on either: their URLs come from the environment on every read, so one
         // pinned at container-build time would outlive the override it was resolved from.
         services.AddHttpClient<TenantProvisioningClient>();

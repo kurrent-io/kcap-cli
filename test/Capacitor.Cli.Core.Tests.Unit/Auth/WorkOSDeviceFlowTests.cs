@@ -48,10 +48,10 @@ public class WorkOSDeviceFlowTests {
         Authenticated(server,
             """{"user":{"id":"user_x","first_name":"Ada"},"organization_id":"org_a","access_token":"acc","refresh_token":"rt"}""");
         using var stub = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var result = await OAuthLoginFlow.RunWorkOSDeviceFlowAsync(
-            workos, "client_d", new RecordingBrowser(), progress: new RecordingAuthProgress());
+            workos, "client_d", new RecordingBrowser(), TimeProvider.System, progress: new RecordingAuthProgress());
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
@@ -70,11 +70,11 @@ public class WorkOSDeviceFlowTests {
     public async Task Says_so_when_the_authorize_endpoint_refuses() {
         using var server   = WithAuthorize("""{"error":"unauthorized_client"}""", status: 400);
         using var stub     = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
         var       progress = new RecordingAuthProgress();
 
         var result = await OAuthLoginFlow.RunWorkOSDeviceFlowAsync(
-            workos, "client_d", new RecordingBrowser(), progress: progress);
+            workos, "client_d", new RecordingBrowser(), TimeProvider.System, progress: progress);
 
         await Assert.That(result).IsNull();
         await Assert.That(string.Join("\n", progress.Errors)).Contains("may not be enabled");
@@ -106,11 +106,11 @@ public class WorkOSDeviceFlowTests {
             }));
 
         using var stub     = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
         var       progress = new RecordingAuthProgress();
 
         var result = await OAuthLoginFlow.RunWorkOSDeviceFlowAsync(
-            workos, "client_d", new RecordingBrowser(), progress: progress);
+            workos, "client_d", new RecordingBrowser(), TimeProvider.System, progress: progress);
 
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
         await Assert.That(progress.PollTicks).IsEqualTo(2);
@@ -123,11 +123,11 @@ public class WorkOSDeviceFlowTests {
         using var server = WithAuthorize(Device);
         Authenticated(server, """{"access_token":"acc"}""");
         using var stub     = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
         var       progress = new RecordingAuthProgress();
 
         await OAuthLoginFlow.RunWorkOSDeviceFlowAsync(
-            workos, "client_d", new RecordingBrowser(), progress: progress);
+            workos, "client_d", new RecordingBrowser(), TimeProvider.System, progress: progress);
 
         await Assert.That(progress.DeviceCodes).Count().IsEqualTo(1);
         await Assert.That(progress.DeviceCodes[0].Code).IsEqualTo("WXYZ-1234");
@@ -147,11 +147,11 @@ public class WorkOSDeviceFlowTests {
             """{"device_code":"dc","user_code":"WXYZ-1234","verification_uri":"https://signin.example/device","verification_uri_complete":"https://signin.example/device?user_code=WXYZ-1234","interval":0,"expires_in":900}""");
         Authenticated(server, """{"access_token":"acc"}""");
         using var stub     = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
         var       progress = new RecordingAuthProgress();
 
         await OAuthLoginFlow.RunWorkOSDeviceFlowAsync(
-            workos, "client_d", new RecordingBrowser(opens: opened), progress: progress);
+            workos, "client_d", new RecordingBrowser(opens: opened), TimeProvider.System, progress: progress);
 
         await Assert.That(progress.DeviceCodes[0].Uri).IsEqualTo(expectedUri);
         await Assert.That(progress.DeviceCodes[0].Prefilled).IsEqualTo(expectedPrefilled);
@@ -166,11 +166,11 @@ public class WorkOSDeviceFlowTests {
             """{"device_code":"dc","user_code":"WXYZ-1234","verification_uri":"https://signin.example/device","verification_uri_complete":"https://signin.example/device?user_code=WXYZ-1234","interval":0,"expires_in":900}""");
         Authenticated(server, """{"access_token":"acc"}""");
         using var stub    = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
         var       browser = new RecordingBrowser(opens: false);
 
         await OAuthLoginFlow.RunWorkOSDeviceFlowAsync(
-            workos, "client_d", browser, progress: new RecordingAuthProgress());
+            workos, "client_d", browser, TimeProvider.System, progress: new RecordingAuthProgress());
 
         await Assert.That(browser.Urls).IsEquivalentTo(["https://signin.example/device?user_code=WXYZ-1234"]);
     }

@@ -150,7 +150,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
 
     public CodexAppServerHostedAgentRuntime(
             CodexAppServerSpawn spawn, CodexAppServerLaunch launch, AgentActivityClock? clock,
-            ILogger logger, TimeProvider? timeProvider = null, TimeSpan? forwardStallTimeout = null,
+            ILogger logger, TimeProvider timeProvider, TimeSpan? forwardStallTimeout = null,
             bool emitEnvelopeTranscript = false, bool deferFirstTurn = false,
             string? agentId = null,
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null,
@@ -159,7 +159,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         _launch  = launch;
         _clock   = clock;
         _logger  = logger;
-        _time    = timeProvider ?? TimeProvider.System;
+        _time    = timeProvider;
         _emitEnvelopeTranscript = emitEnvelopeTranscript;
         _deferFirstTurn = deferFirstTurn;
         // Interactive iff approvals are actually raised (never ⇒ reviewer ⇒ decline path) AND we can both
@@ -168,7 +168,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
          && !string.Equals(_launch.Approval, "never", StringComparison.Ordinal)) {
             _approvalBridge = new CodexApprovalBridge(
                 requestInteraction, agentId, logger,
-                approvalTimeout ?? TimeSpan.FromSeconds(DefaultApprovalTimeoutSeconds));
+                approvalTimeout ?? TimeSpan.FromSeconds(DefaultApprovalTimeoutSeconds), timeProvider);
         }
         _dispatcher = new CodexTurnInputDispatcher(
             startTurn: IssueTurnStartAsync, steerTurn: IssueTurnSteerAsync,
@@ -180,7 +180,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         _forwardBuffer = new CodexForwardBuffer(
             ForwardBufferCapacity,
             forwardStallTimeout ?? TimeSpan.FromSeconds(DefaultForwardStallSeconds),
-            _cts.Token, OnForwardStall, journal, logger);
+            timeProvider, _cts.Token, OnForwardStall, journal, logger);
     }
 
     // ── IHostedAgentRuntime: identity / lifecycle observables ──────────────────────────────────
@@ -475,7 +475,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
         var settled   = _dispatcher.WaitForSettledAsync();
         var completed = await Task.WhenAny(settled, _runtimeTerminal.Task,
-            Task.Delay(Timeout.Infinite, linked.Token)).ConfigureAwait(false);
+            Task.Delay(Timeout.InfiniteTimeSpan, _time, linked.Token)).ConfigureAwait(false);
 
         if (completed == settled || completed == _runtimeTerminal.Task)
             return; // input drained + turn settled, or the child died — the round is no longer in flight

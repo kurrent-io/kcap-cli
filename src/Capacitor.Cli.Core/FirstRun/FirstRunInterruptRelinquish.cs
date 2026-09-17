@@ -63,7 +63,10 @@ public sealed class FirstRunNotice(
     public void RunBeforeExit(TimeSpan budget) {
         try {
             if (TryClaim()) {
+                // Wall-clock: an interrupt handler cannot await, and the Wait below is on the same clock.
+#pragma warning disable RS0030
                 using var cts = new CancellationTokenSource(budget);
+#pragma warning restore RS0030
 
                 RunAsync(interruptReason(), cts.Token).Wait(budget);
             } else {

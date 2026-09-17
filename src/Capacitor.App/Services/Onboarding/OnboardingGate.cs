@@ -21,7 +21,8 @@ public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBind
 /// inverse of "does TokenStore already consider this profile authenticated" — so every branch
 /// here mirrors a specific TokenStore rule rather than inventing its own.
 /// </summary>
-public sealed class OnboardingGate(ConfigRoot config, TokenStore tokenStore, ProfileOverrides env) {
+public sealed class OnboardingGate(
+        ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, TimeProvider time) {
     /// <summary>
     /// The ONE shared validator for "is this usable as a server identity" — also used by
     /// <c>App.ValidProfileName</c> so the gate and the lifecycle-controller precondition can
@@ -88,7 +89,7 @@ public sealed class OnboardingGate(ConfigRoot config, TokenStore tokenStore, Pro
             return new GateResult.Incomplete(GateReason.TokenUnusableBinding);
         }
 
-        if (!tokens.IsExpired) {
+        if (!tokens.IsExpiredAt(time.GetUtcNow())) {
             return new GateResult.Complete();
         }
 

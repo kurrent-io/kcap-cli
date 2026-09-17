@@ -24,7 +24,7 @@ public class TelemetryClientTests {
 
     static TelemetryClient Client(StubHandler handler, string spoolPath, out TelemetrySpool spool) {
         spool = new TelemetrySpool(spoolPath);
-        return new TelemetryClient(handler, spool, "phc_test", "https://phog.example");
+        return new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
     }
 
     // Deterministic stand-in for real elapsed time: FlushAsync calls GetTimestamp() once at
@@ -112,12 +112,12 @@ public class TelemetryClientTests {
         using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
         var spool   = new TelemetrySpool(spoolPath);
 
-        var first = new TelemetryClient(failing, spool, "phc_test", "https://phog.example");
+        var first = new TelemetryClient(failing, spool, "phc_test", "https://phog.example", TimeProvider.System);
         first.Enqueue(Event("offline_event"));
         await first.FlushAsync("device-1", null, TimeSpan.FromSeconds(2));
 
         var ok      = new StubHandler(HttpStatusCode.OK);
-        var second  = new TelemetryClient(ok, spool, "phc_test", "https://phog.example");
+        var second  = new TelemetryClient(ok, spool, "phc_test", "https://phog.example", TimeProvider.System);
         second.Enqueue(Event("fresh_event"));
         var flushed = await second.FlushAsync("device-1", null, TimeSpan.FromSeconds(2));
 

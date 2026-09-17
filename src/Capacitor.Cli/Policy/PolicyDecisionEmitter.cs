@@ -10,12 +10,12 @@ using Capacitor.Cli.Core.Policy;
 /// ceiling and the vendor acts on the seam's stdout only once the process exits, so a round trip
 /// here could outlive the hook and lose a deny that had already been written.
 /// </summary>
-internal sealed class PolicyDecisionEmitter(ConfigRoot config) {
+internal sealed class PolicyDecisionEmitter(ConfigRoot config, TimeProvider time) {
     /// <param name="snapshot">Null only when the decision names no resolvable snapshot — a failure
     /// that never got one — so there is nothing to upload alongside it.</param>
     public Task EmitAsync(PolicyDecisionEventV1 evt, PolicySnapshot? snapshot) {
         try {
-            var spool = new HookSpool(config);
+            var spool = new HookSpool(config, time);
             // Snapshot first: a decision names a snapshot id the server cannot resolve on its own,
             // and the spool delivers a session's entries in arrival order.
             if (snapshot is not null) EnsureSnapshotSpooled(spool, evt.SessionId, snapshot);

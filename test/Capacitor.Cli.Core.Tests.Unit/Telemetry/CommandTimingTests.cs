@@ -8,7 +8,7 @@ public class CommandTimingTests {
         var start = System.Diagnostics.Stopwatch.GetTimestamp();
         Thread.Sleep(15);
 
-        var elapsed = CommandTiming.ElapsedMs(start);
+        var elapsed = CommandTiming.ElapsedMs(start, TimeProvider.System);
 
         await Assert.That(elapsed >= 10).IsTrue();
         await Assert.That(elapsed < 5_000).IsTrue();
@@ -16,7 +16,7 @@ public class CommandTimingTests {
 
     [Test]
     public async Task Elapsed_ms_is_never_negative() {
-        await Assert.That(CommandTiming.ElapsedMs(System.Diagnostics.Stopwatch.GetTimestamp() + 1_000_000) >= 0).IsTrue();
+        await Assert.That(CommandTiming.ElapsedMs(System.Diagnostics.Stopwatch.GetTimestamp() + 1_000_000, TimeProvider.System) >= 0).IsTrue();
     }
 
     // Neither test above would fail against a stub that always returns a constant 15: the sleep
@@ -25,7 +25,7 @@ public class CommandTimingTests {
     // 15ms the other test sleeps for — while a hardcoded-15 stub fails it outright.
     [Test]
     public async Task Elapsed_ms_with_no_sleep_is_near_zero() {
-        var elapsed = CommandTiming.ElapsedMs(System.Diagnostics.Stopwatch.GetTimestamp());
+        var elapsed = CommandTiming.ElapsedMs(System.Diagnostics.Stopwatch.GetTimestamp(), TimeProvider.System);
 
         await Assert.That(elapsed < 15).IsTrue();
     }

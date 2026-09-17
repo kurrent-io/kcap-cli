@@ -25,7 +25,7 @@ sealed class ProdPathFixture : IDisposable {
         DaemonPath = _daemons.CreateFile("kcap-daemon");
 
         Manager = new(
-            Home,
+            Home, TimeProvider.System,
             runProcess: (_, args) => PrintNotFound(args),
             runBounded: (_, args, _) => {
                 var (code, stdout, stderr) = PrintNotFound(args);

@@ -19,7 +19,7 @@ internal sealed class VirtualFlowRetryClock : FlowRetryClock {
 
     public DateTimeOffset StartedAt { get; }
 
-    public VirtualFlowRetryClock() => StartedAt = _now;
+    public VirtualFlowRetryClock() : base(TimeProvider.System) => StartedAt = _now;
 
     public TimeSpan Elapsed => _now - StartedAt;
 

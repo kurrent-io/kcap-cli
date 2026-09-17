@@ -79,6 +79,7 @@ public class PiHostedRuntimeLiveCertTests {
         var factory = new PiRpcHostedAgentRuntimeFactory(
             config: config,
             loggerFactory: liveLoggerFactory,
+            time: TimeProvider.System,
             processSource: null,  // real `pi --mode rpc` spawn — the production path
             binaryExists: null);  // real BinaryProbe.Finds probe
 

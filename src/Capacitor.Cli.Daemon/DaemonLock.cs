@@ -211,15 +211,19 @@ internal sealed class DaemonLock : IDisposable {
     /// elapses — used by a self-respawned successor (<c>--await-lock</c>) to wait out the
     /// outgoing daemon's flock instead of exiting with code 2 on the first contended attempt.
     /// </summary>
-    public static DaemonLock? TryAcquire(DaemonStore store, string daemonName, TimeSpan awaitTimeout, string? version = null) {
-        var deadline = DateTime.UtcNow + awaitTimeout;
+    public static async Task<DaemonLock?> TryAcquireAsync(
+            DaemonStore store, string daemonName, TimeSpan awaitTimeout, TimeProvider time,
+            string? version = null) {
+        var deadline = time.GetUtcNow() + awaitTimeout;
 
         while (true) {
             if (TryAcquire(store, daemonName, version) is { } locked) return locked;
-            if (DateTime.UtcNow >= deadline) return null;
-            Thread.Sleep(100);
+            if (time.GetUtcNow() >= deadline) return null;
+            await Task.Delay(RetryGap, time).ConfigureAwait(false);
         }
     }
+
+    static readonly TimeSpan RetryGap = TimeSpan.FromMilliseconds(100);
 
     static void WritePidFile(string pidPath) {
         // The second line is a cross-process-stable start token: on

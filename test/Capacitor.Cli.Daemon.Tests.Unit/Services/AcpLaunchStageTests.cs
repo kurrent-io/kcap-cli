@@ -94,7 +94,7 @@ public class AcpLaunchStageTests {
                 new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
                 AuthFixtures.NewTokenStore(configRoot),
                 NullLoggerFactory.Instance,
-                NullLogger<ServerConnection>.Instance);
+                NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
             Factory = new AcpHostedAgentRuntimeFactory(
                 descriptor: AcpVendorDescriptors.Cursor,
@@ -320,7 +320,7 @@ public class AcpLaunchStageTests {
             new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
             AuthFixtures.NewTokenStore(Config.Root),
             NullLoggerFactory.Instance,
-            NullLogger<ServerConnection>.Instance);
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         var factory = new AcpHostedAgentRuntimeFactory(
             descriptor: AcpVendorDescriptors.Cursor,

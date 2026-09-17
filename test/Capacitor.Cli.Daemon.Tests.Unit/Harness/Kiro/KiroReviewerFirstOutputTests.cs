@@ -59,7 +59,7 @@ public class KiroReviewerFirstOutputTests {
         _ = agent.RunAsync(ct);
 
         var runtime = new AcpHostedAgentRuntime(
-            conn, process, NullLogger.Instance, agentId: "agent-1", vendor: "kiro",
+            conn, process, NullLogger.Instance, TimeProvider.System, agentId: "agent-1", vendor: "kiro",
             firstOutputDeadline: firstOutputDeadline);
 
         // A non-empty prompt is what arms the watchdog — an empty one enqueues no turn at all, which

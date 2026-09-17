@@ -4,16 +4,16 @@ namespace Capacitor.Cli.Commands;
 /// The injectable timing seam shared by the flows MCP server's two retry lanes —
 /// <c>SendWithSettlementRetryAsync</c> (POST) and <c>PollUntilTerminalAsync</c> (poll). Every clock
 /// read, delay and timeout source routes through here so tests drive a virtual clock instead of
-/// wall-clock sleeps or pre-cancelled tokens standing in for the real deadline logic. Production is
-/// backed by <see cref="TimeProvider.System"/>.
+/// wall-clock sleeps or pre-cancelled tokens standing in for the real deadline logic. The server
+/// builds one from the provider it was composed with, so both lanes share that clock.
 /// </summary>
 internal class FlowRetryClock {
     readonly TimeProvider _time;
 
-    public FlowRetryClock(TimeProvider? time = null) => _time = time ?? TimeProvider.System;
+    public FlowRetryClock(TimeProvider time) => _time = time;
 
-    /// <summary>The production clock — real time, real timers.</summary>
-    public static FlowRetryClock System { get; } = new();
+    /// <summary>Real time, real timers — for a caller that has no provider to hand over.</summary>
+    public static FlowRetryClock System { get; } = new(TimeProvider.System);
 
     public virtual DateTimeOffset UtcNow => _time.GetUtcNow();
 

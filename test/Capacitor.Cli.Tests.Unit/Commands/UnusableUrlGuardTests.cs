@@ -38,17 +38,17 @@ public class UnusableUrlGuardTests : IDisposable {
     // parameter would let a caller point a guard at a URL the process never resolved.
     ProfileContext  Bad => field ??= Resolutions.At(BadUrl, Config.Root);
 
-    AgentHookPoster  Poster => field ??= new(Config.Root, Bad, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()));
+    AgentHookPoster  Poster => field ??= new(Config.Root, Bad, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), TimeProvider.System);
 
     WatcherManager  Watchers => field ??= TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient());
 
     // Collaborators whose starts the test can count: each guard's whole claim is that none is reached.
     ProcessWatcherSpawner GuardedSpawner(IProcessStarter starter) =>
-        new(Config.Root, Bad, WatcherPaths.FromEnvironment(Config.Root), starter);
+        new(Config.Root, Bad, WatcherPaths.FromEnvironment(Config.Root), starter, TimeProvider.System);
 
     WatcherManager GuardedManager(IProcessStarter starter) =>
         new(Config.Root, Bad, new FixedCapacitorHttpClient(), starter,
-            WatcherPaths.FromEnvironment(Config.Root), GuardedSpawner(starter));
+            WatcherPaths.FromEnvironment(Config.Root), GuardedSpawner(starter), TimeProvider.System);
 
     public UnusableUrlGuardTests() {
         _tdir = _tmp.PathTo("tdir");
@@ -59,7 +59,7 @@ public class UnusableUrlGuardTests : IDisposable {
 
     [Test]
     public async Task PostOrSpool_spools_the_payload_and_reports_Spooled() {
-        var spool   = new HookSpool(_dir);
+        var spool   = new HookSpool(_dir, time: TimeProvider.System);
         var outcome = await Poster.PostOrSpoolAsync(
             "session-start/codex", """{"session_id":"x"}""", "codex-hook", spool, Sid, "session-start/codex");
 
@@ -76,7 +76,7 @@ public class UnusableUrlGuardTests : IDisposable {
         File.WriteAllText(unwritable, "not a directory");
 
         var outcome = await Poster.PostOrSpoolAsync(
-            "session-start/codex", "{}", "codex-hook", new HookSpool(unwritable), Sid, "session-start/codex");
+            "session-start/codex", "{}", "codex-hook", new HookSpool(unwritable, time: TimeProvider.System), Sid, "session-start/codex");
 
         await Assert.That(outcome).IsEqualTo(HookPostOutcome.Skipped);
     }
@@ -115,7 +115,7 @@ public class UnusableUrlGuardTests : IDisposable {
         var entered = false;
 
         await Poster.DrainSpoolsCoreAsync(
-            new HookSpool(_dir), new TranscriptSpool(_tdir), Sid,
+            new HookSpool(_dir, time: TimeProvider.System), new TranscriptSpool(_tdir, time: TimeProvider.System), Sid,
             _ => {
                 entered = true;
                 throw new InvalidOperationException("the drain guard did not run");
@@ -187,7 +187,7 @@ public class UnusableUrlGuardTests : IDisposable {
         // OpenCode ids are base62 and genuinely mixed case; rejecting them would lose the session
         // outright. Case safety on the filesystem is handled by escaping the filename, not by
         // narrowing what is admitted.
-        await Assert.That(new HookSpool(_dir).Append(sessionId, "session-start/opencode", "{}")).IsTrue();
+        await Assert.That(new HookSpool(_dir, time: TimeProvider.System).Append(sessionId, "session-start/opencode", "{}")).IsTrue();
     }
 
     /// <summary>
@@ -244,7 +244,7 @@ public class UnusableUrlGuardTests : IDisposable {
                 entered = true;
                 throw new InvalidOperationException("the cursor guard did not run");
             },
-            () => new HookSpool(_dir));
+            () => new HookSpool(_dir, time: TimeProvider.System));
 
         await Assert.That(entered).IsFalse();
         await Assert.That(exit).IsEqualTo(0);
@@ -259,7 +259,7 @@ public class UnusableUrlGuardTests : IDisposable {
         var entered = false;
 
         var exit = await new ClaudeHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
-            new HookSpool(_dir),
+            new HookSpool(_dir, time: TimeProvider.System),
             stdin: new StringReader($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}"}"""),
             clientFactory: () => {
                 entered = true;

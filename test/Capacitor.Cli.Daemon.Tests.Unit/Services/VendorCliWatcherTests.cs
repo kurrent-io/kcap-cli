@@ -24,7 +24,8 @@ public class VendorCliWatcherTests {
             Watcher = VendorCliWatcher.ForTest(
                 watched,
                 refresh: Refreshes.Add,
-                stat: path => Stats.GetValueOrDefault(path));
+                stat: path => Stats.GetValueOrDefault(path),
+                time: TimeProvider.System);
         }
     }
 
@@ -130,7 +131,7 @@ public class VendorCliWatcherTests {
     public async Task A_baseline_recorded_before_the_startup_probe_wins_over_the_file_at_start() {
         var refreshes = new List<string>();
         var watcher = VendorCliWatcher.ForTest(
-            [("claude", "/bin/claude")], refreshes.Add, _ => New,
+            [("claude", "/bin/claude")], refreshes.Add, _ => New, TimeProvider.System,
             baselines: new Dictionary<string, CliBinaryStat?> { ["claude"] = Old });
         watcher.PrimeBaselines();
 

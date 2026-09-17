@@ -29,11 +29,11 @@ public static partial class BootRefusalMarker {
     /// </summary>
     public static void TryWrite(
             DaemonStore store, string daemonName, string token,
-            string? expectation, string? resolved, string? instanceId, string? attemptId) {
+            string? expectation, string? resolved, string? instanceId, string? attemptId, TimeProvider time) {
         try {
             var record = new BootRefusalRecord(
                 CurrentSchema, daemonName, token, expectation, resolved,
-                Environment.ProcessId, instanceId, attemptId, DateTimeOffset.UtcNow);
+                Environment.ProcessId, instanceId, attemptId, time.GetUtcNow());
 
             var path = store.BootRefusalPath(daemonName);
             var tmp  = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];

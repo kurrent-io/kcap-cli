@@ -109,11 +109,11 @@ public sealed class WizardTenantProvisioner(
         string                   baseUrl,
         IAuthProgress            progress,
         CliTelemetry             telemetry,
-        TimeProvider?            time = null) : ITenantProvisioner {
+        TimeProvider            time) : ITenantProvisioner {
     internal const int PollIntervalMs = 4000;
     internal const int MaxPolls       = 150; // ~10 minutes (server budget is 15)
 
-    readonly TimeProvider _time = time ?? TimeProvider.System;
+    readonly TimeProvider _time = time;
 
     /// Null hooks answer as "backed out": an unwired provisioner must never provision.
     public Func<CancellationToken, Task<ProvisionMode>>?               OfferMode     { get; set; }

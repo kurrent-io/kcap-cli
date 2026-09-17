@@ -39,7 +39,7 @@ sealed class PiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -90,7 +90,7 @@ sealed class PiHookCommand(
 
         // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
 
         var activeProfile = profiles.Effective;
 
@@ -142,11 +142,11 @@ sealed class PiHookCommand(
         // JsonString round-trip (same rationale as the Codex/Copilot dispatchers).
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
+        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -177,9 +177,9 @@ sealed class PiHookCommand(
         // stdout regardless of exit code, so no commit gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
         await WriteMemoryFragment(stdout, fragment, workItemsNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;
@@ -202,7 +202,7 @@ sealed class PiHookCommand(
                     await watchers.InlineDrainAsync(sessionId, file, agentId: null, vendor: "pi");
                 },
                 PreHookDrainCap
-            );
+            , clock.Time);
 
             if (!drained) {
                 await Console.Error.WriteLineAsync(
@@ -218,7 +218,7 @@ sealed class PiHookCommand(
             ["session_id"]      = sessionId,
             ["reason"]          = string.IsNullOrEmpty(reason) ? "quit" : reason,
             ["home_dir"]        = home.Path,
-            ["ended_at"]        = DateTimeOffset.UtcNow.ToString("O")
+            ["ended_at"]        = clock.Time.GetUtcNow().ToString("O")
         };
 
         if (cwd is not null) forwarded["cwd"] = cwd;

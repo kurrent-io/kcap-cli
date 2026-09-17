@@ -53,6 +53,7 @@ namespace Capacitor.Cli.Daemon.Harness.Pi;
 internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         DaemonConfig                                                 config,
         ILoggerFactory                                                loggerFactory,
+        TimeProvider                                                  time,
         Func<ProcessStartInfo, CancellationToken, Task<IPiRpcProcess>>? processSource = null,
         Func<string, bool>?                                           binaryExists = null,
         TimeSpan?                                                     readyDeadline = null
@@ -61,7 +62,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
 
     readonly Func<ProcessStartInfo, CancellationToken, Task<IPiRpcProcess>> _processSource =
         processSource ?? ((psi, _) => Task.FromResult<IPiRpcProcess>(
-            new PiRpcProcess(psi, loggerFactory.CreateLogger<PiRpcProcess>())));
+            new PiRpcProcess(psi, loggerFactory.CreateLogger<PiRpcProcess>(), time)));
 
     readonly Func<string, bool> _binaryExists =
         binaryExists ?? (path => config.Binaries.Finds(path));
@@ -130,6 +131,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
                 ctx.AgentId,
                 ResolveModel(config, ctx),
                 ctx.Worktree.Path,
+                time,
                 readyDeadline: readyDeadline,
                 journal: ctx.Journal);
         } catch {

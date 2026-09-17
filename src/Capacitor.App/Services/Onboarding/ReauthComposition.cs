@@ -28,10 +28,10 @@ internal static class ReauthComposition {
             ConfigRoot root, TokenStore tokenStore, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
             GitHubOAuthClient github, WorkOSClient workos,
             string profile, string serverUrl, WizardBridges bridges,
-            ConsentFlipClaims claims, IAppStateStore appState, IUrlOpener urlOpener,
+            ConsentFlipClaims claims, IAppStateStore appState, IUrlOpener urlOpener, TimeProvider time,
             Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation) {
         var auth = new WizardAuthService(WizardComposition.BuildOperation(
-            root, tokenStore, httpFactory, proxy, github, workos, profile, bridges, claims, operation));
+            root, tokenStore, httpFactory, proxy, github, workos, profile, bridges, claims, time, operation));
         var connect = new ConnectStepViewModel();
         connect.Prefill(serverUrl);
 

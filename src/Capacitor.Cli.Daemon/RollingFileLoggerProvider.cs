@@ -15,7 +15,12 @@ sealed class RollingFileLoggerProvider : ILoggerProvider {
 
     const long DefaultMaxSize = 10 * 1024 * 1024; // 10 MB
 
-    public RollingFileLoggerProvider(string path, long maxSize = DefaultMaxSize, LogLevel minLevel = LogLevel.Information) {
+    readonly TimeProvider _time;
+
+    public RollingFileLoggerProvider(
+            string path, TimeProvider time, long maxSize = DefaultMaxSize,
+            LogLevel minLevel = LogLevel.Information) {
+        _time     = time;
         _path     = path;
         _maxSize  = maxSize;
         _minLevel = minLevel;
@@ -33,7 +38,7 @@ sealed class RollingFileLoggerProvider : ILoggerProvider {
         lock (_lock) {
             if (_writer is null) return;
 
-            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {LevelTag(level)} {category}  {message}";
+            var line = $"{_time.GetLocalNow().DateTime:yyyy-MM-dd HH:mm:ss.fff} {LevelTag(level)} {category}  {message}";
             _writer.WriteLine(line);
 
             TryRotate();

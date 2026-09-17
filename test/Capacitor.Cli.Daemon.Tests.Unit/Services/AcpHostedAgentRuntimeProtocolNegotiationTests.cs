@@ -48,7 +48,7 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
             Fake    = new FakeAcpAgent();
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, logger ?? NullLogger.Instance);
             Process = new FakeAcpProcess();
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, agentId: agentId, vendor: vendor);
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, TimeProvider.System, agentId: agentId, vendor: vendor);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);

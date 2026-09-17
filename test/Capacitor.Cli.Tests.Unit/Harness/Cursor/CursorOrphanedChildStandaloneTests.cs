@@ -44,7 +44,7 @@ public class CursorOrphanedChildStandaloneTests {
         using var fx = new ProjectsDirFixture();
         WriteParentAndChild(fx);
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
@@ -82,7 +82,7 @@ public class CursorOrphanedChildStandaloneTests {
             "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":" + childUserText + "}]}}\n" +
             "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
@@ -102,7 +102,7 @@ public class CursorOrphanedChildStandaloneTests {
         using var fx = new ProjectsDirFixture();
         WriteParentAndChild(fx);
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var getClient  = new HttpClient(getHandler);
 
@@ -154,7 +154,7 @@ public class CursorOrphanedChildStandaloneTests {
         using var fx = new ProjectsDirFixture();
         WriteParentAndChild(fx);
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var getClient  = new HttpClient(getHandler);
 
@@ -207,7 +207,7 @@ public class CursorOrphanedChildStandaloneTests {
         using var fx = new ProjectsDirFixture();
         WriteParentAndChild(fx);
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var getClient  = new HttpClient(getHandler);
 

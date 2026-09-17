@@ -18,7 +18,7 @@ public class PlanEntitlementCaptureHandlerTests {
     }
 
     static async Task SendThrough(string serverUrl, HttpResponseMessage response, ConfigRoot config) {
-        var capture = new PlanEntitlementCaptureHandler(serverUrl, config) { InnerHandler = new StubHandler(response) };
+        var capture = new PlanEntitlementCaptureHandler(serverUrl, config, TimeProvider.System) { InnerHandler = new StubHandler(response) };
         using var client = new HttpClient(capture);
         using var _ = await client.GetAsync(serverUrl);
     }
@@ -37,7 +37,7 @@ public class PlanEntitlementCaptureHandlerTests {
 
         await SendThrough(url, WithPlan("work_items=0,projects=1"), Config.Root);
 
-        var plan = PlanEntitlementStore.Get(url, Config.Root);
+        var plan = PlanEntitlementStore.Get(url, Config.Root, DateTimeOffset.UtcNow);
         await Assert.That(plan.Allows(PlanFeature.WorkItems)).IsFalse();
         await Assert.That(plan.Allows(PlanFeature.Projects)).IsTrue();
     }
@@ -51,7 +51,7 @@ public class PlanEntitlementCaptureHandlerTests {
 
         await SendThrough(url, WithPlan(null), Config.Root);
 
-        await Assert.That(PlanEntitlementStore.Get(url, Config.Root).Allows(PlanFeature.WorkItems)).IsFalse();
+        await Assert.That(PlanEntitlementStore.Get(url, Config.Root, DateTimeOffset.UtcNow).Allows(PlanFeature.WorkItems)).IsFalse();
     }
 
     [Test]
@@ -60,7 +60,7 @@ public class PlanEntitlementCaptureHandlerTests {
 
         await SendThrough(url, WithPlan(null), Config.Root);
 
-        await Assert.That(PlanEntitlementStore.Get(url, Config.Root).Allows(PlanFeature.WorkItems)).IsTrue();
+        await Assert.That(PlanEntitlementStore.Get(url, Config.Root, DateTimeOffset.UtcNow).Allows(PlanFeature.WorkItems)).IsTrue();
     }
 
     [Test]
@@ -70,6 +70,6 @@ public class PlanEntitlementCaptureHandlerTests {
 
         await SendThrough(url, WithPlan("work_items=1"), Config.Root);
 
-        await Assert.That(PlanEntitlementStore.Get(url, Config.Root).Allows(PlanFeature.WorkItems)).IsTrue();
+        await Assert.That(PlanEntitlementStore.Get(url, Config.Root, DateTimeOffset.UtcNow).Allows(PlanFeature.WorkItems)).IsTrue();
     }
 }

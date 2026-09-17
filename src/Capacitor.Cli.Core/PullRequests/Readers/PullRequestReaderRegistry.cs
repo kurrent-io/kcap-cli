@@ -4,10 +4,10 @@ namespace Capacitor.Cli.Core.PullRequests.Readers;
 /// Session links always come from <paramref name="sessionLinks"/>; reading routes to the first
 /// ready provider serving the subject's kind and host. Nothing here names a provider.
 /// </summary>
-public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, IReadOnlyList<IPullRequestReaderProvider> providers, TimeProvider? time = null)
+public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, IReadOnlyList<IPullRequestReaderProvider> providers, TimeProvider time)
         : IPullRequestSource, IPullRequestReaders {
     readonly Lock _lock = new();
-    readonly TimeProvider _time = time ?? TimeProvider.System;
+    readonly TimeProvider _time = time;
     readonly Dictionary<string, (PullRequestRepository? Repository, string? Branch, string? SubjectKey, string? ProviderName)> _sessions = new(StringComparer.Ordinal);
     PullRequestReaderStatus[] _statuses = [.. providers.Select(_ => new PullRequestReaderStatus(PullRequestReaderStatusKind.Failed, "not_probed"))];
 

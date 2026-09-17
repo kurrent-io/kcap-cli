@@ -24,7 +24,7 @@ public class TrackedBranchTests {
 
     static Task<string?> Resolve(GitRepo repo, string? branch = "local-name") =>
         TrackedBranch.ResolveAsync(
-            branch, "github.com", "acme", "widget", repo, () => Budget, RepositoryDetection.DefaultRunner);
+            branch, "github.com", "acme", "widget", repo, () => Budget, RepositoryDetection.DefaultRunner(TimeProvider.System));
 
     [Test]
     public async Task Resolves_an_upstream_that_goes_by_another_name() {

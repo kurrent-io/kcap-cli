@@ -19,10 +19,11 @@ internal static class TranscriptFileClassification {
             ConfigRoot                                                   config,
             UserHome                                                     home,
             HttpClient                                                   httpClient,
+            TimeProvider                                                 time,
             string                                                       baseUrl,
             List<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             int                                                          minLines,
-                        CancellationToken                                            ct,
+            CancellationToken                                            ct,
             HarnessId                                                    vendor        = HarnessId.Claude,
             Action?                                                      onProbed      = null
         ) {
@@ -30,7 +31,7 @@ internal static class TranscriptFileClassification {
         var       tasks     = new List<Task<ImportCommand.SessionClassification>>(transcripts.Count);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, onProbed, ct));
+            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -43,6 +44,7 @@ internal static class TranscriptFileClassification {
             ConfigRoot        config,
             UserHome          home,
             HttpClient        httpClient,
+            TimeProvider      time,
             string            baseUrl,
             string            sessionId,
             string            filePath,
@@ -54,7 +56,7 @@ internal static class TranscriptFileClassification {
             CancellationToken ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ct);
+            return await ClassifyOneCoreAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ct);
         } finally {
             onProbed?.Invoke();
         }
@@ -65,6 +67,7 @@ internal static class TranscriptFileClassification {
             ConfigRoot        config,
             UserHome          home,
             HttpClient        httpClient,
+            TimeProvider      time,
             string            baseUrl,
             string            sessionId,
             string            filePath,
@@ -116,7 +119,7 @@ internal static class TranscriptFileClassification {
         await probeGate.WaitAsync(ct);
 
         try {
-            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
+            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", time, ct: ct);
 
             switch (resp.StatusCode) {
                 case HttpStatusCode.NotFound:

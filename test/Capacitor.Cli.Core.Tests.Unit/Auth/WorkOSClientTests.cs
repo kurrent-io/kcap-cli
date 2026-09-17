@@ -74,7 +74,7 @@ public class WorkOSClientTests : IDisposable {
     public async Task A_honoured_refresh_rotates_and_carries_the_response() {
         var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, Rotation));
 
-        var result = await new WorkOSClient(new PlainHttpClientFactory(workos))
+        var result = await new WorkOSClient(new PlainHttpClientFactory(workos), TimeProvider.System)
             .RefreshAsync("client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
@@ -91,7 +91,7 @@ public class WorkOSClientTests : IDisposable {
     public async Task A_refused_refresh_is_rejected_and_sent_exactly_once() {
         var workos = new SequencedHttpScript(Reply(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}"""));
 
-        var result = await new WorkOSClient(new PlainHttpClientFactory(workos))
+        var result = await new WorkOSClient(new PlainHttpClientFactory(workos), TimeProvider.System)
             .RefreshAsync("client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
@@ -189,7 +189,7 @@ public class WorkOSClientTests : IDisposable {
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var client = new WorkOSClient(
-            new PlainHttpClientFactory(workos),
+            new PlainHttpClientFactory(workos), TimeProvider.System,
             refreshTimeout: TimeSpan.FromSeconds(10),
             replayBudget:   TimeSpan.FromSeconds(60),
             replayBackoff:  TimeSpan.FromSeconds(1));
@@ -202,7 +202,7 @@ public class WorkOSClientTests : IDisposable {
     // Deadlines short enough that a stalled script runs the loop out in a few seconds, yet long
     // enough that a cold HttpClient's first send under a fully parallel suite lands inside them.
     static WorkOSClient Client(SequencedHttpScript workos) => new(
-        new PlainHttpClientFactory(workos),
+        new PlainHttpClientFactory(workos), TimeProvider.System,
         refreshTimeout: TimeSpan.FromSeconds(2),
         replayBudget:   TimeSpan.FromSeconds(5),
         replayBackoff:  TimeSpan.FromMilliseconds(10));

@@ -36,6 +36,7 @@ internal sealed partial class AcpInteractionBridge(
         Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
         string                                                                       agentId,
         ILogger                                                                      logger,
+        TimeProvider time,
         AcpUnattendedInteractionPolicy                                                unattendedPolicy = AcpUnattendedInteractionPolicy.Disabled,
         Action<string>?                                                               unexpectedUnattendedInteraction = null,
         IReadOnlySet<string>?                                                         admittedToolIds = null,
@@ -788,7 +789,7 @@ internal sealed partial class AcpInteractionBridge(
                 sessionId, agentId, policyVendor ?? "unknown", PolicySeams.AcpRequestPermission, snapshot.Id,
                 PolicyEngine.Version, "full", requested, effective, PolicyWire.ToWire(action),
                 PolicyWire.ToWire(evaluation.MatchedRules), snapshot.Degraded, null, correlationId, false,
-                DateTimeOffset.UtcNow.ToString("O")));
+                time.GetUtcNow().ToString("O")));
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: policy decision audit notify threw for agent {AgentId}; ignoring", agentId);
         }

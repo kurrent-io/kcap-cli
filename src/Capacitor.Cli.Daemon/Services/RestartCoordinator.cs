@@ -25,6 +25,7 @@ internal enum RestartRequestResult {
 /// where a running binary can't be replaced); the explicit request path works anywhere.
 /// </summary>
 internal sealed partial class RestartCoordinator : BackgroundService {
+    readonly TimeProvider _time;
     readonly DaemonStore _store;
     readonly string      _name;
     readonly string  _version;
@@ -48,8 +49,9 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
     // Production constructor (DI).
     public RestartCoordinator(
-            DaemonConfig config, AgentOrchestrator orchestrator,
-            EvalContextCache evalCache, IRestartStrategy strategy, ILogger<RestartCoordinator> logger) {
+            DaemonConfig config, AgentOrchestrator orchestrator, EvalContextCache evalCache,
+            IRestartStrategy strategy, ILogger<RestartCoordinator> logger, TimeProvider time) {
+        _time      = time;
         _store     = config.Store;
         _name      = config.Name;
         _version   = DaemonRunner.ResolveDaemonVersion();
@@ -59,13 +61,17 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         StatBinary = StatProcessBinary;
     }
 
-    RestartCoordinator(DaemonStore store, string daemonName, string version, IRestartStrategy strategy, ILogger logger) {
+    RestartCoordinator(
+            DaemonStore store, string daemonName, string version, IRestartStrategy strategy, ILogger logger,
+            TimeProvider time) {
+        _time      = time;
         _store = store; _name = daemonName; _version = version; Strategy = strategy; _logger = logger;
     }
 
     /// <summary>Test factory — bypasses DI; caller sets the seams.</summary>
-    internal static RestartCoordinator ForTest(DaemonStore store, string daemonName, string version, IRestartStrategy strategy) =>
-        new(store, daemonName, version, strategy, NullLogger.Instance);
+    internal static RestartCoordinator ForTest(
+            DaemonStore store, string daemonName, string version, IRestartStrategy strategy, TimeProvider time) =>
+        new(store, daemonName, version, strategy, NullLogger.Instance, time);
 
     internal void PrimeBaseline() {
         lock (_gate) _baseline = StatBinary();
@@ -100,7 +106,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
             if (force) _force = true;
 
             if (!force) {
-                DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "requested", DateTimeOffset.UtcNow));
+                DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "requested", _time.GetUtcNow()));
                 LogQueued(_logger, "requested");
             }
         }
@@ -128,7 +134,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
                 if (RestartDecision.BinaryChanged(_baseline, current)) {
                     _pending  = true;
                     _baseline = current;
-                    DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "self-detected", DateTimeOffset.UtcNow));
+                    DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "self-detected", _time.GetUtcNow()));
                     LogQueued(_logger, "self-detected");
                 }
             }
@@ -157,7 +163,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         // running version now matches the on-disk binary.
         DaemonRestartMarker.Delete(_store, _name);
 
-        using var timer = new PeriodicTimer(PollInterval);
+        using var timer = new PeriodicTimer(PollInterval, _time);
         try {
             while (await timer.WaitForNextTickAsync(ct)) Tick();
         } catch (OperationCanceledException) { /* shutdown */ }

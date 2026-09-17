@@ -44,7 +44,7 @@ sealed class AcpLaunchNoticeHarness : IAsyncDisposable {
             new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
-            NullLogger<ServerConnection>.Instance);
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         Factory = new AcpHostedAgentRuntimeFactory(
             descriptor: AcpVendorDescriptors.Cursor,

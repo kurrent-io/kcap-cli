@@ -31,8 +31,8 @@ namespace Capacitor.Cli.Harness.Cursor;
 /// periodic full-prefix re-hash (every N polls, wired by the watcher), reusing
 /// <see cref="CursorAppendOnlyProbe"/> — the same pure core the phase-0 harness uses.
 /// </summary>
-public sealed class CursorRewriteGuard(ConfigRoot config, string sessionId) {
-    readonly CursorMarkers _markers = new(config);
+public sealed class CursorRewriteGuard(ConfigRoot config, string sessionId, TimeProvider time) {
+    readonly CursorMarkers _markers = new(config, time);
 
     public int TrailingBytes { get; init; } = 4096;
 

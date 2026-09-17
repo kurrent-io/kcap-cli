@@ -18,7 +18,7 @@ internal sealed class EvalContextCache : IDisposable {
     sealed record Entry(EvalService.EvalContext Context, DateTimeOffset LastAccessed);
 
     readonly ConcurrentDictionary<string, Entry> _entries = new();
-    readonly Timer                               _sweepTimer;
+    readonly ITimer                              _sweepTimer;
 
     // Sliding expiration — an entry is evicted when MaxIdle elapses since
     // its last Get(). Per-question calls refresh the timestamp, so only
@@ -26,17 +26,20 @@ internal sealed class EvalContextCache : IDisposable {
     static readonly TimeSpan MaxIdle       = TimeSpan.FromMinutes(30);
     static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
 
-    public EvalContextCache() {
-        _sweepTimer = new(_ => Sweep(), null, SweepInterval, SweepInterval);
+    readonly TimeProvider _time;
+
+    public EvalContextCache(TimeProvider time) {
+        _time       = time;
+        _sweepTimer = time.CreateTimer(_ => Sweep(), null, SweepInterval, SweepInterval);
     }
 
     public void Put(string evalRunId, EvalService.EvalContext ctx) =>
-        _entries[evalRunId] = new Entry(ctx, DateTimeOffset.UtcNow);
+        _entries[evalRunId] = new Entry(ctx, _time.GetUtcNow());
 
     public EvalService.EvalContext? Get(string evalRunId) {
         if (!_entries.TryGetValue(evalRunId, out var entry)) return null;
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _time.GetUtcNow();
 
         if (now - entry.LastAccessed > MaxIdle) {
             _entries.TryRemove(new(evalRunId, entry));
@@ -57,7 +60,7 @@ internal sealed class EvalContextCache : IDisposable {
     public int Count => _entries.Count;
 
     void Sweep() {
-        var now = DateTimeOffset.UtcNow;
+        var now = _time.GetUtcNow();
 
         foreach (var kvp in _entries) {
             if (now - kvp.Value.LastAccessed > MaxIdle) {

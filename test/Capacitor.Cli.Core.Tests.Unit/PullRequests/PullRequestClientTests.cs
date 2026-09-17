@@ -21,7 +21,7 @@ public class PullRequestClientTests {
         foreach (var example in fixture.RootElement.GetProperty("responses").EnumerateArray()) {
             using var handler = new Handler { Body = example.GetProperty("body").GetRawText() };
             using var http = new HttpClient(handler);
-            using var client = new PullRequestClient(http, "https://tenant.test");
+            using var client = new PullRequestClient(http, "https://tenant.test", TimeProvider.System);
             var kind = example.GetProperty("route").GetString() switch {
                 "links" => (await client.ListAsync("session", default)).Kind,
                 "overview" => (await client.OverviewAsync("session", subject, default)).Kind,
@@ -43,7 +43,7 @@ public class PullRequestClientTests {
         foreach (var example in fixture.RootElement.GetProperty("discovery").EnumerateArray()) {
             using var handler = new Handler { Discovery = example.GetProperty("body").GetRawText() };
             using var http = new HttpClient(handler);
-            using var client = new PullRequestClient(http, "https://tenant.test");
+            using var client = new PullRequestClient(http, "https://tenant.test", TimeProvider.System);
             var discovery = await client.DiscoverAsync(false, default);
             await Assert.That(discovery.Kind.ToString()).IsEqualTo(example.GetProperty("kind").GetString());
             if (discovery.Kind != PullRequestCapabilityKind.Supported) {
@@ -91,7 +91,7 @@ public class PullRequestClientTests {
     public async Task A_non_JSON_gateway_failure_is_transient_and_an_off_origin_response_is_invalid() {
         using var handler = new Handler { Status = HttpStatusCode.ServiceUnavailable, Body = "gateway unavailable" };
         using var http = new HttpClient(handler);
-        using var client = new PullRequestClient(http, "https://tenant.test");
+        using var client = new PullRequestClient(http, "https://tenant.test", TimeProvider.System);
         var outage = await client.ListAsync("session", default);
         await Assert.That(outage.AccessFailure).IsEqualTo("transient");
         handler.Redirect = true;
@@ -106,7 +106,7 @@ public class PullRequestClientTests {
             Body = """{"session_id":"session","pull_requests":[{"repo_hash":"hash","owner":"Example","repo_name":"Repo","number":7,"url":"https://github.com/Example/Repo/pull/7"}]}"""
         };
         using var http = new HttpClient(handler);
-        using var client = new PullRequestClient(http, "https://tenant.test");
+        using var client = new PullRequestClient(http, "https://tenant.test", TimeProvider.System);
         var read = await client.LegacyLinksAsync("session", default);
         await Assert.That(read.Kind).IsEqualTo(PullRequestReadKind.Ready);
         await Assert.That(read.Data!.Items[0].Owner).IsEqualTo("example");
@@ -124,7 +124,7 @@ public class PullRequestClientTests {
     public async Task Malformed_legacy_rows_are_rejected(string rows) {
         using var handler = new Handler { Discovery = """{"provider":"workos"}""", Body = "{\"session_id\":\"session\",\"pull_requests\":" + rows + "}" };
         using var http = new HttpClient(handler);
-        using var client = new PullRequestClient(http, "https://tenant.test");
+        using var client = new PullRequestClient(http, "https://tenant.test", TimeProvider.System);
         await Assert.That((await client.LegacyLinksAsync("session", default)).Kind).IsEqualTo(PullRequestReadKind.InvalidProtocol);
     }
 
@@ -136,7 +136,7 @@ public class PullRequestClientTests {
     public async Task Non_object_legacy_summaries_are_rejected_without_throwing(string body) {
         using var handler = new Handler { Discovery = """{"provider":"workos"}""", Body = body };
         using var http = new HttpClient(handler);
-        using var client = new PullRequestClient(http, "https://tenant.test");
+        using var client = new PullRequestClient(http, "https://tenant.test", TimeProvider.System);
         await Assert.That((await client.LegacyLinksAsync("session", default)).Kind).IsEqualTo(PullRequestReadKind.InvalidProtocol);
     }
 

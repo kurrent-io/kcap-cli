@@ -33,7 +33,8 @@ public record StoredTokens {
     [JsonPropertyName("server_url")]
     public string? ServerUrl { get; init; }
 
-    public bool IsExpired => DateTimeOffset.UtcNow >= ExpiresAt - TimeSpan.FromSeconds(30);
+    /// <summary>Expired, or close enough that a request started now would arrive after expiry.</summary>
+    public bool IsExpiredAt(DateTimeOffset now) => now >= ExpiresAt - TimeSpan.FromSeconds(30);
 }
 
 /// <summary>
@@ -62,7 +63,8 @@ public sealed record TokenResolution(
 // treats Contended quietly — no warning, no backoff.
 public enum ProactiveRefreshOutcome { NotDue, Refreshed, Failed, Contended, Rejected }
 
-public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpClientFactory httpFactory, WorkOSClient workos) {
+public sealed class TokenStore(
+        ConfigRoot config, ProfileOverrides env, IHttpClientFactory httpFactory, WorkOSClient workos, TimeProvider time) {
     string LegacyTokenPath { get; } = config.Path("tokens.json");
     string TokenDir        { get; } = config.Path("tokens");
 
@@ -143,7 +145,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
                 await writer.WriteAsync(
                     JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens).AsMemory(), ct);
             }
-            await ReplaceWithRetryAsync(tempPath, path, ct);
+            await ReplaceWithRetryAsync(tempPath, path, time, ct);
         } finally {
             // Success renames the temp away; only a failed write/move leaves it. Unlike the
             // old shared name, a leaked unique temp never gets reused, so clean it up.
@@ -174,7 +176,8 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
     const int ReplaceMaxAttempts   = 10;
     const int ReplaceBackoffBaseMs = 20;
 
-    static async Task ReplaceWithRetryAsync(string tempPath, string path, CancellationToken ct = default) {
+    static async Task ReplaceWithRetryAsync(
+            string tempPath, string path, TimeProvider time, CancellationToken ct = default) {
         for (var attempt = 1; ; attempt++) {
             ct.ThrowIfCancellationRequested();
             try {
@@ -184,7 +187,9 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
                                          && attempt < ReplaceMaxAttempts) {
                 // Jitter the backoff so concurrent writers don't wake in lockstep and re-collide on
                 // the shared target every attempt (the Windows sharing-violation thundering herd).
-                await Task.Delay(ReplaceBackoffBaseMs * attempt + Random.Shared.Next(ReplaceBackoffBaseMs), ct);
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(ReplaceBackoffBaseMs * attempt + Random.Shared.Next(ReplaceBackoffBaseMs)),
+                    time, ct);
             }
         }
     }
@@ -353,7 +358,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
             return null;
         }
 
-        if (!tokens.IsExpired) {
+        if (!tokens.IsExpiredAt(time.GetUtcNow())) {
             return tokens;
         }
 
@@ -476,7 +481,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         // per-profile store when the refresh persists).
         var tokens = await LoadWithLegacyFallbackAsync(profile);
 
-        var decision = DecideProactiveRefresh(tokens, DateTimeOffset.UtcNow, window);
+        var decision = DecideProactiveRefresh(tokens, time.GetUtcNow(), window);
 
         if (decision is not (RefreshDecision.RefreshWorkOS or RefreshDecision.RefreshGitHub)) {
             return ProactiveRefreshOutcome.NotDue;
@@ -484,7 +489,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
 
         // Re-evaluate the window under the lock too (via this predicate): a peer may refresh
         // between our read here and our acquiring the lock, leaving the re-read token fresh.
-        bool ExpiringWithinWindow(StoredTokens t) => DateTimeOffset.UtcNow >= t.ExpiresAt - window;
+        bool ExpiringWithinWindow(StoredTokens t) => time.GetUtcNow() >= t.ExpiresAt - window;
 
         // Capture the raw WorkOS classification the same way `contended` captures lock contention:
         // the delegate records it, the code after the lock reads it. Only set when the WorkOS
@@ -517,6 +522,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
     // persist. A shorter wait gives up on a holder that is one replay away from saving a fresh token
     // and falls back to the stale one instead.
     static readonly TimeSpan LockWaitMargin = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan LockPollGap    = TimeSpan.FromMilliseconds(100);
 
     internal TimeSpan LockWait => workos.RefreshBudget + LockWaitMargin;
 
@@ -537,7 +543,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         // proactive path (RefreshIfExpiringAsync) passes a wider "within N minutes of expiry"
         // predicate so it can refresh ahead of expiry — under this same lock, re-checked after
         // the re-read, so it can't race a peer's refresh or double-spend a rotated token.
-        needsRefresh ??= static t => t.IsExpired;
+        needsRefresh ??= t => t.IsExpiredAt(time.GetUtcNow());
 
         // Validate before building the lock path — a profile name with path separators
         // must not let the lock file escape TokenDir (matches ProfileTokenPath's guard).
@@ -546,14 +552,14 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         var lockPath = Path.Combine(TokenDir, $"{profile}.lock");
 
         FileStream? lockStream = null;
-        var         deadline   = DateTime.UtcNow + LockWait;
+        var         deadline   = time.GetUtcNow() + LockWait;
 
         while (lockStream is null) {
             cancellationToken.ThrowIfCancellationRequested();
             try {
                 lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             } catch (IOException) {
-                if (DateTime.UtcNow >= deadline) {
+                if (time.GetUtcNow() >= deadline) {
                     var latest = await LoadAsync(profile);
 
                     // A peer refreshed while we waited → return their fresh token.
@@ -568,7 +574,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
                     return null;
                 }
 
-                await Task.Delay(100, cancellationToken);
+                await Task.Delay(LockPollGap, time, cancellationToken);
             }
         }
 
@@ -580,7 +586,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
             // the proactive window. A short-lived / JwtExpiry-fallback token would otherwise be
             // double-rotated (and double the endpoint traffic) right after a peer just rotated it.
             // The reactive path is unaffected: its needsRefresh is IsExpired, already false here.
-            if (latest.AccessToken != current.AccessToken && !latest.IsExpired) {
+            if (latest.AccessToken != current.AccessToken && !latest.IsExpiredAt(time.GetUtcNow())) {
                 return latest;
             }
 
@@ -610,7 +616,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
 
     // WorkOS access tokens are JWTs carrying their own `exp`. Read it without signature
     // validation (the server validates against JWKS); fall back to a short lifetime.
-    public static DateTimeOffset JwtExpiry(string accessToken) {
+    public static DateTimeOffset JwtExpiry(string accessToken, TimeProvider time) {
         try {
             var parts = accessToken.Split('.');
 
@@ -628,7 +634,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
             // Malformed token — fall through to the conservative default.
         }
 
-        return DateTimeOffset.UtcNow.AddMinutes(5);
+        return time.GetUtcNow().AddMinutes(5);
     }
 
     // Short retry budget for the refresh HTTP call. A bare single-shot POST turned any
@@ -674,7 +680,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         var payload = new StringContent(requestBody, System.Text.Encoding.UTF8, "application/json");
 
         try {
-            var response = await http.PostWithRetryAsync(url, payload, RefreshRetryBudget, ct);
+            var response = await http.PostWithRetryAsync(url, payload, time, RefreshRetryBudget, ct);
 
             if (!response.IsSuccessStatusCode) {
                 return null;
@@ -692,7 +698,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
             // written to the wrong profile if the active profile changes mid-refresh.
             return tokens with {
                 AccessToken = json.AccessToken,
-                ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(json.ExpiresIn),
+                ExpiresAt = time.GetUtcNow().AddSeconds(json.ExpiresIn),
                 ServerUrl = stamped
             };
         } catch {
@@ -723,7 +729,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         // under the wrong profile would be especially damaging.
         return tokens with {
             AccessToken  = json.AccessToken,
-            ExpiresAt    = JwtExpiry(json.AccessToken),
+            ExpiresAt    = JwtExpiry(json.AccessToken, time),
             RefreshToken = json.RefreshToken ?? tokens.RefreshToken
         };
     }

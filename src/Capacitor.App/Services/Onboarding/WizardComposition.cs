@@ -24,6 +24,7 @@ internal sealed record WizardFacadeSpec(
     ITenantProvisioner?                                        Provisioner,
     CliTelemetry                                               Telemetry,
     AuthEndpoints                                              Endpoints,
+    TimeProvider                                               Time,
     Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit);
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
@@ -79,9 +80,9 @@ internal static class WizardComposition {
     /// provisioner built from the bridges' OWN sink, per WizardBridges' contract.
     internal static WizardBridges BuildBridges(
             Action<Action> post, TenantProvisioningClient provisioning, CliTelemetry telemetry,
-            AuthEndpoints endpoints) =>
+            AuthEndpoints endpoints, TimeProvider time) =>
         new(post, telemetry, endpoints, progress => new WizardTenantProvisioner(
-            provisioning, endpoints.SignupUrl, progress, telemetry));
+            provisioning, endpoints.SignupUrl, progress, telemetry, time));
 
     /// Production operation: the spec IS the façade's arguments, and WizardSignInOperation owns
     /// the intent→call map (paste adopts the server; create/discover run WorkOS discovery).
@@ -89,7 +90,7 @@ internal static class WizardComposition {
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
             SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
-            spec.BeforeCommit), spec.Profile);
+            spec.Time, spec.BeforeCommit), spec.Profile);
 
     /// The ONE façade a wizard run signs in through — provisioner armed (a provisioner-less façade
     /// dead-ends "Create a workspace" at "ask your admin") and the decision-7 arming hook wired as
@@ -97,18 +98,18 @@ internal static class WizardComposition {
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> BuildOperation(
             ConfigRoot root, TokenStore tokenStore, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
             GitHubOAuthClient github, WorkOSClient workos,
-            string profile, WizardBridges bridges, ConsentFlipClaims claims,
+            string profile, WizardBridges bridges, ConsentFlipClaims claims, TimeProvider time,
             Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation) =>
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
-            bridges.Provisioner, bridges.Telemetry, bridges.Endpoints,
+            bridges.Provisioner, bridges.Telemetry, bridges.Endpoints, time,
             WizardAuthService.ArmingHook(claims)));
 
     internal static WizardGraph BuildGraph(WizardGraphOptions options) {
         var claims = options.Claims;
         var cli    = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
         var auth   = new WizardAuthService(BuildOperation(options.Root, options.TokenStore, options.HttpFactory, options.Proxy,
-        options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Operation));
+        options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
         var connect  = new ConnectStepViewModel();
         var signIn   = new SignInStepViewModel(auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener);

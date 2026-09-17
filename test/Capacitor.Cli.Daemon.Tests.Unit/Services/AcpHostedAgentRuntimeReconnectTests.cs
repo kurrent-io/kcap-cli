@@ -80,6 +80,7 @@ public class AcpHostedAgentRuntimeReconnectTests {
             Support = withSupport
                 ? new AcpReconnectSupport {
                     Spawn                = SpawnCandidate,
+                    TimeProvider         = TimeProvider.System,
                     AttemptDelays        = [TimeSpan.Zero, TimeSpan.Zero],
                     RetirementWait       = TimeSpan.FromSeconds(2),
                     SettlementWait       = TimeSpan.FromSeconds(5),
@@ -97,7 +98,7 @@ public class AcpHostedAgentRuntimeReconnectTests {
             }
 
             var connection = new AcpConnection(fake0.ClientWriteStream, fake0.ClientReadStream, NullLogger.Instance);
-            Runtime = new AcpHostedAgentRuntime(connection, proc0, NullLogger.Instance, reconnect: Support);
+            Runtime = new AcpHostedAgentRuntime(connection, proc0, NullLogger.Instance, TimeProvider.System, reconnect: Support);
         }
 
         (Stream Input, Stream Output, IAcpProcess Process) SpawnCandidate() {

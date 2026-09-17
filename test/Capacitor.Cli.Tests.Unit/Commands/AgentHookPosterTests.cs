@@ -25,7 +25,7 @@ public class AgentHookPosterTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // The poster targets the resolution's URL, so the stub server's is what the resolution names.
-    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()));
+    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), TimeProvider.System);
 
     public void Dispose() => _server.Stop();
 
@@ -143,7 +143,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_on_auth_lapse_spools_and_returns_Spooled() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.Expired)), "session-start/kiro", """{"session_id":"x"}""",
             "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro");
@@ -178,7 +178,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_spools_when_auth_outlives_its_cap() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         var never     = new TaskCompletionSource<AuthAttempt>();
         var sw        = System.Diagnostics.Stopwatch.StartNew();
         var handedOff = false;
@@ -199,7 +199,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_on_401_spools_and_returns_Spooled() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.Unauthorized);
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(handler), AuthStatus.Ok)), "session-start/kiro", """{"session_id":"x"}""",
@@ -214,7 +214,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_on_a_payload_rejecting_4xx_returns_Failed_and_spools_nothing() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.BadRequest);
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(handler), AuthStatus.Ok)), "session-start/kiro", """{"session_id":"x"}""",
@@ -229,7 +229,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test, NotInParallel]
     public async Task PostOrSpool_on_401_still_names_kcap_login_on_stderr() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.Unauthorized);
         using var capture = ConsoleOutput.StartErrorCapture("\n");
 
@@ -244,7 +244,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_on_success_returns_Posted_and_spools_nothing() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.OK); // 200
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(handler), AuthStatus.Ok, null, null)), "session-start/kiro", """{"session_id":"x"}""",

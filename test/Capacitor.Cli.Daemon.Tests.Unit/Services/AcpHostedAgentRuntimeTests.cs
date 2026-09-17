@@ -77,7 +77,7 @@ public class AcpHostedAgentRuntimeTests {
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
             Process = new FakeAcpProcess();
             Runtime = new AcpHostedAgentRuntime(
-                Conn, Process, NullLogger.Instance, transcriptCapacity: transcriptCapacity, journal: journal,
+                Conn, Process, NullLogger.Instance, TimeProvider.System, transcriptCapacity: transcriptCapacity, journal: journal,
                 pendingTurnsCapacity: pendingTurnsCapacity);
         }
 
@@ -884,7 +884,7 @@ public class AcpHostedAgentRuntimeTests {
     [Test]
     public async Task Journal_receives_every_accepted_envelope_in_channel_order_including_the_initial_user_message() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
         journal.Open("/abs/worktree", null);
         await using var h = new Harness(journal);
         h.StartFakeAgentLoop();
@@ -909,7 +909,7 @@ public class AcpHostedAgentRuntimeTests {
     [Test]
     public async Task Envelope_evicted_by_drop_oldest_is_still_in_the_journal_and_one_after_completion_is_not() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
         journal.Open("/abs/worktree", null);
         await using var h = new Harness(journal, transcriptCapacity: 1);
         h.StartFakeAgentLoop();

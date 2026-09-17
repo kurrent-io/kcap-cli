@@ -34,8 +34,8 @@ public interface ILocalControlOps {
 /// persistent connection. Mirrors the CLI's existing socket usage (AgentCommand.SendStopAsync,
 /// DaemonConsentCommand's GetPolicyAsync/PutPolicyAsync) so the app shares the same wire
 /// behavior without depending on CLI command code. See design spec §10.
-public sealed class LocalControlOps(DaemonStore store, string daemonName, TimeProvider? time = null) : ILocalControlOps {
-    readonly TimeProvider _time = time ?? TimeProvider.System;
+public sealed class LocalControlOps(DaemonStore store, string daemonName, TimeProvider time) : ILocalControlOps {
+    readonly TimeProvider _time = time;
 
     // Internal seams for tests (same pattern as LocalControlClient):
     internal TimeSpan ConnectTimeout      = TimeSpan.FromSeconds(5);

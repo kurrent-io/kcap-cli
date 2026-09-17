@@ -40,7 +40,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http)
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System)
             .CreateAsync(server.Urls[0], FlowId, Report("nostromo"), CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(200);
@@ -67,7 +67,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        await new FirstRunFlowClient(http).CreateAsync(
+        await new FirstRunFlowClient(http, TimeProvider.System).CreateAsync(
             server.Urls[0], FlowId,
             Report(
                 "nostromo",
@@ -107,7 +107,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        await new FirstRunFlowClient(http).CreateAsync(
+        await new FirstRunFlowClient(http, TimeProvider.System).CreateAsync(
             server.Urls[0], FlowId, Report("nostromo", platform: FirstRunPlatforms.MacOs), CancellationToken.None);
 
         var body = JsonNode.Parse(
@@ -125,7 +125,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).ReportMachineActionAsync(
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).ReportMachineActionAsync(
             server.Urls[0], FlowId,
             new ReportFirstRunMachineActionRequest {
                 Capability  = FirstRunMachineCapabilities.PathShim,
@@ -158,7 +158,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).RelinquishAsync(
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).RelinquishAsync(
             server.Urls[0], FlowId, FirstRunRelinquishReasons.Handover, CancellationToken.None);
 
         await Assert.That(outcome.Recorded).IsTrue();
@@ -184,7 +184,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).RelinquishAsync(
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).RelinquishAsync(
             server.Urls[0], FlowId, FirstRunRelinquishReasons.Stopped, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(410);
@@ -201,7 +201,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).ReportMachineActionAsync(
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).ReportMachineActionAsync(
             server.Urls[0], FlowId,
             new ReportFirstRunMachineActionRequest {
                 Capability  = FirstRunMachineCapabilities.PathShim,
@@ -225,7 +225,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        await new FirstRunFlowClient(http)
+        await new FirstRunFlowClient(http, TimeProvider.System)
             .CreateAsync(server.Urls[0], FlowId, Report("nostromo"), CancellationToken.None);
 
         var body = JsonNode.Parse(
@@ -252,7 +252,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
         var answer  = FirstRunFlowOutcomes.Agents(outcome.Body);
 
         await Assert.That(answer).IsNotNull();
@@ -270,7 +270,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http)
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System)
             .CreateAsync(server.Urls[0], FlowId, Report(), CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(429);
@@ -287,7 +287,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http)
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System)
             .CreateAsync(server.Urls[0], FlowId, Report(), CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(404);
@@ -302,7 +302,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http)
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System)
             .CreateAsync($"{server.Urls[0]}/", FlowId, Report(), CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(200);
@@ -317,7 +317,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(200);
         await Assert.That(FirstRunFlowOutcomes.IsFinished(outcome.Body!)).IsTrue();
@@ -333,7 +333,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(status);
         await Assert.That(outcome.Body).IsNull();
@@ -350,7 +350,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(200);
         await Assert.That(outcome.Body).IsNull();
@@ -370,7 +370,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http)
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System)
             .CreateAsync(server.Urls[0], FlowId, Report(), CancellationToken.None);
 
         await Assert.That(outcome.RetryAfter).IsNotNull();
@@ -389,7 +389,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http)
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System)
             .CreateAsync(server.Urls[0], FlowId, Report(), CancellationToken.None);
 
         await Assert.That(outcome.RetryAfter).IsEqualTo(TimeSpan.Zero);
@@ -406,7 +406,7 @@ public class FirstRunFlowClientTests {
         using var http = new HttpClient();
         using var cts  = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
-        await Assert.That(async () => await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, cts.Token))
+        await Assert.That(async () => await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, cts.Token))
                     .Throws<OperationCanceledException>();
     }
 
@@ -420,7 +420,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(200) };
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(0);
     }
@@ -435,7 +435,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(429);
         await Assert.That(outcome.RetryAfter).IsEqualTo(TimeSpan.FromSeconds(60));
@@ -446,7 +446,7 @@ public class FirstRunFlowClientTests {
         using var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(250) };
 
         // Reserved as unroutable by RFC 5737, so this fails to connect rather than reaching anything.
-        var outcome = await new FirstRunFlowClient(http)
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System)
             .PollAsync("http://192.0.2.1:9", FlowId, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(0);
@@ -463,7 +463,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).ReportImportAsync(
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).ReportImportAsync(
             server.Urls[0], FlowId,
             new ReportFirstRunImportRequest {
                 Repos = [
@@ -513,7 +513,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        await new FirstRunFlowClient(http).ReportImportAsync(
+        await new FirstRunFlowClient(http, TimeProvider.System).ReportImportAsync(
             server.Urls[0], FlowId,
             new ReportFirstRunImportRequest {
                 Repos     = [],
@@ -547,7 +547,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         var answer = FirstRunFlowOutcomes.Import(outcome.Body)!;
 
@@ -576,7 +576,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         await Assert.That(outcome.Body!.DefaultVisibility).IsEqualTo("private");
         await Assert.That(FirstRunFlowOutcomes.Agents(outcome.Body)!.DefaultVisibility).IsEqualTo("private");
@@ -597,7 +597,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).PollAsync(server.Urls[0], FlowId, CancellationToken.None);
 
         await Assert.That(outcome.Body!.DefaultVisibility).IsNull();
         await Assert.That(FirstRunFlowOutcomes.Agents(outcome.Body)!.DefaultVisibility).IsNull();
@@ -618,7 +618,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).ReportImportOutcomeAsync(
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).ReportImportOutcomeAsync(
             server.Urls[0], FlowId,
             new ReportFirstRunImportOutcomeRequest {
                 DecidedAt = new DateTimeOffset(2026, 8, 27, 9, 30, 0, TimeSpan.Zero),
@@ -653,7 +653,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        await new FirstRunFlowClient(http).ReportImportOutcomeAsync(
+        await new FirstRunFlowClient(http, TimeProvider.System).ReportImportOutcomeAsync(
             server.Urls[0], FlowId,
             new ReportFirstRunImportOutcomeRequest {
                 DecidedAt = DateTimeOffset.UnixEpoch,
@@ -681,7 +681,7 @@ public class FirstRunFlowClientTests {
 
         using var http = new HttpClient();
 
-        var outcome = await new FirstRunFlowClient(http).ReportImportOutcomeAsync(
+        var outcome = await new FirstRunFlowClient(http, TimeProvider.System).ReportImportOutcomeAsync(
             server.Urls[0], FlowId,
             new ReportFirstRunImportOutcomeRequest {
                 DecidedAt = DateTimeOffset.UnixEpoch, Imported = 0, Skipped = 0, Failed = 0

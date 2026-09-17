@@ -52,7 +52,7 @@ public class DaemonHeartbeatLoopTests {
     }
 
     static DaemonHeartbeatLoop CreateLoop(FakePort port, TimeSpan? deadline = null)
-        => new(port, deadline ?? TimeSpan.FromSeconds(10), NullLogger.Instance);
+        => new(port, deadline ?? TimeSpan.FromSeconds(10), NullLogger.Instance, TimeProvider.System);
 
     /// <summary>Minimal <see cref="ILogger"/> that records the rendered message and level of every entry.</summary>
     sealed class CaptureLogger : ILogger {
@@ -69,7 +69,7 @@ public class DaemonHeartbeatLoopTests {
     public async Task Tick_HealthyPing_RecordsRttAtDebug() {
         var logger = new CaptureLogger();
         var port   = new FakePort { PingHandler = _ => Task.FromResult(true) };
-        var loop   = new DaemonHeartbeatLoop(port, TimeSpan.FromSeconds(5), logger);
+        var loop   = new DaemonHeartbeatLoop(port, TimeSpan.FromSeconds(5), logger, TimeProvider.System);
 
         await loop.TickAsync(CancellationToken.None);
 
@@ -96,7 +96,7 @@ public class DaemonHeartbeatLoopTests {
             pingDeadline: TimeSpan.FromSeconds(5),
             logger,
             slowPingThreshold: TimeSpan.FromMilliseconds(20)
-        );
+        , time: TimeProvider.System);
 
         await loop.TickAsync(CancellationToken.None);
 
@@ -116,7 +116,7 @@ public class DaemonHeartbeatLoopTests {
                 return tcs.Task;
             }
         };
-        var loop = new DaemonHeartbeatLoop(port, TimeSpan.FromMilliseconds(50), logger);
+        var loop = new DaemonHeartbeatLoop(port, TimeSpan.FromMilliseconds(50), logger, TimeProvider.System);
 
         await loop.TickAsync(CancellationToken.None);
 

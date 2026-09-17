@@ -54,7 +54,7 @@ public class PtyHostedAgentRuntimeInputLaneTests {
     public async Task Paste_is_followed_by_one_cr_no_earlier_than_150ms() {
         var pty  = new RecordingPtyProcess();
         var time = new FakeTimeProvider();
-        var rt   = new PtyHostedAgentRuntime("claude", pty, approvalsDisabled: false, time);
+        var rt   = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
 
         var send = rt.SendUserInputAsync("hi");
 
@@ -73,7 +73,7 @@ public class PtyHostedAgentRuntimeInputLaneTests {
     public async Task Raw_input_during_a_send_lands_after_the_cr_and_nothing_is_lost() {
         var pty  = new RecordingPtyProcess();
         var time = new FakeTimeProvider();
-        var rt   = new PtyHostedAgentRuntime("claude", pty, false, time);
+        var rt   = new PtyHostedAgentRuntime("claude", pty, time, false);
 
         await rt.SendRawInputAsync("a"u8.ToArray());
 
@@ -96,7 +96,7 @@ public class PtyHostedAgentRuntimeInputLaneTests {
     public async Task Spray_schedule_holds_the_lane_until_the_last_cr() {
         var pty  = new RecordingPtyProcess();
         var time = new FakeTimeProvider();
-        var rt   = new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true, time);
+        var rt   = new PtyHostedAgentRuntime("codex", pty, time, approvalsDisabled: true);
 
         var send = rt.SendUserInputAsync("hi");
         var raw  = rt.SendRawInputAsync("k"u8.ToArray());
@@ -112,7 +112,7 @@ public class PtyHostedAgentRuntimeInputLaneTests {
     public async Task Graceful_stop_cannot_interleave_with_a_paste() {
         var pty  = new RecordingPtyProcess();
         var time = new FakeTimeProvider();
-        var rt   = new PtyHostedAgentRuntime("claude", pty, approvalsDisabled: false, time);
+        var rt   = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
 
         var send = rt.SendUserInputAsync("hi");
         var stop = rt.RequestGracefulStopAsync();

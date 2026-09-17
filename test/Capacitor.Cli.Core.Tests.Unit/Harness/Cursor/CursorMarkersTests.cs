@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Harness.Cursor;
 /// quarantine read/write cycle, each test under its own config root.
 /// </summary>
 public class CursorMarkersTests {
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 

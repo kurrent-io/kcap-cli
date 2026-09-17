@@ -251,7 +251,7 @@ public class AntigravityReviewerLiveCertTests {
             // binaryExists/resolveVersion left to production: this cert exists to judge the INSTALLED
             // agy, so seaming the version would certify a build the gate would have refused.
             var factory = new AntigravityHostedAgentRuntimeFactory(
-                Config, NullLoggerFactory.Instance, turnSource: SpawnAsync);
+                Config, NullLoggerFactory.Instance, TimeProvider.System, turnSource: SpawnAsync);
 
             var ctx = new RuntimeStartContext(
                 AgentId: "agy-cert-" + Guid.NewGuid().ToString("N")[..8],
@@ -277,7 +277,7 @@ public class AntigravityReviewerLiveCertTests {
         }
 
         Task<IAgyTurnProcess> SpawnAsync(ProcessStartInfo psi, CancellationToken ct) {
-            var process = new AgyTurnProcess(psi, NullLogger<AgyTurnProcess>.Instance);
+            var process = new AgyTurnProcess(psi, NullLogger<AgyTurnProcess>.Instance, TimeProvider.System);
 
             lock (Spawns) Spawns.Add(new SpawnedRound(psi, process));
 

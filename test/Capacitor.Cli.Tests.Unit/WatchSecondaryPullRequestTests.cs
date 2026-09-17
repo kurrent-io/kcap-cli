@@ -33,7 +33,7 @@ public class WatchSecondaryPullRequestTests {
 
     static Task Link(WatchState state, Func<string, TimeSpan, Task<RepositoryPayload?>> detect, Func<RepositoryPayload, CancellationToken, Task<bool>> post,
         TimeSpan? budget = null, CancellationToken ct = default, Action? beat = null) =>
-        WatchCommand.LinkSecondaryPullRequestsAsync(state, detect, post, budget ?? Budget, ct, beat ?? (() => { }));
+        WatchCommand.LinkSecondaryPullRequestsAsync(state, detect, post, budget ?? Budget, TimeProvider.System, ct, beat ?? (() => { }));
 
     // A root whose probe eats the whole pass must not shadow the roots after it every time.
     [Test]

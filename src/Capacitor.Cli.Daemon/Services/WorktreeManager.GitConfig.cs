@@ -118,14 +118,14 @@ public partial class WorktreeManager {
     /// restart; the property is one of the git binary and the platform, not of the repository.</para>
     /// </summary>
     /// <exception cref="GitConfigTransportException">The entries did not reach git.</exception>
-    internal static async Task ProveConfigTransportAsync(string gitContextPath) {
+    internal static async Task ProveConfigTransportAsync(string gitContextPath, TimeProvider time) {
         if (_configTransportProven) return;
 
         await ConfigTransportGate.WaitAsync();
         try {
             if (_configTransportProven) return;
 
-            await ProbeConfigTransportAsync(gitContextPath);
+            await ProbeConfigTransportAsync(gitContextPath, time);
             _configTransportProven = true;
         } finally {
             ConfigTransportGate.Release();
@@ -149,7 +149,7 @@ public partial class WorktreeManager {
     /// <para>Runs through the UNPROVEN runner, which is what stops the gate recursing into itself — the gate
     /// is not reentrant and would deadlock on its own semaphore.</para>
     /// </summary>
-    internal static async Task ProbeConfigTransportAsync(string gitContextPath) {
+    internal static async Task ProbeConfigTransportAsync(string gitContextPath, TimeProvider time) {
         var driver = $"kcap-transport-probe={Guid.NewGuid():N}";
         GitConfigOverride[] probe = [
             new($"filter.{driver}.smudge", ""),
@@ -157,7 +157,8 @@ public partial class WorktreeManager {
         ];
 
         var listing = await RunGitCaptureResultUnproven(
-            gitContextPath, GitTimeout, sourceReadOnly: false, probe, "config", "--list", "-z");
+            gitContextPath, GitTimeout, time, sourceReadOnly: false, config: probe,
+            "config", "--list", "-z");
 
         if (listing.ExitCode != 0)
             throw new GitConfigTransportException(

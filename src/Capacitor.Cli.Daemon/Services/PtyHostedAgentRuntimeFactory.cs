@@ -26,7 +26,8 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed partial class PtyHostedAgentRuntimeFactory(
         IHostedAgentLauncher                  launcher,
         IPtyProcessFactory                    ptyFactory,
-        ILogger<PtyHostedAgentRuntimeFactory> logger
+        ILogger<PtyHostedAgentRuntimeFactory> logger,
+        TimeProvider                          time
     ) : IHostedAgentRuntimeFactory {
     public string Vendor             => launcher.Vendor;
     public bool   SupportsUnattended => launcher.SupportsUnattended;
@@ -119,7 +120,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
         // Gate the multi-CR submit spray on whether this launch turned off approval prompts — the
         // launcher is the authority (it set the flags). See PtyHostedAgentRuntime.SubmitAsync.
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, launcher.DisablesApprovalPrompts(launcherCtx));
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, launcher.DisablesApprovalPrompts(launcherCtx));
 
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }

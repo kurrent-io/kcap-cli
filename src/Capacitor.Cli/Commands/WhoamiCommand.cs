@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 public sealed class WhoamiCommand(
         ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        AuthProviderDiscovery discovery) {
+        AuthProviderDiscovery discovery, TimeProvider time) {
     /// <summary>Cheap authenticated GET used purely to ask "do you accept this token?".</summary>
     internal const string ProbePath = "/api/me/notification-prefs";
 
@@ -68,7 +68,7 @@ public sealed class WhoamiCommand(
         await Console.Out.WriteLineAsync($"Profile:  {profile}");
         await Console.Out.WriteLineAsync($"Expires:  {snapshot.ExpiresAt:u}");
         await Console.Out.WriteLineAsync($"Server:   {baseUrl}");
-        await Console.Out.WriteLineAsync($"Expired:  {(snapshot.IsExpired ? "yes" : "no")}");
+        await Console.Out.WriteLineAsync($"Expired:  {(snapshot.IsExpiredAt(time.GetUtcNow()) ? "yes" : "no")}");
 
         // A token minted elsewhere can never be accepted here, and no refresh can change that —
         // say so instead of spending a request to be told 401.
@@ -96,7 +96,7 @@ public sealed class WhoamiCommand(
             client.DefaultRequestHeaders.Authorization = new("Bearer", accessToken);
 
             using var response = await client.GetOnceAsync(
-                $"{AppConfig.NormalizeUrl(baseUrl)}{ProbePath}", ProbeTimeout);
+                $"{AppConfig.NormalizeUrl(baseUrl)}{ProbePath}", time, ProbeTimeout);
 
             return response.StatusCode;
         } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException) {

@@ -24,16 +24,22 @@ internal sealed partial class RepoStoreWatcher : BackgroundService {
     // terminal is in the launch dialog by the time the user has switched to the browser.
     static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(3);
 
-    public RepoStoreWatcher(DaemonConfig config, ServerConnection server, ILogger<RepoStoreWatcher> logger) {
+    readonly TimeProvider _time;
+
+    public RepoStoreWatcher(
+            DaemonConfig config, ServerConnection server, ILogger<RepoStoreWatcher> logger, TimeProvider time) {
         _logger    = logger;
-        Stat       = () => new RepoPathStore(config.ConfigRoot).Fingerprint();
+        _time      = time;
+        Stat       = () => new RepoPathStore(config.ConfigRoot, time).Fingerprint();
         Advertised = () => server.AdvertisedRepoStore;
         IsReady    = () => server.IsReady;
         Publish    = server.UpdateRepoPathsAsync;
     }
 
-    RepoStoreWatcher(Func<RepoStoreFingerprint?> stat, Func<RepoStoreFingerprint?> advertised, Func<bool> isReady, Func<Task> publish) {
+    RepoStoreWatcher(Func<RepoStoreFingerprint?> stat, Func<RepoStoreFingerprint?> advertised, Func<bool> isReady,
+            Func<Task> publish, TimeProvider time) {
         _logger    = NullLogger.Instance;
+        _time      = time;
         Stat       = stat;
         Advertised = advertised;
         IsReady    = isReady;
@@ -41,8 +47,9 @@ internal sealed partial class RepoStoreWatcher : BackgroundService {
     }
 
     internal static RepoStoreWatcher ForTest(
-            Func<RepoStoreFingerprint?> stat, Func<RepoStoreFingerprint?> advertised, Func<bool> isReady, Func<Task> publish) =>
-        new(stat, advertised, isReady, publish);
+            Func<RepoStoreFingerprint?> stat, Func<RepoStoreFingerprint?> advertised, Func<bool> isReady,
+            Func<Task> publish, TimeProvider time) =>
+        new(stat, advertised, isReady, publish, time);
 
     /// <summary>One poll iteration (timer-driven; also the unit-test entry point). Registration
     /// sends the file as it is then, so nothing is sent before it; a failed send leaves the
@@ -60,7 +67,7 @@ internal sealed partial class RepoStoreWatcher : BackgroundService {
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct) {
-        using var timer = new PeriodicTimer(PollInterval);
+        using var timer = new PeriodicTimer(PollInterval, _time);
         try {
             while (await timer.WaitForNextTickAsync(ct)) await TickAsync();
         } catch (OperationCanceledException) { /* shutdown */ }

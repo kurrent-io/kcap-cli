@@ -40,7 +40,7 @@ sealed class KiroHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -163,7 +163,7 @@ sealed class KiroHookCommand(
 
         // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
 
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = profiles.Effective;
@@ -221,11 +221,11 @@ sealed class KiroHookCommand(
             forwarded["model"] = model;
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
+        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -273,9 +273,9 @@ sealed class KiroHookCommand(
         // claim could commit its record with nothing emitted and silence the nudges for the
         // session. The emitters run at most once per firing: the harness nudge stamps a ledger.
         string? ResolveNudges() => HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
         var nudgeDecided = nudgeClaim.IsCompleted;
         var workItemsNudge = nudgeDecided && await nudgeClaim ? ResolveNudges() : null;
         WriteAgentSpawnOutput(Console.Out, fragment, workItemsNudge);
@@ -288,7 +288,7 @@ sealed class KiroHookCommand(
         // only by the Pi/OpenCode capture scripts, so it is inert in Kiro context.
         if (!nudgeDecided && budget.Remaining is { Ticks: > 0 } claimWait) {
             var claimed = false;
-            try { claimed = await nudgeClaim.WaitAsync(claimWait); } catch (TimeoutException) { }
+            try { claimed = await nudgeClaim.WaitAsync(claimWait, budget.Time); } catch (TimeoutException) { }
             if (claimed) {
                 WriteAgentSpawnOutput(Console.Out, null, ResolveNudges());
                 await Console.Out.FlushAsync();
@@ -306,7 +306,7 @@ sealed class KiroHookCommand(
         HookPostOutcome outcome;
 
         try {
-            outcome = await postTask.WaitAsync(budget.Remaining);
+            outcome = await postTask.WaitAsync(budget.Remaining, budget.Time);
         } catch (TimeoutException) {
             // Spooled, not Failed: a drain pass will replay it, so capture must still start — but only
             // claim that when the write actually landed.
@@ -332,7 +332,7 @@ sealed class KiroHookCommand(
             await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "kiro"
-            ).WaitAsync(budget.Remaining);
+            ).WaitAsync(budget.Remaining, budget.Time);
         } catch (TimeoutException) {
             // Budget exhausted (possibly already zero, which skips the attempt outright). The next
             // agentSpawn ensures the watcher; exiting 0 now is what keeps the fragment deliverable.

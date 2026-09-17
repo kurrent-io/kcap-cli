@@ -28,7 +28,7 @@ public class WatcherLifecycleTests {
         TestWatchers.In(Paths, Root, Profiles, new FixedCapacitorHttpClient());
 
     static readonly IWatcherSpawner Spawner =
-        new ProcessWatcherSpawner(Root, Profiles, Paths, SystemProcessStarter.Instance);
+        new ProcessWatcherSpawner(Root, Profiles, Paths, SystemProcessStarter.Instance, TimeProvider.System);
 
     [Before(Class)]
     public static void SetUp() {

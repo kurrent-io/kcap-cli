@@ -19,7 +19,7 @@ public class ConnectionRetryTests {
         };
 
         var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
-            invoke, isReady, FastPoll, _ => { }, CancellationToken.None);
+            invoke, isReady, FastPoll, TimeProvider.System, _ => { }, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo("decision");
         // Invoked exactly once, and only after readiness was reached — never
@@ -41,7 +41,7 @@ public class ConnectionRetryTests {
         };
 
         var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
-            invoke, isReady, FastPoll, retries.Add, CancellationToken.None);
+            invoke, isReady, FastPoll, TimeProvider.System, retries.Add, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo("decision");
         await Assert.That(invokeCalls).IsEqualTo(2);
@@ -58,7 +58,7 @@ public class ConnectionRetryTests {
         Func<bool> isReady = () => { cts.Cancel(); return false; };
 
         await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
-                invoke, isReady, FastPoll, _ => { }, cts.Token))
+                invoke, isReady, FastPoll, TimeProvider.System, _ => { }, cts.Token))
             .Throws<OperationCanceledException>();
 
         await Assert.That(invoked).IsFalse();
@@ -74,7 +74,7 @@ public class ConnectionRetryTests {
         Action<int>        onRetry = _ => { retries++; cts.Cancel(); };
 
         await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
-                invoke, isReady, FastPoll, onRetry, cts.Token))
+                invoke, isReady, FastPoll, TimeProvider.System, onRetry, cts.Token))
             .Throws<OperationCanceledException>();
 
         await Assert.That(retries).IsEqualTo(1);
@@ -87,7 +87,7 @@ public class ConnectionRetryTests {
         Func<Task<string>> invoke = () => throw new HubException("server rejected");
 
         await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
-                invoke, () => true, FastPoll, _ => retries++, CancellationToken.None))
+                invoke, () => true, FastPoll, TimeProvider.System, _ => retries++, CancellationToken.None))
             .Throws<HubException>();
 
         await Assert.That(retries).IsEqualTo(0);
@@ -104,7 +104,7 @@ public class ConnectionRetryTests {
         };
 
         var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
-            invoke, () => true, FastPoll, _ => { }, CancellationToken.None);
+            invoke, () => true, FastPoll, TimeProvider.System, _ => { }, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo("decision");
         await Assert.That(invokeCalls).IsEqualTo(2);
@@ -121,7 +121,7 @@ public class ConnectionRetryTests {
         };
 
         var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
-            invoke, () => true, FastPoll, _ => { }, CancellationToken.None);
+            invoke, () => true, FastPoll, TimeProvider.System, _ => { }, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo("decision");
         await Assert.That(invokeCalls).IsEqualTo(2);
@@ -146,7 +146,7 @@ public class ConnectionRetryTests {
         };
 
         var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
-            invoke, () => true, FastPoll, _ => { }, CancellationToken.None,
+            invoke, () => true, FastPoll, TimeProvider.System, _ => { }, CancellationToken.None,
             isRetriableServerError: IsOwnershipError, maxServerErrorRetries: 5);
 
         await Assert.That(result).IsEqualTo("decision");
@@ -163,7 +163,7 @@ public class ConnectionRetryTests {
         };
 
         await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
-                invoke, () => true, FastPoll, _ => { }, CancellationToken.None,
+                invoke, () => true, FastPoll, TimeProvider.System, _ => { }, CancellationToken.None,
                 isRetriableServerError: IsOwnershipError, maxServerErrorRetries: 3))
             .Throws<HubException>();
 
@@ -181,7 +181,7 @@ public class ConnectionRetryTests {
         };
 
         await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
-                invoke, () => true, FastPoll, _ => { }, CancellationToken.None,
+                invoke, () => true, FastPoll, TimeProvider.System, _ => { }, CancellationToken.None,
                 isRetriableServerError: IsOwnershipError, maxServerErrorRetries: 3))
             .Throws<HubException>();
 
@@ -194,7 +194,8 @@ public class ConnectionRetryTests {
         await Assert.ThrowsAsync<PermissionRequestAbandonedException>(async () =>
             await ConnectionRetry.InvokeWithConnectionRetryAsync<string>(
                 () => { attempts++; throw new PermissionRequestAbandonedException(); },
-                isReady: () => true, TimeSpan.FromMilliseconds(1), _ => { }, CancellationToken.None));
+                isReady: () => true, TimeSpan.FromMilliseconds(1), TimeProvider.System, _ => { },
+                CancellationToken.None));
         await Assert.That(attempts).IsEqualTo(1);
     }
 }

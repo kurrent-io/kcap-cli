@@ -44,6 +44,7 @@ public static class WorkOSDiscovery {
             SetupFunnel                                     funnel,
             Func<Task<WorkOSAuthResponse?>>                 orglessLogin,
             Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch,     // args: refreshToken, organizationId
+            TimeProvider                                    time,
             Func<string, CancellationToken, Task<WorkOSAuthResponse?>>? orglessRefresh = null, // args: refreshToken, ct
             ITenantProvisioner?                             provisioner = null,
             CancellationToken                               ct = default,
@@ -81,7 +82,8 @@ public static class WorkOSDiscovery {
         }
 
         if (result.Tenants.Length == 0) {
-            return await OfferCreateAsync(proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, ct, progress);
+            return await OfferCreateAsync(
+                proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, time, ct, progress);
         }
 
         var picked = result.Tenants.Length == 1
@@ -107,6 +109,7 @@ public static class WorkOSDiscovery {
             Func<string, CancellationToken, Task<WorkOSAuthResponse?>>? orglessRefresh,
             ITenantProvisioner?                                         provisioner,
             SetupFunnel                                                 funnel,
+            TimeProvider                                                time,
             CancellationToken                                           ct,
             IAuthProgress                                               progress) {
         // Fires before the provisioner-null check below: a headless run (null provisioner,
@@ -124,7 +127,7 @@ public static class WorkOSDiscovery {
         // TTL, so hand the provisioner a refreshing token source rather than the login-time token.
         var tokens = new WorkOSTokenSource(
             auth.AccessToken, auth.RefreshToken,
-            orglessRefresh ?? ((_, _) => Task.FromResult<WorkOSAuthResponse?>(null)));
+            orglessRefresh ?? ((_, _) => Task.FromResult<WorkOSAuthResponse?>(null)), time);
         var offer = await provisioner.OfferCreateAsync(tokens, ct);
 
         if (offer.Status == ProvisionOfferStatus.ExistingWorkspace) {
@@ -201,6 +204,7 @@ public static class WorkOSDiscovery {
             WorkOSDiscoveryFlow.Ready                                   ready,
             IAuthProgress                                               progress,
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
+            TimeProvider                                                time,
             CancellationToken                                           ct) {
         var picked = ready.Picked;
 
@@ -213,7 +217,7 @@ public static class WorkOSDiscovery {
         var tokens = new StoredTokens {
             AccessToken    = ready.SwitchedAuth.AccessToken,
             RefreshToken   = ready.SwitchedAuth.RefreshToken,
-            ExpiresAt      = TokenStore.JwtExpiry(ready.SwitchedAuth.AccessToken),
+            ExpiresAt      = TokenStore.JwtExpiry(ready.SwitchedAuth.AccessToken, time),
             GitHubUsername = ready.Username,
             Provider       = AuthProvider.WorkOS,
             ClientId       = ready.ClientId,

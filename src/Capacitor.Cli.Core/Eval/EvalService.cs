@@ -269,6 +269,7 @@ public static class EvalService {
             bool                            chain,
             int?                            thresholdBytes,
             IEvalObserver                   observer,
+            TimeProvider                    time,
             CancellationToken               ct        = default,
             string?                         evalRunId = null,
             IReadOnlyList<EvalQuestionDto>? questions = null
@@ -279,7 +280,7 @@ public static class EvalService {
         observer = new SafeObserver(observer);
 
         try {
-            questions ??= await EvalQuestionCatalogClient.FetchAsync(baseUrl, httpClient, observer, ct);
+            questions ??= await EvalQuestionCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, ct);
             if (questions is null || questions.Count == 0) {
                 // FetchAsync already emitted OnFailed with a specific reason.
                 // Caller-supplied empty list is rejected here without a specific reason
@@ -290,10 +291,12 @@ public static class EvalService {
 
             // Phase 3 — fetch the full catalog (rendered prompts + raw text +
             // versions) so PrepareAsync can reconcile the run question list from it.
-            var catalog = await EvalCatalogClient.FetchAsync(baseUrl, httpClient, observer, ct);
+            var catalog = await EvalCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, ct);
             if (catalog is null) return null;   // FetchAsync already emitted OnFailed
 
-            var ctx = await PrepareAsync(baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, chain, thresholdBytes, observer, ct, model, evalRunId);
+            var ctx = await PrepareAsync(
+                baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, chain, thresholdBytes,
+                observer, time, ct, model, evalRunId);
             if (ctx is null) return null;
 
             // Iterate the RECONCILED questions (ctx.Questions) — the text path uses
@@ -301,11 +304,13 @@ public static class EvalService {
             // catalog PromptVersion on every verdict.
             var verdicts = new List<EvalQuestionVerdict>();
             for (var i = 0; i < ctx.Questions.Count; i++) {
-                var verdict = await RunQuestionAsync(ctx, httpClient, baseUrl, ctx.Questions[i], model, i + 1, ctx.Questions.Count, observer, ct);
+                var verdict = await RunQuestionAsync(
+                    ctx, httpClient, baseUrl, ctx.Questions[i], model, i + 1, ctx.Questions.Count,
+                    observer, time, ct);
                 if (verdict is not null) verdicts.Add(verdict);
             }
 
-            return await FinalizeAsync(ctx, httpClient, baseUrl, verdicts, model, observer, ct);
+            return await FinalizeAsync(ctx, httpClient, baseUrl, verdicts, model, observer, time, ct);
         } catch (OperationCanceledException) {
             // Honour the contract that observers always see OnFinished or
             // OnFailed — cancellation isn't an exception path consumers
@@ -332,6 +337,7 @@ public static class EvalService {
             bool                           chain,
             int?                           thresholdBytes,
             IEvalObserver                  observer,
+            TimeProvider                   time,
             CancellationToken              ct,
             string                         model,
             string?                        evalRunId = null
@@ -352,7 +358,7 @@ public static class EvalService {
                 + (chain ? "?chain=true" : "")
                 + (thresholdBytes is { } t ? (chain ? "&" : "?") + $"threshold={t}" : "");
 
-            using var resp = await httpClient.GetWithRetryAsync(url, ct: ct);
+            using var resp = await httpClient.GetWithRetryAsync(url, time, ct: ct);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized) {
                 // Detect 401 directly rather than going through
@@ -473,6 +479,7 @@ public static class EvalService {
             int                index,
             int                total,
             IEvalObserver      observer,
+            TimeProvider       time,
             CancellationToken  ct
         ) {
         ct.ThrowIfCancellationRequested();
@@ -513,6 +520,7 @@ public static class EvalService {
             result = await ClaudeCliRunner.RunAsync(
                 prompt,
                 ToolsPerQuestionTimeout,
+                time,
                 msg => { diagnostics.Add(msg); observer.OnInfo($"  {msg}"); },
                 ctx.Profile,
                 ctx.Harnesses,
@@ -534,6 +542,7 @@ public static class EvalService {
             result = await ClaudeCliRunner.RunAsync(
                 prompt,
                 TimeSpan.FromMinutes(5),
+                time,
                 msg => { diagnostics.Add(msg); observer.OnInfo($"  {msg}"); },
                 ctx.Profile,
                 ctx.Harnesses,
@@ -585,7 +594,7 @@ public static class EvalService {
         if (ExtractRetainFact(result.Result) is { } retainedFact) {
             if (await PostJudgeFactAsync(httpClient, baseUrl, ctx.EncodedSessionId, question.Category,
                     retainedFact.Fact, ctx.EvalRunId, retainedFact.AppliesToVendors, retainedFact.AppliesToSessionKinds,
-                    observer, ct)) {
+                    observer, time, ct)) {
                 observer.OnFactRetained(question.Category, retainedFact.Fact);
             }
         }
@@ -602,6 +611,7 @@ public static class EvalService {
             IReadOnlyList<EvalQuestionVerdict> verdicts,
             string                             model,
             IEvalObserver                      observer,
+            TimeProvider                       time,
             CancellationToken                  ct
         ) {
         if (verdicts.Count == 0) {
@@ -643,6 +653,7 @@ public static class EvalService {
             retrospectivePrompt: ctx.RetrospectivePrompt,
             traceJson:           ctx.TraceJson,
             observer:            observer,
+            time:                time,
             ct:                  ct
         );
         aggregate = aggregate with { Retrospective = retrospective };
@@ -651,7 +662,8 @@ public static class EvalService {
         aggregate = aggregate with { RetrospectivePromptVersion = ctx.RetrospectivePromptVersion };
 
         // 6. Persist the aggregate to the server via the V3 route.
-        var ok = await PersistAggregateV3Async(httpClient, baseUrl, ctx.EncodedSessionId, aggregate, observer, ct);
+        var ok = await PersistAggregateV3Async(
+            httpClient, baseUrl, ctx.EncodedSessionId, aggregate, observer, time, ct);
         if (!ok) return null;
 
         observer.OnFinished(aggregate);
@@ -679,6 +691,7 @@ public static class EvalService {
             string                        encodedSessionId,
             SessionEvalCompletedPayloadV2 aggregate,
             IEvalObserver                 observer,
+            TimeProvider                  time,
             CancellationToken             ct
         ) {
         var       postUrl     = $"{baseUrl}/api/sessions/{encodedSessionId}/evals/v2";
@@ -686,7 +699,7 @@ public static class EvalService {
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
-            using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, ct: ct);
+            using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, time, ct: ct);
             if (!postResp.IsSuccessStatusCode) {
                 observer.OnFailed($"failed to persist eval result: HTTP {(int)postResp.StatusCode}");
 
@@ -713,6 +726,7 @@ public static class EvalService {
             string                        encodedSessionId,
             SessionEvalCompletedPayloadV3 aggregate,
             IEvalObserver                 observer,
+            TimeProvider                  time,
             CancellationToken             ct
         ) {
         var       postUrl     = $"{baseUrl}/api/sessions/{encodedSessionId}/evals/v3";
@@ -720,7 +734,7 @@ public static class EvalService {
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
-            using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, ct: ct);
+            using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, time, ct: ct);
             if (!postResp.IsSuccessStatusCode) {
                 observer.OnFailed($"failed to persist eval result: HTTP {(int)postResp.StatusCode}");
                 return false;
@@ -1254,6 +1268,7 @@ public static class EvalService {
             string                             retrospectivePrompt,
             string                             traceJson,
             IEvalObserver                      observer,
+            TimeProvider                       time,
             CancellationToken                  ct
         ) {
         // Check cancellation before emitting OnRetrospectiveStarted so a
@@ -1285,6 +1300,7 @@ public static class EvalService {
             var result = await ClaudeCliRunner.RunAsync(
                 prompt,
                 RetrospectiveTimeout,
+                time,
                 msg => observer.OnInfo($"  {msg}"),
                 profile,
                 harnesses,
@@ -1340,6 +1356,7 @@ public static class EvalService {
             string[]?         appliesToVendors,
             string[]?         appliesToSessionKinds,
             IEvalObserver     observer,
+            TimeProvider      time,
             CancellationToken ct
         ) {
         var payload = new JudgeFactPayload {
@@ -1354,7 +1371,7 @@ public static class EvalService {
         using var content     = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
-            using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/api/sessions/{encodedSessionId}/judge-facts", content, ct: ct);
+            using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/api/sessions/{encodedSessionId}/judge-facts", content, time, ct: ct);
             if (!resp.IsSuccessStatusCode) {
                 observer.OnInfo($"failed to retain fact for category {category}: HTTP {(int)resp.StatusCode}");
 

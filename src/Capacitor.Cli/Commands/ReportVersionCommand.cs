@@ -8,9 +8,9 @@ namespace Capacitor.Cli.Commands;
 /// <see cref="ServerProbe"/> so the server's endpoint-agnostic version-observer middleware sees the new
 /// <see cref="HttpClientExtensions.CliVersionHeader"/> immediately. Never prints, always returns 0.
 /// </summary>
-public sealed class ReportVersionCommand(CapacitorServer server, ICapacitorHttpClient http) {
+public sealed class ReportVersionCommand(CapacitorServer server, ICapacitorHttpClient http, TimeProvider time) {
     public async Task<int> HandleAsync() {
-        await ServerProbe.SendAsync(server, http);
+        await ServerProbe.SendAsync(server, http, time);
 
         return 0;
     }

@@ -34,7 +34,7 @@ public class KiroWatchContextUsageTests {
     public async Task Enriches_anchor_assistant_line_from_sibling_json() {
         using var tmp = new TempDir();
         var transcriptPath = SeedSibling(tmp, Meta);
-        var outLines = WatchCommand.EnrichKiroContextUsage([AnchorLine], transcriptPath);
+        var outLines = WatchCommand.EnrichKiroContextUsage([AnchorLine], transcriptPath, TimeProvider.System);
         await Assert.That(outLines[0]).Contains("_kcap_usage");
         await Assert.That(outLines[0]).Contains("5.2612");
     }
@@ -43,7 +43,7 @@ public class KiroWatchContextUsageTests {
     public async Task Leaves_non_anchor_and_non_assistant_lines_untouched() {
         using var tmp = new TempDir();
         var transcriptPath = SeedSibling(tmp, Meta);
-        var outLines = WatchCommand.EnrichKiroContextUsage([NonAnchorAsst, PromptLine], transcriptPath);
+        var outLines = WatchCommand.EnrichKiroContextUsage([NonAnchorAsst, PromptLine], transcriptPath, TimeProvider.System);
         await Assert.That(outLines[0]).DoesNotContain("_kcap_usage");  // assistant, but not the anchor turn
         await Assert.That(outLines[1]).DoesNotContain("_kcap_usage");  // Prompt line
     }
@@ -52,7 +52,7 @@ public class KiroWatchContextUsageTests {
     public async Task Missing_sibling_json_returns_lines_unchanged() {
         using var tmp = new TempDir();
         var transcriptPath = tmp.PathTo("no-sibling.jsonl");   // no {stem}.json next to it
-        var outLines = WatchCommand.EnrichKiroContextUsage([AnchorLine], transcriptPath);
+        var outLines = WatchCommand.EnrichKiroContextUsage([AnchorLine], transcriptPath, TimeProvider.System);
         await Assert.That(outLines[0]).IsEqualTo(AnchorLine);          // untouched, best-effort
     }
 
@@ -60,7 +60,7 @@ public class KiroWatchContextUsageTests {
     public async Task Malformed_sibling_json_returns_lines_unchanged() {
         using var tmp = new TempDir();
         var transcriptPath = SeedSibling(tmp, "{ not valid json");
-        var outLines = WatchCommand.EnrichKiroContextUsage([AnchorLine], transcriptPath);
+        var outLines = WatchCommand.EnrichKiroContextUsage([AnchorLine], transcriptPath, TimeProvider.System);
         await Assert.That(outLines[0]).IsEqualTo(AnchorLine);
     }
 
@@ -71,7 +71,7 @@ public class KiroWatchContextUsageTests {
         using var tmp = new TempDir();
         var transcriptPath = SeedSibling(tmp, Meta);
         var batch = new List<string> { PromptLine, NonAnchorAsst, AnchorLine };
-        var outLines = WatchCommand.EnrichKiroContextUsage(batch, transcriptPath);
+        var outLines = WatchCommand.EnrichKiroContextUsage(batch, transcriptPath, TimeProvider.System);
         await Assert.That(outLines.Count).IsEqualTo(3);
         await Assert.That(outLines[0]).DoesNotContain("_kcap_usage");
         await Assert.That(outLines[1]).DoesNotContain("_kcap_usage");

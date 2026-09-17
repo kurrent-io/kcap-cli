@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Core.Auth;
 /// <para>Draws the anonymous lane per call: discovery must not spend or mint a credential, and the
 /// caller may still be deciding whether to adopt the server it is asking about.</para>
 /// </summary>
-public sealed class AuthProviderDiscovery(IHttpClientFactory factory) {
+public sealed class AuthProviderDiscovery(IHttpClientFactory factory, TimeProvider time) {
     // Keyed by baseUrl, like the on-disk store: one process can discover against more than one
     // server — `kcap setup` retargeting to another tenant is the reachable case — and a single memo
     // would hand the first server's provider to the second, short-circuiting the on-disk lookup
@@ -34,7 +34,7 @@ public sealed class AuthProviderDiscovery(IHttpClientFactory factory) {
 
         // Cross-process cache: each hook invocation is a fresh process, so the memo above never helps
         // a hook. Skip the /auth/config round-trip when a recent result is on disk.
-        var cached = AuthProviderCache.TryGet(baseUrl, config);
+        var cached = AuthProviderCache.TryGet(baseUrl, config, time);
 
         if (cached is not null) {
             _memo[baseUrl] = cached;
@@ -51,7 +51,7 @@ public sealed class AuthProviderDiscovery(IHttpClientFactory factory) {
                 var discovered = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AuthDiscoveryResponse, ct);
                 var provider   = discovered?.Provider ?? "None";
                 _memo[baseUrl] = provider;
-                AuthProviderCache.Set(baseUrl, provider, config); // only cache successful discovery
+                AuthProviderCache.Set(baseUrl, provider, config, time); // only cache successful discovery
 
                 return provider;
             }

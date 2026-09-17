@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -23,7 +22,7 @@ namespace Capacitor.Cli.Commands;
 /// boundary so no flag regression can ever expose start_review_flow to an unattended reviewer.
 /// </summary>
 sealed class McpFlowResultServer(
-        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http, TelemetryStartup startup) {
+        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http, TelemetryStartup startup, TimeProvider time) {
     internal const string AgentIdEnvVar = "KCAP_FLOW_AGENT_ID";
 
     /// <summary>Daemon-minted loopback capability a BORROWED reviewer delivers through: its sandbox
@@ -66,7 +65,7 @@ sealed class McpFlowResultServer(
         // MCP servers are long-lived and denylisted under the top-level "mcp" command
         // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
         // "mcp-server" is what lets per-tool-call events leave at all.
-        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
         telemetry.AddSharedProperty("logged_in", loggedIn);
 
         await using var mcp = new McpTelemetry(telemetry);
@@ -136,10 +135,10 @@ sealed class McpFlowResultServer(
 
                 var (text, isError) = toolName switch {
                     "submit_review_result" => await SubmitCoreAsync(
-                        client, apiRoot, agentId, arguments, delay: Task.Delay,
+                        client, apiRoot, agentId, arguments, delay: d => Task.Delay(d, time),
                         submitUrlOverride: borrowed ? capabilityBase + CapabilitySubmitLeaf : null),
                     "send_flow_message"    => await SendMessageCoreAsync(
-                        client, apiRoot, agentId, arguments, delay: Task.Delay,
+                        client, apiRoot, agentId, arguments, delay: d => Task.Delay(d, time),
                         messageUrlOverride: borrowed ? capabilityBase + CapabilityMessageLeaf : null),
                     _                      => ($"Error: Unknown tool: {toolName}", true)
                 };
@@ -156,7 +155,7 @@ sealed class McpFlowResultServer(
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -165,7 +164,7 @@ sealed class McpFlowResultServer(
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                mcp.ToolCalled("kcap-flow-result", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-flow-result", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -251,7 +250,7 @@ sealed class McpFlowResultServer(
                 return ("Result recorded. You may end your reply now.", false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), true);
+                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
 
             var errorNode = TryParse(responseBody);
             var code      = errorNode?["error"]?.GetValue<string>();
@@ -323,7 +322,7 @@ sealed class McpFlowResultServer(
                 return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), true);
+                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
 
             var responseBody = await response.Content.ReadAsStringAsync();
             var errorNode    = TryParse(responseBody);

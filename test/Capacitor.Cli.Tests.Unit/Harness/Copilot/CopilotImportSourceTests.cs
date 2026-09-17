@@ -35,7 +35,7 @@ public class CopilotImportSourceTests {
         await File.WriteAllTextAsync(
             Path.Combine(paths.SessionStateDir, Sid2, "workspace.yaml"), $"id: {Sid2}\ncwd: /work/b\n");
 
-        var source   = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter());
+        var source   = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter(), time: TimeProvider.System);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(1);
@@ -53,7 +53,7 @@ public class CopilotImportSourceTests {
             name: "Create a file hello.txt containing 'hello world'",
             createdAt: "2026-06-10T20:23:25.556Z");
 
-        var source   = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter());
+        var source   = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter(), time: TimeProvider.System);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(1);
@@ -71,7 +71,7 @@ public class CopilotImportSourceTests {
         WriteSession(paths.LegacySessionStateDir, Sid1, cwd: "/work/legacy");
         WriteSession(paths.LegacySessionStateDir, Sid2, cwd: "/work/legacy-only");
 
-        var source   = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter());
+        var source   = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter(), time: TimeProvider.System);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(2);
@@ -88,7 +88,7 @@ public class CopilotImportSourceTests {
         WriteSession(paths.SessionStateDir, Sid1, cwd: "/work/a");
         WriteSession(paths.SessionStateDir, Sid2, cwd: "/work/b");
 
-        var source = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter());
+        var source = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var byDashed = await source.DiscoverAsync(new DiscoveryFilters(null, Sid1, null, 0), CancellationToken.None);
         await Assert.That(byDashed.Count).IsEqualTo(1);
@@ -106,7 +106,7 @@ public class CopilotImportSourceTests {
         WriteSession(paths.SessionStateDir, Sid1, cwd: "/work/a");
         WriteSession(paths.SessionStateDir, Sid2, cwd: null);   // no workspace.yaml cwd
 
-        var source  = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter());
+        var source  = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter(), time: TimeProvider.System);
         var matched = await source.DiscoverAsync(new DiscoveryFilters("/work/a", null, null, 0), CancellationToken.None);
 
         await Assert.That(matched.Count).IsEqualTo(1);
@@ -120,7 +120,7 @@ public class CopilotImportSourceTests {
         WriteSession(paths.SessionStateDir, Sid1, cwd: "/work/a", createdAt: "2026-06-01T10:00:00Z");
         WriteSession(paths.SessionStateDir, Sid2, cwd: "/work/b", createdAt: "2026-06-09T10:00:00Z");
 
-        var source  = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter());
+        var source  = new CopilotImportSource(Config.Root, paths, router: new GitProviderRouter(), time: TimeProvider.System);
         var matched = await source.DiscoverAsync(
             new DiscoveryFilters(null, null, new DateOnly(2026, 6, 5), 0), CancellationToken.None);
 

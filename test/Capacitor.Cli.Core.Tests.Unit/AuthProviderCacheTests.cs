@@ -67,8 +67,8 @@ public class AuthProviderCacheTests {
 
     [Test]
     public async Task Set_then_TryGet_round_trips_on_disk() {
-        await Assert.That(AuthProviderCache.TryGet("https://rt.example", Config.Root)).IsNull(); // cold
-        AuthProviderCache.Set("https://rt.example", "GitHubApp", Config.Root);
-        await Assert.That(AuthProviderCache.TryGet("https://rt.example", Config.Root)).IsEqualTo("GitHubApp");
+        await Assert.That(AuthProviderCache.TryGet("https://rt.example", Config.Root, TimeProvider.System)).IsNull(); // cold
+        AuthProviderCache.Set("https://rt.example", "GitHubApp", Config.Root, TimeProvider.System);
+        await Assert.That(AuthProviderCache.TryGet("https://rt.example", Config.Root, TimeProvider.System)).IsEqualTo("GitHubApp");
     }
 }

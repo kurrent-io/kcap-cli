@@ -48,7 +48,7 @@ public static class PlanEntitlementStore {
     /// <c>X-Kcap-Plan</c> value. No-op for a blank URL, or when the cache already holds this answer
     /// and was refreshed within <see cref="RefreshAfter"/>. Never throws.
     /// </summary>
-    public static void Set(string? serverUrl, string? headerValue, ConfigRoot config, DateTimeOffset? now = null) {
+    public static void Set(string? serverUrl, string? headerValue, ConfigRoot config, DateTimeOffset now) {
         if (string.IsNullOrWhiteSpace(serverUrl)) return;
 
         // A header that parses to nothing denied is still an ANSWER — it is how an upgrade is
@@ -57,7 +57,7 @@ public static class PlanEntitlementStore {
         var rendered = PlanEntitlements.Parse(headerValue).Render();
         var key      = Normalize(serverUrl);
         var path     = PathFor(key, config);
-        var at       = now ?? DateTimeOffset.UtcNow;
+        var at       = now;
 
         if (ShouldSkip(path, rendered, at)) return;
 
@@ -111,7 +111,7 @@ public static class PlanEntitlementStore {
     /// <see cref="PlanEntitlements.Unknown"/> when none has been seen, the file is unreadable, or the
     /// answer is older than <see cref="StaleAfter"/>.
     /// </summary>
-    public static PlanEntitlements Get(string? serverUrl, ConfigRoot config, DateTimeOffset? now = null) {
+    public static PlanEntitlements Get(string? serverUrl, ConfigRoot config, DateTimeOffset now) {
         if (string.IsNullOrWhiteSpace(serverUrl)) return PlanEntitlements.Unknown;
 
         try {
@@ -123,7 +123,7 @@ public static class PlanEntitlementStore {
             // A missing or unparseable timestamp is treated as stale: it cannot be shown to be
             // recent, and the safe direction here is the one that nudges.
             if (node?["seen_at"]?.GetValue<DateTimeOffset>() is not { } seenAt) return PlanEntitlements.Unknown;
-            if ((now ?? DateTimeOffset.UtcNow) - seenAt > StaleAfter) return PlanEntitlements.Unknown;
+            if (now - seenAt > StaleAfter) return PlanEntitlements.Unknown;
 
             return PlanEntitlements.Parse(node["plan"]?.GetValue<string>());
         } catch {

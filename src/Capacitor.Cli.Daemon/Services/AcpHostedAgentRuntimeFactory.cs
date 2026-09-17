@@ -38,15 +38,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         DaemonConfig                                                                   config,
         ILoggerFactory                                                                 loggerFactory,
         ServerConnection                                                               connection,
+        TimeProvider                                                                  timeProvider,
         Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)>? connectionSource = null,
         // Test seam ONLY, for the certified-version decision. Production passes null, which interrogates the
         // real binary. Tests pin a value so the OPERATOR-FLAG half of the gate is assertable on a host with
         // no gemini installed — otherwise a disabled-daemon test passes for the wrong reason (unknown
         // version) and would keep passing if advertisement stopped honouring the flag.
         Func<string, string?>? resolveVendorVersion = null,
-        // Test seam ONLY for the per-stage launch-handshake cap. Production passes null → the
-        // TimeProvider.System every other daemon-local timing decision uses.
-        TimeProvider? timeProvider = null,
         // The desktop app's local permission surface. Non-null (production) presents a permission on
         // it alongside the server's web card, first answer wins; null leaves every launch server-only.
         PermissionPromptBroker? permissionBroker = null,
@@ -54,7 +52,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         PermissionDecisionLog? permissionDecisionLog = null
     ) : IHostedAgentRuntimeFactory {
     readonly Func<string, string?>? _resolveVendorVersion = resolveVendorVersion;
-    readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    readonly TimeProvider _timeProvider = timeProvider;
     readonly PermissionPromptBroker? _permissionBroker = permissionBroker;
     readonly PermissionDecisionLog? _permissionDecisionLog = permissionDecisionLog;
 
@@ -64,12 +62,12 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> RequestInteraction =>
         _permissionBroker is { } broker
             ? new AcpPermissionSurface(
-                    broker, descriptor.Vendor, connection.RequestAcpInteractionAsync,
-                    connection.ResolveAcpInteractionAsync, _permissionDecisionLog, _timeProvider).RequestAsync
+                    broker, descriptor.Vendor, connection.RequestAcpInteractionAsync, _timeProvider,
+                    connection.ResolveAcpInteractionAsync, _permissionDecisionLog).RequestAsync
             : connection.RequestAcpInteractionAsync;
 
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =
-        connectionSource ?? (ctx => StartRealProcess(descriptor, config, ctx, loggerFactory));
+        connectionSource ?? (ctx => StartRealProcess(descriptor, config, ctx, loggerFactory, timeProvider));
 
     readonly ILogger _logger = loggerFactory.CreateLogger<AcpHostedAgentRuntimeFactory>();
 
@@ -204,7 +202,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             // candidate is spawned by the same code path — argv, env, cwd — as the original child, and
             // carries no registration/forwarder/slot side effects (§6.2's pure-spawn contract).
             var reconnect = descriptor.SupportsReconnectResume && !ctx.IsReviewFlow && config.AcpReconnectEnabled
-                ? new AcpReconnectSupport { Spawn = () => _connectionSource(ctx) }
+                ? new AcpReconnectSupport { Spawn = () => _connectionSource(ctx), TimeProvider = _timeProvider }
                 : null;
             // PidCallbacks defaults to AcpPidRecordCallbacks.Unwired — fail-closed: a crash during the
             // orchestrator's wiring window fails its attempts rather than proceeding with an unrecorded
@@ -225,7 +223,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 requestInteraction: RequestInteraction,
                 // Drives the handshake's per-stage caps (RunHandshakeStageAsync), so a test's
                 // FakeTimeProvider controls them without a real 90-second wait.
-                timeProvider: _timeProvider,
+                time: _timeProvider,
                 debugFrames: config.DebugFrames,
                 vendor: descriptor.Vendor,
                 modelSelector: descriptor.ModelSelector,
@@ -358,7 +356,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // "Opening browser..." and STAYS ALIVE FOREVER. Nothing else here bounds that: the runtime
         // bounds only its settlement wait, and a server-side round timeout would fail the round while
         // leaving this child, and its transcript-bearing home, behind.
-        using var launchDeadline = ReviewerLaunchDeadline(descriptor, config, ctx, ct);
+        using var launchCap      = ReviewerLaunchCap(descriptor, config, ctx, _timeProvider);
+        using var launchDeadline = launchCap is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(ct, launchCap.Token);
 
         try {
             await runtime.StartAsync(
@@ -568,16 +569,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     }
 
     /// <summary>The single absolute budget for a gated review launch, or null for every other launch.
-    /// Linked to the caller's token so a real shutdown still wins and is not misreported as a
-    /// timeout.</summary>
-    static CancellationTokenSource? ReviewerLaunchDeadline(
-            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx, CancellationToken ct) {
-        if (ReviewerLaunchTimeoutSeconds(descriptor, config, ctx) is not { } seconds) return null;
-
-        var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        linked.CancelAfter(TimeSpan.FromSeconds(seconds));
-        return linked;
-    }
+    /// The caller links it to its own token so a real shutdown still wins and is not misreported as a
+    /// timeout; both sources must stay alive for the whole launch, so they share one scope there.</summary>
+    static CancellationTokenSource? ReviewerLaunchCap(
+            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx, TimeProvider time) =>
+        ReviewerLaunchTimeoutSeconds(descriptor, config, ctx) is { } seconds
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(seconds), time)
+            : null;
 
     /// <summary>The vendor-specific tail of the launch-timeout error: what the operator should check.
     /// Both vendors' CLIs share the failure this bound exists for — an expired credential that waits on
@@ -1230,7 +1228,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// <see cref="AcpChildProcess"/> lifecycle wrapper.
     /// </summary>
     static (Stream Input, Stream Output, IAcpProcess Process) StartRealProcess(
-            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx, ILoggerFactory loggerFactory) {
+            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx,
+            ILoggerFactory loggerFactory, TimeProvider time) {
         var psi = BuildProcessStartInfo(descriptor, config, ctx);
 
         // Materialize what the pure builder declared. Only a sandboxed borrowed launch carries these,
@@ -1246,7 +1245,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
          ?? throw new InvalidOperationException($"Failed to start '{psi.FileName} {string.Join(' ', psi.ArgumentList)}' (Process.Start returned null).");
 
         var processLogger = loggerFactory.CreateLogger<AcpChildProcess>();
-        var acpProcess    = new AcpChildProcess(process, processLogger, config.DebugFrames, descriptor.Vendor);
+        var acpProcess    = new AcpChildProcess(process, processLogger, time, config.DebugFrames, descriptor.Vendor);
 
         return (process.StandardInput.BaseStream, process.StandardOutput.BaseStream, acpProcess);
     }

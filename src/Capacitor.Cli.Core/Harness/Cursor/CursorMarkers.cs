@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Core.Harness.Cursor;
 /// small JSON payload (reason + timestamp) instead, as a permanent diagnostic record rather than
 /// a rolling liveness signal.
 /// </summary>
-public sealed class CursorMarkers(ConfigRoot config) {
+public sealed class CursorMarkers(ConfigRoot config, TimeProvider time) {
     public string QuarantinePath(string sessionId) => config.Path("cursor-quarantine", $"{sessionId}.json");
     public string BarrierPath(string sessionId)    => config.Path("cursor-barrier", $"{sessionId}.json");
     public string HeartbeatPath(string sessionId)  => config.Path("cursor-heartbeat", $"{sessionId}.json");
@@ -65,7 +65,7 @@ public sealed class CursorMarkers(ConfigRoot config) {
             var dir  = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-            var marker = new CursorQuarantineMarker(reason, DateTimeOffset.UtcNow);
+            var marker = new CursorQuarantineMarker(reason, time.GetUtcNow());
             var json   = JsonSerializer.Serialize(marker, CapacitorJsonContext.Default.CursorQuarantineMarker);
             var tmp    = $"{path}.tmp";
 
@@ -162,7 +162,7 @@ public sealed class CursorMarkers(ConfigRoot config) {
     /// the marker's presence matters.
     /// </summary>
     public void MarkSubagentStartAcked(string childSessionId) {
-        try { WatcherHeartbeat.Touch(SubagentStartAckPath(childSessionId), DateTimeOffset.UtcNow); }
+        try { WatcherHeartbeat.Touch(SubagentStartAckPath(childSessionId), time.GetUtcNow()); }
         catch { /* best-effort — see HasSubagentStartAck's fail-open contract */ }
     }
 }

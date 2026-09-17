@@ -109,6 +109,7 @@ static class ClaudeCliRunner {
     public static async Task<ClaudeCliResult?> RunAsync(
             string            prompt,
             TimeSpan          timeout,
+            TimeProvider      time,
             Action<string>    log,
             Profile?          profile,
             HarnessRegistry   harnesses,
@@ -159,7 +160,7 @@ static class ClaudeCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, log, profile, harnesses, workingDir, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
+            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
         } finally {
             if (createdWorkingDir) {
                 try {
@@ -175,6 +176,7 @@ static class ClaudeCliRunner {
     static async Task<ClaudeCliResult?> RunCoreAsync(
             string            prompt,
             TimeSpan          timeout,
+            TimeProvider      time,
             Action<string>    log,
             Profile?          profile,
             HarnessRegistry   harnesses,
@@ -234,7 +236,7 @@ static class ClaudeCliRunner {
             return null;
         }
 
-        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var timeoutCts = new CancellationTokenSource(timeout, time);
         // Link caller cancellation with the internal timeout so both flow into
         // the same awaited token. Distinguishing which fired (external vs
         // timeout) is cheap — ct.IsCancellationRequested is the source of truth.

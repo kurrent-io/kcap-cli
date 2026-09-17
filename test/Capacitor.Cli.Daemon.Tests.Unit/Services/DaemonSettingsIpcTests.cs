@@ -33,12 +33,12 @@ public class DaemonSettingsIpcTests {
         var config = captured!;
 
         var stateRoot   = config.Store.StateDirectory(config.Name);
-        var consentIpc  = new LaunchConsentIpc(new LaunchConsentBroker(), new LaunchConsentStore(stateRoot, NullLogger.Instance), config, NullLogger<LaunchConsentIpc>.Instance);
+        var consentIpc  = new LaunchConsentIpc(new LaunchConsentBroker(), new LaunchConsentStore(stateRoot, NullLogger.Instance, TimeProvider.System), config, NullLogger<LaunchConsentIpc>.Instance);
         var permissionIpc = new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance);
         var notifier    = new DaemonStatusNotifier();
-        var statusIpc   = new DaemonStatusIpc(config, orchestrator, server, notifier);
+        var statusIpc   = new DaemonStatusIpc(config, orchestrator, server, notifier, TimeProvider.System);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
-        var restart     = RestartCoordinator.ForTest(config.Store, config.Name, "test", new NoopRestartStrategy());
+        var restart     = RestartCoordinator.ForTest(config.Store, config.Name, "test", new NoopRestartStrategy(), TimeProvider.System);
         var control     = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
         await control.StartAsync(ct);
 
@@ -189,7 +189,7 @@ public class DaemonSettingsIpcTests {
     [Test]
     public async Task The_core_client_round_trips_a_put() {
         await RunAsync(new CaptureServerConnection(), async (h, ct) => {
-            var ops = new LocalControlOps(h.Config.Store, h.Config.Name);
+            var ops = new LocalControlOps(h.Config.Store, h.Config.Name, TimeProvider.System);
 
             var ack = await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(4), ct);
 

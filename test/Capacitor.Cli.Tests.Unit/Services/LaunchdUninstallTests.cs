@@ -23,7 +23,7 @@ public class LaunchdUninstallTests {
         Skip.When(OperatingSystem.IsWindows(), "Uid() P/Invokes libc's getuid, POSIX-only");
 
         var path = SeedPlist();
-        var mgr  = new LaunchdServiceManager(Home, runProcess: (_, _) => (0, "", ""));
+        var mgr  = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, _) => (0, "", ""));
 
         var ok = mgr.Uninstall("test", out var error);
 
@@ -37,7 +37,7 @@ public class LaunchdUninstallTests {
         Skip.When(OperatingSystem.IsWindows(), "Uid() P/Invokes libc's getuid, POSIX-only");
 
         var path = SeedPlist();
-        var mgr  = new LaunchdServiceManager(Home, runProcess: (_, args) =>
+        var mgr  = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) =>
             args[0] == "bootout"
                 ? (113, "", "")
                 : (113, "", "Could not find service \"io.kurrent.kcap.daemon.test\" in domain for user gui: 501"));
@@ -54,7 +54,7 @@ public class LaunchdUninstallTests {
         Skip.When(OperatingSystem.IsWindows(), "Uid() P/Invokes libc's getuid, POSIX-only");
 
         var path = SeedPlist();
-        var mgr  = new LaunchdServiceManager(Home, runProcess: (_, args) =>
+        var mgr  = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) =>
             args[0] == "bootout"
                 ? (1, "", "Operation not permitted")
                 : (0, "state = running\npid = 924\n", ""));
@@ -71,7 +71,7 @@ public class LaunchdUninstallTests {
         Skip.When(OperatingSystem.IsWindows(), "Uid() P/Invokes libc's getuid, POSIX-only");
 
         var path = SeedPlist();
-        var mgr  = new LaunchdServiceManager(Home, runProcess: (_, args) =>
+        var mgr  = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) =>
             args[0] == "bootout"
                 ? (1, "", "Operation not permitted")
                 : (1, "", "Operation not permitted"));

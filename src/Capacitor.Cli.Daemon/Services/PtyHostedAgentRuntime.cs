@@ -16,7 +16,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Input writes take the input lane, so a paste and its submit are never interleaved by another
 /// writer; the graceful stop only tries for it (see <see cref="RequestGracefulStopAsync"/>).
 /// </summary>
-internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool approvalsDisabled = false, TimeProvider? time = null) : IHostedAgentRuntime {
+internal sealed class PtyHostedAgentRuntime(
+        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false) : IHostedAgentRuntime {
     /// <summary>
     /// Delays (relative to the previous write) before each carriage return on the spray submit path.
     /// A single CR right after a paste is unreliable: codex's TUI suppresses Enter-as-submit for a
@@ -42,7 +43,6 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool
     /// </summary>
     internal static readonly TimeSpan GracefulStopLaneWait = TimeSpan.FromSeconds(1);
 
-    readonly TimeProvider   _time = time ?? TimeProvider.System;
     readonly SemaphoreSlim  _lane = new(1, 1);
 
     public string  Vendor              => vendor;
@@ -121,14 +121,14 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool
         if (approvalsDisabled) {
             foreach (var delay in SubmitCarriageReturnSchedule) {
                 if (pty.HasExited) return;
-                await Task.Delay(delay, _time);
+                await Task.Delay(delay, time);
                 if (!await WriteSubmitCarriageReturnAsync()) return; // stop once the reviewer is gone
             }
 
             return;
         }
 
-        await Task.Delay(SingleSubmitDelay, _time);
+        await Task.Delay(SingleSubmitDelay, time);
         await WriteSubmitCarriageReturnAsync();
     }
 

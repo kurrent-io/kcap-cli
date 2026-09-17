@@ -27,7 +27,7 @@ public class EvalQuestionsAliasRawTextTests : IDisposable {
 
         var observer = new SilentObserver();
         using var http = new HttpClient();
-        var questions = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var questions = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(questions).IsNotNull();
         // RAW text in Prompt (NOT a rendered rubric wrapper) — the double-wrap guard.

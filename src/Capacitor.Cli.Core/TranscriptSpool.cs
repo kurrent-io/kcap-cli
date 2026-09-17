@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Core;
 /// <see cref="LifecycleSpoolDrain"/> so both the CLI and the daemon can share the ordered-drain
 /// primitives.</para>
 /// </summary>
-public sealed partial class TranscriptSpool(string spoolDir, long capBytes = TranscriptSpool.DefaultCapBytes) {
+public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, long capBytes = TranscriptSpool.DefaultCapBytes) {
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
 
     // Named here rather than on ConfigRoot, for the same reason as HookSpool's.
@@ -22,8 +22,8 @@ public sealed partial class TranscriptSpool(string spoolDir, long capBytes = Tra
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory.</summary>
-    public TranscriptSpool(ConfigRoot config, long capBytes = DefaultCapBytes)
-        : this(config.Path(DirName), capBytes) { }
+    public TranscriptSpool(ConfigRoot config, TimeProvider time, long capBytes = DefaultCapBytes)
+        : this(config.Path(DirName), time, capBytes) { }
 
     /// <summary>Outcome of an <see cref="Append"/> call.</summary>
     public enum AppendResult {
@@ -79,7 +79,7 @@ public sealed partial class TranscriptSpool(string spoolDir, long capBytes = Tra
         if (p is null) return false;
         try {
             Directory.CreateDirectory(spoolDir);
-            File.WriteAllText(p, $"{DateTimeOffset.UtcNow:O} {reason}\n");
+            File.WriteAllText(p, $"{time.GetUtcNow():O} {reason}\n");
             return true;
         } catch (Exception ex) {
             Console.Error.WriteLine($"[kcap] transcript spool: failed to write needs-import marker for {sessionId}: {ex.Message}");
@@ -208,7 +208,7 @@ public sealed partial class TranscriptSpool(string spoolDir, long capBytes = Tra
     public void ReapOlderThan(TimeSpan age) {
         try {
             if (!Directory.Exists(spoolDir)) return;
-            var cutoff = DateTime.UtcNow - age;
+            var cutoff = (time.GetUtcNow() - age).UtcDateTime;
             foreach (var file in Directory.EnumerateFiles(spoolDir)) {
                 try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); } catch { }
             }

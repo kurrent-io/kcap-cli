@@ -25,7 +25,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 public class CursorSubagentStaleStateTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -101,7 +101,7 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(tmp.PathTo("spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
             await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 client,
@@ -156,7 +156,7 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(tmp.PathTo("spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
             // Drive the REAL CALLER, not the divert directly. That matters: the leading remedy
             // changes the caller (make SaveLink report success and fail open before the start is
@@ -207,7 +207,7 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(tmp.PathTo("spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
             // Again through the REAL CALLER — see the note in the test above.
             await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(

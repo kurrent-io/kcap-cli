@@ -2,10 +2,10 @@ using System.Globalization;
 
 namespace Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 
-public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider? time = null) : IPullRequestReaderProvider, IDisposable {
+public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider time) : IPullRequestReaderProvider, IDisposable {
     static readonly PullRequestReaderTool GitHubCliTool = new("GitHub CLI", "https://cli.github.com",
         host => host is null ? "gh auth login" : "gh auth login --hostname " + host);
-    readonly TimeProvider _time = time ?? TimeProvider.System;
+    readonly TimeProvider _time = time;
     readonly SemaphoreSlim _probeGate = new(1, 1);
     readonly GitHubCliCursors _cursors = new();
     readonly Lock _views = new();

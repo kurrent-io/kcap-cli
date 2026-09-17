@@ -23,9 +23,12 @@ internal sealed class OpenCodeImportSource : IImportSource {
     readonly OpenCodeImportLedger _ledger;
     readonly object               _ledgerLock = new(); // routed imports may run concurrently
 
-    public OpenCodeImportSource(string dbPath, string ledgerPath) {
+    readonly TimeProvider _time;
+
+    public OpenCodeImportSource(string dbPath, string ledgerPath, TimeProvider time) {
         _dbPath = dbPath;
         _ledger = OpenCodeImportLedger.Load(ledgerPath);
+        _time   = time;
     }
 
     public HarnessId Vendor => HarnessId.OpenCode;
@@ -208,7 +211,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             }
             sent = await SessionImporter.SendTranscriptBatches(
                 httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: c.SessionId,
-                filePath: tmpFile, agentId: null, startLine: 0, vendor: Vendor,
+                filePath: tmpFile, agentId: null, startLine: 0, time: _time, vendor: Vendor,
                 lineNumberOffset: lineOffset, failOnError: true, progress: ctx.Progress);
         } catch (OperationCanceledException) {
             throw; // cancellation is not an import failure — let it propagate
@@ -334,7 +337,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
 
                 await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: tmp, agentId: agentId, startLine: 0, vendor: Vendor,
+                    filePath: tmp, agentId: agentId, startLine: 0, time: _time, vendor: Vendor,
                     lineNumberOffset: childOffset, failOnError: true, progress: progress);
 
                 if (!await PostHookAsync(client, baseUrl, "subagent-stop",
@@ -446,10 +449,10 @@ internal sealed class OpenCodeImportSource : IImportSource {
         return d;
     }
 
-    static async Task<int?> FetchServerLastLineAsync(
+    async Task<int?> FetchServerLastLineAsync(
         HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
         var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
-        using var resp = await http.GetWithRetryAsync(url, ct: ct);
+        using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
         var body = await resp.Content.ReadAsStringAsync(ct);
@@ -485,22 +488,22 @@ internal sealed class OpenCodeImportSource : IImportSource {
         return p;
     }
 
-    static async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
+    async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, ct: ct);
+            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, _time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch (OperationCanceledException) {
             throw; // don't mask cancellation as a hook failure
         } catch { return false; }
     }
 
-    static async Task PostSetTitleAsync(HttpClient client, string baseUrl, string sid, string title, CancellationToken ct) {
+    async Task PostSetTitleAsync(HttpClient client, string baseUrl, string sid, string title, CancellationToken ct) {
         if (title.Length > 120) title = title[..120];
         var payload = new JsonObject { ["session_id"] = sid, ["title"] = title };
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _ = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, ct: ct);
+            using var _ = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, _time, ct: ct);
         } catch { /* best effort */ }
     }
 }

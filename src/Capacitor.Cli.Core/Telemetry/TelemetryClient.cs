@@ -10,12 +10,10 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// </summary>
 public sealed class TelemetryClient(
         HttpMessageHandler handler, TelemetrySpool spool, string token, string endpoint,
-        TimeProvider? timeProvider = null) : ITelemetrySink {
+        TimeProvider timeProvider) : ITelemetrySink {
     readonly List<TelemetryEvent> _queue = [];
 
-    // Test seam only: production always uses the default (real) clock. Lets a test simulate a
-    // slow drain/serialize phase deterministically instead of racing real wall-clock timing.
-    readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
+    readonly TimeProvider _clock = timeProvider;
 
     public void Enqueue(TelemetryEvent e) {
         lock (_queue) _queue.Add(e);
@@ -77,7 +75,7 @@ public sealed class TelemetryClient(
             }
 
             using var http = new HttpClient(handler, disposeHandler: false) { Timeout = remaining };
-            using var cts  = new CancellationTokenSource(remaining);
+            using var cts  = new CancellationTokenSource(remaining, _clock);
             using var content = new StringContent(body, Encoding.UTF8);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 

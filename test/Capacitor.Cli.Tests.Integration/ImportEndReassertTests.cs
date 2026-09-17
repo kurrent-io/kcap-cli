@@ -25,7 +25,7 @@ public class ImportEndReassertTests : IDisposable {
 
     // These tests exercise chaining and repo resolution, not profile selection.
     ImportCommand Import() =>
-        new(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter());
+        new(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new GitProviderRouter(), TimeProvider.System);
     readonly WireMockServer _server = WireMockServer.Start();
     readonly TempDir        _tmp    = new();
     readonly string         _tempDir;
@@ -81,9 +81,10 @@ public class ImportEndReassertTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             transcripts,
-            minLines: 0,
+            0,
             CancellationToken.None
         );
 

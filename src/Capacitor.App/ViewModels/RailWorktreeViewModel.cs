@@ -70,7 +70,7 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
             string path, Func<string, string> resolveRepoRoot, bool showHeader,
             IObservableCache<AgentRow, string> sessionsCache, RailCollapseState collapse,
             IObservable<string?> selectedAgentId, IObservable<IReadOnlySet<string>> agentsWithPending,
-            IObservable<bool> remoteStale, Action<string> openLocal, Action<string> openRemote,
+            IObservable<bool> remoteStale, Action<string> openLocal, Action<string> openRemote, TimeProvider time,
             IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
         Path = path;
         // Every row in one worktree group shares CheckoutLabel by construction — any member
@@ -147,7 +147,7 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
 
         Sessions = new ReadOnlyObservableCollection<RailSessionViewModel>(_sessionsSource);
         sessionsCache.Connect()
-            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale, openLocal, openRemote))
+            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale, openLocal, openRemote, time))
             .DisposeMany()
             .SortAndBind(_sessionsSource, SessionComparer)
             .Subscribe()

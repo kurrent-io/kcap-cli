@@ -87,7 +87,7 @@ public class CliTelemetryTests {
     // correctly-skipped capture look identical from the outside unless state is asserted.
     [Test]
     public async Task A_disabled_facade_is_inert() {
-        var telemetry = CliTelemetry.Disabled();
+        var telemetry = CliTelemetry.Disabled(TimeProvider.System);
 
         telemetry.Capture("orphan", new JsonObject());
         telemetry.RecordCommand("status", ["status"], 0, 1);

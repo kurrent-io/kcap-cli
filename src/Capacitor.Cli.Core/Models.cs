@@ -158,15 +158,15 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
-    // Task 7: set by the shutdown final drain (isFinalDrain) when it held back an
-    // unterminated/unparseable final line rather than consuming it. RunWatch reads it right after
-    // the final drain to flag the session needs-import (never drop a truncated tail).
+    // Set by the shutdown final drain when it held back an unterminated/unparseable final line
+    // rather than consuming it, so RunWatch can flag the session needs-import and never drop a
+    // truncated tail.
     public bool FinalDrainHeldIncompleteLine { get; set; }
 
-    // Last wall-clock time new transcript content was observed on the rollout file.
-    // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
-    // Initialized when the watcher starts; updated in DrainNewLines on new lines.
-    public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
+    // Last time new transcript content was observed on the rollout file, driving the Codex
+    // idle-timeout fallback (see WatchCommand.ShouldEndOnIdle). Set when the watcher starts and
+    // advanced in DrainNewLines, so a zero value means the watcher has not started yet.
+    public DateTimeOffset LastActivityAt { get; set; }
 
     // idle-clock freeze while disconnected. DisconnectedSince is set when the SignalR
     // connection drops and cleared when it returns; AccumulatedDisconnected sums the disconnected

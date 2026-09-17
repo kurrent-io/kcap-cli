@@ -144,6 +144,7 @@ public class ClaudeCliRunnerTests {
     async Task AssertAllowedToolsGuard(string[]? allowedTools) {
         var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
             ClaudeCliRunner.RunAsync(
+                time:          TimeProvider.System,
                 prompt:        "irrelevant",
                 timeout:       TimeSpan.FromSeconds(1),
                 log:           _ => { },

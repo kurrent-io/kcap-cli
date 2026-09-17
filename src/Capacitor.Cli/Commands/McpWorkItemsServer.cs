@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -20,7 +19,7 @@ namespace Capacitor.Cli.Commands;
 /// memory this server has no repo/machine context to resolve — the only per-call input is the
 /// session id and the declare selector, both carried in the tool arguments.</summary>
 sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup) {
+        TelemetryStartup startup, TimeProvider time) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     public async Task<int> RunAsync() {
@@ -37,7 +36,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         // MCP servers are long-lived and denylisted under the top-level "mcp" command
         // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
         // "mcp-server" is what lets per-tool-call events leave at all.
-        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
         telemetry.AddSharedProperty("logged_in", loggedIn);
 
         await using var mcp = new McpTelemetry(telemetry);
@@ -73,7 +72,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -82,7 +81,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                mcp.ToolCalled("kcap-workitems", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-workitems", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -207,7 +206,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             var body = await httpResponse.Content.ReadAsStringAsync();
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl), isError: true);
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
             if (!httpResponse.IsSuccessStatusCode) {

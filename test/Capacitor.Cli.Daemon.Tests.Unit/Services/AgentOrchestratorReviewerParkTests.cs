@@ -364,6 +364,8 @@ public class AgentOrchestratorReviewerParkTests {
             new FakeAppServerRuntime(threadId),
             new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             Kind                = LaunchKind.ReviewFlow,
             Status              = "Running",
             ActivityClock       = clock,

@@ -22,13 +22,16 @@ namespace Capacitor.Cli.Harness.Kiro;
 /// </summary>
 internal sealed class KiroImportSource : IImportSource {
     readonly string                                 _sessionsDir;
+    readonly TimeProvider                           _time;
 
     public KiroImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
-        GitProviderRouter                        router
+        GitProviderRouter                        router,
+        TimeProvider                            time
     ) {
         _sessionsDir  = sessionsDir;
+        _time         = time;
     }
 
     static StringComparison PathComparison =>
@@ -162,7 +165,7 @@ internal sealed class KiroImportSource : IImportSource {
 
             int? serverLastLine;
             try {
-                serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
+                serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, _time, ctx.BaseUrl, s.SessionId, ct);
             } catch {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: nonBlankCount,
                                                probeErrorReason: "watermark probe failed"));
@@ -230,7 +233,7 @@ internal sealed class KiroImportSource : IImportSource {
         }
 
         var startOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-start/kiro",
+            ctx.HttpClient, _time, ctx.BaseUrl, "session-start/kiro",
             startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
@@ -267,6 +270,7 @@ internal sealed class KiroImportSource : IImportSource {
                 filePath:   sendPath,
                 agentId:    null,
                 startLine:  startLine,
+                time:       _time,
                 vendor:     Vendor,
                 progress:   ctx.Progress);
         } catch {
@@ -281,11 +285,11 @@ internal sealed class KiroImportSource : IImportSource {
         if (classification.SourceMeta!.TryGetValue("Title", out var titleObj)
          && titleObj is string title
          && !string.IsNullOrWhiteSpace(title)) {
-            await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, title, ct);
+            await PostSetTitleAsync(ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId, title, ct);
         }
 
         var endOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-end/kiro",
+            ctx.HttpClient, _time, ctx.BaseUrl, "session-end/kiro",
             BuildSessionEndPayload(lifecycleId, cwd, classification.Meta.LastTimestamp),
             ct);
         if (!endOk) return ImportOutcome.Failed;
@@ -323,18 +327,18 @@ internal sealed class KiroImportSource : IImportSource {
     }
 
     static async Task<bool> PostSyntheticHookAsync(
-        HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
+        HttpClient client, TimeProvider time, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
     ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
         }
     }
 
-    static async Task PostSetTitleAsync(HttpClient client, string baseUrl, string sessionId, string title, CancellationToken ct) {
+    static async Task PostSetTitleAsync(HttpClient client, TimeProvider time, string baseUrl, string sessionId, string title, CancellationToken ct) {
         if (title.Length > 120) title = title[..120];
 
         var payload = new JsonObject {
@@ -344,7 +348,7 @@ internal sealed class KiroImportSource : IImportSource {
 
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, ct: ct);
+            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, ct: ct);
         } catch {
             // Best effort.
         }
@@ -415,8 +419,8 @@ internal sealed class KiroImportSource : IImportSource {
         }
     }
 
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
-        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
+    static async Task<int?> FetchServerLastLineAsync(HttpClient http, TimeProvider time, string baseUrl, string sessionId, CancellationToken ct) {
+        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", time, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");

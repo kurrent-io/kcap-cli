@@ -35,8 +35,9 @@ static class HarnessNudgeEmitter {
 
     /// <summary>Hook-site convenience: resolve the SessionStart fragment against the default on-disk
     /// ledger/throttle. <paramref name="optedOut"/> is the profile's <c>DisableHarnessNudge</c>.</summary>
-    public static string? ResolveFragmentForHook(bool optedOut, ConfigRoot config, HarnessRegistry harnesses) =>
-        ResolveFragment(harnesses, new HarnessOfferStore(config), optedOut, DateTimeOffset.UtcNow);
+    public static string? ResolveFragmentForHook(
+            bool optedOut, ConfigRoot config, HarnessRegistry harnesses, TimeProvider time) =>
+        ResolveFragment(harnesses, new HarnessOfferStore(config, time), optedOut, time.GetUtcNow());
 
     /// <summary>Joins SessionStart nudges (any may be null) into one additional-context blob,
     /// blank-line separated — so a delivery helper that carries a single nudge slot can carry them

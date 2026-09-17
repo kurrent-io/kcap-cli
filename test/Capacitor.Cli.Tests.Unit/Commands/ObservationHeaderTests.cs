@@ -41,7 +41,7 @@ public class ObservationHeaderTests : IDisposable {
 
         return new WhoamiCommand(
             Config.Root, profiles, AuthFixtures.NewTokenStore(Config.Root), _sp.GetRequiredService<ICapacitorHttpClient>(),
-            _sp.GetRequiredService<AuthProviderDiscovery>());
+            _sp.GetRequiredService<AuthProviderDiscovery>(), TimeProvider.System);
     }
 
     /// <summary>An interactive-command client from the real container, built against

@@ -20,7 +20,7 @@ public class AuthProxyClientTests {
             );
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var config = await client.GetConfigAsync(server.Urls[0]);
 
@@ -42,7 +42,7 @@ public class AuthProxyClientTests {
             );
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var config = await client.GetConfigAsync(server.Urls[0]);
 
@@ -64,7 +64,7 @@ public class AuthProxyClientTests {
             );
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var config = await client.GetConfigAsync(server.Urls[0]);
 
@@ -76,7 +76,7 @@ public class AuthProxyClientTests {
     public async Task GetConfigAsync_returns_null_on_proxy_unreachable() {
         using var http = new HttpClient();
         http.Timeout = TimeSpan.FromMilliseconds(200);
-        var client = new AuthProxyClient(http);
+        var client = new AuthProxyClient(http, TimeProvider.System);
 
         var config = await client.GetConfigAsync("http://127.0.0.1:1");
 
@@ -96,7 +96,7 @@ public class AuthProxyClientTests {
             );
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.DiscoverTenantsAsync(server.Urls[0], "gh-token");
 
@@ -115,7 +115,7 @@ public class AuthProxyClientTests {
             .RespondWith(Response.Create().WithStatusCode(401));
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.DiscoverTenantsAsync(server.Urls[0], "gh-token");
 
@@ -130,7 +130,7 @@ public class AuthProxyClientTests {
             .RespondWith(Response.Create().WithStatusCode(403));
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.DiscoverTenantsAsync(server.Urls[0], "gh-token");
 
@@ -145,7 +145,7 @@ public class AuthProxyClientTests {
             .RespondWith(Response.Create().WithStatusCode(502));
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.DiscoverTenantsAsync(server.Urls[0], "gh-token");
 
@@ -156,7 +156,7 @@ public class AuthProxyClientTests {
     public async Task DiscoverTenantsAsync_returns_ProxyUnreachable_on_connection_refused() {
         using var http = new HttpClient();
         http.Timeout = TimeSpan.FromMilliseconds(200);
-        var client = new AuthProxyClient(http);
+        var client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.DiscoverTenantsAsync("http://127.0.0.1:1", "gh-token");
 
@@ -176,7 +176,7 @@ public class AuthProxyClientTests {
             );
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.DiscoverWorkOSTenantsAsync(server.Urls[0], "wos.tok.en");
 
@@ -194,7 +194,7 @@ public class AuthProxyClientTests {
             .RespondWith(Response.Create().WithStatusCode(401));
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.DiscoverWorkOSTenantsAsync(server.Urls[0], "bad");
 
@@ -214,7 +214,7 @@ public class AuthProxyClientTests {
             );
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.CreateMachineApplicationAsync(server.Urls[0], "wos-token", "runner");
 
@@ -238,13 +238,13 @@ public class AuthProxyClientTests {
 
         using var http = new HttpClient();
 
-        var unauthorized = await new AuthProxyClient(http).CreateMachineApplicationAsync(server.Urls[0], "t", "runner");
+        var unauthorized = await new AuthProxyClient(http, TimeProvider.System).CreateMachineApplicationAsync(server.Urls[0], "t", "runner");
 
         server.Reset();
         server.Given(Request.Create().WithPath("/connect/m2m-applications").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(403));
 
-        var forbidden = await new AuthProxyClient(http).CreateMachineApplicationAsync(server.Urls[0], "t", "runner");
+        var forbidden = await new AuthProxyClient(http, TimeProvider.System).CreateMachineApplicationAsync(server.Urls[0], "t", "runner");
 
         await Assert.That(unauthorized.Error).IsEqualTo(MachineProvisioningError.Unauthorized);
         await Assert.That(forbidden.Error).IsEqualTo(MachineProvisioningError.Forbidden)
@@ -259,7 +259,7 @@ public class AuthProxyClientTests {
             .RespondWith(Response.Create().WithStatusCode(502).WithBody("upstream said no"));
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.CreateMachineApplicationAsync(server.Urls[0], "t", "runner");
 
@@ -272,7 +272,7 @@ public class AuthProxyClientTests {
     [Test]
     public async Task CreateMachineApplicationAsync_reports_an_unreachable_proxy() {
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.CreateMachineApplicationAsync("http://127.0.0.1:1", "t", "runner");
 
@@ -295,7 +295,7 @@ public class AuthProxyClientTests {
             );
 
         using var http   = new HttpClient();
-        var       client = new AuthProxyClient(http);
+        var       client = new AuthProxyClient(http, TimeProvider.System);
 
         var result = await client.CreateMachineApplicationAsync(server.Urls[0], "t", "runner");
 

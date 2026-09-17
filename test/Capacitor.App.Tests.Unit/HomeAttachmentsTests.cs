@@ -80,10 +80,10 @@ public class HomeAttachmentsTests {
             Daemon.StatusSubject.OnNext(new AttachStatus(
                 AttachState.Connected, null, capabilities ?? ["input/1", "input/2"]));
             Vm = new HomeViewModel(
-                Daemon, new AppStateStore(statePath), launch ?? Launch, () => Task.FromResult<string[]>([]),
+                Daemon, new AppStateStore(statePath), launch ?? Launch, () => Task.FromResult<string[]>([]), Time,
                 shutdown: Shutdown.Token,
                 daemons: Daemons, viewerId: _ => Task.FromResult(ViewerId), laneStatus: Lane,
-                launchFailures: Failures, directory: Directory, uploader: Uploader, time: Time);
+                launchFailures: Failures, directory: Directory, uploader: Uploader);
             return Vm;
         }
 

@@ -30,7 +30,11 @@ public class AgentOrchestratorBracketedPasteTests {
 
         var agent = new AgentInstance(
             "agent-paste", null, "", null, WorktreePath, "codex",
-            new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true), new WorktreeInfo(WorktreePath, "", WorktreePath, IsStandalone: true), new CancellationTokenSource());
+            new PtyHostedAgentRuntime("codex", pty, TimeProvider.System, approvalsDisabled: true), new WorktreeInfo(WorktreePath, "", WorktreePath, IsStandalone: true), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
         orch.RegisterAgentForTest(agent);
 
         await orch.HandleSendInputForTest(new SendInputCommand("agent-paste", message, null));

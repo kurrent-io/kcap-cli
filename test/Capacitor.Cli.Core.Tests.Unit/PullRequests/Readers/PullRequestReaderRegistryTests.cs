@@ -15,7 +15,7 @@ public class PullRequestReaderRegistryTests {
     public async Task Reads_route_to_the_first_ready_provider_that_serves_the_host() {
         var first = new StubProvider("first", ready: true, hosts: ["ghe.example"]);
         var second = new StubProvider("second", ready: true, hosts: ["github.com", "ghe.example"]);
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [first, second]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [first, second], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         await registry.OverviewAsync("session", Subject("ghe.example"), default);
         await registry.OverviewAsync("session", Subject(), default);
@@ -25,7 +25,7 @@ public class PullRequestReaderRegistryTests {
 
     [Test]
     public async Task A_subject_no_provider_serves_reads_as_unavailable_with_no_reader() {
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [new StubProvider("gh", ready: true, hosts: ["github.com"])]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [new StubProvider("gh", ready: true, hosts: ["github.com"])], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var read = await registry.OverviewAsync("session", Subject("gitlab.com", "gitlab"), default);
         await Assert.That(read.Kind).IsEqualTo(PullRequestReadKind.Unavailable);
@@ -37,7 +37,7 @@ public class PullRequestReaderRegistryTests {
     public async Task Capability_is_supported_when_any_provider_is_ready_else_the_session_link_capability() {
         var links = new StubLinks { Capability = new(PullRequestCapabilityKind.Legacy) };
         var provider = new StubProvider("gh", ready: false, hosts: []);
-        var registry = new PullRequestReaderRegistry(links, [provider]);
+        var registry = new PullRequestReaderRegistry(links, [provider], TimeProvider.System);
         await Assert.That((await registry.DiscoverAsync(false, default)).Kind).IsEqualTo(PullRequestCapabilityKind.Legacy);
         provider.Ready = true;
         await Assert.That((await registry.DiscoverAsync(true, default)).Kind).IsEqualTo(PullRequestCapabilityKind.Supported);
@@ -49,7 +49,7 @@ public class PullRequestReaderRegistryTests {
             Legacy = [Link("github.com", 7, provider: "unknown"), Link("gitlab.com", 8, provider: "unknown", url: "https://gitlab.com/example/repo/-/merge_requests/8")] };
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]);
         var lab = new StubProvider("lab", ready: true, hosts: ["gitlab.com"], kind: "gitlab", linkShape: "/-/merge_requests/");
-        var registry = new PullRequestReaderRegistry(links, [gh, lab]);
+        var registry = new PullRequestReaderRegistry(links, [gh, lab], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var list = await registry.ListAsync("session", default);
         await Assert.That(list.Kind).IsEqualTo(PullRequestReadKind.Ready);
@@ -62,7 +62,7 @@ public class PullRequestReaderRegistryTests {
     public async Task Live_discovery_merges_with_session_links_deduplicated_and_canonically_ordered() {
         var links = new StubLinks { Links = [Link("github.com", 5)] };
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Discovered = [Link("github.com", 5), Link("github.com", 2)] };
-        var registry = new PullRequestReaderRegistry(links, [gh]);
+        var registry = new PullRequestReaderRegistry(links, [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         registry.DescribeSession("session", new("github", "github.com", "example", "repo", "hash"), "feature");
         var list = await registry.ListAsync("session", default);
@@ -77,7 +77,7 @@ public class PullRequestReaderRegistryTests {
     public async Task Live_discovery_rows_win_over_stale_session_links() {
         var links = new StubLinks { Links = [Link("github.com", 5) with { HeadRef = null }] };
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Discovered = [Link("github.com", 5)] };
-        var registry = new PullRequestReaderRegistry(links, [gh]);
+        var registry = new PullRequestReaderRegistry(links, [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         registry.DescribeSession("session", new("github", "github.com", "example", "repo", "hash"), "feature");
         var list = await registry.ListAsync("session", default);
@@ -89,7 +89,7 @@ public class PullRequestReaderRegistryTests {
     public async Task Local_discovery_serves_the_list_when_the_server_links_are_unavailable() {
         var links = new StubLinks { ListKind = PullRequestReadKind.Unavailable };
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Discovered = [Link("github.com", 9)] };
-        var registry = new PullRequestReaderRegistry(links, [gh]);
+        var registry = new PullRequestReaderRegistry(links, [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         registry.DescribeSession("session", new("github", "github.com", "example", "repo", "hash"), "feature");
         var list = await registry.ListAsync("session", default);
@@ -101,7 +101,7 @@ public class PullRequestReaderRegistryTests {
     public async Task A_server_failure_stands_when_local_discovery_finds_nothing() {
         var links = new StubLinks { ListKind = PullRequestReadKind.Unavailable };
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]);
-        var registry = new PullRequestReaderRegistry(links, [gh]);
+        var registry = new PullRequestReaderRegistry(links, [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         registry.DescribeSession("session", new("github", "github.com", "example", "repo", "hash"), "feature");
         var list = await registry.ListAsync("session", default);
@@ -112,7 +112,7 @@ public class PullRequestReaderRegistryTests {
     public async Task A_provider_change_on_rediscovery_restarts_the_next_read_once() {
         var provider = new StubProvider("gh", ready: false, hosts: ["github.com"]);
         var server = new StubProvider("server", ready: true, hosts: ["github.com"]);
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [provider, server]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [provider, server], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         await registry.OverviewAsync("a", Subject(), default);
         await registry.OverviewAsync("b", Subject(), default);
@@ -131,7 +131,7 @@ public class PullRequestReaderRegistryTests {
     public async Task A_read_from_a_superseded_provider_returns_restart() {
         var gh = new StubProvider("gh", ready: false, hosts: ["github.com"]);
         var server = new StubProvider("server", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var pending = registry.OverviewAsync("session", Subject(), default);
         gh.Ready = true;
@@ -150,7 +150,7 @@ public class PullRequestReaderRegistryTests {
     [Test]
     public async Task An_identity_change_on_the_serving_provider_restarts_once() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Identity = "github.com=octocat" };
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         await registry.OverviewAsync("session", Subject(), default);
         gh.Identity = "github.com=other";
@@ -166,7 +166,7 @@ public class PullRequestReaderRegistryTests {
     [Test]
     public async Task A_read_from_a_provider_whose_identity_changed_returns_restart() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Identity = "github.com=octocat", PendingOverview = new() };
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var pending = registry.OverviewAsync("session", Subject(), default);
         gh.Identity = "github.com=other";
@@ -182,7 +182,7 @@ public class PullRequestReaderRegistryTests {
     [Test]
     public async Task A_read_dispatched_before_an_identity_change_restarts_without_a_fresh_dispatch() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Identity = "github.com=octocat", PendingOverview = new() };
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var pending = registry.OverviewAsync("session", Subject(), default);
         gh.Identity = "github.com=other";
@@ -197,7 +197,7 @@ public class PullRequestReaderRegistryTests {
     public async Task A_read_dispatched_before_a_higher_precedence_provider_became_ready_returns_restart() {
         var gh = new StubProvider("gh", ready: false, hosts: []);
         var server = new StubProvider("server", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var pending = registry.OverviewAsync("session", Subject(), default);
         gh.Ready = true; gh.Hosts = ["github.com"];
@@ -214,7 +214,7 @@ public class PullRequestReaderRegistryTests {
     [Test]
     public async Task Losing_the_last_reader_for_a_subject_rejects_a_pending_read() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var pending = registry.OverviewAsync("session", Subject(), default);
         gh.Hosts = [];
@@ -232,7 +232,7 @@ public class PullRequestReaderRegistryTests {
     public async Task A_host_sign_in_that_reroutes_the_same_subject_restarts_once() {
         var gh = new StubProvider("gh", ready: true, hosts: []);
         var server = new StubProvider("server", ready: true, hosts: ["github.com"]);
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         await registry.OverviewAsync("session", Subject(), default);
         gh.Hosts = ["github.com"];
@@ -249,7 +249,7 @@ public class PullRequestReaderRegistryTests {
     public async Task A_manual_reset_before_a_reroute_still_restarts_once() {
         var gh = new StubProvider("gh", ready: true, hosts: []);
         var server = new StubProvider("server", ready: true, hosts: ["github.com"]);
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         await registry.OverviewAsync("session", Subject(), default);
         gh.Hosts = ["github.com"];
@@ -267,7 +267,7 @@ public class PullRequestReaderRegistryTests {
     public async Task Switching_subjects_within_a_session_does_not_restart() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]);
         var server = new StubProvider("server", ready: true, hosts: ["ghe.example"]);
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var first = await registry.OverviewAsync("session", Subject(), default);
         await Assert.That(first.Kind).IsEqualTo(PullRequestReadKind.Ready);
@@ -278,7 +278,7 @@ public class PullRequestReaderRegistryTests {
     [Test]
     public async Task Notes_describe_the_missing_or_signed_out_tool_for_a_host_and_nothing_when_served() {
         var gh = new StubProvider("gh", ready: false, hosts: [], status: PullRequestReaderStatusKind.ToolMissing);
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         await Assert.That(registry.NoteFor("github", "github.com")!.Text).IsEqualTo("Install GitHub CLI to read pull requests here.");
         await Assert.That(registry.NoteFor("github", "github.com")!.InstallUrl).IsEqualTo("https://cli.github.com");
@@ -295,7 +295,7 @@ public class PullRequestReaderRegistryTests {
     [Test]
     public async Task An_unsupported_gh_version_note_tells_the_user_to_update_it() {
         var gh = new StubProvider("gh", ready: false, hosts: [], status: PullRequestReaderStatusKind.Failed) { Reason = "unsupported_version" };
-        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh], TimeProvider.System);
         await registry.DiscoverAsync(false, default);
         var note = registry.NoteFor("github", "github.com")!;
         await Assert.That(note.Text).IsEqualTo("Update GitHub CLI to read pull requests here.");

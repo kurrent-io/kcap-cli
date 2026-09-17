@@ -23,11 +23,12 @@ public class CodexApprovalTimeoutChainTests {
         // Mirrors ServerConnection.RequestAcpInteractionAsync: invoke (returns the request id) then await the decision.
         async Task<AcpInteractionDecision> RequestInteraction(AcpInteractionRequest request, CancellationToken ct) {
             var requestId = await ConnectionRetry.InvokeWithConnectionRetryAsync(
-                () => Task.FromResult("req-1"), () => true, TimeSpan.FromMilliseconds(50), _ => { }, ct);
+                () => Task.FromResult("req-1"), () => true, TimeSpan.FromMilliseconds(50),
+                TimeProvider.System, _ => { }, ct);
             return await registry.AwaitDecisionAsync(requestId, ct);
         }
 
-        var bridge = new CodexApprovalBridge(RequestInteraction, "agent-1", NullLogger.Instance, TimeSpan.FromMilliseconds(300));
+        var bridge = new CodexApprovalBridge(RequestInteraction, "agent-1", NullLogger.Instance, TimeSpan.FromMilliseconds(300), TimeProvider.System);
 
         var result = await bridge.HandleAsync(Approval(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
 

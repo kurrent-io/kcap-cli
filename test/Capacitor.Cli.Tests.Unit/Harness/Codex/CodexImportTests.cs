@@ -244,9 +244,10 @@ public class CodexImportTests {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             server.Url!,
             transcripts,
-            minLines: 0,
+            0,
             CancellationToken.None,
             vendor: HarnessId.Codex
         );
@@ -283,9 +284,10 @@ public class CodexImportTests {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             server.Url!,
             transcripts,
-            minLines: 0,
+            0,
             CancellationToken.None,
             vendor: HarnessId.Codex
         );

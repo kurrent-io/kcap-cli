@@ -289,7 +289,7 @@ public partial class ServiceFilesTests {
     [Test]
     public async Task Launchd_writes_its_plist_through_the_secure_writer() {
         var seen = new List<string>();
-        var mgr  = new LaunchdServiceManager(Home, (path, content, _) => seen.Add(path + "|" + content));
+        var mgr  = new LaunchdServiceManager(Home, TimeProvider.System, (path, content, _) => seen.Add(path + "|" + content));
 
         mgr.WriteUnitFiles(Spec());
 

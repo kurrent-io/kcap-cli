@@ -18,7 +18,7 @@ public class AuthProviderDiscoveryTests : IDisposable {
 
     // One per test, which is the whole isolation story: the memo lives here rather than on a static,
     // so a value cached by one test cannot be observed by another.
-    readonly AuthProviderDiscovery _discovery = new(new PlainHttpClientFactory());
+    readonly AuthProviderDiscovery _discovery = new(new PlainHttpClientFactory(), TimeProvider.System);
 
     public void Dispose() {
         _a.Stop();

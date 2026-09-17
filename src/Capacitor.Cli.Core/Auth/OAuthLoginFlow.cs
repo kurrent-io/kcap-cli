@@ -22,6 +22,8 @@ public enum GitHubFlow { Browser, Device }
 public enum WorkOSFlow { Browser, Device }
 
 public static class OAuthLoginFlow {
+    static readonly TimeSpan EscapeHatchPollGap = TimeSpan.FromMilliseconds(120);
+
     /// <summary>GET <c>{serverUrl}/auth/config</c>, or <c>null</c> with the failure already reported.</summary>
     internal static async Task<AuthDiscoveryResponse?> FetchAuthConfigAsync(
             HttpClient http, string serverUrl, CancellationToken ct, IAuthProgress progress) {
@@ -102,9 +104,8 @@ public static class OAuthLoginFlow {
     /// </summary>
     /// <returns>The GitHub access token on success, or <c>null</c> on failure.</returns>
     internal static async Task<string?> RunDeviceFlowAsync(
-            GitHubOAuthClient github, string clientId, IBrowserLauncher launcher,
-            CancellationToken ct = default, IAuthProgress? progress = null,
-            TimeProvider? time = null) {
+            GitHubOAuthClient github, string clientId, IBrowserLauncher launcher, TimeProvider time,
+            CancellationToken ct = default, IAuthProgress? progress = null) {
         progress ??= ConsoleAuthProgress.Instance;
 
         var deviceResponse = await github.RequestDeviceCodeAsync(clientId, ct);
@@ -167,18 +168,19 @@ public static class OAuthLoginFlow {
             System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> typeInfo,
             Func<TResponse, (T? Value, string? Error)> read,
             DeviceCodeResponse device, int interval,
-            CancellationToken ct, IAuthProgress progress, TimeProvider? time = null,
+            CancellationToken ct, IAuthProgress progress, TimeProvider time,
             TimeSpan? attemptTimeout = null)
         where T : class where TResponse : class {
-        time ??= TimeProvider.System;
         form["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code";
 
         var deadline = time.GetUtcNow().AddSeconds(device.ExpiresInOrDefault);
 
         while (true) {
-            // The sleep stays on the real clock deliberately: `time` exists to bound the deadline, and
-            // a fake one here would leave the timer waiting for an advance nobody makes.
+            // The poll gap stays on the real clock: `time` bounds the deadline, and a caller whose
+            // fake clock only advances on a read cannot advance one while blocked inside the delay.
+#pragma warning disable RS0030
             await Task.Delay(TimeSpan.FromSeconds(interval), ct);
+#pragma warning restore RS0030
             ct.ThrowIfCancellationRequested();
 
             if (time.GetUtcNow() >= deadline) {
@@ -190,8 +192,8 @@ public static class OAuthLoginFlow {
             // Bound each attempt well inside the code's own lifetime: HttpClient's default timeout is
             // 100 seconds, which on a 300-second device code spends a third of the window on one hung
             // request.
-            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            attempt.CancelAfter(attemptTimeout ?? TimeSpan.FromSeconds(20));
+            using var attemptCap = new CancellationTokenSource(attemptTimeout ?? TimeSpan.FromSeconds(20), time);
+            using var attempt    = CancellationTokenSource.CreateLinkedTokenSource(ct, attemptCap.Token);
 
             HttpResponseMessage response;
 
@@ -291,7 +293,7 @@ public static class OAuthLoginFlow {
     /// </summary>
     public static async Task<string?> RunGitHubBrowserFlowAsync(
             GitHubOAuthClient github, string clientId, string codeExchangeUrl, IBrowserLauncher launcher,
-            ILoopbackJoin join,
+            ILoopbackJoin join, TimeProvider time,
             IBrowser? browser = null, TimeSpan? timeout = null,
             CancellationToken ct = default, IAuthProgress? progress = null) {
         progress ??= ConsoleAuthProgress.Instance;
@@ -302,7 +304,7 @@ public static class OAuthLoginFlow {
         // injected one would tear down a test's stand-in, or a future caller's shared instance.
         // `using` on a nullable disposes only when non-null, which is exactly the distinction.
         using LoopbackBrowser? created =
-            browser is null ? new LoopbackBrowser(launcher, progress, join: join) : null;
+            browser is null ? new LoopbackBrowser(launcher, time, progress, join: join) : null;
         browser ??= created!; // non-null exactly when browser was null, which is when we built it
 
         var redirectUri = $"http://127.0.0.1:{GetAvailablePort()}/callback";
@@ -357,8 +359,8 @@ public static class OAuthLoginFlow {
 
         // Bound the proxy exchange to the login timeout — a stalled endpoint must not hang the CLI —
         // while still observing the caller's own cancellation.
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(timeout ?? TimeSpan.FromMinutes(5));
+        using var cap = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5), time);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
 
         HttpResponseMessage tokenResponse;
 
@@ -416,6 +418,7 @@ public static class OAuthLoginFlow {
             string            provider,
             string?           profile,
             IAuthProgress     progress,
+            TimeProvider      time,
             CancellationToken ct = default) {
         if (provider is not AuthProvider.GitHubApp) {
             progress.Error($"Error: unknown auth provider '{provider}'");
@@ -446,7 +449,7 @@ public static class OAuthLoginFlow {
 
         return (new StoredTokens {
             AccessToken    = exchange.AccessToken,
-            ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
+            ExpiresAt      = time.GetUtcNow().AddSeconds(exchange.ExpiresIn),
             GitHubUsername = exchange.Username,
             Provider       = provider,
             ServerUrl      = canonical
@@ -503,7 +506,7 @@ public static class OAuthLoginFlow {
 
     internal static async Task<string?> AcquireGitHubTokenAsync(
             GitHubOAuthClient github, string clientId, string? codeExchangeUrl, bool forceDevice,
-            IBrowserLauncher launcher, ILoopbackJoin join,
+            IBrowserLauncher launcher, ILoopbackJoin join, TimeProvider time,
             CancellationToken ct = default, IAuthProgress? progress = null) {
         progress ??= ConsoleAuthProgress.Instance;
 
@@ -513,7 +516,7 @@ public static class OAuthLoginFlow {
         if (choice == GitHubFlow.Browser) {
             try {
                 var token = await RunGitHubBrowserFlowAsync(
-                    github, clientId, codeExchangeUrl!, launcher, join, ct: ct, progress: progress);
+                    github, clientId, codeExchangeUrl!, launcher, join, time, ct: ct, progress: progress);
 
                 return token ??
                     // Browser flow ran but user cancelled / state mismatch — don't silently fall back.
@@ -527,7 +530,7 @@ public static class OAuthLoginFlow {
             }
         }
 
-        return await RunDeviceFlowAsync(github, clientId, launcher, ct, progress);
+        return await RunDeviceFlowAsync(github, clientId, launcher, time, ct, progress);
     }
 
     internal const string WorkOSApiBase = "https://api.workos.com";
@@ -607,8 +610,8 @@ public static class OAuthLoginFlow {
     /// Public client: no secret anywhere in this flow, so the proxy is not involved.
     /// </summary>
     internal static async Task<WorkOSAuthResponse?> RunWorkOSDeviceFlowAsync(
-            WorkOSClient workos, string clientId, IBrowserLauncher launcher,
-            CancellationToken ct = default, IAuthProgress? progress = null, TimeProvider? time = null) {
+            WorkOSClient workos, string clientId, IBrowserLauncher launcher, TimeProvider time,
+            CancellationToken ct = default, IAuthProgress? progress = null) {
         progress ??= ConsoleAuthProgress.Instance;
 
         var authorize = await workos.AuthorizeDeviceAsync(clientId, ct);
@@ -681,18 +684,18 @@ public static class OAuthLoginFlow {
     /// device grant reachable by pressing <c>d</c> at any point and taken automatically when loopback
     /// cannot bind. A loopback attempt that RAN and failed returns <c>null</c> rather than falling
     /// through — a cancel or a state mismatch is an answer, and silently re-asking through another
-    /// channel would ignore it. Mirrors <see cref="AcquireGitHubTokenAsync(GitHubOAuthClient,string,string?,bool,IBrowserLauncher,Telemetry.ILoopbackJoin,CancellationToken,IAuthProgress?)"/>.
+    /// channel would ignore it. Mirrors <see cref="AcquireGitHubTokenAsync(GitHubOAuthClient,string,string?,bool,IBrowserLauncher,Telemetry.ILoopbackJoin,TimeProvider,CancellationToken,IAuthProgress?)"/>.
     /// </summary>
     internal static async Task<WorkOSAuthResponse?> AcquireWorkOSAsync(
             WorkOSClient workos, string clientId, string? organizationId, bool forceDevice,
             IBrowserLauncher launcher, ILoopbackJoin join,
-            IBrowser? browser = null, string apiBase = WorkOSApiBase, CancellationToken ct = default,
-            IAuthProgress? progress = null, IKeyWatcher? keys = null, TimeProvider? time = null) {
+            TimeProvider time, IBrowser? browser = null, string apiBase = WorkOSApiBase,
+            CancellationToken ct = default, IAuthProgress? progress = null, IKeyWatcher? keys = null) {
         progress ??= ConsoleAuthProgress.Instance;
         keys     ??= ConsoleKeyWatcher.Instance;
 
         if (ChooseWorkOSFlow(forceDevice) is WorkOSFlow.Device) {
-            return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, ct, progress, time);
+            return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, time, ct, progress);
         }
 
         using var escape = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -710,7 +713,7 @@ public static class OAuthLoginFlow {
         // round trip merged in under a second) but genuinely tighter, not equivalent.
         using LoopbackBrowser? created = browser is null
             ? new LoopbackBrowser(
-                launcher, progress, keys.CanWatch ? WorkOSBrowserHint() : null, join)
+                launcher, time, progress, keys.CanWatch ? WorkOSBrowserHint() : null, join)
             : null;
 
         var login = AuthenticateWorkOSAsync(
@@ -719,7 +722,7 @@ public static class OAuthLoginFlow {
             // never reaches here (DeviceRouteRequired sent it to the device grant already).
             browser ?? created!,
             apiBase, escape.Token, progress);
-        var watch = WatchForEscapeHatchAsync(keys, escape, settled.Token);
+        var watch = WatchForEscapeHatchAsync(keys, escape, time, settled.Token);
 
         try {
             return await login;
@@ -740,7 +743,7 @@ public static class OAuthLoginFlow {
             await watch;
         }
 
-        return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, ct, progress, time);
+        return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, time, ct, progress);
     }
 
     /// <summary>
@@ -757,12 +760,12 @@ public static class OAuthLoginFlow {
     /// </summary>
     /// <param name="settled">Cancelled by the caller once the browser leg is done, either way.</param>
     internal static async Task WatchForEscapeHatchAsync(
-            IKeyWatcher keys, CancellationTokenSource escape, CancellationToken settled) {
+            IKeyWatcher keys, CancellationTokenSource escape, TimeProvider time, CancellationToken settled) {
         if (!keys.CanWatch) return;
 
         try {
             while (true) {
-                await Task.Delay(TimeSpan.FromMilliseconds(120), settled);
+                await Task.Delay(EscapeHatchPollGap, time, settled);
 
                 // Re-read `settled` before touching the keyboard: once the browser leg has finished,
                 // anything buffered belongs to the next prompt rather than to this one.
@@ -795,11 +798,11 @@ public static class OAuthLoginFlow {
     internal static async Task<(StoredTokens Tokens, string Username)?> WorkOSTokensForServerAsync(
             WorkOSClient workos, string serverUrl, string clientId, string? organizationId, bool forceDevice,
             IBrowserLauncher launcher, ILoopbackJoin join,
-            IBrowser? browser, CancellationToken ct, IAuthProgress progress, string apiBase = WorkOSApiBase,
-            IKeyWatcher? keys = null, TimeProvider? time = null) {
+            IBrowser? browser, CancellationToken ct, IAuthProgress progress, TimeProvider time,
+            string apiBase = WorkOSApiBase, IKeyWatcher? keys = null) {
         // AcquireWorkOSAsync already reported the specific failure reason.
         var json = await AcquireWorkOSAsync(
-            workos, clientId, organizationId, forceDevice, launcher, join, browser, apiBase, ct, progress, keys, time);
+            workos, clientId, organizationId, forceDevice, launcher, join, time, browser, apiBase, ct, progress, keys);
         if (json is null) return null;
 
         // Org gate: a multi-org user must not be "logged in" to the wrong org — every API call would
@@ -829,7 +832,7 @@ public static class OAuthLoginFlow {
         return (new StoredTokens {
             AccessToken    = json.AccessToken,
             RefreshToken   = json.RefreshToken,
-            ExpiresAt      = TokenStore.JwtExpiry(json.AccessToken),
+            ExpiresAt      = TokenStore.JwtExpiry(json.AccessToken, time),
             GitHubUsername = username,
             Provider       = AuthProvider.WorkOS,
             ClientId       = clientId,

@@ -16,7 +16,7 @@ internal sealed record ClaudeHostedPolicyResult(PolicyOutcome Outcome, PolicyDec
 internal static class ClaudeHostedPolicySeam {
     internal static ClaudeHostedPolicyResult? Evaluate(
             string sessionId, string agentId, PolicySnapshot snapshot,
-            string? toolName, JsonElement? toolInput, string? cwd) {
+            string? toolName, JsonElement? toolInput, string? cwd, TimeProvider time) {
         var action     = ClaudeActionNormalizer.Normalize(toolName, toolInput, cwd);
         var evaluation = PolicyEngine.Evaluate(snapshot, action, EvaluationMode.Full);
 
@@ -35,6 +35,6 @@ internal static class ClaudeHostedPolicySeam {
                 sessionId, agentId, "claude", PolicySeams.HostedClaudePermission, snapshot.Id,
                 PolicyEngine.Version, "full", requested, effective, PolicyWire.ToWire(action),
                 PolicyWire.ToWire(evaluation.MatchedRules), snapshot.Degraded, null, null, false,
-                DateTimeOffset.UtcNow.ToString("O")));
+                time.GetUtcNow().ToString("O")));
     }
 }

@@ -1,0 +1,29 @@
+P:System.DateTime.Now;Take a TimeProvider.
+P:System.DateTime.UtcNow;Take a TimeProvider.
+P:System.DateTime.Today;Take a TimeProvider.
+P:System.DateTimeOffset.Now;Take a TimeProvider.
+P:System.DateTimeOffset.UtcNow;Take a TimeProvider.
+M:System.Diagnostics.Stopwatch.StartNew;Take a TimeProvider: GetTimestamp then GetElapsedTime.
+M:System.Diagnostics.Stopwatch.GetTimestamp;Take a TimeProvider.
+M:System.Diagnostics.Stopwatch.GetElapsedTime(System.Int64);Take a TimeProvider.
+M:System.Diagnostics.Stopwatch.GetElapsedTime(System.Int64,System.Int64);Take a TimeProvider.
+P:System.Environment.TickCount;Take a TimeProvider.
+P:System.Environment.TickCount64;Take a TimeProvider.
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan);Take a TimeProvider: Task.Delay(delay, time, ct).
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan,System.Threading.CancellationToken);Take a TimeProvider: Task.Delay(delay, time, ct).
+M:System.Threading.Tasks.Task.Delay(System.Int32);Take a TimeProvider: Task.Delay(delay, time, ct).
+M:System.Threading.Tasks.Task.Delay(System.Int32,System.Threading.CancellationToken);Take a TimeProvider: Task.Delay(delay, time, ct).
+M:System.Threading.CancellationTokenSource.#ctor(System.TimeSpan);Take a TimeProvider: new CancellationTokenSource(delay, time).
+M:System.Threading.CancellationTokenSource.#ctor(System.Int32);Take a TimeProvider: new CancellationTokenSource(delay, time).
+M:System.Threading.CancellationTokenSource.CancelAfter(System.TimeSpan);Take a TimeProvider: link a new CancellationTokenSource(delay, time).
+M:System.Threading.CancellationTokenSource.CancelAfter(System.Int32);Take a TimeProvider: link a new CancellationTokenSource(delay, time).
+M:System.Threading.Tasks.Task.WaitAsync(System.TimeSpan);Take a TimeProvider: WaitAsync(timeout, time, ct).
+M:System.Threading.Tasks.Task.WaitAsync(System.TimeSpan,System.Threading.CancellationToken);Take a TimeProvider: WaitAsync(timeout, time, ct).
+M:System.Threading.Tasks.Task`1.WaitAsync(System.TimeSpan);Take a TimeProvider: WaitAsync(timeout, time, ct).
+M:System.Threading.Tasks.Task`1.WaitAsync(System.TimeSpan,System.Threading.CancellationToken);Take a TimeProvider: WaitAsync(timeout, time, ct).
+M:System.Threading.PeriodicTimer.#ctor(System.TimeSpan);Take a TimeProvider: new PeriodicTimer(period, time).
+M:System.Threading.Timer.#ctor(System.Threading.TimerCallback,System.Object,System.TimeSpan,System.TimeSpan);Take a TimeProvider: time.CreateTimer(callback, state, dueTime, period).
+M:System.Threading.Timer.#ctor(System.Threading.TimerCallback,System.Object,System.Int32,System.Int32);Take a TimeProvider: time.CreateTimer(callback, state, dueTime, period).
+M:System.Threading.Timer.#ctor(System.Threading.TimerCallback,System.Object,System.Int64,System.Int64);Take a TimeProvider: time.CreateTimer(callback, state, dueTime, period).
+M:System.Threading.Timer.#ctor(System.Threading.TimerCallback,System.Object,System.UInt32,System.UInt32);Take a TimeProvider: time.CreateTimer(callback, state, dueTime, period).
+M:System.Threading.Timer.#ctor(System.Threading.TimerCallback);Take a TimeProvider: time.CreateTimer(callback, state, dueTime, period).

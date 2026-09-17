@@ -50,7 +50,7 @@ public class ReportVersionCommandTests : IDisposable {
         _sp = services.BuildServiceProvider();
 
         return new ReportVersionCommand(
-            _sp.GetRequiredService<CapacitorServer>(), _sp.GetRequiredService<ICapacitorHttpClient>());
+            _sp.GetRequiredService<CapacitorServer>(), _sp.GetRequiredService<ICapacitorHttpClient>(), TimeProvider.System);
     }
 
     public void Dispose() {
@@ -115,7 +115,7 @@ public class ReportVersionCommandTests : IDisposable {
                 .WithHeader(HttpClientExtensions.ServerVersionHeader, "1.0.2"));
 
         var profiles = await SeedValidTokenAsync("report-version-refresh");
-        ServerVersionStore.Set(_server.Urls[0], "1.0.1", Config.Root);
+        ServerVersionStore.Set(_server.Urls[0], "1.0.1", Config.Root, TimeProvider.System);
 
         await Command(profiles).HandleAsync();
 

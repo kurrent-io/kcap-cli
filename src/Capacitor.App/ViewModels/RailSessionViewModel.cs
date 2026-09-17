@@ -52,12 +52,13 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public RailSessionViewModel(
             AgentRow row, IObservable<string?> selectedAgentId,
             IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
-            Action<string> openLocal, Action<string> openRemote) {
+            Action<string> openLocal, Action<string> openRemote, TimeProvider time) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
         var kindExtra = row.Kind == "agent" ? null : row.Kind;
         var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
-        var age = UptimeFormat.Format(DateTime.UtcNow - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
+        var age = UptimeFormat.Format(
+            time.GetUtcNow().UtcDateTime - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
 
         Primary = string.IsNullOrEmpty(row.Title) ? null : row.Title;
         HasTitle = Primary is not null;

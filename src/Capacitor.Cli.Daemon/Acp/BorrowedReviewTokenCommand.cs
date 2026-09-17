@@ -31,7 +31,11 @@ internal static class BorrowedReviewTokenCommand {
     }
 
     static async Task<string?> RunAsync(string commandLine) {
+        // Wall-clock: the only caller blocks on this task from a synchronous delegate, so a provider
+        // nothing can advance would hang rather than bound it.
+#pragma warning disable RS0030
         using var cts = new CancellationTokenSource(Timeout);
+#pragma warning restore RS0030
 
         // A shell is the useful contract for an operator-supplied line (`gh auth token`, a keychain
         // lookup, a pipeline); the string comes from the daemon's own environment.

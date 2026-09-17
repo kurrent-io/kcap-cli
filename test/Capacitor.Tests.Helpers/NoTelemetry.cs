@@ -10,7 +10,7 @@ namespace Capacitor.Tests.Helpers;
 /// the opposite.
 /// </summary>
 public static class NoTelemetry {
-    public static CliTelemetry Facade => CliTelemetry.Disabled();
+    public static CliTelemetry Facade => CliTelemetry.Disabled(TimeProvider.System);
 
     /// <summary>A suppressed startup, so anything that starts its own facade from it comes up off.</summary>
     public static TelemetryStartup Startup =>

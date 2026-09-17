@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class UpdateCommand(
         ConfigRoot root, ProfileContext profiles, NpmRegistryClient npm, CapacitorServer server, ICapacitorHttpClient http,
-        bool? appBundled = null) {
+        TimeProvider time, bool? appBundled = null) {
     /// Printed by every `kcap update` invocation of a CLI that lives inside the desktop app.
     internal const string BundledMessage =
         "This kcap is bundled with the Kurrent Capacitor desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
@@ -83,8 +83,8 @@ public sealed class UpdateCommand(
 
         // The cap reads a cached server version that only an authenticated response refreshes, so a
         // server upgraded since the last one would otherwise hold this update back.
-        var probe             = channel == "latest" ? ServerProbe.SendAsync(server, http) : Task.CompletedTask;
-        var checkResult       = await CheckForUpdateAsync(forceCheck: true, channel, root, npm);
+        var probe             = channel == "latest" ? ServerProbe.SendAsync(server, http, time) : Task.CompletedTask;
+        var checkResult       = await CheckForUpdateAsync(forceCheck: true, channel, root, npm, time);
         await probe;
         var advisory          = UpdateAdvisoryResolver.Resolve(checkResult, channel, profiles.Resolution.ServerUrl, root);
         var (latest, current) = (advisory.Target, advisory.Current);
@@ -145,6 +145,7 @@ public sealed class UpdateCommand(
             ConfigRoot root,
             string channel,
             NpmRegistryClient npm,
+            TimeProvider time,
             TimeSpan? cacheFreshBudget = null,
             TimeSpan? networkCancelAfter = null,
             TimeSpan? cleanupGrace = null) {
@@ -152,8 +153,8 @@ public sealed class UpdateCommand(
         var networkCancelAfterVal = networkCancelAfter ?? TimeSpan.FromSeconds(3);
         var cleanupGraceVal       = cleanupGrace ?? TimeSpan.FromMilliseconds(500);
 
-        var cts       = new CancellationTokenSource(networkCancelAfterVal);
-        var checkTask = CheckForUpdateAsync(forceCheck: false, channel, root, npm, cts.Token);
+        var cts       = new CancellationTokenSource(networkCancelAfterVal, time);
+        var checkTask = CheckForUpdateAsync(forceCheck: false, channel, root, npm, time, cts.Token);
 
         // Dispose only once the task reaches a terminal state — never synchronously here, since
         // an abandoned check (either tier below giving up) may still be running past this method's
@@ -163,7 +164,7 @@ public sealed class UpdateCommand(
             if (t.IsFaulted) _ = t.Exception;
         }, cts, TaskScheduler.Default);
 
-        var firstWinner = await Task.WhenAny(checkTask, Task.Delay(cacheFreshBudgetVal));
+        var firstWinner = await Task.WhenAny(checkTask, Task.Delay(cacheFreshBudgetVal, time));
         if (firstWinner == checkTask) {
             return checkTask.IsCompletedSuccessfully ? checkTask.Result : null;
         }
@@ -173,7 +174,8 @@ public sealed class UpdateCommand(
         // armed on `cts` cut the HTTP request at networkCancelAfterVal, then allow cleanupGraceVal
         // more for the CancellationToken.None-guarded backoff write to persist.
         var remaining    = networkCancelAfterVal - cacheFreshBudgetVal + cleanupGraceVal;
-        var secondWinner = await Task.WhenAny(checkTask, Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero));
+        var secondWinner = await Task.WhenAny(
+            checkTask, Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, time));
 
         return secondWinner == checkTask && checkTask.IsCompletedSuccessfully ? checkTask.Result : null;
     }
@@ -275,11 +277,11 @@ public sealed class UpdateCommand(
     /// <see cref="WriteCacheRecordAsync"/>.
     /// </param>
     internal static async Task<UpdateCheckResult> CheckForUpdateAsync(
-            bool forceCheck, string channel, ConfigRoot root, NpmRegistryClient npm,
+            bool forceCheck, string channel, ConfigRoot root, NpmRegistryClient npm, TimeProvider time,
             CancellationToken ct = default) {
         var current   = GetCurrentVersion();
         var cachePath = CachePathFor(channel, root);
-        var now       = DateTimeOffset.UtcNow;
+        var now       = time.GetUtcNow();
 
         UpdateCacheRecord? cached = null;
         if (File.Exists(cachePath)) {

@@ -27,21 +27,21 @@ public class AuthRejectionNoticeTests {
 
     [Test]
     public async Task Missing_store_keeps_the_legacy_message_byte_identical() {
-        var state = AuthRejectionNotice.Classify(null, Target);
+        var state = AuthRejectionNotice.Classify(null, Target, TimeProvider.System);
 
         await Assert.That(state).IsEqualTo(StoredCredentialState.Missing);
-        await Assert.That(AuthRejectionNotice.Render(state, null, Target))
+        await Assert.That(AuthRejectionNotice.Render(state, null, Target, TimeProvider.System))
             .IsEqualTo("Not logged in. Run 'kcap login' on the host shell.");
     }
 
     [Test]
     public async Task Locally_valid_token_is_reported_as_a_server_rejection_not_a_missing_login() {
         var tokens = Tokens(DateTimeOffset.UtcNow.AddHours(23));
-        var state  = AuthRejectionNotice.Classify(tokens, Target);
+        var state  = AuthRejectionNotice.Classify(tokens, Target, TimeProvider.System);
 
         await Assert.That(state).IsEqualTo(StoredCredentialState.LooksValid);
 
-        var text = AuthRejectionNotice.Render(state, tokens, Target);
+        var text = AuthRejectionNotice.Render(state, tokens, Target, TimeProvider.System);
 
         // The incident's wild-goose chase, point by point: the user IS logged in — never say
         // otherwise; login IS the remedy (a fresh credential under the server's current key);
@@ -59,7 +59,7 @@ public class AuthRejectionNoticeTests {
         // configured URL without it — that pair must classify as LooksValid, never WrongServer.
         var tokens = Tokens(DateTimeOffset.UtcNow.AddHours(2), serverUrl: "https://kurrent.kcap.ai:443");
 
-        await Assert.That(AuthRejectionNotice.Classify(tokens, "https://kurrent.kcap.ai"))
+        await Assert.That(AuthRejectionNotice.Classify(tokens, "https://kurrent.kcap.ai", TimeProvider.System))
             .IsEqualTo(StoredCredentialState.LooksValid);
     }
 
@@ -67,18 +67,18 @@ public class AuthRejectionNoticeTests {
     public async Task Unbound_legacy_token_classifies_by_expiry_alone() {
         var tokens = Tokens(DateTimeOffset.UtcNow.AddHours(2), serverUrl: null);
 
-        await Assert.That(AuthRejectionNotice.Classify(tokens, Target))
+        await Assert.That(AuthRejectionNotice.Classify(tokens, Target, TimeProvider.System))
             .IsEqualTo(StoredCredentialState.LooksValid);
     }
 
     [Test]
     public async Task Expired_token_says_expired_and_points_at_login() {
         var tokens = Tokens(DateTimeOffset.UtcNow.AddHours(-1));
-        var state  = AuthRejectionNotice.Classify(tokens, Target);
+        var state  = AuthRejectionNotice.Classify(tokens, Target, TimeProvider.System);
 
         await Assert.That(state).IsEqualTo(StoredCredentialState.Expired);
 
-        var text = AuthRejectionNotice.Render(state, tokens, Target);
+        var text = AuthRejectionNotice.Render(state, tokens, Target, TimeProvider.System);
 
         await Assert.That(text).Contains("expired");
         await Assert.That(text).Contains("kcap login");
@@ -87,11 +87,11 @@ public class AuthRejectionNoticeTests {
     [Test]
     public async Task Wrong_server_token_names_both_servers() {
         var tokens = Tokens(DateTimeOffset.UtcNow.AddHours(2), serverUrl: "https://other.kcap.ai");
-        var state  = AuthRejectionNotice.Classify(tokens, Target);
+        var state  = AuthRejectionNotice.Classify(tokens, Target, TimeProvider.System);
 
         await Assert.That(state).IsEqualTo(StoredCredentialState.WrongServer);
 
-        var text = AuthRejectionNotice.Render(state, tokens, Target);
+        var text = AuthRejectionNotice.Render(state, tokens, Target, TimeProvider.System);
 
         await Assert.That(text).Contains("https://other.kcap.ai");
         await Assert.That(text).Contains(Target);
@@ -108,7 +108,7 @@ public class AuthRejectionNoticeTests {
                      (Tokens(DateTimeOffset.UtcNow.AddHours(2)), Target),
                      (Tokens(DateTimeOffset.UtcNow.AddHours(2), serverUrl: "https://other.kcap.ai"), Target),
                  }) {
-            var text = AuthRejectionNotice.Render(AuthRejectionNotice.Classify(tokens, target), tokens, target);
+            var text = AuthRejectionNotice.Render(AuthRejectionNotice.Classify(tokens, target, TimeProvider.System), tokens, target, TimeProvider.System);
 
             await Assert.That(text).Contains("kcap login");
         }

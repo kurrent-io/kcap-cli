@@ -100,6 +100,7 @@ public partial class WorktreeManager {
     }
 
     static async Task<BorrowedReviewContextGeneration> CreateReviewContextGenerationAsync(
+            TimeProvider time,
             string source, string reviewContextRoot, string sourceHead,
             byte[] listing, bool caseSensitive, SnapshotExclusionPlan plan, CancellationToken ct) {
         CreateOwnerOnlyDirectory(reviewContextRoot);
@@ -109,7 +110,7 @@ public partial class WorktreeManager {
         try {
             CreateOwnerOnlyDirectory(preparing);
             var (entries, omitted) = await ExtractReviewContextEntriesAsync(
-                source, listing, caseSensitive, plan, ct);
+                source, listing, caseSensitive, plan, time, ct);
 
             var manifest = new BorrowedReviewContextManifest(
                 1,
@@ -158,7 +159,7 @@ public partial class WorktreeManager {
     static async Task<(List<BorrowedReviewContextEntry> Entries, List<BorrowedReviewContextOmission> OmittedForCapacity)>
             ExtractReviewContextEntriesAsync(
             string source, byte[] listing, bool caseSensitive, SnapshotExclusionPlan plan,
-            CancellationToken ct) {
+            TimeProvider time, CancellationToken ct) {
         // The plan's set, not WorkspaceMcpConfigPaths: containment and reviewability have to range over
         // the same paths, or a config one directory down becomes excluded from the snapshot (good) while
         // staying invisible to the reviewer (bad) — contained but unreviewable, which is precisely the
@@ -224,7 +225,7 @@ public partial class WorktreeManager {
                 throw new InvalidOperationException(
                     $"borrowed_snapshot_review_context_non_regular_mode: {path}");
             var objectType = (await RunGitCapture(
-                source, GitTimeout, true, "cat-file", "-t", objectId)).Trim();
+                source, GitTimeout, time, true, "cat-file", "-t", objectId)).Trim();
             if (!objectType.Equals("blob", StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     $"borrowed_snapshot_review_context_non_blob_object: {path}");
@@ -233,7 +234,7 @@ public partial class WorktreeManager {
                     $"borrowed_snapshot_review_context_path_collision: {path}");
 
             var sizeText = (await RunGitCapture(
-                source, GitTimeout, true, "cat-file", "-s", objectId)).Trim();
+                source, GitTimeout, time, true, "cat-file", "-s", objectId)).Trim();
             if (!long.TryParse(sizeText, System.Globalization.NumberStyles.None,
                     System.Globalization.CultureInfo.InvariantCulture, out var objectSize) ||
                 objectSize < 0)
@@ -246,11 +247,11 @@ public partial class WorktreeManager {
                 // size cannot cost memory), and it never enters the executable tree regardless.
                 omitted.Add(new BorrowedReviewContextOmission(
                     path, fields[0], objectId, objectSize,
-                    await HashBlobSha256Async(source, objectId, objectSize, path, ct)));
+                    await HashBlobSha256Async(source, objectId, objectSize, path, time, ct)));
                 continue;
             }
             totalBytes += objectSize;
-            var content = await RunGitCaptureBytes(source, GitTimeout, true, ct,
+            var content = await RunGitCaptureBytes(source, GitTimeout, time, true, ct,
                 "cat-file", "blob", objectId);
             if (content.LongLength != objectSize)
                 throw new InvalidOperationException(
@@ -270,11 +271,12 @@ public partial class WorktreeManager {
     /// <c>cat-file</c> stream rather than buffered — reusing <see cref="RunGitCaptureBytes"/> here
     /// would hand the branch an equally large daemon allocation.</summary>
     static async Task<string> HashBlobSha256Async(
-            string source, string objectId, long expectedSize, string path, CancellationToken ct) {
+            string source, string objectId, long expectedSize, string path, TimeProvider time,
+            CancellationToken ct) {
         var psi = NewGitPsi(source, ["cat-file", "blob", objectId], sourceReadOnly: true);
         using var process = Process.Start(psi)!;
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(GitTimeout);
+        using var cap        = new CancellationTokenSource(GitTimeout, time);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
         var stderrTask = ReadAllDecodedAsync(process.StandardError.BaseStream, timeoutCts.Token);
         var stderr = "";
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -296,7 +298,7 @@ public partial class WorktreeManager {
             // Every abnormal exit — timeout, cancellation, or an IOException mid-read — must reap the
             // child and observe the stderr pump, or a wedged git survives into the bounded refresh
             // window. Same discipline as the bounded capture helpers.
-            await TerminateAndDrainAsync(process, stderrTask);
+            await TerminateAndDrainAsync(process, time, stderrTask);
         }
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git cat-file blob {objectId} failed: {stderr}");
@@ -439,12 +441,12 @@ public partial class WorktreeManager {
     }
 
     static async Task<byte[]> RunGitCaptureBytes(
-            string cwd, TimeSpan timeout, bool sourceReadOnly, CancellationToken ct,
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, CancellationToken ct,
             params string[] args) {
         var psi = NewGitPsi(cwd, args, sourceReadOnly);
         using var process = Process.Start(psi)!;
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(timeout);
+        using var cap        = new CancellationTokenSource(timeout, time);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
         using var stdout = new MemoryStream();
         var stdoutTask = process.StandardOutput.BaseStream.CopyToAsync(stdout, timeoutCts.Token);
         var stderrTask = ReadAllDecodedAsync(process.StandardError.BaseStream, timeoutCts.Token);

@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Core.Setup;
 /// corrupt-tolerant (→ empty
 /// ledger); Save is atomic (temp + rename) so a reader never observes a partial file.
 /// </summary>
-public sealed class HarnessOfferStore(ConfigRoot config) {
+public sealed class HarnessOfferStore(ConfigRoot config, TimeProvider time) {
     const string LedgerFileName = "harness-offers-v1.json";
     const string StampFileName  = "harness-offers.last-check";
 
@@ -98,7 +98,7 @@ public sealed class HarnessOfferStore(ConfigRoot config) {
     /// </summary>
     public bool TryClaimCheck(TimeSpan throttle) {
         try {
-            if (File.Exists(_stampPath) && DateTime.UtcNow - File.GetLastWriteTimeUtc(_stampPath) < throttle)
+            if (File.Exists(_stampPath) && time.GetUtcNow() - File.GetLastWriteTimeUtc(_stampPath) < throttle)
                 return false;
 
             var dir = Path.GetDirectoryName(_stampPath);

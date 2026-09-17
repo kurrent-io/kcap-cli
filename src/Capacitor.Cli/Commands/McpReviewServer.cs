@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -17,7 +16,7 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Commands;
 
 sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir) {
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
     /// <summary>
     /// Run with an explicit session-default PR (used by <c>kcap review &lt;pr&gt;</c>).
     /// Tool calls may still override the default by passing a <c>pr</c> argument.
@@ -49,7 +48,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
         // MCP servers are long-lived and denylisted under the top-level "mcp" command
         // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
         // "mcp-server" is what lets per-tool-call events leave at all.
-        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
         telemetry.AddSharedProperty("logged_in", loggedIn);
 
         await using var mcp = new McpTelemetry(telemetry);
@@ -88,7 +87,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -97,7 +96,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                mcp.ToolCalled("kcap-review", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-review", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -151,7 +150,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
     async Task<PrIdentity?> DetectPrFromGitAsync() {
         try {
             var cwd      = workdir.Path;
-            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
+            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time);
 
             if (repoInfo?.Owner is not null && repoInfo.RepoName is not null && repoInfo.PrNumber is not null) {
                 return new PrIdentity(repoInfo.Owner, repoInfo.RepoName, repoInfo.PrNumber.Value);

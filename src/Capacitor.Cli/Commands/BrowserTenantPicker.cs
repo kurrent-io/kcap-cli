@@ -22,9 +22,9 @@ namespace Capacitor.Cli.Commands;
 public sealed class BrowserTenantPicker(
         IBrowserLauncher    launcher,
         SpectreTenantPicker fallback,
+        TimeProvider       time,
         IAuthProgress?      progress   = null,
         IKeyWatcher?        keys       = null,
-        TimeProvider?       time       = null,
         Func<bool>?         canPrompt  = null
     ) : ITenantPicker {
 
@@ -32,7 +32,7 @@ public sealed class BrowserTenantPicker(
 
     IAuthProgress Progress => progress ?? ConsoleAuthProgress.Instance;
     IKeyWatcher   Keys     => keys     ?? ConsoleKeyWatcher.Instance;
-    TimeProvider  Clock    => time     ?? TimeProvider.System;
+    TimeProvider  Clock    => time;
 
     public DiscoveredTenant? Pick(DiscoveredTenant[] tenants) => fallback.Pick(tenants);
 

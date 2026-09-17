@@ -16,7 +16,7 @@ internal static class BoundedAuth {
     /// with a rotation in flight, so the caller hands the refresh to something that will outlive it.
     /// </summary>
     internal static async Task<AuthAttempt?> CreateClientWithinAsync(
-            Func<Task<AuthAttempt>> factory, TimeSpan cap, Action? onAbandoned = null) {
+            Func<Task<AuthAttempt>> factory, TimeSpan cap, TimeProvider time, Action? onAbandoned = null) {
         if (cap <= TimeSpan.Zero) {
             onAbandoned?.Invoke();
 
@@ -24,7 +24,7 @@ internal static class BoundedAuth {
         }
 
         var task   = factory();
-        var winner = await Task.WhenAny(task, Task.Delay(cap));
+        var winner = await Task.WhenAny(task, Task.Delay(cap, time));
 
         if (winner != task) {
             onAbandoned?.Invoke();
