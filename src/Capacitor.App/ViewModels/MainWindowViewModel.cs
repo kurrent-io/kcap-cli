@@ -277,8 +277,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,
-            CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
-            IObservable<string?>? lifecycleStatus = null, TimeProvider? time = null, HomeViewModel? home = null,
+            CancellationToken shutdownToken, ActivityViewModel activity, TimeProvider time,
+            Func<CancellationToken, Task>? startAction = null,
+            IObservable<string?>? lifecycleStatus = null, HomeViewModel? home = null,
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
@@ -287,7 +288,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null) {
         _service = service;
-        _time = time ?? TimeProvider.System;
+        _time = time;
         Activity = activity;
         Home = home;
         _navigation = navigation ?? new NavigationGate();

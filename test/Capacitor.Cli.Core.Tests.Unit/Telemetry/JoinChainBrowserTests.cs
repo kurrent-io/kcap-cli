@@ -66,7 +66,7 @@ public class JoinChainBrowserTests {
             var port     = OAuthLoginFlow.GetAvailablePort();
             var redirect = $"http://127.0.0.1:{port}/callback";
 
-            using var browser = new LoopbackBrowser(new RecordingBrowser(), join: probe.Join) {
+            using var browser = new LoopbackBrowser(new RecordingBrowser(), TimeProvider.System, join: probe.Join) {
                 DrainCap = DriverBudget, DisposeWait = TimeSpan.FromSeconds(10),
             };
 

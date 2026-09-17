@@ -17,7 +17,7 @@ internal enum SeamAnswer { Answered, NotAnswered }
 /// an ungoverned session exits 0 with no output, because any non-zero exit renders Claude's opaque
 /// hook-error banner.
 /// </summary>
-internal sealed class ClaudePolicySeam(ConfigRoot config) {
+internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
     /// <summary>False degrades a policy ask to pass-through: nothing is written to Claude, and the
     /// decision event records requested=ask against effective=pass_through so the gap stays
     /// visible rather than silent.</summary>
@@ -212,11 +212,11 @@ internal sealed class ClaudePolicySeam(ConfigRoot config) {
             RawPayloadJson = rawPayload,
         };
 
-        return new PolicyDecisionEmitter(config).EmitAsync(new PolicyDecisionEventV1(
+        return new PolicyDecisionEmitter(config, time).EmitAsync(new PolicyDecisionEventV1(
             sessionId, f.AgentId, "claude", PolicySeams.ClaudePermissionRequest,
             snapshot?.Id ?? "unknown", PolicyEngine.Version, "full", "ask", "prompt_stands",
             PolicyWire.ToWire(action), [], snapshot?.Degraded ?? false, "evaluation_error",
-            f.CallId, consumed.Ambiguous, DateTimeOffset.UtcNow.ToString("O"),
+            f.CallId, consumed.Ambiguous, time.GetUtcNow().ToString("O"),
             PendingAskConsumed: true, FreshOutcome: "error"), snapshot);
     }
 
@@ -227,12 +227,12 @@ internal sealed class ClaudePolicySeam(ConfigRoot config) {
 
     Task Emit(SeamContext ctx, string requested, string effective, bool? ambiguous = null,
               bool? pendingAskConsumed = null, string? freshOutcome = null) =>
-        new PolicyDecisionEmitter(config).EmitAsync(new PolicyDecisionEventV1(
+        new PolicyDecisionEmitter(config, time).EmitAsync(new PolicyDecisionEventV1(
             ctx.SessionId, ctx.AgentId, "claude", ctx.Seam, ctx.Snapshot.Id, PolicyEngine.Version,
             ctx.Mode == EvaluationMode.Full ? "full" : "tighten_only", requested, effective,
             PolicyWire.ToWire(ctx.Action), PolicyWire.ToWire(ctx.Eval.MatchedRules),
             ctx.Snapshot.Degraded, null, ctx.CallId, ambiguous ?? (ctx.CallId is null),
-            DateTimeOffset.UtcNow.ToString("O"), pendingAskConsumed, freshOutcome), ctx.Snapshot);
+            time.GetUtcNow().ToString("O"), pendingAskConsumed, freshOutcome), ctx.Snapshot);
 
     // camelCase keys are Claude's own PreToolUse hook contract, outside kcap's snake_case
     // convention — the same exemption LocalPermissionBridge.BuildClaudeResponse takes.

@@ -19,7 +19,7 @@ internal sealed class SeqCaptureServerConnection() : ServerConnection(
     UnusedTokenStore.Create(),
     NullLoggerFactory.Instance,
     NullLogger<ServerConnection>.Instance
-) {
+, TimeProvider.System) {
     internal override bool                                  IsReady       => true;
     public            List<CommandRejected>                 Rejects       { get; } = [];
     public            List<CommandAck>                      Acks          { get; } = [];

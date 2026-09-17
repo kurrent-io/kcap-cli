@@ -11,8 +11,7 @@ public sealed class ServerPullRequestSource : IPullRequestSource, IAsyncDisposab
     readonly Dictionary<string, int> _missing = new(StringComparer.Ordinal);
     long _generation;
     public ServerPullRequestSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
-        MachineAuth machine, AuthenticatedServerReads<PullRequestClient>.ClientFactory? factory = null,
-        TimeProvider? time = null) {
+        MachineAuth machine, TimeProvider time, AuthenticatedServerReads<PullRequestClient>.ClientFactory? factory = null) {
         _reads = new(config, profiles, env, machine, (http, url) => new PullRequestClient(http, url, time), factory, allowAutoRedirect: false);
     }
     public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => _reads.ReadAsync((channel, token) => channel.DiscoverAsync(refresh, token),

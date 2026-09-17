@@ -23,7 +23,10 @@ internal sealed partial class LaunchConsentStore {
     readonly object _gate = new();
     LaunchConsentPolicy _current;
 
-    public LaunchConsentStore(string stateDir, ILogger logger) {
+    readonly TimeProvider _time;
+
+    public LaunchConsentStore(string stateDir, ILogger logger, TimeProvider time) {
+        _time = time;
         Directory.CreateDirectory(stateDir);
 
         // Owner-only directory: consent.json holds requester ids and repo paths, so no other
@@ -80,7 +83,7 @@ internal sealed partial class LaunchConsentStore {
             }
 
             if (!recognized) {
-                var quarantinePath = _path + ".quarantined-" + DateTime.UtcNow.Ticks;
+                var quarantinePath = _path + ".quarantined-" + _time.GetUtcNow().UtcDateTime.Ticks;
                 try {
                     File.Move(_path, quarantinePath, overwrite: true);
                 } catch (Exception ex) {

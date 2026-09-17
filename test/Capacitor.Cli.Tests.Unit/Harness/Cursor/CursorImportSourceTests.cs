@@ -25,19 +25,19 @@ public class CursorImportSourceTests {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [Test]
     public async Task vendor_is_cursor() {
         using var fx  = new ProjectsDirFixture();
-        var       src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var       src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.Vendor).IsEqualTo(HarnessId.Cursor);
     }
 
     [Test]
     public async Task does_not_support_title_generation() {
         using var fx  = new ProjectsDirFixture();
-        var       src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var       src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.SupportsTitleGeneration).IsFalse();
     }
 
@@ -65,14 +65,14 @@ public class CursorImportSourceTests {
     [Test]
     public async Task is_available_when_projects_dir_exists() {
         using var fx  = new ProjectsDirFixture();
-        var       src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var       src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.IsAvailable).IsTrue();
     }
 
     [Test]
     public async Task is_unavailable_when_projects_dir_missing() {
         using var missingDir = TempDir.WithPathTo("kcap-cursor-missing", out var missing);
-        var src     = new CursorImportSource(Config.Root, missing, missing, router: new GitProviderRouter());
+        var src     = new CursorImportSource(Config.Root, missing, missing, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.IsAvailable).IsFalse();
     }
 
@@ -91,7 +91,7 @@ public class CursorImportSourceTests {
     [Test]
     public async Task discover_returns_empty_when_projects_dir_missing() {
         using var missingDir = TempDir.WithPathTo("kcap-cursor-missing", out var missing);
-        var src     = new CursorImportSource(Config.Root, missing, missing, router: new GitProviderRouter());
+        var src     = new CursorImportSource(Config.Root, missing, missing, router: new GitProviderRouter(), time: TimeProvider.System);
         var result  = await src.DiscoverAsync(Filters(), CancellationToken.None);
         await Assert.That(result.Count).IsEqualTo(0);
     }
@@ -102,7 +102,7 @@ public class CursorImportSourceTests {
         fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"x\":1}\n");
         fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":2}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         var got = await src.DiscoverAsync(Filters(), CancellationToken.None);
 
         await Assert.That(got.Count).IsEqualTo(2);
@@ -117,7 +117,7 @@ public class CursorImportSourceTests {
         fx.AddWorkspaceJson("hash-aaa", "file:///Users/me/dev/foo");
         fx.AddSession("Users-me-dev-foo", "33333333-3333-3333-3333-333333333333", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         var got = await src.DiscoverAsync(Filters(), CancellationToken.None);
 
         await Assert.That(got.Count).IsEqualTo(1);
@@ -129,7 +129,7 @@ public class CursorImportSourceTests {
         using var fx = new ProjectsDirFixture();
         fx.AddSession("Users-someone-else-proj", "44444444-4444-4444-4444-444444444444", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         var got = await src.DiscoverAsync(Filters(), CancellationToken.None);
 
         await Assert.That(got.Count).IsEqualTo(1);
@@ -142,7 +142,7 @@ public class CursorImportSourceTests {
         fx.AddSession("Users-me-proj", "55555555-5555-5555-5555-555555555555", "{}\n");
         fx.AddSession("Users-me-proj", "66666666-6666-6666-6666-666666666666", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         // Pass the dashed form; the filter must normalize to dashless before matching.
         var got = await src.DiscoverAsync(Filters(filterSession: "55555555-5555-5555-5555-555555555555"), CancellationToken.None);
 
@@ -158,7 +158,7 @@ public class CursorImportSourceTests {
         fx.AddSession("Users-me-dev-match", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "{}\n");
         fx.AddSession("Users-me-dev-other", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         var got = await src.DiscoverAsync(Filters(filterCwd: "/Users/me/dev/match"), CancellationToken.None);
 
         await Assert.That(got.Count).IsEqualTo(1);
@@ -174,7 +174,7 @@ public class CursorImportSourceTests {
             "11111111-1111-1111-1111-111111111111",
             "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
         );
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound)
@@ -204,7 +204,7 @@ public class CursorImportSourceTests {
         using var fx = new ProjectsDirFixture();
         fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n{}\n");
 
-        var       src     = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var       src     = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
@@ -228,7 +228,7 @@ public class CursorImportSourceTests {
             "11111111-1111-1111-1111-111111111111",
             "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
         );
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         // Three non-blank lines at indexes 0,1,2 → last_line_number=2 means fully loaded.
         using var handler = new StubHandler(
@@ -256,7 +256,7 @@ public class CursorImportSourceTests {
             "11111111-1111-1111-1111-111111111111",
             "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
         );
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.OK) {
@@ -279,7 +279,7 @@ public class CursorImportSourceTests {
     public async Task classify_marks_too_short_below_min_lines() {
         using var fx = new ProjectsDirFixture();
         fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n");
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
@@ -302,7 +302,7 @@ public class CursorImportSourceTests {
             "11111111-1111-1111-1111-111111111111",
             "{\"a\":1}\n{\"b\":2}\n"
         );
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
         using var client  = new HttpClient(handler);
@@ -331,7 +331,7 @@ public class CursorImportSourceTests {
         fx.AddSession("Users-me-proj", sessionIdWithDashes, "{\"a\":1}\n{\"b\":2}\n");
         Markers.Quarantine(sessionId, "transcript rewrite detected");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
@@ -355,7 +355,7 @@ public class CursorImportSourceTests {
         // test's quarantine marker for that id (see classify_skips_a_quarantined_standalone_session).
         fx.AddSession("Users-me-proj", Guid.NewGuid().ToString(), "{\"a\":1}\n{\"b\":2}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
@@ -418,7 +418,7 @@ public class CursorImportSourceTests {
             "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
         );
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<(string Path, string Body)>();
 
@@ -491,7 +491,7 @@ public class CursorImportSourceTests {
         File.SetCreationTimeUtc(jsonl, created);
         File.SetLastWriteTimeUtc(jsonl, modified);
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<(string Path, string Body)>();
 
@@ -535,7 +535,7 @@ public class CursorImportSourceTests {
         using var fx    = new ProjectsDirFixture();
         var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<string>();
 
@@ -576,7 +576,7 @@ public class CursorImportSourceTests {
         using var fx    = new ProjectsDirFixture();
         var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(
             postCapture: (req, _) => req.RequestUri!.AbsolutePath == "/hooks/session-end/cursor"
@@ -617,7 +617,7 @@ public class CursorImportSourceTests {
             "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
         );
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<string>();
 
@@ -666,7 +666,7 @@ public class CursorImportSourceTests {
         var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
         var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound), // child subsession watermark: nothing sent yet
@@ -710,7 +710,7 @@ public class CursorImportSourceTests {
         var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
         var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(
             // Subsession watermark already covers both child lines (0-indexed last_line_number=1).
@@ -767,7 +767,7 @@ public class CursorImportSourceTests {
         var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
         var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<string>();
 
@@ -823,7 +823,7 @@ public class CursorImportSourceTests {
         // ingested), so lines 1 and 2 are genuinely new.
         var childJsonl = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var handler = new StubHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.OK) {
@@ -870,7 +870,7 @@ public class CursorImportSourceTests {
         // are genuinely new.
         var childJsonl = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var getCalls = 0;
         var posted   = new List<(string Path, string Body)>();
@@ -934,7 +934,7 @@ public class CursorImportSourceTests {
         var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
         var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var getCalls = 0;
         var posted   = new List<(string Path, string Body)>();
@@ -993,7 +993,7 @@ public class CursorImportSourceTests {
         var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
         var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var getCalls = 0;
 
@@ -1040,7 +1040,7 @@ public class CursorImportSourceTests {
         var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
         var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var getCalls = 0;
 
@@ -1180,7 +1180,7 @@ public class CursorImportSourceTests {
                     RemoteUrl = "git@github.com:kurrent-io/kcap-server.git",
                 }
             )
-        , router: new GitProviderRouter());
+        , router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<(string Path, string Body)>();
         using var handler = new StubHandler(
@@ -1225,7 +1225,7 @@ public class CursorImportSourceTests {
             fx.ProjectsDir,
             fx.WorkspaceStorageDir,
             repoDetector: _ => Task.FromResult<RepositoryPayload?>(null)
-        , router: new GitProviderRouter());
+        , router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<(string Path, string Body)>();
         using var handler = new StubHandler(
@@ -1270,7 +1270,7 @@ public class CursorImportSourceTests {
             "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":" + childUserText + "}]}}\n" +
             "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var getClient  = new HttpClient(getHandler);
         var discovered = await src.DiscoverAsync(Filters(), CancellationToken.None);
@@ -1408,7 +1408,7 @@ public class CursorImportSourceTests {
 
         Markers.Quarantine(sessionId, "transcript rewrite detected");
         try {
-            var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+            var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
             var posted = new List<string>();
             using var handler = new StubHandler(
@@ -1446,7 +1446,7 @@ public class CursorImportSourceTests {
         using var fx = new ProjectsDirFixture();
         var jsonl = fx.AddSession(
             "Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         var sessionId = "11111111111111111111111111111111";
 
         var posted = new List<string>();
@@ -1488,7 +1488,7 @@ public class CursorImportSourceTests {
         var sessionIdWithDashes = Guid.NewGuid().ToString();
         var sessionId           = CursorImportSource.NormalizeCursorSessionId(sessionIdWithDashes);
         var jsonl = fx.AddSession("Users-me-proj", sessionIdWithDashes, "{\"a\":1}\n{\"b\":2}\n");
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<string>();
         using var handler = new StubHandler(postCapture: (req, _) => {
@@ -1538,7 +1538,7 @@ public class CursorImportSourceTests {
         var sessionId           = CursorImportSource.NormalizeCursorSessionId(sessionIdWithDashes);
         var lines = string.Concat(Enumerable.Range(0, 150).Select(i => $$"""{"n":{{i}}}""" + "\n"));
         var jsonl = fx.AddSession("Users-me-proj", sessionIdWithDashes, lines);
-        var src   = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src   = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted         = new List<string>();
         var transcriptPosts = 0;
@@ -1598,7 +1598,7 @@ public class CursorImportSourceTests {
         var sessionId           = CursorImportSource.NormalizeCursorSessionId(sessionIdWithDashes);
         var lines = string.Concat(Enumerable.Range(0, 30).Select(i => $$"""{"n":{{i}}}""" + "\n"));
         var jsonl = fx.AddSession("Users-me-proj", sessionIdWithDashes, lines);
-        var src   = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src   = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted           = new List<string>();
         var transcriptPosts  = 0;
@@ -1659,7 +1659,7 @@ public class CursorImportSourceTests {
         var parentJsonl = fx.AddSession("Users-me-proj", parentIdWithDashes, "{\"a\":1}\n");
         var childJsonl  = fx.AddSession("Users-me-proj", childIdWithDashes, "{\"b\":1}\n{\"c\":2}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<string>();
         using var handler = new StubHandler(
@@ -1729,7 +1729,7 @@ public class CursorImportSourceTests {
         var childAJsonl = fx.AddSession("Users-me-proj", childAIdWithDashes, "{\"b\":1}\n");
         var childBJsonl = fx.AddSession("Users-me-proj", childBIdWithDashes, "{\"c\":1}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var bodies = new List<(string Path, string Body)>();
         using var handler = new StubHandler(
@@ -1804,7 +1804,7 @@ public class CursorImportSourceTests {
         Markers.Quarantine(parentId, "transcript rewrite detected");
 
         try {
-            var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+            var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
             using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
             using var client  = new HttpClient(handler);
 
@@ -1862,7 +1862,7 @@ public class CursorImportSourceTests {
             "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":" + childUserText + "}]}}\n" +
             "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
@@ -1888,7 +1888,7 @@ public class CursorImportSourceTests {
         fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
         fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
@@ -1907,7 +1907,7 @@ public class CursorImportSourceTests {
         using var fx    = new ProjectsDirFixture();
         var       jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<(string Path, string Body)>();
 
@@ -1949,7 +1949,7 @@ public class CursorImportSourceTests {
             "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
         );
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
         var posted = new List<(string Path, string Body)>();
 
@@ -1993,7 +1993,7 @@ public class CursorImportSourceTests {
         fx.AddWorkspaceJson("hash-aaa", "file:///Users/me/dev/MyProj");
         fx.AddSession("Users-me-dev-MyProj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         // Caller passes a lower-cased cwd, e.g. from a shell tab-completion.
         var got = await src.DiscoverAsync(Filters(filterCwd: "/users/me/dev/myproj"), CancellationToken.None);
 
@@ -2019,7 +2019,7 @@ public class CursorImportSourceTests {
         File.SetCreationTimeUtc(jsonl, thirtyDaysAgo);
         File.SetLastWriteTimeUtc(jsonl, DateTime.UtcNow);
 
-        var src   = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src   = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         var since = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-7));
         var got   = await src.DiscoverAsync(Filters(since: since), CancellationToken.None);
 
@@ -2036,7 +2036,7 @@ public class CursorImportSourceTests {
         fx.AddWorkspaceJson("hash-b", "file:///foo-bar");
         fx.AddSession("foo-bar", "11111111-1111-1111-1111-111111111111", "{}\n");
 
-        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter());
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
         var got = await src.DiscoverAsync(Filters(), CancellationToken.None);
 
         await Assert.That(got.Count).IsEqualTo(1);

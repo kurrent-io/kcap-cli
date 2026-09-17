@@ -8,7 +8,8 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
         DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, NpmRegistryClient npm, MachineAuth machine, bool? appBundled = null) {
+        ICapacitorHttpClient http, NpmRegistryClient npm, MachineAuth machine, TimeProvider time,
+        bool? appBundled = null) {
 
     readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();
 
@@ -53,7 +54,7 @@ public sealed class StatusCommand(
             var tokens = await tokenStore.GetValidTokensForProfileAsync(profiles.Name);
 
             if (tokens is not null) {
-                var remaining = tokens.ExpiresAt - DateTimeOffset.UtcNow;
+                var remaining = tokens.ExpiresAt - time.GetUtcNow();
 
                 var expiryText = remaining.TotalHours > 1
                     ? $"expires in {remaining.TotalHours:F0}h"
@@ -130,7 +131,7 @@ public sealed class StatusCommand(
         }
 
         var channel  = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
-        var result   = await UpdateNotice.GetSharedCheckAsync(channel, config, npm);
+        var result   = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         // Cap the recommendation at the connected server's version (min(npm latest, server)).
         var advisory = UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config);

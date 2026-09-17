@@ -22,7 +22,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Normalized origin URLs are cached for <see cref="CacheTtl"/> per path to avoid
 /// spawning <c>git</c> on rapid re-clicks.
 /// </summary>
-internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> logger) {
+internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> logger, TimeProvider time) {
     static readonly TimeSpan CacheTtl     = TimeSpan.FromSeconds(60);
     const           int      MaxWalkUp    = 10;
     const           int      GitTimeoutMs = 5_000;
@@ -99,7 +99,7 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
         // Persisted RepoPathStore failures are non-fatal — server candidates
         // and AllowedRepoPaths still flow through.
         try {
-            var persisted = await new RepoPathStore(config.ConfigRoot).GetSortedPathsAsync();
+            var persisted = await new RepoPathStore(config.ConfigRoot, time).GetSortedPathsAsync();
             foreach (var p in persisted) Add(p);
         } catch (Exception ex) {
             LogPersistedLoadFailed(ex);
@@ -150,13 +150,13 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
     }
 
     async Task<string?> GetNormalizedOriginAsync(string repoRoot, CancellationToken ct) {
-        var now = DateTimeOffset.UtcNow;
+        var now = time.GetUtcNow();
 
         if (_cache.TryGetValue(repoRoot, out var cached) && cached.Expires > now) {
             return cached.NormalizedRemote;
         }
 
-        var raw        = await RunGitCaptureAsync(repoRoot, ["remote", "get-url", "origin"], ct);
+        var raw        = await RunGitCaptureAsync(repoRoot, ["remote", "get-url", "origin"], time, ct);
         var normalized = raw is null ? null : RemoteMatcher.NormalizeRemoteUrl(raw.Trim());
 
         _cache[repoRoot] = new CacheEntry(now + CacheTtl, normalized);
@@ -176,7 +176,8 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
         }
     }
 
-    static async Task<string?> RunGitCaptureAsync(string cwd, string[] args, CancellationToken ct) {
+    static async Task<string?> RunGitCaptureAsync(
+            string cwd, string[] args, TimeProvider time, CancellationToken ct) {
         var psi = new ProcessStartInfo("git", args) {
             WorkingDirectory       = cwd,
             RedirectStandardOutput = true,
@@ -192,8 +193,8 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
 
         if (proc is null) return null;
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(GitTimeoutMs);
+        using var gitCap     = new CancellationTokenSource(TimeSpan.FromMilliseconds(GitTimeoutMs), time);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct, gitCap.Token);
 
         try {
             await proc.WaitForExitAsync(timeoutCts.Token);

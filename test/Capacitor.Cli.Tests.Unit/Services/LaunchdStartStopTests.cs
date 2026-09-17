@@ -35,7 +35,7 @@ public partial class LaunchdStartStopTests {
         var path = SeedPlist();
 
         List<string[]> calls = [];
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) => {
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) => {
             calls.Add(args);
             return (0, "", "");
         });
@@ -55,7 +55,7 @@ public partial class LaunchdStartStopTests {
 
         var path = SeedPlist();
 
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) =>
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) =>
             args[0] == "bootout"
                 ? (113, "", "")
                 : (113, "", "Could not find service \"io.kurrent.kcap.daemon.test\" in domain for user gui: 501"));
@@ -73,7 +73,7 @@ public partial class LaunchdStartStopTests {
 
         var path = SeedPlist();
 
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) =>
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) =>
             args[0] == "bootout"
                 ? (1, "", "Operation not permitted")
                 : (0, "state = running\npid = 924\n", ""));
@@ -94,7 +94,7 @@ public partial class LaunchdStartStopTests {
         var path = SeedPlist();
 
         List<string[]> calls = [];
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) => {
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) => {
             calls.Add(args);
             return args[0] == "print"
                 ? (113, "", "Could not find service \"io.kurrent.kcap.daemon.test\" in domain for user gui: 501")
@@ -117,7 +117,7 @@ public partial class LaunchdStartStopTests {
         var path = SeedPlist();
 
         List<string[]> calls = [];
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) => {
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) => {
             calls.Add(args);
             return args[0] == "print"
                 ? (0, "state = running\npid = 924\n", "")
@@ -142,7 +142,7 @@ public partial class LaunchdStartStopTests {
         var path = SeedPlist();
 
         List<string[]> calls = [];
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) => {
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) => {
             calls.Add(args);
             return (0, "", "");
         });
@@ -165,7 +165,7 @@ public partial class LaunchdStartStopTests {
 
         SeedPlist();
 
-        var mgr = new LaunchdServiceManager(Home, runBounded: (_, _, _) => (137, "", "", true));
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runBounded: (_, _, _) => (137, "", "", true));
 
         var q = mgr.Query("test", TimeSpan.FromSeconds(1));
 
@@ -178,7 +178,7 @@ public partial class LaunchdStartStopTests {
 
         var path = SeedPlist();
 
-        var mgr = new LaunchdServiceManager(Home, runBounded: (_, _, _) => (0, "", "", true));
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runBounded: (_, _, _) => (0, "", "", true));
 
         var ok = mgr.Uninstall("test", TimeSpan.FromSeconds(1), out var error);
 
@@ -193,7 +193,7 @@ public partial class LaunchdStartStopTests {
 
         SeedPlist();
 
-        var mgr = new LaunchdServiceManager(Home, writeUnit: (_, _, _) => { }, runBounded: (_, _, _) => (0, "", "", true));
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, writeUnit: (_, _, _) => { }, runBounded: (_, _, _) => (0, "", "", true));
         var spec = new ServiceSpec("test", "/opt/kcap/kcap-daemon", "/tmp/daemon-test.log", new Dictionary<string, string>(), []);
 
         await Assert.That(() => mgr.WriteAndBootstrap(spec, TimeSpan.FromSeconds(1))).Throws<TimeoutException>();
@@ -226,7 +226,7 @@ public partial class LaunchdStartStopTests {
             """;
         File.WriteAllText(path, duplicateKeyPlist);
 
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) =>
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) =>
             args[0] == "print"
                 ? (113, "", "Could not find service \"io.kurrent.kcap.daemon.test\" in domain for user gui: 501")
                 : (0, "", ""));
@@ -246,7 +246,7 @@ public partial class LaunchdStartStopTests {
 
         File.WriteAllText(path, "<plist version=\"1.0\"><dict><key>Truncated");
 
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) =>
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) =>
             args[0] == "print"
                 ? (113, "", "Could not find service \"io.kurrent.kcap.daemon.test\" in domain for user gui: 501")
                 : (0, "", ""));
@@ -265,7 +265,7 @@ public partial class LaunchdStartStopTests {
         SeedPlist();
 
         var timeouts = new List<TimeSpan>();
-        var mgr = new LaunchdServiceManager(Home, runBounded: (_, args, timeout) => {
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runBounded: (_, args, timeout) => {
             timeouts.Add(timeout);
             if (args[0] == "print") {
                 Thread.Sleep(50); // consume a real, measurable slice of the shared budget
@@ -292,7 +292,7 @@ public partial class LaunchdStartStopTests {
 
         SeedPlist();
 
-        var mgr = new LaunchdServiceManager(Home, runBounded: (_, args, timeout) =>
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runBounded: (_, args, timeout) =>
             args[0] == "print"
                 ? (113, "", "Could not find service \"io.kurrent.kcap.daemon.test\" in domain for user gui: 501", true) // timed out
                 : (0, "", "", false));
@@ -311,7 +311,7 @@ public partial class LaunchdStartStopTests {
         var path = SeedPlist();
 
         List<string[]> calls = [];
-        var mgr = new LaunchdServiceManager(Home, runProcess: (_, args) => {
+        var mgr = new LaunchdServiceManager(Home, TimeProvider.System, runProcess: (_, args) => {
             calls.Add(args);
             return (1, "", "Operation not permitted");
         });

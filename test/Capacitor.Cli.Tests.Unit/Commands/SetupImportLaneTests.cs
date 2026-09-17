@@ -106,7 +106,7 @@ public class SetupImportLaneTests {
 
     SetupImportLane Lane(Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>> runner) =>
         new(Config.Root, Resolutions.None(Config.Root), Home, new FixedCapacitorHttpClient(),
-            TestHarnesses.Under(Home), new GitProviderRouter(), runner);
+            TestHarnesses.Under(Home), new GitProviderRouter(), TimeProvider.System, runner);
 
     /// <summary>A run that reported its Done grid with nothing failed.</summary>
     static Task<ImportCommand.ImportRunOutcome?> Clean() =>
@@ -252,10 +252,10 @@ public class SetupImportLaneTests {
             ImportCommand.ImportDiscoveryResult? found = null;
 
             await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home,
-                TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter()).HandleImport(
+                TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
                 filterCwd:    null,
                 minLines:     1,
-                sources:      [new ClaudeImportSource(Config.Root, projects, router: new GitProviderRouter())],
+                sources:      [new ClaudeImportSource(Config.Root, projects, router: new GitProviderRouter(), time: TimeProvider.System)],
                 discoverOnly: true,
                 discoverJson: true,
                 windowsAsOf:  asOf,
@@ -276,7 +276,7 @@ public class SetupImportLaneTests {
 
     [Test]
     public async Task Every_harness_has_a_source_when_nothing_filters_them() {
-        var built = SetupCommand.BuildImportSources(Config.Root, TestHarnesses.Under(Home), router: new GitProviderRouter());
+        var built = SetupCommand.BuildImportSources(Config.Root, TestHarnesses.Under(Home), router: new GitProviderRouter(), time: TimeProvider.System);
 
         await Assert.That(built.Select(b => b.Vendor))
                     .IsEquivalentTo(HarnessRegistry.Identities.Select(h => h.Id));
@@ -286,7 +286,7 @@ public class SetupImportLaneTests {
     public async Task Only_the_named_vendors_sources_are_built() {
         // The filter is applied to what gets scanned, which is what makes a reported figure already
         // scoped rather than needing subtraction afterwards.
-        var built = SetupCommand.BuildImportSources(Config.Root, TestHarnesses.Under(Home), new GitProviderRouter(), [HarnessId.Claude, HarnessId.Codex]);
+        var built = SetupCommand.BuildImportSources(Config.Root, TestHarnesses.Under(Home), new GitProviderRouter(), TimeProvider.System, [HarnessId.Claude, HarnessId.Codex]);
 
         await Assert.That(built.Select(s => s.Vendor)).IsEquivalentTo([HarnessId.Claude, HarnessId.Codex]);
     }
@@ -295,7 +295,7 @@ public class SetupImportLaneTests {
     public async Task An_empty_vendor_list_builds_nothing_rather_than_everything() {
         // "Scan nothing" is a real answer — every agent on the machine was left unrecorded — and
         // collapsing it to "no filter" would import exactly what the user declined.
-        await Assert.That(SetupCommand.BuildImportSources(Config.Root, TestHarnesses.Under(Home), new GitProviderRouter(), [])).IsEmpty();
+        await Assert.That(SetupCommand.BuildImportSources(Config.Root, TestHarnesses.Under(Home), new GitProviderRouter(), TimeProvider.System, [])).IsEmpty();
     }
 
     // ---- What the run reports back to the flow.

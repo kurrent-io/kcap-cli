@@ -28,11 +28,11 @@ internal sealed class AcpPermissionSurface(
         PermissionPromptBroker                                                                       broker,
         string                                                                                       vendor,
         Func<AcpInteractionRequest, Action<string>?, CancellationToken, Task<AcpInteractionDecision>> requestServer,
+        TimeProvider                                                                                  timeProvider,
         Func<string, string, AcpInteractionDecision, Task>?                                           resolveServer = null,
-        PermissionDecisionLog?                                                                        decisionLog = null,
-        TimeProvider?                                                                                 timeProvider = null) {
+        PermissionDecisionLog?                                                                        decisionLog = null) {
 
-    readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    readonly TimeProvider _time = timeProvider;
 
     public async Task<AcpInteractionDecision> RequestAsync(AcpInteractionRequest request, CancellationToken ct) {
         if (request.Kind != "permission")

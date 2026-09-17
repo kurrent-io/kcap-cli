@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Commands;
 
 class PermissionRequestCommand(
         ConfigRoot config, ProfileContext profiles, HostedAgent hosted,
-        ICapacitorHttpClient http, WatcherManager watchers) {
+        ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -64,7 +64,7 @@ class PermissionRequestCommand(
         // no journal shared across the two processes. An excluded session is ungoverned entirely
         // (see selfHealWatcher).
         if (selfHealWatcher && !isRenderedAgent
-            && await new ClaudePolicySeam(config).HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out)
+            && await new ClaudePolicySeam(config, time).HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out)
                 == SeamAnswer.Answered) {
             return 0;
         }

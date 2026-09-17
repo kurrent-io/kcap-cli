@@ -30,7 +30,7 @@ public static class ServerVersionStore {
     /// Records the server version observed for <paramref name="serverUrl"/>. No-op for a blank URL or
     /// version, or when the same value was already written this process. Never throws.
     /// </summary>
-    public static void Set(string? serverUrl, string? version, ConfigRoot config) {
+    public static void Set(string? serverUrl, string? version, ConfigRoot config, TimeProvider time) {
         if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(version)) return;
 
         var key  = Normalize(serverUrl);
@@ -42,7 +42,7 @@ public static class ServerVersionStore {
             var obj = new JsonObject {
                 ["url"]     = key,
                 ["version"] = version,
-                ["seen_at"] = DateTimeOffset.UtcNow,
+                ["seen_at"] = time.GetUtcNow(),
             };
 
             var tempPath = $"{path}.tmp";

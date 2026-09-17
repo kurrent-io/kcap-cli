@@ -53,7 +53,7 @@ public class AcpTranscriptAggregationTests {
             Fake    = new FakeAcpAgent();
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
             Process = new FakeAcpProcess();
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, transcriptCapacity: transcriptCapacity);
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, TimeProvider.System, transcriptCapacity: transcriptCapacity);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);

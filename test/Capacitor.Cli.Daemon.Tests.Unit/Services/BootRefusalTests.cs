@@ -6,7 +6,7 @@ public class BootRefusalTests {
     static void Write(DaemonConfig config, string token) =>
         BootRefusalMarker.TryWrite(
             config.Store, config.Name, token, config.ExpectedServerUrl, config.ServerUrl,
-            config.InstanceId, config.BootAttemptId);
+            config.InstanceId, config.BootAttemptId, TimeProvider.System);
 
     [Test]
     public async Task Write_then_read_round_trips_identity() {
@@ -82,7 +82,7 @@ public class BootRefusalTests {
         using var tmp = new TempDir();
         var config = new DaemonConfig { Name = "d-empty-expect", ServerUrl = "https://s", ExpectedServerUrl = "", Store = new DaemonStore(tmp.Path) };
         using var capture = ConsoleOutput.StartErrorCapture();
-        var exit = await DaemonRunner.RunBootChecksAsync(config);
+        var exit = await DaemonRunner.RunBootChecksAsync(config, TimeProvider.System);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capture.GetCapturedError()).Contains("server_expectation_mismatch");
@@ -93,7 +93,7 @@ public class BootRefusalTests {
         using var tmp = new TempDir();
         var config = new DaemonConfig { Name = "d-absent", ServerUrl = "https://s", ConsentSeedDirective = null, Store = new DaemonStore(tmp.Path) };
 
-        var exit = await DaemonRunner.RunBootChecksAsync(config);
+        var exit = await DaemonRunner.RunBootChecksAsync(config, TimeProvider.System);
 
         await Assert.That(exit).IsNull();
         await Assert.That(File.Exists(Path.Combine(config.Store.StateDirectory(config.Name), "consent.json"))).IsFalse(); // never seeded
@@ -106,7 +106,7 @@ public class BootRefusalTests {
         // must activate on it (BootSeed("") itself already classifies RefusedInvalidDirective).
         var config = new DaemonConfig { Name = "d-empty", ServerUrl = "https://s", ConsentSeedDirective = "", Store = new DaemonStore(tmp.Path) };
         using var capture = ConsoleOutput.StartErrorCapture();
-        var exit = await DaemonRunner.RunBootChecksAsync(config);
+        var exit = await DaemonRunner.RunBootChecksAsync(config, TimeProvider.System);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capture.GetCapturedError()).Contains("consent_seed_invalid");
@@ -125,7 +125,7 @@ public class BootRefusalTests {
         };
         await File.WriteAllTextAsync(config.Store.StateDirectory(config.Name), "not a directory");
         using var capture = ConsoleOutput.StartErrorCapture();
-        var exit = await DaemonRunner.RunBootChecksAsync(config);
+        var exit = await DaemonRunner.RunBootChecksAsync(config, TimeProvider.System);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capture.GetCapturedError()).Contains("consent_seed_unwritable");

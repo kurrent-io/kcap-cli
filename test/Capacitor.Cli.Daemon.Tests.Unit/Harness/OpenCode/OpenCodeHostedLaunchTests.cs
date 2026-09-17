@@ -160,7 +160,7 @@ public class OpenCodeHostedLaunchTests {
             connection: new StubServerConnection(),
             // Never spawns: this reads a capability property only.
             connectionSource: _ => throw new InvalidOperationException(
-                "IsAvailable must not spawn a process."));
+                "IsAvailable must not spawn a process."), timeProvider: TimeProvider.System);
 
         await Assert.That(factory.Vendor).IsEqualTo("opencode");
         await Assert.That(factory.IsAvailable()).IsFalse();
@@ -170,5 +170,5 @@ public class OpenCodeHostedLaunchTests {
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
         UnusedTokenStore.Create(),
         Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
-        Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerConnection>.Instance);
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerConnection>.Instance, TimeProvider.System);
 }

@@ -16,8 +16,9 @@ internal sealed class AcpReconnectSupport {
     /// </summary>
     public required Func<(Stream Input, Stream Output, IAcpProcess Process)> Spawn { get; init; }
 
-    /// <summary>Drives attempt backoff and the settlement-wait bound; injectable for test determinism.</summary>
-    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+    /// <summary>Drives attempt backoff and the settlement-wait bound. The same provider the runtime
+    /// this support object is handed to was given, or one incident is bounded on two clocks.</summary>
+    public required TimeProvider TimeProvider { get; init; }
 
     /// <summary>
     /// The durable PID-record callbacks, published as ONE immutable bundle (code-review r2: two

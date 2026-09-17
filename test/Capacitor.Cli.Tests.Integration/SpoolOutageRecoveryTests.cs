@@ -66,7 +66,7 @@ public class SpoolOutageRecoveryTests : IDisposable {
         }
         """;
 
-    HookSpool MakeSpool() => new(_spoolDir);
+    HookSpool MakeSpool() => new(_spoolDir, time: TimeProvider.System);
 
     // HandleCore takes a pre-built HttpClient so we bypass auth entirely.
     Task<int> Invoke(HttpClient client, string payload) =>

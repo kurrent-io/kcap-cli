@@ -18,7 +18,7 @@ public class RepositoryDetectionTrackedBranchTests {
 
     static CommandRunner RealGitFakeGh(Func<string, string?> gh, List<string>? ghCalls = null) =>
         (cmd, args, cwd, cap) => {
-            if (cmd != "gh") return RepositoryDetection.DefaultRunner(cmd, args, cwd, cap);
+            if (cmd != "gh") return RepositoryDetection.DefaultRunner(TimeProvider.System)(cmd, args, cwd, cap);
 
             ghCalls?.Add(args);
 
@@ -47,7 +47,7 @@ public class RepositoryDetectionTrackedBranchTests {
         var ghCalls = new List<string>();
         var payload = await RepositoryDetection.DetectRepositoryAsync(
             new GitProviderRouter(),
-            Config.Root, repo, run: RealGitFakeGh(args => args == TrackedLookup ? TrackedPr : null, ghCalls));
+            Config.Root, repo, TimeProvider.System, run: RealGitFakeGh(args => args == TrackedLookup ? TrackedPr : null, ghCalls));
 
         await Assert.That(payload!.Branch).IsEqualTo("local-name");
         await Assert.That(payload.PrNumber).IsEqualTo(874);
@@ -62,7 +62,7 @@ public class RepositoryDetectionTrackedBranchTests {
         var ghCalls = new List<string>();
         var payload = await RepositoryDetection.DetectRepositoryAsync(
             new GitProviderRouter(),
-            Config.Root, repo,
+            Config.Root, repo, TimeProvider.System,
             run: RealGitFakeGh(args => args == NormalLookup
                 ? """{"number":5,"headRefName":"local-name"}"""
                 : TrackedPr, ghCalls));
@@ -78,9 +78,9 @@ public class RepositoryDetectionTrackedBranchTests {
         var prOpened = false;
         var run      = RealGitFakeGh(args => prOpened && args == TrackedLookup ? TrackedPr : null);
 
-        var before = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, run: run);
+        var before = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, TimeProvider.System, run: run);
         prOpened = true;
-        var after = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, run: run);
+        var after = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, TimeProvider.System, run: run);
 
         await Assert.That(before!.PrNumber).IsNull();
         await Assert.That(after!.PrNumber).IsEqualTo(874);

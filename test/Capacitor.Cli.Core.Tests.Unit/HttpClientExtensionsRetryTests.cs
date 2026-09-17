@@ -26,7 +26,7 @@ public class HttpClientExtensionsRetryTests {
                     totalTimeout: TimeSpan.FromMilliseconds(1_500),
                     perAttemptTimeout: TimeSpan.FromMilliseconds(50),
                     ct: CancellationToken.None
-                )
+                , time: TimeProvider.System)
             )
             .Throws<HttpRequestException>();
 
@@ -52,7 +52,7 @@ public class HttpClientExtensionsRetryTests {
                     totalTimeout: TimeSpan.FromMilliseconds(300),
                     perAttemptTimeout: TimeSpan.FromSeconds(30),
                     ct: CancellationToken.None
-                )
+                , time: TimeProvider.System)
             )
             .Throws<HttpRequestException>();
 
@@ -82,7 +82,7 @@ public class HttpClientExtensionsRetryTests {
             totalTimeout: TimeSpan.FromSeconds(5),
             perAttemptTimeout: TimeSpan.FromMilliseconds(150),
             ct: CancellationToken.None
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.OK);
         await Assert.That(attempts).IsEqualTo(2);
@@ -104,7 +104,7 @@ public class HttpClientExtensionsRetryTests {
                     totalTimeout: TimeSpan.FromSeconds(1),
                     perAttemptTimeout: TimeSpan.FromSeconds(1),
                     ct: cts.Token
-                )
+                , time: TimeProvider.System)
             )
             .Throws<OperationCanceledException>();
     }
@@ -126,7 +126,7 @@ public class HttpClientExtensionsRetryTests {
             totalTimeout: TimeSpan.FromSeconds(5),
             perAttemptTimeout: TimeSpan.FromSeconds(1),
             ct: CancellationToken.None
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.OK);
         await Assert.That(attempts).IsEqualTo(3);
@@ -152,7 +152,7 @@ public class HttpClientExtensionsRetryTests {
         }
 
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromSeconds(5), CancellationToken.None, retryStatuses: true);
+            Send, TimeSpan.FromSeconds(5), TimeProvider.System, CancellationToken.None, retryStatuses: true);
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.OK);
         await Assert.That(attempts).IsEqualTo(2);
@@ -177,7 +177,7 @@ public class HttpClientExtensionsRetryTests {
         }
 
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromSeconds(5), CancellationToken.None, retryStatuses: true);
+            Send, TimeSpan.FromSeconds(5), TimeProvider.System, CancellationToken.None, retryStatuses: true);
 
         await Assert.That(resp.StatusCode).IsEqualTo(status);
         await Assert.That(attempts).IsEqualTo(1);
@@ -196,7 +196,7 @@ public class HttpClientExtensionsRetryTests {
         }
 
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromSeconds(5), CancellationToken.None);
+            Send, TimeSpan.FromSeconds(5), TimeProvider.System, CancellationToken.None);
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.ServiceUnavailable);
         await Assert.That(attempts).IsEqualTo(1);
@@ -216,7 +216,7 @@ public class HttpClientExtensionsRetryTests {
         }
 
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromMilliseconds(600), CancellationToken.None, retryStatuses: true);
+            Send, TimeSpan.FromMilliseconds(600), TimeProvider.System, CancellationToken.None, retryStatuses: true);
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.ServiceUnavailable);
         await Assert.That(attempts).IsGreaterThan(1).Because("it did try again before giving up");
@@ -243,7 +243,7 @@ public class HttpClientExtensionsRetryTests {
         var sw = Stopwatch.StartNew();
 
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromSeconds(10), CancellationToken.None, retryStatuses: true);
+            Send, TimeSpan.FromSeconds(10), TimeProvider.System, CancellationToken.None, retryStatuses: true);
 
         sw.Stop();
 
@@ -267,7 +267,7 @@ public class HttpClientExtensionsRetryTests {
         var sw = Stopwatch.StartNew();
 
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromMilliseconds(400), CancellationToken.None, retryStatuses: true);
+            Send, TimeSpan.FromMilliseconds(400), TimeProvider.System, CancellationToken.None, retryStatuses: true);
 
         sw.Stop();
 
@@ -287,7 +287,7 @@ public class HttpClientExtensionsRetryTests {
         }
 
         await Assert.That(async () => await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromSeconds(5), cts.Token, retryStatuses: true))
+            Send, TimeSpan.FromSeconds(5), TimeProvider.System, cts.Token, retryStatuses: true))
             .Throws<OperationCanceledException>();
     }
 
@@ -313,7 +313,7 @@ public class HttpClientExtensionsRetryTests {
         // on attempts==1 rather than on the behaviour it pins. The delay above must outlast whatever
         // budget remains when that attempt starts.
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromSeconds(1), CancellationToken.None, retryStatuses: true);
+            Send, TimeSpan.FromSeconds(1), TimeProvider.System, CancellationToken.None, retryStatuses: true);
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.ServiceUnavailable);
         await Assert.That(attempts).IsEqualTo(2);
@@ -326,7 +326,7 @@ public class HttpClientExtensionsRetryTests {
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadGateway));
 
         using var resp = await HttpClientExtensions.SendWithRetryAsync(
-            Send, TimeSpan.FromMilliseconds(400), CancellationToken.None, retryStatuses: true);
+            Send, TimeSpan.FromMilliseconds(400), TimeProvider.System, CancellationToken.None, retryStatuses: true);
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.BadGateway);
         await Assert.That(await resp.Content.ReadAsStringAsync()).IsEqualTo("");

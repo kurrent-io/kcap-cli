@@ -59,7 +59,7 @@ internal enum HookPostOutcome {
 /// A no-op for the <c>None</c> provider (posts normally, unauthenticated) and unchanged when authenticated.
 /// </summary>
 internal sealed class AgentHookPoster(
-        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers) {
+        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time) {
 
     // The one URL this process resolved. A hook posting to one server while its watcher streams to
     // another is not a configuration this can represent.
@@ -102,7 +102,7 @@ internal sealed class AgentHookPoster(
         // Past the cap the payload is dropped the way a lapse drops it: this path has no spool, and
         // a hook killed by its host while waiting on the refresh lock would lose it just the same.
         var created = await BoundedAuth.CreateClientWithinAsync(
-            clientFactory, authCap ?? AuthCap, onAuthAbandoned ?? HandOffRefresh);
+            clientFactory, authCap ?? AuthCap, time, onAuthAbandoned ?? HandOffRefresh);
 
         if (created is null) {
             return HookPostOutcome.AuthLapsed;
@@ -120,7 +120,7 @@ internal sealed class AgentHookPoster(
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
             try {
-                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content);
+                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content, time);
 
                 if (!resp.IsSuccessStatusCode) {
                     var code = (int)resp.StatusCode;
@@ -214,7 +214,7 @@ internal sealed class AgentHookPoster(
     /// still calls this itself, but from the BACKGROUND after its stdout contract. Also reused by
     /// the daemon's own periodic sweep (<c>SpoolDrainLoop</c>) for the equivalent Core primitives —
     /// the daemon can't reference this CLI-project method, so it composes
-    /// <see cref="LifecycleSpoolDrain.RunAsync(CursorMarkers,HttpClient,string,HookSpool,TranscriptSpool,string?,TimeSpan,CancellationToken,Action{string,string}?)"/>
+    /// <see cref="LifecycleSpoolDrain.RunAsync(CursorMarkers,HttpClient,string,HookSpool,TranscriptSpool,string?,TimeSpan,TimeProvider,CancellationToken,Action{string,string}?)"/>
     /// directly instead.
     ///
     /// <para><b>Throttled.</b> Several vendors fire their lifecycle hook on
@@ -271,17 +271,18 @@ internal sealed class AgentHookPoster(
         var budget = TimeSpan.FromSeconds(1.5);
 
         try {
-            using var cts = new CancellationTokenSource(budget);
+            using var cts = new CancellationTokenSource(budget, time);
             var (client, status) = await clientFactory(cts.Token);
 
             using (client) {
                 if (IsAuthLapsed(status)) return;
 
-                // Task 12 / BLOCKER-2: a generically-drained session-end (any vendor — the
-                // server's generate_whats_done signal is vendor-agnostic, see WatchCommand's
-                // parent-exit path) must still trigger the what's-done generator, mirroring
-                // ClaudeHookCommand.ClaudePoster's own session-end replay side effect.
-                await LifecycleSpoolDrain.RunAsync(new CursorMarkers(config), client, Url!, lifecycle, transcript, sessionId, budget, cts.Token,
+                // A generically-drained session-end must still trigger the what's-done generator,
+                // mirroring ClaudeHookCommand.ClaudePoster's own session-end replay side effect: the
+                // server's generate_whats_done signal is vendor-agnostic.
+                await LifecycleSpoolDrain.RunAsync(
+                    new CursorMarkers(config, time), client, Url!, lifecycle, transcript, sessionId, budget,
+                    time, cts.Token,
                     onWhatsDoneRequested: (sid, vendor) => watchers.SpawnWhatsDoneGenerator(sid, vendor));
             }
         } catch {
@@ -296,11 +297,11 @@ internal sealed class AgentHookPoster(
     /// ignore it. Fail-open: a stamp-file hiccup must never suppress a drain, so any I/O error returns
     /// <c>true</c>.
     /// </summary>
-    static bool TryClaimDrainAttempt(string spoolDir) {
+    bool TryClaimDrainAttempt(string spoolDir) {
         try {
             var stamp = Path.Combine(spoolDir, ".last-drain");
 
-            if (File.Exists(stamp) && DateTime.UtcNow - File.GetLastWriteTimeUtc(stamp) < DrainThrottle) {
+            if (File.Exists(stamp) && time.GetUtcNow().UtcDateTime - File.GetLastWriteTimeUtc(stamp) < DrainThrottle) {
                 return false;
             }
 
@@ -330,7 +331,7 @@ internal sealed class AgentHookPoster(
             HookSpool spool, string sessionId, string route,
             TimeSpan? authCap = null, Action? onAuthAbandoned = null) {
         var created = await BoundedAuth.CreateClientWithinAsync(
-            clientFactory, authCap ?? AuthCap, onAuthAbandoned ?? HandOffRefresh);
+            clientFactory, authCap ?? AuthCap, time, onAuthAbandoned ?? HandOffRefresh);
 
         if (created is null) {
             return SpoolOrSkip(spool, sessionId, route, body, agentTag);
@@ -347,7 +348,7 @@ internal sealed class AgentHookPoster(
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
             try {
-                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content);
+                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content, time);
 
                 if (resp.IsSuccessStatusCode) {
                     return HookPostOutcome.Posted;

@@ -53,7 +53,7 @@ internal sealed class ImportDiscoveryAgeTests {
         var       day  = tmp.CreateDir("sessions", "2026", "01", "05");
         var       roll = day.CreateFile("rollout-abc.jsonl", "{}");
 
-        var age = new CodexImportSource(Config.Root, CodexHarness.FromEnvironment(Home).Paths.Sessions, router: new GitProviderRouter()).DiscoveryAge(Session(HarnessId.Codex, null, roll));
+        var age = new CodexImportSource(Config.Root, CodexHarness.FromEnvironment(Home).Paths.Sessions, router: new GitProviderRouter(), time: TimeProvider.System).DiscoveryAge(Session(HarnessId.Codex, null, roll));
 
         // Not the file's mtime, which is now: --since prunes Codex on the directory alone.
         await Assert.That(age!.Value.UtcDateTime.Date).IsEqualTo(new DateTime(2026, 1, 5));
@@ -67,7 +67,7 @@ internal sealed class ImportDiscoveryAgeTests {
             /*lang=json*/ "{\"type\":\"user\",\"timestamp\":\"2026-08-01T10:00:00Z\",\"message\":{\"content\":\"later\"}}",
         ]);
 
-        var age = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter()).DiscoveryAge(Session(HarnessId.Claude, null, path));
+        var age = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter(), time: TimeProvider.System).DiscoveryAge(Session(HarnessId.Claude, null, path));
 
         // A session started in January and appended to today belongs to January, which is the window
         // --since places it in. Taking mtime would count it inside a 30-day window it is not in.
@@ -87,7 +87,7 @@ internal sealed class ImportDiscoveryAgeTests {
 
         var path = tmp.CreateFile("session.jsonl", [.. lines]);
 
-        var age = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter()).DiscoveryAge(Session(HarnessId.Claude, null, path));
+        var age = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter(), time: TimeProvider.System).DiscoveryAge(Session(HarnessId.Claude, null, path));
 
         await Assert.That(age!.Value.UtcDateTime.Date).IsEqualTo(new DateTime(2026, 1, 5));
     }
@@ -97,7 +97,7 @@ internal sealed class ImportDiscoveryAgeTests {
         using var tmp  = new TempDir();
         var       path = tmp.CreateFile("garbage.jsonl", "not json at all");
 
-        var age = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter()).DiscoveryAge(Session(HarnessId.Claude, null, path));
+        var age = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter(), time: TimeProvider.System).DiscoveryAge(Session(HarnessId.Claude, null, path));
 
         // Same fallback the --since filter takes when the metadata carries no timestamp.
         await Assert.That(age).IsNotNull();
@@ -128,14 +128,14 @@ internal sealed class ImportDiscoveryAgeTests {
 
     /// <summary>Every source but Claude and Codex, which resolve no timestamp during discovery.</summary>
     IImportSource SourceFor(string vendor) => vendor switch {
-        "gemini"      => new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir),
-        "kiro"        => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter()),
-        "pi"          => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter()),
-        "copilot"     => new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter()),
-        "antigravity" => new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths),
+        "gemini"      => new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir, TimeProvider.System),
+        "kiro"        => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System),
+        "pi"          => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System),
+        "copilot"     => new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System),
+        "antigravity" => new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths, TimeProvider.System),
         "opencode"    => new OpenCodeImportSource(
             Path.Combine(OpenCodeHarness.FromEnvironment(Home).Paths.DataDir, "opencode.db"),
-            OpenCodeHarness.FromEnvironment(Home).Paths.ImportLedgerJson),
+            OpenCodeHarness.FromEnvironment(Home).Paths.ImportLedgerJson, TimeProvider.System),
         "cursor"      => NewCursorSource(),
         _             => throw new ArgumentOutOfRangeException(nameof(vendor), vendor, null),
     };
@@ -143,7 +143,7 @@ internal sealed class ImportDiscoveryAgeTests {
     CursorImportSource NewCursorSource() {
         var paths = CursorHarness.FromEnvironment(Home).Paths;
 
-        return new(Config.Root, paths.ProjectsDir, paths.WorkspaceStorageDir, router: new GitProviderRouter());
+        return new(Config.Root, paths.ProjectsDir, paths.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
     }
 
     [Test]

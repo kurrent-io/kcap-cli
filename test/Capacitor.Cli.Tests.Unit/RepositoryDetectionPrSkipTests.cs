@@ -30,7 +30,7 @@ public class RepositoryDetectionPrSkipTests {
         var commands = new List<string>();
 
         var repo = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
-            cwd.Path, budget: TimeSpan.FromSeconds(5), detectPullRequest: false, run: RecordingRunner(commands));
+            cwd.Path, TimeProvider.System, budget: TimeSpan.FromSeconds(5), detectPullRequest: false, run: RecordingRunner(commands));
 
         await Assert.That(repo).IsNotNull();
         await Assert.That(repo!.Owner).IsEqualTo("acme");
@@ -49,7 +49,7 @@ public class RepositoryDetectionPrSkipTests {
         var commands = new List<string>();
 
         await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
-            cwd.Path, budget: TimeSpan.FromSeconds(5), detectPullRequest: true, run: RecordingRunner(commands));
+            cwd.Path, TimeProvider.System, budget: TimeSpan.FromSeconds(5), detectPullRequest: true, run: RecordingRunner(commands));
 
         // Proves the flag actually gates the round-trip: with detection ON, the
         // GitHub provider probe (gh) is attempted.
@@ -63,7 +63,7 @@ public class RepositoryDetectionPrSkipTests {
         var payload  = $$"""{"cwd":"{{cwd.Path.Replace("\\", "/")}}","hook_event_name":"session-start"}""";
 
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(new GitProviderRouter(), Config.Root, 
-            payload, budget: TimeSpan.FromSeconds(5), detectPullRequest: false, run: RecordingRunner(commands));
+            payload, TimeProvider.System, budget: TimeSpan.FromSeconds(5), detectPullRequest: false, run: RecordingRunner(commands));
 
         await Assert.That(enriched).Contains("acme");
         await Assert.That(commands.All(c => c == "git")).IsTrue();

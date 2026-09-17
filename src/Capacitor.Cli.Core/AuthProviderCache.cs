@@ -71,12 +71,12 @@ static class AuthProviderCache {
     }
 
     /// <summary>Best-effort disk read. Returns the cached provider or <c>null</c>.</summary>
-    public static string? TryGet(string baseUrl, ConfigRoot config) {
+    public static string? TryGet(string baseUrl, ConfigRoot config, TimeProvider time) {
         try {
             var path = StorePath(config);
 
             return File.Exists(path)
-                ? Read(File.ReadAllText(path), baseUrl, DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                ? Read(File.ReadAllText(path), baseUrl, time.GetUtcNow().ToUnixTimeSeconds())
                 : null;
         } catch {
             return null;
@@ -84,7 +84,7 @@ static class AuthProviderCache {
     }
 
     /// <summary>Best-effort disk write. Silently no-ops on any failure.</summary>
-    public static void Set(string baseUrl, string provider, ConfigRoot config) {
+    public static void Set(string baseUrl, string provider, ConfigRoot config, TimeProvider time) {
         try {
             var path = StorePath(config);
             var dir  = Path.GetDirectoryName(path);
@@ -93,7 +93,7 @@ static class AuthProviderCache {
 
             var existing = File.Exists(path) ? File.ReadAllText(path) : null;
 
-            File.WriteAllText(path, Upsert(existing, baseUrl, provider, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            File.WriteAllText(path, Upsert(existing, baseUrl, provider, time.GetUtcNow().ToUnixTimeSeconds()));
         } catch {
             // Best effort — the cache never breaks auth.
         }

@@ -5,9 +5,9 @@ using System.Text.Json.Nodes;
 
 namespace Capacitor.Cli.Core.Http;
 
-internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer server) : ISessionsApi {
+internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer server, TimeProvider time) : ISessionsApi {
     public async Task<DeleteSessionResponse> DeleteSessionAsync(string sessionId, CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.DeleteWithRetryAsync($"{server.Url}/api/sessions/{sessionId}", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.DeleteWithRetryAsync($"{server.Url}/api/sessions/{sessionId}", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) return new DeleteSessionResponse.Deleted();
         if (response.StatusCode == HttpStatusCode.NotFound) return new DeleteSessionResponse.NotFound();
@@ -18,21 +18,21 @@ internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer ser
     public async Task HideSessionAsync(string sessionId, CancellationToken ct = default) {
         using var body = Json(new JsonObject { ["visibility"] = "none" });
         using var response = await SendAsync(
-                (c, token) => c.PutWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/visibility", body, ct: token), ct);
+                (c, token) => c.PutWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/visibility", body, time, ct: token), ct);
 
         if (!response.IsSuccessStatusCode) throw await FailureAsync(response);
     }
 
     public async Task SetSessionTitleAsync(string sessionId, string title, CancellationToken ct = default) {
         using var body = Json(new JsonObject { ["session_id"] = sessionId, ["title"] = title });
-        using var response = await SendAsync((c, token) => c.PostWithRetryAsync($"{server.Url}/hooks/set-title", body, ct: token), ct);
+        using var response = await SendAsync((c, token) => c.PostWithRetryAsync($"{server.Url}/hooks/set-title", body, time, ct: token), ct);
 
         if (!response.IsSuccessStatusCode) throw await FailureAsync(response);
     }
 
     public async Task<ErrorsResult> GetErrorsAsync(string sessionId, bool chain, CancellationToken ct = default) {
         var query = chain ? "?chain=true" : "";
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/errors{query}", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/errors{query}", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) {
             var errors = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ListErrorEntry, ct);
@@ -45,7 +45,7 @@ internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer ser
 
     public async Task<RecapResult> GetRecapAsync(string sessionId, bool chain, CancellationToken ct = default) {
         var query = chain ? "?chain=true" : "";
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/recap{query}", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/recap{query}", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) {
             var entries = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ListRecapEntry, ct);
@@ -57,7 +57,7 @@ internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer ser
     }
 
     public async Task<TurnsResult> GetTurnsAsync(string sessionId, CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/turns", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/turns", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) return new TurnsResult.Found(await response.Content.ReadAsStringAsync(ct));
         if (response.StatusCode == HttpStatusCode.NotFound) return new TurnsResult.NotFound();
@@ -66,7 +66,7 @@ internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer ser
     }
 
     public async Task<TurnDetailResult> GetTurnAsync(string sessionId, int turnIndex, CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/turns/{turnIndex}", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/turns/{turnIndex}", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) return new TurnDetailResult.Found(await response.Content.ReadAsStringAsync(ct));
         if (response.StatusCode == HttpStatusCode.NotFound) return new TurnDetailResult.NotFound();
@@ -75,7 +75,7 @@ internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer ser
     }
 
     public async Task<PlanArtifactsResult> GetPlanArtifactsAsync(string sessionId, CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/plan-artifacts?chain=true", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/sessions/{sessionId}/plan-artifacts?chain=true", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) {
             var dto = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.PlanArtifactsResponseDto, ct);

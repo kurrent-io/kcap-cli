@@ -19,11 +19,11 @@ public class CodexForwardBufferTests {
     static CodexForwardBuffer New(
             int capacity, TimeSpan stall, Action<TimeSpan>? onStall = null,
             TranscriptJournal? journal = null, CancellationToken shutdown = default) =>
-        new(capacity, stall, shutdown, onStall ?? (_ => { }), journal);
+        new(capacity, stall, TimeProvider.System, shutdown, onStall ?? (_ => { }), journal);
 
     static (TranscriptJournal Journal, TempDir Tmp) OpenJournal() {
         var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
         journal.Open("/w", null);
         return (journal, tmp);
     }

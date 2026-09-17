@@ -41,7 +41,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             requestInteraction: (req, ct) => gate.Task);
 
         using var cts = new CancellationTokenSource();
@@ -101,7 +101,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
         var process = new FakeAcpProcess();
 
-        var runtime = new AcpHostedAgentRuntime(conn, process, NullLogger.Instance); // no requestInteraction arg
+        var runtime = new AcpHostedAgentRuntime(conn, process, NullLogger.Instance, TimeProvider.System); // no requestInteraction arg
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -139,7 +139,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var gate    = new TaskCompletionSource<AcpInteractionDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var runtime = new AcpHostedAgentRuntime(
-            conn, process, NullLogger.Instance, requestInteraction: (req, ct) => gate.Task) {
+            conn, process, NullLogger.Instance, TimeProvider.System, requestInteraction: (req, ct) => gate.Task) {
             ActivityClock = new AgentActivityClock(new FakeTimeProvider())
         };
 
@@ -191,7 +191,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
 
         using var cts = new CancellationTokenSource();
@@ -241,7 +241,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             // Never resolves on its own — only cancellation (from DisposeAsync below) ends this.
             requestInteraction: (req, ct) => Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => default(AcpInteractionDecision), TaskScheduler.Default));
 
@@ -311,7 +311,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             requestInteraction: (req, ct) => { captured = req; return Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)); });
 
         using var cts = new CancellationTokenSource();
@@ -374,7 +374,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
 
         using var cts = new CancellationTokenSource();
@@ -415,7 +415,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
 
         using var cts = new CancellationTokenSource();
@@ -455,7 +455,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
 
         using var cts = new CancellationTokenSource();
@@ -497,7 +497,7 @@ public class AcpHostedAgentRuntimePermissionTests {
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
-            NullLogger.Instance,
+            NullLogger.Instance, TimeProvider.System,
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)));
 
         using var cts = new CancellationTokenSource();

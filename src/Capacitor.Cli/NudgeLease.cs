@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.SessionStartMemory;
@@ -16,20 +15,22 @@ internal static class NudgeLease {
     public static async Task<bool> TryClaimAsync(
             ConfigRoot config, TimeProvider time, HarnessId harness, string sessionId, TimeSpan budget) {
         try {
-            return await TryClaimAsync(SessionStartMemoryLeaseStore.Create(config, time), harness, sessionId, budget);
+            return await TryClaimAsync(
+                SessionStartMemoryLeaseStore.Create(config, time), harness, sessionId, budget, time);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return false;
         }
     }
 
     public static async Task<bool> TryClaimAsync(
-            SessionStartMemoryLeaseStore store, HarnessId harness, string sessionId, TimeSpan budget) {
+            SessionStartMemoryLeaseStore store, HarnessId harness, string sessionId, TimeSpan budget,
+            TimeProvider time) {
         try {
             var key = SessionStartMemoryIdentity.CreateNudgeKey(harness, sessionId);
-            var started = Stopwatch.GetTimestamp();
+            var started = time.GetTimestamp();
             var lease = await store.TryBeginAsync(key, budget);
             if (lease is null) return false;
-            var remaining = budget - Stopwatch.GetElapsedTime(started);
+            var remaining = budget - time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero) return false;
             // An uncompleted claim (a crash or exhausted budget between the two calls) expires with
             // the lease, so a later prompt still emits — delayed, never duplicated.

@@ -40,7 +40,7 @@ public class AttachmentPlacementTests {
             ReadInheritedMcpServers = static () => [],
         };
         return new CodexHostedAgentRuntimeFactory(
-            launcher, new UnusedPtyDelegate(), new DaemonConfig(), NullLoggerFactory.Instance);
+            launcher, new UnusedPtyDelegate(), new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
     }
 
     [Test]

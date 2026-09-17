@@ -7,7 +7,7 @@ public class LaunchConsentStoreTests {
     [Test]
     public async Task Missing_file_yields_upgrade_safe_policy() {
         using var dir = new TempDir();
-        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance, TimeProvider.System);
         await Assert.That(store.Current.Default).IsEqualTo(LaunchConsentDefault.Allow);
         await Assert.That(store.Current.PromptTimeoutSeconds).IsEqualTo(45);
         await Assert.That(store.Current.Rules.Count).IsEqualTo(0);
@@ -17,21 +17,21 @@ public class LaunchConsentStoreTests {
     public async Task Corrupt_file_yields_upgrade_safe_policy() {
         using var dir = new TempDir();
         dir.CreateFile("consent.json", "{not json");
-        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance, TimeProvider.System);
         await Assert.That(store.Current.Default).IsEqualTo(LaunchConsentDefault.Allow);
     }
 
     [Test]
     public async Task Replace_persists_and_reloads() {
         using var dir = new TempDir();
-        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance, TimeProvider.System);
         var next = new LaunchConsentPolicy(LaunchConsentDefault.Prompt, 60,
             [new LaunchConsentRule("deny", "user_x", "review-flow", null, "codex")]);
         var ok = store.TryReplace(next, out var error);
         await Assert.That(ok).IsTrue();
         await Assert.That(error).IsNull();
 
-        var reloaded = new LaunchConsentStore(dir.Path, NullLogger.Instance);
+        var reloaded = new LaunchConsentStore(dir.Path, NullLogger.Instance, TimeProvider.System);
         await Assert.That(reloaded.Current.Default).IsEqualTo(LaunchConsentDefault.Prompt);
         await Assert.That(reloaded.Current.PromptTimeoutSeconds).IsEqualTo(60);
         await Assert.That(reloaded.Current.Rules[0].Requester).IsEqualTo("user_x");
@@ -40,7 +40,7 @@ public class LaunchConsentStoreTests {
     [Test]
     public async Task Replace_rejects_invalid_action_and_kind() {
         using var dir = new TempDir();
-        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance, TimeProvider.System);
         var badAction = new LaunchConsentPolicy(LaunchConsentDefault.Allow, 45,
             [new LaunchConsentRule("maybe", null, null, null, null)]);
         await Assert.That(store.TryReplace(badAction, out var e1)).IsFalse();
@@ -55,7 +55,7 @@ public class LaunchConsentStoreTests {
     [Test]
     public async Task Replace_clamps_prompt_timeout() {
         using var dir = new TempDir();
-        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance, TimeProvider.System);
         await Assert.That(store.TryReplace(
             new LaunchConsentPolicy(LaunchConsentDefault.Allow, 1, []), out _)).IsTrue();
         await Assert.That(store.Current.PromptTimeoutSeconds).IsEqualTo(5);
@@ -71,7 +71,7 @@ public class LaunchConsentStoreTests {
         if (OperatingSystem.IsWindows()) return;
 
         using var dir = new TempDir();
-        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir.Path, NullLogger.Instance, TimeProvider.System);
         var ok = store.TryReplace(new LaunchConsentPolicy(LaunchConsentDefault.Allow, 45, []), out _);
         await Assert.That(ok).IsTrue();
 

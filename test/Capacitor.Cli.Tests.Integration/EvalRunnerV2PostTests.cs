@@ -63,7 +63,7 @@ public class EvalRunnerV2PostTests : IDisposable {
             aggregate:        aggregate,
             observer:         observer,
             ct:               CancellationToken.None
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(ok).IsTrue();
 

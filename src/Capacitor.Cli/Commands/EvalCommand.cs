@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Commands;
 /// terminal report. The eval pipeline itself lives in the Eval library so
 /// the daemon (DEV-1440 milestone 2) can reuse it.
 /// </summary>
-class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitorHttpClient http) {
+class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitorHttpClient http, TimeProvider time) {
     public async Task<int> HandleEval(
             string  sessionId,
             string  model,
@@ -26,8 +26,8 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
 
         // Fetch taxonomy once up-front so --list and --questions/--skip share
         // the same source of truth; the server controls it (PR 1), not the CLI.
-        var observer = new ConsoleEvalObserver(sessionId);
-        var catalog  = await EvalQuestionCatalogClient.FetchAsync(baseUrl, httpClient, observer, CancellationToken.None);
+        var observer = new ConsoleEvalObserver(sessionId, time);
+        var catalog  = await EvalQuestionCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, CancellationToken.None);
         if (catalog is null || catalog.Length == 0) {
             // FetchAsync emitted OnFailed with a reason already.
             return 1;
@@ -47,7 +47,7 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
 
         var result = await EvalService.RunAsync(
             baseUrl, httpClient, profiles.Resolution.Profile, harnesses, sessionId, model, chain, thresholdBytes,
-            observer, questions: questions
+            observer, time, questions: questions
         );
 
         if (result is null) return 1;
@@ -59,8 +59,8 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
     public async Task<int> HandleListQuestions() {
         var       baseUrl    = profiles.Resolution.ServerUrl!;
         using var httpClient = await http.ForCommandAsync();
-        var observer = new ConsoleEvalObserver(sessionId: "");
-        var catalog  = await EvalQuestionCatalogClient.FetchAsync(baseUrl, httpClient, observer, CancellationToken.None);
+        var observer = new ConsoleEvalObserver(sessionId: "", time);
+        var catalog  = await EvalQuestionCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, CancellationToken.None);
         if (catalog is null) return 1;
 
         foreach (var group in catalog.GroupBy(q => q.Category)) {
@@ -117,7 +117,7 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
     /// <c>[HH:mm:ss] [eval] …</c> prefix, matching the pre-refactor shape
     /// of <c>kcap eval</c>'s output.
     /// </summary>
-    sealed class ConsoleEvalObserver(string sessionId) : IEvalObserver {
+    sealed class ConsoleEvalObserver(string sessionId, TimeProvider time) : IEvalObserver {
         public void OnInfo(string message) => Log(message);
 
         public void OnStarted(string evalRunId, string judgeModel, int totalQuestions) =>
@@ -153,7 +153,7 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
         public void OnFailed(string reason) =>
             Console.Error.WriteLine(reason);
 
-        static void Log(string message) =>
-            Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss}] [eval] {message}");
+        void Log(string message) =>
+            Console.Error.WriteLine($"[{time.GetLocalNow():HH:mm:ss}] [eval] {message}");
     }
 }

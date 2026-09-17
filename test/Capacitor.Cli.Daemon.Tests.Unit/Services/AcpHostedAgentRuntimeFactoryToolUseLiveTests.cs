@@ -49,7 +49,7 @@ public class AcpHostedAgentRuntimeFactoryToolUseLiveTests {
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance
-        ) {
+        , TimeProvider.System) {
         public List<AcpInteractionRequest> Requests { get; } = [];
 
         public override Task<AcpInteractionDecision> RequestAcpInteractionAsync(AcpInteractionRequest request, CancellationToken ct = default) {
@@ -110,6 +110,7 @@ public class AcpHostedAgentRuntimeFactoryToolUseLiveTests {
             config: new DaemonConfig(), // CursorPath="cursor-agent"
             loggerFactory: liveLoggerFactory,
             connection: connection,
+            timeProvider: TimeProvider.System,
             connectionSource: null // real cursor-agent acp spawn — gap 1/task 5's production path
         );
 

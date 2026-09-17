@@ -27,7 +27,7 @@ public class WorktreeMetadataGateTests {
     /// <summary>Takes and releases the gate once so the path's key is resolved and cached. Keeps the
     /// git spawn out of the timed section below.</summary>
     static Task WarmGateKey(string path) =>
-        WorktreeManager.WithWorktreeMetadataGate(path, () => Task.CompletedTask);
+        WorktreeManager.WithWorktreeMetadataGate(path, TimeProvider.System, () => Task.CompletedTask);
 
     /// <summary>Holds the gate for <paramref name="firstPath"/>, starts a second acquisition for
     /// <paramref name="secondPath"/>, gives an ungated implementation ample room to slip in, then
@@ -40,7 +40,8 @@ public class WorktreeMetadataGateTests {
         var firstEntered = Signal();
         var releaseFirst = Signal();
 
-        var first = WorktreeManager.WithWorktreeMetadataGate(firstPath, async () => {
+        var first = WorktreeManager.WithWorktreeMetadataGate(firstPath,
+        TimeProvider.System, async () => {
             log.Enqueue("first-enter");
             firstEntered.SetResult();
             await releaseFirst.Task;
@@ -48,7 +49,8 @@ public class WorktreeMetadataGateTests {
 
         await firstEntered.Task;
 
-        var second = WorktreeManager.WithWorktreeMetadataGate(secondPath, () => {
+        var second = WorktreeManager.WithWorktreeMetadataGate(secondPath,
+        TimeProvider.System, () => {
             log.Enqueue("second-enter");
 
             return Task.CompletedTask;
@@ -132,11 +134,13 @@ public class WorktreeMetadataGateTests {
         var bEntered = Signal();
         var release  = Signal();
 
-        var a = WorktreeManager.WithWorktreeMetadataGate(repoA, async () => {
+        var a = WorktreeManager.WithWorktreeMetadataGate(repoA,
+        TimeProvider.System, async () => {
             aEntered.SetResult();
             await release.Task;
         });
-        var b = WorktreeManager.WithWorktreeMetadataGate(repoB, async () => {
+        var b = WorktreeManager.WithWorktreeMetadataGate(repoB,
+        TimeProvider.System, async () => {
             bEntered.SetResult();
             await release.Task;
         });
@@ -154,10 +158,10 @@ public class WorktreeMetadataGateTests {
         using var repo = new TempDir();
 
         await Assert.That(async () => await WorktreeManager.WithWorktreeMetadataGate(
-            repo.Path, () => throw new InvalidOperationException("git failed"))).Throws<InvalidOperationException>();
+            repo.Path, TimeProvider.System, () => throw new InvalidOperationException("git failed"))).Throws<InvalidOperationException>();
 
         // A leaked permit would hang the next launch on this repo forever, so prove the gate reopens.
-        await WorktreeManager.WithWorktreeMetadataGate(repo.Path, () => Task.CompletedTask)
+        await WorktreeManager.WithWorktreeMetadataGate(repo.Path, TimeProvider.System, () => Task.CompletedTask)
             .WaitAsync(TimeSpan.FromSeconds(30));
     }
 

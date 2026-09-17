@@ -24,7 +24,7 @@ public class ServerConnectionParkProxyTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
-    ) {
+    , TimeProvider.System) {
         public bool Ready { get; set; } = true;
 
         internal override bool IsReady => Ready;

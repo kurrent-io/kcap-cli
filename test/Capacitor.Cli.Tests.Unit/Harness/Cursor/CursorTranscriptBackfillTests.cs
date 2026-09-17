@@ -6,7 +6,7 @@ using Capacitor.Cli.Harness.Cursor;
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
 public class CursorTranscriptBackfillTests {
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -29,7 +29,7 @@ public class CursorTranscriptBackfillTests {
 
         var stats = await CursorTranscriptBackfill.RunAsync(
             Markers,
-            client, "http://s", NewSessionId(), transcript, () => false, CancellationToken.None, finalDrain: false);
+            client, "http://s", NewSessionId(), transcript, () => false, TimeProvider.System, CancellationToken.None, finalDrain: false);
 
         var lines = JsonNode.Parse(postedBody!)!["lines"]!.AsArray();
         await Assert.That(lines.Count).IsEqualTo(2); // the half-written line was HELD
@@ -56,7 +56,7 @@ public class CursorTranscriptBackfillTests {
 
         var stats = await CursorTranscriptBackfill.RunAsync(
             Markers,
-            client, "http://s", NewSessionId(), transcript, () => false, CancellationToken.None, finalDrain: true);
+            client, "http://s", NewSessionId(), transcript, () => false, TimeProvider.System, CancellationToken.None, finalDrain: true);
 
         var lines = JsonNode.Parse(postedBody!)!["lines"]!.AsArray();
         await Assert.That(lines.Count).IsEqualTo(3); // the complete-but-unterminated final line was CONSUMED
@@ -73,7 +73,7 @@ public class CursorTranscriptBackfillTests {
 
         var postCount = 0;
         using var client = new HttpClient(new RecordingHandler(_ => null, (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); }));
-        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
         await Assert.That(postCount).IsEqualTo(0);
@@ -91,7 +91,7 @@ public class CursorTranscriptBackfillTests {
         using var client = new HttpClient(new RecordingHandler(
             r => r.RequestUri!.AbsolutePath.EndsWith("/last-line", StringComparison.Ordinal) ? new HttpResponseMessage(HttpStatusCode.NoContent) : null,
             (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); }));
-        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
         await Assert.That(postCount).IsEqualTo(0);
@@ -125,7 +125,7 @@ public class CursorTranscriptBackfillTests {
             postCapture: (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); });
         using var client = new HttpClient(handler);
 
-        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(postCount).IsEqualTo(0);
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
@@ -152,7 +152,7 @@ public class CursorTranscriptBackfillTests {
             postCapture: (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); });
         using var client = new HttpClient(handler);
 
-        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", sessionId, transcript, () => false, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(postCount).IsEqualTo(0);
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
@@ -167,7 +167,7 @@ public class CursorTranscriptBackfillTests {
         var stats = await CursorTranscriptBackfill.RunAsync(
             Markers,
             client, "http://localhost", sessionId: "abc",
-            transcriptPath: null, budget: () => false, CancellationToken.None);
+            transcriptPath: null, budget: () => false, time: TimeProvider.System, ct: CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
         await Assert.That(handler.Sent).IsEmpty();
@@ -197,7 +197,7 @@ public class CursorTranscriptBackfillTests {
         var stats = await CursorTranscriptBackfill.RunAsync(
             Markers,
             client, "http://localhost", sessionId: "abc",
-            transcriptPath: transcript, budget: () => false, CancellationToken.None);
+            transcriptPath: transcript, budget: () => false, time: TimeProvider.System, ct: CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(2);
         await Assert.That(postedPath).IsEqualTo("/hooks/transcript");
@@ -231,7 +231,7 @@ public class CursorTranscriptBackfillTests {
         var stats = await CursorTranscriptBackfill.RunAsync(
             Markers,
             client, "http://localhost", sessionId: "abc",
-            transcriptPath: transcript, budget: () => false, CancellationToken.None);
+            transcriptPath: transcript, budget: () => false, time: TimeProvider.System, ct: CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(2);
         await Assert.That(stats.Failed).IsFalse();
@@ -257,7 +257,7 @@ public class CursorTranscriptBackfillTests {
             client, "http://localhost", sessionId: "abc",
             transcriptPath: transcript,
             budget: () => true,
-            CancellationToken.None);
+            time: TimeProvider.System, ct: CancellationToken.None);
 
         // Budget already burnt before the batch POST — nothing posted, no failure.
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
@@ -279,7 +279,7 @@ public class CursorTranscriptBackfillTests {
         var stats = await CursorTranscriptBackfill.RunAsync(
             Markers,
             client, "http://localhost", sessionId: "abc",
-            transcriptPath: transcript, budget: () => false, CancellationToken.None);
+            transcriptPath: transcript, budget: () => false, time: TimeProvider.System, ct: CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
         await Assert.That(stats.Failed).IsTrue();
@@ -299,7 +299,7 @@ public class CursorTranscriptBackfillTests {
         var stats = await CursorTranscriptBackfill.RunAsync(
             Markers,
             client, "http://localhost", sessionId: "abc",
-            transcriptPath: transcript, budget: () => false, CancellationToken.None);
+            transcriptPath: transcript, budget: () => false, time: TimeProvider.System, ct: CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(0);
         await Assert.That(stats.Failed).IsTrue();

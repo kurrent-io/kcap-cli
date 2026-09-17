@@ -123,7 +123,7 @@ public class InputDeliveryCoreTests {
         var server = new CaptureServerConnection();
         await using var orch = Build(server);
         var journal = TranscriptJournal.ForAgent(
-            orch.PidRecordRootForTest, "acp-quit-row", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+            orch.PidRecordRootForTest, "acp-quit-row", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, TimeProvider.System);
         await Assert.That(journal.Open("/repo", "default")).IsTrue();
         var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "acp-quit-row", new FakeAcpRuntime(), journal: journal);
 

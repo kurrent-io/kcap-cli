@@ -3,8 +3,8 @@ using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class ReposCommand(ConfigRoot config) {
-    RepoPathStore Repos { get; } = new(config);
+public sealed class ReposCommand(ConfigRoot config, TimeProvider time) {
+    RepoPathStore Repos { get; } = new(config, time);
 
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2)
@@ -30,7 +30,7 @@ public sealed class ReposCommand(ConfigRoot config) {
             return 0;
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = time.GetUtcNow();
 
         foreach (var entry in entries.OrderByDescending(e => e.LastUsed)) {
             var ago = FormatTimeAgo(now - entry.LastUsed);

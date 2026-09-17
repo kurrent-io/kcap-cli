@@ -19,11 +19,11 @@ internal readonly record struct SessionStartFetchOutcome(HttpStatusCode Status, 
 /// </summary>
 internal static class SessionStartContextFetch {
     public static async Task<SessionStartFetchOutcome> FetchAsync(
-            HttpClient client, string url, CancellationToken ct) {
+            HttpClient client, string url, TimeProvider time, CancellationToken ct) {
         // Headers-read, so the bounded read below decides how much of the body is ever pulled.
         using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
 
-        var retryAfter = ParseRetryAfter(response);
+        var retryAfter = ParseRetryAfter(response, time);
 
         if (!response.IsSuccessStatusCode)
             return new SessionStartFetchOutcome(response.StatusCode, Body: null, retryAfter);
@@ -47,11 +47,11 @@ internal static class SessionStartContextFetch {
         return buffer.AsSpan(0, total).ToArray();
     }
 
-    static TimeSpan? ParseRetryAfter(HttpResponseMessage response) {
+    static TimeSpan? ParseRetryAfter(HttpResponseMessage response, TimeProvider time) {
         if (response.StatusCode != HttpStatusCode.TooManyRequests || response.Headers.RetryAfter is null) return null;
         if (response.Headers.RetryAfter.Delta is { } delta) return delta;
         if (response.Headers.RetryAfter.Date is { } date) {
-            var value = date - DateTimeOffset.UtcNow;
+            var value = date - time.GetUtcNow();
             return value > TimeSpan.Zero ? value : null;
         }
         return null;

@@ -20,7 +20,7 @@ public sealed class SessionCardViewModel {
     // Sort key only — not part of the card's presentation surface.
     internal DateTime CreatedAt { get; }
 
-    public SessionCardViewModel(AgentStatusDto dto) {
+    public SessionCardViewModel(AgentStatusDto dto, TimeProvider time) {
         Id = dto.Id;
         Vendor = dto.Vendor;
         RepoFull = dto.RepoPath ?? "";
@@ -33,6 +33,6 @@ public sealed class SessionCardViewModel {
         CreatedAt = dto.CreatedAt;
 
         var createdAtUtc = DateTime.SpecifyKind(dto.CreatedAt, DateTimeKind.Utc);
-        Age = UptimeFormat.Format(DateTime.UtcNow - createdAtUtc);
+        Age = UptimeFormat.Format(time.GetUtcNow().UtcDateTime - createdAtUtc);
     }
 }

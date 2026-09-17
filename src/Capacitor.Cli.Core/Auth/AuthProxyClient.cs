@@ -36,7 +36,7 @@ public interface IAuthProxyClient {
     Task AbandonPickAsync(string proxyUrl, string handle, CancellationToken ct = default);
 }
 
-public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
+public class AuthProxyClient(HttpClient http, TimeProvider time) : IAuthProxyClient {
     public async Task<ProxyConfigResponse?> GetConfigAsync(string proxyUrl, CancellationToken ct = default) {
         try {
             using var response = await http.GetAsync($"{proxyUrl}/config", ct);
@@ -120,7 +120,8 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
             };
             request.Headers.Authorization = new("Bearer", bearer);
 
-            using var attempt = Bounded(ct);
+            using var timeout = AttemptTimeout(time);
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
             using var response = await http.SendAsync(request, attempt.Token);
             if (!response.IsSuccessStatusCode) return null;
 
@@ -134,7 +135,8 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
     public async Task<CliPickerResultResponse?> PollPickAsync(
             string proxyUrl, string handle, string secret, CancellationToken ct = default) {
         try {
-            using var attempt = Bounded(ct);
+            using var timeout = AttemptTimeout(time);
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
             using var response = await http.PostAsJsonAsync(
                 $"{proxyUrl}/cli/v1/picker/{handle}/result",
                 new CliPickerResultRequest { Secret = secret },
@@ -151,7 +153,8 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
 
     public async Task AbandonPickAsync(string proxyUrl, string handle, CancellationToken ct = default) {
         try {
-            using var attempt = Bounded(ct);
+            using var timeout = AttemptTimeout(time);
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
             using var response = await http.DeleteAsync($"{proxyUrl}/cli/v1/picker/{handle}", attempt.Token);
         } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
             // Nothing to do about it and nothing to tell the user: the pick is already abandoned
@@ -165,12 +168,10 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
     /// the advertised way out look broken. Every one of these calls degrades to the terminal picker,
     /// so giving up early costs nothing.
     /// </summary>
-    static CancellationTokenSource Bounded(CancellationToken ct) {
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(15));
-
-        return cts;
-    }
+    /// <remarks>The caller scopes this alongside the source it links into: a linked source does not
+    /// own the timer behind the token it was given, so disposing only that one leaves this running.</remarks>
+    static CancellationTokenSource AttemptTimeout(TimeProvider time) =>
+        new(TimeSpan.FromSeconds(15), time);
 
     static async Task<DiscoveredTenant[]> ReadTenants(HttpResponseMessage response, CancellationToken ct) =>
         await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.DiscoveredTenantArray, ct) ?? [];

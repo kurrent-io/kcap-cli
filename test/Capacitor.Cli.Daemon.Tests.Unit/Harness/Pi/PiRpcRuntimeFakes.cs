@@ -196,6 +196,7 @@ internal static class PiRpcRuntimeFakes {
             agentId:        "agent-1",
             requestedModel: requestedModel,
             cwd:            "/w",
+            time:           TimeProvider.System,
             readyDeadline:  readyDeadline,
             stopGrace:      stopGrace,
             onDisposed:     onDisposed,

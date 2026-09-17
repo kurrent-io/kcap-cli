@@ -57,10 +57,14 @@ public partial class App : Application {
     readonly AuthEndpoints    _endpoints  = AuthEndpoints.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
 
+    // The app's one clock, named here because App is the composition root. A field initializer
+    // cannot read another instance field, so the fields below name it again rather than take it.
+    readonly TimeProvider _time = TimeProvider.System;
+
     /// The wizard signs in through the CLI's own stack, which reports the signup funnel. The app
     /// shows no privacy notice and offers no opt-out of its own, so it hands that stack a facade
     /// that is off — nothing a wizard run does can emit.
-    readonly CliTelemetry _telemetry = CliTelemetry.Disabled();
+    readonly CliTelemetry _telemetry = CliTelemetry.Disabled(TimeProvider.System);
 
     /// Process-lifetime rather than per wizard run — a provisioning poll can outlive the window that
     /// started it, and this client degrades a transport failure but not a disposed handler. What it
@@ -251,7 +255,7 @@ public partial class App : Application {
             if (UpdateCoordinator.TryApplyPendingAtStartup(_updater, Program.UpdateRelaunch)) return; // the process is being replaced
 
             // The lane is constructed first — every daemon mutation routes through this one instance, and its dependencies need neither a resolved profile nor a live service.
-            var laneRunner = new ProcessRunner();
+            var laneRunner = new ProcessRunner(_time);
             var laneProbe  = new LoginShellProbe(laneRunner, Environment.GetEnvironmentVariable);
             var channel    = new OutcomeChannel();
             var lane = new DaemonMutationLane(
@@ -259,11 +263,11 @@ public partial class App : Application {
                 (request, pinnedPath) => new KcapCli(
                     laneRunner, pinnedPath, request.DaemonName, request.Profile, laneProbe.TerminalPathAsync,
                     canonicalServer: request.CanonicalServer),
-                _ => new OneShotObservation(_daemonStore, OneShotProbeTimeout),
-                TimeProvider.System);
+                _ => new OneShotObservation(_daemonStore, _time, OneShotProbeTimeout),
+                _time);
             _lane = lane;
 
-            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _shutdown.Token);
+            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _time, _shutdown.Token);
             // A graph built while the lane still owns a live action must not also drive automatic
             // ones (spec §6a) — only the wizard's own handoff can answer this with anything but true.
             var laneQuiesced = true;
@@ -274,7 +278,7 @@ public partial class App : Application {
             if (gate is GateResult.Incomplete) {
                 laneQuiesced = await RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, profiles);
                 if (_shutdown.IsCancellationRequested) return; // quit during onboarding — nothing left to build
-                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _shutdown.Token);
+                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _time, _shutdown.Token);
             }
 
             BuildDaemonGraph(desktop, lane, channel, gate, profiles, laneQuiesced);
@@ -342,7 +346,7 @@ public partial class App : Application {
         var kind = InstallLocation.Classify(root, _userHome.Path);
         if (InstallLocation.Passes(kind)) return false;
 
-        var mover = new ApplicationsMover(new ProcessRunner(), ApplicationsMover.PromoteExclusive);
+        var mover = new ApplicationsMover(new ProcessRunner(_time), ApplicationsMover.PromoteExclusive);
         // Shutdown(0) closes this window as a side effect, which the window's own Closed handler
         // below turns back into a Quit call — this flag is what keeps that reentry from calling
         // Shutdown twice, whichever of the three paths (Quit, a successful move, or the titlebar
@@ -423,14 +427,15 @@ public partial class App : Application {
     // cannot be read off a second one, and the post-wizard build re-runs this rather than reusing a
     // startup value the wizard may have invalidated.
     internal static Task<(GateResult Gate, ProfileContext? Profiles)> ResolveAndEvaluateGateAsync(
-            ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, CancellationToken ct) =>
-        EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore, env).EvaluateAsync, ct);
+            ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, TimeProvider time,
+            CancellationToken ct) =>
+        EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore, env, time).EvaluateAsync, ct);
 
     // The steady-state graph, over the resolution the gate was evaluated on (never a second resolve).
     void BuildDaemonGraph(
             IClassicDesktopStyleApplicationLifetime desktop, DaemonMutationLane lane, OutcomeChannel channel,
             GateResult gate, ProfileContext? profiles, bool laneQuiesced) {
-        var service = DaemonClientService.CreateResolved(_daemonStore, profiles?.Resolution, lane.RunAsync);
+        var service = DaemonClientService.CreateResolved(_daemonStore, profiles?.Resolution, _time, lane.RunAsync);
 
         // Incomplete after the wizard (abandoned, or sign-in skipped) is the carve-out arm, and so
         // is a lane that outran the handoff cap: the graph comes up with every lifecycle
@@ -441,11 +446,11 @@ public partial class App : Application {
         // window rows share a single stop/open-in-web code path (spec §7) and a single
         // toast/stderr channel (spec §11). notifier is built here (not after service.Start()
         // below) because PauseController/AgentActionService, constructed further down, need it.
-        var ops      = new LocalControlOps(_daemonStore, service.DaemonName);
+        var ops      = new LocalControlOps(_daemonStore, service.DaemonName, _time);
         var notifier = new AppNotifier();
 
         var restartPending = new DaemonRestartPendingWatcher(
-            _daemonStore, service.DaemonName, service.Status, TimeProvider.System, _shutdown.Token);
+            _daemonStore, service.DaemonName, service.Status, _time, _shutdown.Token);
         restartPending.Start();
         _restartPending = restartPending;
 
@@ -476,7 +481,7 @@ public partial class App : Application {
         // dialog goes through the same serialized surface as the skew and shim dialogs.
         // The ready dialog's TCS resolves on the thread pool, so its accept continuation (and
         // therefore this quit) can run off the UI thread — post it back before shutting down.
-        _updates = new UpdateCoordinator(_updater, lifecycleSurface, TimeProvider.System, quit: () => Dispatcher.UIThread.Post(() => desktop.TryShutdown()), _shutdown.Token);
+        _updates = new UpdateCoordinator(_updater, lifecycleSurface, _time, quit: () => Dispatcher.UIThread.Post(() => desktop.TryShutdown()), _shutdown.Token);
         _updates.Start();
 
         // Said once, here, because nothing else in the app would: the graph is up but deliberately degraded.
@@ -499,7 +504,7 @@ public partial class App : Application {
         // Built here rather than with the other server clients below because a remote stop goes
         // over the hub: the lane must exist before the service that calls it. Start() still runs
         // down there, with the rest of the server graph.
-        var serverLane = new ServerConnectionService(profiles, _foreignHttp.GetRequiredService<TokenStore>());
+        var serverLane = new ServerConnectionService(profiles, _foreignHttp.GetRequiredService<TokenStore>(), _time);
         var actions = new AgentActionService(
             ops, notifier, opener, service.Snapshots, _shutdown.Token, ConfirmForceStopAsync,
             fallbackServerUrl: profiles?.Resolution.ServerUrl, lane: serverLane);
@@ -516,12 +521,12 @@ public partial class App : Application {
         // and each window gets its own ViewModel over the one shared service (spec §6).
         var consent = new ConsentService(
             service, ops, ticker, ct => ConsentSubscription.RunAsync(_daemonStore, service.DaemonName, ct),
-            TimeProvider.System, _shutdown.Token);
+            _time, _shutdown.Token);
         _consent = consent;
 
         _promptCoordinator = new ConsentPromptCoordinator(consent, () => new ConsentPromptWindow {
             DataContext = new ConsentPromptViewModel(
-                consent, notifier, ticker, TimeProvider.System, _shutdown.Token, activity.RequestRefresh),
+                consent, notifier, ticker, _time, _shutdown.Token, activity.RequestRefresh),
             Notifier = notifier,
         });
 
@@ -529,11 +534,11 @@ public partial class App : Application {
         // coordinator builds — each owns a live transport, and only a held instance can be
         // disposed at teardown.
         var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv);
-        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv);
-        var ghRunner = new ProcessRunner();
+        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time);
+        var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
-        var readers = new PullRequestReaderRegistry(pullRequests, [new GitHubCliReaderProvider(gh), new ServerReaderProvider(pullRequests)], TimeProvider.System);
+        var readers = new PullRequestReaderRegistry(pullRequests, [new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
         var serverClients = new ServerClients(serverLane, workContext, pullRequests);
         _serverLane = serverLane;
 
@@ -561,13 +566,13 @@ public partial class App : Application {
         var uploader = new ServerAttachmentUploader(ServerHttp(profiles), profiles);
         var permissions = new PermissionService(
             service, ops, ct => PermissionSubscription.RunAsync(_daemonStore, service.DaemonName, ct),
-            TimeProvider.System, _shutdown.Token, ServerSessionHttp.Responder(sessionHttp, profiles),
+            _time, _shutdown.Token, ServerSessionHttp.Responder(sessionHttp, profiles),
             sessionAgents: directory.SessionAgents);
         _permissions = permissions;
-        var sessionAccess = new SessionAccessService(serverLane, TimeProvider.System);
+        var sessionAccess = new SessionAccessService(serverLane, _time);
         var permissionFeed = new ServerPermissionFeed(
-            serverLane, sessionAccess, permissions, readDetail, directory.VendorOfSession, TimeProvider.System);
-        var attention = new SessionAttentionTracker(serverLane, readDetail, TimeProvider.System);
+            serverLane, sessionAccess, permissions, readDetail, directory.VendorOfSession, _time);
+        var attention = new SessionAttentionTracker(serverLane, readDetail, _time);
         _sessionAccess = sessionAccess;
         var pullRequestTones = new PullRequestToneCache(directory, readers, TimeProvider.System);
         _pullRequestTones = pullRequestTones;
@@ -623,7 +628,7 @@ public partial class App : Application {
         _menuBar?.SetFeedbackAction(openFeedback);
 
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
-            agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), TimeProvider.System, opener, permissions,
+            agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, opener, permissions,
             workContext, ops, uploader,
             requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: () => {
@@ -635,14 +640,14 @@ public partial class App : Application {
         // host, and the click opens nothing.
         RemoteSessionViewModel? BuildRemote(string agentId) =>
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
-                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, opener, TimeProvider.System,
+                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, opener, _time,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath))
                 : null;
 
         _coordinator = new MainWindowCoordinator(
             () => BuildAndShowMainWindow(
                 service, _config, actions, notifier, ticker,
-                _shutdown.Token, activity, launch, lifecycle.StartActionAsync,
+                _shutdown.Token, activity, launch, _time, lifecycle.StartActionAsync,
                 lifecycleStatus, _navigation, _workspaceTeardown.Track, BuildWorkspace,
                 // The tenant slug the rail footer shows — profiles are named after it at sign-in.
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
@@ -706,9 +711,9 @@ public partial class App : Application {
         SettingsViewModel vm;
         try {
             vm = new SettingsViewModel(settings, service, ops,
-                async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, OneShotProbeTimeout, ct)).Reachable,
+                async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, _time, OneShotProbeTimeout, ct)).Reachable,
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
-                ct => RelaunchForSettingsAsync(desktop, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
+                ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token);
         } catch (Exception ex) {
@@ -758,9 +763,10 @@ public partial class App : Application {
         window.Activate();
     }
 
-    static async Task<bool> RelaunchForSettingsAsync(IClassicDesktopStyleApplicationLifetime desktop, CancellationToken ct) {
+    static async Task<bool> RelaunchForSettingsAsync(
+            IClassicDesktopStyleApplicationLifetime desktop, TimeProvider time, CancellationToken ct) {
         if (InstallLocation.BundleRoot(Environment.ProcessPath) is not { } bundle) return false;
-        var result = await new ProcessRunner().RunAsync("/usr/bin/open", ["-n", bundle],
+        var result = await new ProcessRunner(time).RunAsync("/usr/bin/open", ["-n", bundle],
             new RunOptions(Timeout: TimeSpan.FromSeconds(10)), ct);
         if (result.TimedOut || result.ExitCode != 0) return false;
         desktop.TryShutdown();
@@ -793,10 +799,11 @@ public partial class App : Application {
             profiles.Name, serverUrl,
             WizardComposition.BuildBridges(
                 action => Dispatcher.UIThread.Post(action),
-                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints),
+                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time),
             new ConsentFlipClaims(_config),
             new AppStateStore(_config.Path("app-state.json")),
             new ShellUrlOpener(),
+            _time,
             WizardComposition.NewOperation);
         var window = new SignInWindow { DataContext = graph.SignIn };
 
@@ -824,7 +831,7 @@ public partial class App : Application {
     async Task CloseSignInAfterSuccessAsync(Window window) {
         var refresh = RefreshAfterReauthAsync();
         try {
-            await Task.WhenAll(refresh, Task.Delay(SignInSuccessHold)).ConfigureAwait(true);
+            await Task.WhenAll(refresh, Task.Delay(SignInSuccessHold, _time)).ConfigureAwait(true);
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: post-sign-in refresh failed: {ex.Message}");
         }
@@ -869,7 +876,7 @@ public partial class App : Application {
             OperatingSystem.IsMacOS(), shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(
             action => Dispatcher.UIThread.Post(action),
-            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints);
+            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
         var graph = WizardComposition.BuildGraph(new WizardGraphOptions(
@@ -887,11 +894,11 @@ public partial class App : Application {
             WizardComposition.NewOperation,
             surface,
             ResolveCli: () => NewWizardCli(_config, runner, cliPath, probe),
-            ResolveOps: name => new LocalControlOps(_daemonStore, name),
+            ResolveOps: name => new LocalControlOps(_daemonStore, name, _time),
             ResolveIdentity: () => ResolveWizardIdentity(_config, _serverEnv),
             ResolveConsentFlipIdentity: () => ResolveConsentFlipIdentity(_config),
             RunMutation: lane.RunAsync,
-            Observation: new OneShotObservation(_daemonStore, OneShotProbeTimeout),
+            Observation: new OneShotObservation(_daemonStore, _time, OneShotProbeTimeout),
             AppState: new AppStateStore(_config.Path("app-state.json")),
             ShimInstaller: new PathShimInstaller(runner, probe),
             UrlOpener: new ShellUrlOpener(),
@@ -901,7 +908,7 @@ public partial class App : Application {
             ShimApplicable: shimApplicable,
             ShimTarget: shimTarget,
             DefaultDaemonName: ResolveWizardIdentity(_config, _serverEnv)?.DaemonName,
-            Time: TimeProvider.System,
+            Time: _time,
             ShutdownToken: _shutdown.Token));
 
         _wizardAuth = graph.Auth;
@@ -917,7 +924,8 @@ public partial class App : Application {
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
         var quiesced = await HandoffAfterWizardAsync(
-            graph.Auth, () => lane.QuiescedAsync(CancellationToken.None), QuiesceShutdownCap, channel, graph.Import);
+            graph.Auth, () => lane.QuiescedAsync(CancellationToken.None), QuiesceShutdownCap, channel, _time,
+            graph.Import);
 
         _wizardAuth = null;
         _wizardImport = null;
@@ -995,10 +1003,10 @@ public partial class App : Application {
     /// <summary>Close boundary: settle sign-in, cancel any import, quiesce the lane under the cap, then transfer the channel.</summary>
     internal static async Task<bool> HandoffAfterWizardAsync(
             WizardAuthService? auth, Func<Task> laneQuiescedAsync, TimeSpan cap, OutcomeChannel channel,
-            ImportStepViewModel? import = null) {
+            TimeProvider time, ImportStepViewModel? import = null) {
         await CancelAndAwaitAuthAsync(auth).ConfigureAwait(false);
         if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);
-        var quiesced = await AwaitQuiescedAsync(laneQuiescedAsync, cap).ConfigureAwait(false);
+        var quiesced = await AwaitQuiescedAsync(laneQuiescedAsync, cap, time).ConfigureAwait(false);
         channel.TransferConsumer();
 
         return quiesced;
@@ -1148,6 +1156,7 @@ public partial class App : Application {
             IDaemonClientService service, ConfigRoot config,
             AgentActionService actions, IAppNotifier notifier, ITicker ticker,
             CancellationToken shutdownToken, ActivityViewModel activity, ILaunchClient launch,
+            TimeProvider time,
             Func<CancellationToken, Task>? startAction = null,
             IObservable<string?>? lifecycleStatus = null,
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
@@ -1186,14 +1195,14 @@ public partial class App : Application {
         MainWindowViewModel? vm = null;
         var home = new HomeViewModel(
             service, new AppStateStore(config.Path("app-state.json")),
-            launch, new RepoPathStore(config).GetSortedPathsAsync, shutdownToken,
+            launch, new RepoPathStore(config, time).GetSortedPathsAsync, time, shutdownToken,
             openSession: agentId => vm?.OpenSession(agentId),
             navigationGeneration: () => vm?.NavigationGeneration ?? 0,
             openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation),
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
-            modelCatalog: modelCatalog, uploader: uploader, time: TimeProvider.System, appServerUrl: appServerUrl);
+            modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl);
         // Same knot as home above, over the SAME `service` instance — its own openSession
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
@@ -1201,10 +1210,10 @@ public partial class App : Application {
         // own lookup would open the local one for both.
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
-            openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), agentsWithPending: agentsWithPending,
+            openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), time: time, agentsWithPending: agentsWithPending,
             pullRequestTones: pullRequestTones);
         vm = new MainWindowViewModel(
-            service, shutdownToken, activity, startAction, lifecycleStatus, home: home,
+            service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
@@ -1226,7 +1235,7 @@ public partial class App : Application {
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             ResolvedProfile? profile, Func<bool> requiresAppRestart) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
-        var runner  = new ProcessRunner();
+        var runner  = new ProcessRunner(_time);
         var probe   = new LoginShellProbe(runner, Environment.GetEnvironmentVariable);
         var canonicalServer = ServerIdentity.Canonicalize(profile?.ServerUrl);
         // Shared with the probe above (not re-resolved) — decision 7's PATH overlay on `install`
@@ -1237,7 +1246,7 @@ public partial class App : Application {
         var surface = new LifecycleSurface(setLifecycleStatus, setLifecycleAttention, ConfirmLifecyclePromptAsync);
 
         var lifecycle = new DaemonLifecycleController(
-            service, cli, probe, surface, () => Task.FromResult(ValidProfileName(profile)), TimeProvider.System,
+            service, cli, probe, surface, () => Task.FromResult(ValidProfileName(profile)), _time,
             canonicalServer, runMutation, autoActionsPermanentlyClosed, requiresAppRestart);
 
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
@@ -1720,7 +1729,8 @@ public partial class App : Application {
         // spec §3.6 + decision 2: an in-flight sign-in always settles, mutations get a bounded chance
         // to — both while the UI is still up, before teardown.
         if (_wizardAuth is not null || _wizardImport is not null || _lifecycle is not null || _lane is not null)
-            await QuiesceAppAsync(_wizardAuth, _wizardImport, _lifecycle, _lane, QuiesceShutdownCap).ConfigureAwait(false);
+            await QuiesceAppAsync(_wizardAuth, _wizardImport, _lifecycle, _lane, QuiesceShutdownCap, _time)
+                .ConfigureAwait(false);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
             // Prompt coordinator BEFORE the consent service (spec §5): the window and its
@@ -1774,11 +1784,11 @@ public partial class App : Application {
     /// <summary>Quiesces shutdown in two phases: sign-in and import finish uncapped so an in-progress commit isn't torn down, then lifecycle/lane quiesce under the cap.</summary>
     internal static async Task QuiesceAppAsync(
             WizardAuthService? auth, ImportStepViewModel? import,
-            DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap) {
+            DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap, TimeProvider time) {
         var authTerminal = CancelAndAwaitAuthAsync(auth);
         if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);
         await authTerminal.ConfigureAwait(false);
-        await AwaitQuiescedAsync(() => QuiesceLifecycleAndLaneAsync(lifecycle, lane), cap).ConfigureAwait(false);
+        await AwaitQuiescedAsync(() => QuiesceLifecycleAndLaneAsync(lifecycle, lane), cap, time).ConfigureAwait(false);
     }
 
     // Composes the controller's QuiescedAsync with the lane's (covers main-window Start/Retry too); CancellationToken.None — the bound is AwaitQuiescedAsync's own race against Task.Delay(cap).
@@ -1795,10 +1805,11 @@ public partial class App : Application {
     // test can drive it without a live controller. Returns which arm won: false = the cap fired
     // with work still live, which the wizard handoff turns into a degraded (auto-actions closed)
     // graph. A dead heat reads as false — never claim quiescence that wasn't observed.
-    internal static async Task<bool> AwaitQuiescedAsync(Func<Task> quiescedAsync, TimeSpan cap) {
+    internal static async Task<bool> AwaitQuiescedAsync(
+            Func<Task> quiescedAsync, TimeSpan cap, TimeProvider time) {
         var quiesced = quiescedAsync();
 
-        return await Task.WhenAny(quiesced, Task.Delay(cap)).ConfigureAwait(false) == quiesced;
+        return await Task.WhenAny(quiesced, Task.Delay(cap, time)).ConfigureAwait(false) == quiesced;
     }
 
     // Split out of DisposeAndShutdownAsync so a test can pin the ordering with a recording list.

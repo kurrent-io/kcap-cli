@@ -43,7 +43,7 @@ public class CursorLiveSubagentIntegrationTests {
         // required: without it the mid-lifecycle hook returns at the no-ack gate and never
         // reaches the backfill this test is about.
         CursorLiveSubagentLinker.SaveLink(Config.Root, childId, parentId, "task");
-        new CursorMarkers(Config.Root).MarkSubagentStartAcked(childId);
+        new CursorMarkers(Config.Root, TimeProvider.System).MarkSubagentStartAcked(childId);
         fx.Sent.Clear();
         fx.RouteOrder.Clear();
 
@@ -122,7 +122,7 @@ public class CursorLiveSubagentIntegrationTests {
             PostStatus      = postStatus;
             TranscriptsRoot = _home.CreateDir("agent-transcripts");
             SpoolDir        = _home.PathTo("spool");
-            Spool           = new HookSpool(SpoolDir);
+            Spool           = new HookSpool(SpoolDir, time: TimeProvider.System);
             Config          = config;
 
             var handler = new StubHandler(async req => {
@@ -193,7 +193,7 @@ public class CursorLiveSubagentIntegrationTests {
                 // too. A test that seeds one (see the mid-lifecycle scenario) would otherwise
                 // leave it behind for the rest of the process, where a later
                 // HasSubagentStartAck check could read it.
-                try { File.Delete(new CursorMarkers(Config).SubagentStartAckPath(m)); } catch { }
+                try { File.Delete(new CursorMarkers(Config, TimeProvider.System).SubagentStartAckPath(m)); } catch { }
             }
             _home.Dispose();
         }

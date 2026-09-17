@@ -45,7 +45,7 @@ public class CodexAppServerLiveSmokeTests {
         psi.Environment["CODEX_HOME"] = codexHome.Path;
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("codex app-server did not start.");
-        await using var child = new AcpChildProcess(process, NullLogger<AcpChildProcess>.Instance, vendor: "codex");
+        await using var child = new AcpChildProcess(process, NullLogger<AcpChildProcess>.Instance, TimeProvider.System, vendor: "codex");
         await using var conn = new CodexAppServerConnection(
             process.StandardInput.BaseStream, process.StandardOutput.BaseStream,
             NullLogger<CodexAppServerConnection>.Instance);

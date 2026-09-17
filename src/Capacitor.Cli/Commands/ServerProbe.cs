@@ -13,9 +13,9 @@ namespace Capacitor.Cli.Commands;
 internal static class ServerProbe {
     static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
 
-    public static async Task SendAsync(CapacitorServer server, ICapacitorHttpClient http) {
+    public static async Task SendAsync(CapacitorServer server, ICapacitorHttpClient http, TimeProvider time) {
         try {
-            using var cts = new CancellationTokenSource(Budget);
+            using var cts = new CancellationTokenSource(Budget, time);
 
             var (client, status) = await http.ForHookAsync(cts.Token);
 
@@ -26,7 +26,7 @@ internal static class ServerProbe {
 
                 var url = AppConfig.NormalizeUrl(server.Url) + WhoamiCommand.ProbePath;
 
-                using var _ = await client.GetOnceAsync(url, Budget, cts.Token);
+                using var _ = await client.GetOnceAsync(url, time, Budget, cts.Token);
             }
         } catch {
             // No caller can act on a failed probe.

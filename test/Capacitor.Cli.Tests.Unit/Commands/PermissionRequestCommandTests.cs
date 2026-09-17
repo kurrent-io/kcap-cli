@@ -11,7 +11,7 @@ public class PermissionRequestCommandTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     PermissionRequestCommand On(HostedAgent hosted) =>
-        new(Config.Root, Resolutions.None(Config.Root), hosted, new RecordingCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new RecordingCapacitorHttpClient()));
+        new(Config.Root, Resolutions.None(Config.Root), hosted, new RecordingCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new RecordingCapacitorHttpClient()), TimeProvider.System);
 
     [Test]
     public async Task A_loopback_bridge_is_the_address_the_hook_posts_to() {
@@ -109,7 +109,7 @@ public class PermissionRequestCommandTests {
         var       http     = new RecordingCapacitorHttpClient(handler);
 
         var command = new PermissionRequestCommand(Config.Root, Resolutions.None(Config.Root), // The bridge is the rendered agent's route; a terminal one records the event and never posts.
-            new HostedAgent(null, IsRendered: true, new DaemonBridge.Loopback("http://127.0.0.1:51234/bridge")), http, TestWatchers.For(Config.Root, Resolutions.None(Config.Root), http));
+            new HostedAgent(null, IsRendered: true, new DaemonBridge.Loopback("http://127.0.0.1:51234/bridge")), http, TestWatchers.For(Config.Root, Resolutions.None(Config.Root), http), TimeProvider.System);
 
         await using var stdout = new StringWriter();
 
@@ -140,7 +140,7 @@ public class PermissionRequestCommandTests {
         using var handler = new Counting();
         var       http     = new RecordingCapacitorHttpClient(handler, AuthStatus.NotAuthenticated);
 
-        var command = new PermissionRequestCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), HostedAgent.Terminal, http, TestWatchers.For(Config.Root, Resolutions.At("https://example.test", Config.Root), http));
+        var command = new PermissionRequestCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), HostedAgent.Terminal, http, TestWatchers.For(Config.Root, Resolutions.At("https://example.test", Config.Root), http), TimeProvider.System);
 
         var exit = await command.Handle(
             """{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}""",

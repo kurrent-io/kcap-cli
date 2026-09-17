@@ -182,7 +182,7 @@ public class TenantProvisioningClientTests {
     /// <summary>A facade that is off mints nothing, so there is no key to put on the wire.</summary>
     [Test]
     public async Task ProvisionAsync_sends_no_joinId_when_telemetry_is_off() {
-        var telemetry = CliTelemetry.Disabled();
+        var telemetry = CliTelemetry.Disabled(TimeProvider.System);
 
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/signup/provision").UsingPost())

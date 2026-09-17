@@ -35,7 +35,7 @@ internal sealed class SessionStartMemoryContextProvider(
     public async Task<SessionStartMemoryContextResult> FetchWithScopeAsync(
             SessionStartMemoryScope scope, SessionStartMemoryContextRequest request, CancellationToken ct) {
         var outcome = await SessionStartContextFetch.FetchAsync(
-            await client(ct), BuildUrl(request.BaseUrl, scope), ct);
+            await client(ct), BuildUrl(request.BaseUrl, scope), time, ct);
 
         if (outcome.Status == HttpStatusCode.NoContent) return SessionStartMemoryContextResult.Empty;
         if (outcome.Status is HttpStatusCode.BadRequest or HttpStatusCode.NotFound) {

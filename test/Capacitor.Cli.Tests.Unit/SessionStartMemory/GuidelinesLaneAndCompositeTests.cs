@@ -28,7 +28,7 @@ public class GuidelinesLaneAndCompositeTests {
             GuidelinesDisabled: guidelinesDisabled);
 
     static SessionStartGuidelinesLane Lane(HttpStatusCode status, string body, TimeSpan? retryAfter = null) =>
-        new(Lazy(new HttpClient(new Handler(status, body, retryAfter))));
+        new(Lazy(new HttpClient(new Handler(status, body, retryAfter))), TimeProvider.System);
 
     // ---- Guidelines lane ----
 
@@ -82,7 +82,7 @@ public class GuidelinesLaneAndCompositeTests {
     [Test]
     public async Task Null_repo_scope_skips_fetch() {
         var handler = new Handler(HttpStatusCode.OK, GuidelinesBody);
-        var lane    = new SessionStartGuidelinesLane(Lazy(new HttpClient(handler)));
+        var lane    = new SessionStartGuidelinesLane(Lazy(new HttpClient(handler)), TimeProvider.System);
 
         var result = await lane.FetchWithScopeAsync(
             new SessionStartMemoryScope(null, "machine"), Req(), CancellationToken.None);
@@ -94,7 +94,7 @@ public class GuidelinesLaneAndCompositeTests {
     [Test]
     public async Task Builds_repo_scoped_url() {
         var handler = new Handler(HttpStatusCode.NoContent, "");
-        var lane    = new SessionStartGuidelinesLane(Lazy(new HttpClient(handler)));
+        var lane    = new SessionStartGuidelinesLane(Lazy(new HttpClient(handler)), TimeProvider.System);
 
         await lane.FetchWithScopeAsync(new SessionStartMemoryScope("deadbeef01", null), Req(), CancellationToken.None);
 
@@ -114,7 +114,7 @@ public class GuidelinesLaneAndCompositeTests {
         // spendable by a loaded runner between arming it and the handler answering.
         var time     = new FakeTimeProvider();
         var memory2  = new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(memH)), time);
-        var guide2   = new SessionStartGuidelinesLane(Lazy(new HttpClient(guideH)));
+        var guide2   = new SessionStartGuidelinesLane(Lazy(new HttpClient(guideH)), time);
         return new SessionStartCompositeContextProvider(scope, memory2, guide2, time);
     }
 

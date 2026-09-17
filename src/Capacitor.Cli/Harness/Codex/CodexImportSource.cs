@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Harness.Codex;
 /// <see cref="ImportSessionAsync"/> is never the entry point — <c>ImportChainsAsync</c> is.
 /// </summary>
 internal sealed class CodexImportSource(
-        ConfigRoot config, string sessionsDir, GitProviderRouter router) : IImportSource {
+        ConfigRoot config, string sessionsDir, GitProviderRouter router, TimeProvider time) : IImportSource {
     readonly string _sessionsDir = sessionsDir;
 
     public HarnessId Vendor => HarnessId.Codex;
@@ -107,7 +107,7 @@ internal sealed class CodexImportSource(
             router,
             config,
             ctx.Home,
-            ctx.HttpClient,
+            ctx.HttpClient, time,
             ctx.BaseUrl,
             transcripts,
             ctx.MinLines,

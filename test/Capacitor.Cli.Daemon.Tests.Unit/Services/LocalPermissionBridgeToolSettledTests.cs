@@ -17,7 +17,7 @@ public class LocalPermissionBridgeToolSettledTests {
         public List<(string AgentId, ToolSettledNotice Notice)> Seen { get; } = [];
 
         public Harness(string? attributeTo = "agent-1") {
-            Bridge = new LocalPermissionBridge(new FakeServerConnection(respond: null), NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance) {
+            Bridge = new LocalPermissionBridge(new FakeServerConnection(respond: null), NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System) {
                 AttributeHandler   = attributeTo is null ? _ => null : _ => new AttributedAgent(attributeTo),
                 ToolSettledHandler = (id, notice) => Seen.Add((id, notice)),
             };

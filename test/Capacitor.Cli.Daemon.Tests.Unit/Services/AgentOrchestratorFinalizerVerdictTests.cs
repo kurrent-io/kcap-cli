@@ -86,7 +86,7 @@ public class AgentOrchestratorFinalizerVerdictTests {
         var fake    = new FakeAcpAgent();
         var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
         var process = new FinalizerTestAcpProcess();
-        var runtime = new AcpHostedAgentRuntime(conn, process, NullLogger.Instance, agentId: agentId);
+        var runtime = new AcpHostedAgentRuntime(conn, process, NullLogger.Instance, TimeProvider.System, agentId: agentId);
 
         return (runtime, process, fake);
     }

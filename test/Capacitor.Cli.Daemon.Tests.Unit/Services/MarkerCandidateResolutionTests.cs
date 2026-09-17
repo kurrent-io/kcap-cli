@@ -21,7 +21,7 @@ public class MarkerCandidateResolutionTests {
             ["KCAP_AGENT_ID"] = "rec-less", ["KCAP_DAEMON_ID"] = _daemonId, ["KCAP_DAEMON_EPOCH"] = "old" });
 
         var resolved = new List<(string, string)>();
-        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System,
             markerStore: markers, onMarkerResolved: (a, e) => resolved.Add((a, e)));
         await reaper.ReapOnceAsync();
 
@@ -41,7 +41,7 @@ public class MarkerCandidateResolutionTests {
         markers.Write(new MarkerCandidate("stale", _daemonId, "old", occupant.Pid));
 
         var resolved = new List<(string, string)>();
-        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System,
             markerStore: markers, onMarkerResolved: (a, e) => resolved.Add((a, e)));
         await reaper.ReapOnceAsync(); // boot reconciliation re-reads the source, re-runs (a)/(b)/(c)
 
@@ -61,7 +61,7 @@ public class MarkerCandidateResolutionTests {
         markers.Write(new MarkerCandidate("dead1", _daemonId, "old", pid));
 
         var resolved = new List<(string, string)>();
-        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System,
             markerStore: markers, onMarkerResolved: (a, e) => resolved.Add((a, e)));
         await reaper.ReapOnceAsync();
 
@@ -81,14 +81,14 @@ public class MarkerCandidateResolutionTests {
 
 
         // Crash BEFORE the emit: onMarkerResolved throws before the ledger append -> no entry, source persists.
-        var crashing = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance,
+        var crashing = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System,
             markerStore: markers, onMarkerResolved: (_, _) => throw new IOException("crash before append"));
         try { await crashing.ReapOnceAsync(); } catch { /* per-source faults swallowed */ }
         await Assert.That(markers.ReadAll()).IsNotEmpty(); // source persists (never a source-less window)
 
         // Next boot reconciles: re-read the on-disk source, (a) dead -> single emit + delete.
         var resolved = new List<(string, string)>();
-        var restarted = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance,
+        var restarted = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System,
             markerStore: markers, onMarkerResolved: (a, e) => resolved.Add((a, e)));
         await restarted.ReapOnceAsync();
         await Assert.That(resolved).IsEquivalentTo(new[] { ("mk-gone", "old") });
@@ -108,7 +108,7 @@ public class MarkerCandidateResolutionTests {
         // crash before markerStore.Delete -> committed entry + leftover marker source
 
         // Next boot: reconciliation re-reads the source, (a) dead -> idempotent Upsert (key (AgentId,OldEpoch)) + delete.
-        var restarted = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance,
+        var restarted = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System,
             markerStore: markers, onMarkerResolved: (a, e) => ledger.Upsert(a, e, null, null));
         await restarted.ReapOnceAsync();
         await Assert.That(ledger.Snapshot().Single().Generation).IsEqualTo(committed.Generation); // single emit
@@ -146,7 +146,7 @@ public class MarkerCandidateResolutionTests {
 
         var recordResolved = new List<(string a, string e, string? fr, string? role)>();
         var markerResolved = new List<(string, string)>();
-        var reaper = new OrphanReaper(store, _daemonId, "cur", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, _daemonId, "cur", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => recordResolved.Add((a, e, fr, role)),
             markerStore: markers, onMarkerResolved: (a, e) => markerResolved.Add((a, e)));
         await reaper.ReapOnceAsync();
@@ -179,7 +179,7 @@ public class MarkerCandidateResolutionTests {
         using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> {
             ["KCAP_AGENT_ID"] = "surv", ["KCAP_DAEMON_ID"] = _daemonId, ["KCAP_DAEMON_EPOCH"] = "old" });
 
-        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, markerStore: failingMarkers);
+        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System, markerStore: failingMarkers);
         await reaper.ReapOnceAsync();
 
         // The source write failed, so the pass is not a completeness proof.
@@ -203,7 +203,7 @@ public class MarkerCandidateResolutionTests {
 
         var recordResolved = new List<(string a, string e, string? fr, string? role)>();
         var markerResolved = new List<(string, string)>();
-        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, _daemonId, "new", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => recordResolved.Add((a, e, fr, role)),
             markerStore: markers, onMarkerResolved: (a, e) => markerResolved.Add((a, e)));
         await reaper.ReapOnceAsync();

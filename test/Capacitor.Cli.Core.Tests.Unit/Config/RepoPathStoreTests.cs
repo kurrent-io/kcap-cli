@@ -8,7 +8,7 @@ public class RepoPathStoreTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // Lazy: injection happens after construction, so Config is not readable from an initializer.
-    RepoPathStore Repos => field ??= new RepoPathStore(Config.Root);
+    RepoPathStore Repos => field ??= new RepoPathStore(Config.Root, TimeProvider.System);
 
     string ReposJsonPath => Config.PathTo("repos.json");
 

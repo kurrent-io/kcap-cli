@@ -62,7 +62,7 @@ public class CorrelatedStatusReportTests {
             new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
-            NullLogger<ServerConnection>.Instance);
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
         await Assert.That(unwired.AdvertisesCorrelatedStatusReports).IsFalse();
 
         unwired.OnRequestStatusReport2 += _ => Task.CompletedTask;
@@ -115,7 +115,7 @@ public class CorrelatedStatusReportTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
-    ) {
+    , TimeProvider.System) {
         int _sendCount;
         public int SendCount => Volatile.Read(ref _sendCount);
 

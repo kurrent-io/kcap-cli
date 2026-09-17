@@ -171,7 +171,7 @@ public class BootRefusalAttributionTests {
             Directory.CreateDirectory(Daemons.Store.StateDirectory(id));
             BootRefusalMarker.TryWrite(
                 Daemons.Store, id, "server_expectation_mismatch",
-                "https://s.example", "https://resolved.example", "inst-1", attemptId: null);
+                "https://s.example", "https://resolved.example", "inst-1", attemptId: null, time: TimeProvider.System);
         };
 
         var time = new FakeTimeProvider();
@@ -210,7 +210,7 @@ public class BootRefusalAttributionTests {
             Directory.CreateDirectory(Daemons.Store.StateDirectory(id));
             BootRefusalMarker.TryWrite(
                 Daemons.Store, id, "server_expectation_mismatch",
-                "https://s.example", "https://resolved.example", "inst-1", attemptId: null);
+                "https://s.example", "https://resolved.example", "inst-1", attemptId: null, time: TimeProvider.System);
         };
 
         var time = new FakeTimeProvider();

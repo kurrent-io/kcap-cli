@@ -45,7 +45,12 @@ internal sealed class AntigravityImportSource : IImportSource {
 
     readonly AntigravityPaths _paths;
 
-    public AntigravityImportSource(AntigravityPaths paths) => _paths = paths;
+    readonly TimeProvider _time;
+
+    public AntigravityImportSource(AntigravityPaths paths, TimeProvider time) {
+        _paths = paths;
+        _time  = time;
+    }
 
     // Both product roots' brain dirs (GUI + agy CLI), in fixed order. Import enumerates every one
     // that exists — an agy-only machine has only the CLI root, and before this it was invisible.
@@ -57,7 +62,7 @@ internal sealed class AntigravityImportSource : IImportSource {
     public bool   SupportsTitleGeneration => false; // server computes a fallback title at session-end
     public bool   AttachesChildContentOnReplay => true;  // AlreadyLoaded repair branch imports children
 
-    static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [antigravity-import] {message}");
+    void Log(string message) => Console.Error.WriteLine($"[{_time.GetLocalNow():HH:mm:ss.fff}] [antigravity-import] {message}");
 
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var result = new List<DiscoveredSession>();
@@ -279,7 +284,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         try {
             sent = await SessionImporter.SendTranscriptBatches(
                 httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: c.SessionId,
-                filePath: transcriptPath, agentId: null, startLine: startLine, vendor: Vendor, progress: ctx.Progress);
+                filePath: transcriptPath, agentId: null, startLine: startLine, time: _time, vendor: Vendor, progress: ctx.Progress);
         } catch (OperationCanceledException) {
             throw;
         } catch {
@@ -404,7 +409,7 @@ internal sealed class AntigravityImportSource : IImportSource {
                 // never flips the signal (Qodo finding 3).
                 childSent = await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: childTranscript, agentId: childAgentId, startLine: childStartLine, vendor: Vendor,
+                    filePath: childTranscript, agentId: childAgentId, startLine: childStartLine, time: _time, vendor: Vendor,
                     failOnError: true, progress: progress);
             } catch (OperationCanceledException) {
                 throw;
@@ -501,7 +506,7 @@ internal sealed class AntigravityImportSource : IImportSource {
     /// Best-effort: cost is never load-bearing — a decode/post failure
     /// here must never fail the import.
     /// </summary>
-    static async Task<bool> PostUsageLinesAsync(
+    async Task<bool> PostUsageLinesAsync(
             ImportContext ctx, string sessionId, string transcriptPath, DateTimeOffset? createdAt, CancellationToken ct) {
         if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return true;
 
@@ -518,7 +523,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         return await PostTranscriptLinesAsync(ctx.HttpClient, ctx.BaseUrl, sessionId, lines, lineNumbers, ct);
     }
 
-    static async Task<bool> PostTranscriptLinesAsync(
+    async Task<bool> PostTranscriptLinesAsync(
             HttpClient client, string baseUrl, string sessionId, string[] lines, int[] lineNumbers, CancellationToken ct) {
         var batch = new TranscriptBatch {
             SessionId   = sessionId,
@@ -531,7 +536,7 @@ internal sealed class AntigravityImportSource : IImportSource {
 
         try {
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content, ct: ct);
+            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content, _time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch (OperationCanceledException) {
             throw;
@@ -540,10 +545,10 @@ internal sealed class AntigravityImportSource : IImportSource {
         }
     }
 
-    static async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
+    async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, ct: ct);
+            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, _time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch (OperationCanceledException) {
             throw;
@@ -611,10 +616,10 @@ internal sealed class AntigravityImportSource : IImportSource {
         try { return File.GetLastWriteTimeUtc(path); } catch { return null; }
     }
 
-    static async Task<int?> FetchServerLastLineAsync(
+    async Task<int?> FetchServerLastLineAsync(
             HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
         var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={Uri.EscapeDataString(agentId)}" : "");
-        using var resp = await http.GetWithRetryAsync(url, ct: ct);
+        using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
         var body = await resp.Content.ReadAsStringAsync(ct);

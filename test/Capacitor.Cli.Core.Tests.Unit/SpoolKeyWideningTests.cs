@@ -23,7 +23,7 @@ public class SpoolKeyWideningTests {
 
     [Test]
     public async Task Lifecycle_filename_is_a_reversible_escape_not_a_digest() {
-        var spool = new HookSpool(_dir);
+        var spool = new HookSpool(_dir, time: TimeProvider.System);
 
         await Assert.That(spool.Append(OpenCodeId, "session-start/opencode", """{"session_id":"x"}""")).IsTrue();
 
@@ -41,7 +41,7 @@ public class SpoolKeyWideningTests {
 
     [Test]
     public async Task Transcript_basename_is_the_raw_id() {
-        var transcript = new TranscriptSpool(_tdir);
+        var transcript = new TranscriptSpool(_tdir, time: TimeProvider.System);
 
         transcript.Append(OpenCodeId, """{"line":1}""");
 
@@ -55,7 +55,7 @@ public class SpoolKeyWideningTests {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(blocked, "not a directory");
 
-        await Assert.That(new HookSpool(blocked).Append(OpenCodeId, "session-start/opencode", "{}")).IsFalse();
+        await Assert.That(new HookSpool(blocked, time: TimeProvider.System).Append(OpenCodeId, "session-start/opencode", "{}")).IsFalse();
     }
 
     [Test]
@@ -65,7 +65,7 @@ public class SpoolKeyWideningTests {
     [Arguments("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]     // and its uppercase spelling
     [Arguments("a-b_c-123")]
     public async Task Widened_keys_survive_a_drain_round_trip(string sessionId) {
-        var spool = new HookSpool(_dir);
+        var spool = new HookSpool(_dir, time: TimeProvider.System);
         spool.Append(sessionId, "session-start/opencode", $$"""{"session_id":"{{sessionId}}"}""");
 
         var delivered = new List<(string Route, string Body)>();
@@ -89,7 +89,7 @@ public class SpoolKeyWideningTests {
     [Arguments("has\\backslash")]
     [Arguments("")]
     public async Task Keys_that_would_break_path_parsing_are_still_rejected(string sessionId) {
-        await Assert.That(new HookSpool(_dir).Append(sessionId, "session-start/opencode", "{}")).IsFalse();
+        await Assert.That(new HookSpool(_dir, time: TimeProvider.System).Append(sessionId, "session-start/opencode", "{}")).IsFalse();
     }
 
     /// <summary>
@@ -99,7 +99,7 @@ public class SpoolKeyWideningTests {
     /// </summary>
     [Test]
     public async Task Ids_differing_only_by_case_do_not_share_a_spool_file() {
-        var spool = new HookSpool(_dir);
+        var spool = new HookSpool(_dir, time: TimeProvider.System);
 
         await Assert.That(spool.Append("ses_aBcD", "session-start/opencode", """{"which":"lower"}""")).IsTrue();
         await Assert.That(spool.Append("ses_AbCd", "session-start/opencode", """{"which":"upper"}""")).IsTrue();
@@ -127,7 +127,7 @@ public class SpoolKeyWideningTests {
     [Arguments("ses_ABCDEF")]
     [Arguments("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     public async Task The_drained_session_id_is_the_original_byte_for_byte(string sessionId) {
-        var spool = new HookSpool(_dir);
+        var spool = new HookSpool(_dir, time: TimeProvider.System);
         spool.Append(sessionId, "session-start/opencode", $$"""{"session_id":"{{sessionId}}"}""");
 
         string? posted = null;
@@ -159,7 +159,7 @@ public class SpoolKeyWideningTests {
         File.WriteAllText(legacyPath,
             $$"""{"route":"session-start/claude","body":"{\"session_id\":\"{{legacyId}}\"}"}""" + "\n");
 
-        var spool = new HookSpool(_dir);
+        var spool = new HookSpool(_dir, time: TimeProvider.System);
 
         // Found by the id-keyed lookup...
         await Assert.That(spool.HasBacklog(legacyId)).IsTrue();
@@ -185,7 +185,7 @@ public class SpoolKeyWideningTests {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(Path.Combine(_dir, $".ended-{legacyId}"), "");
 
-        await Assert.That(new HookSpool(_dir).IsMarkedEnded(legacyId)).IsTrue();
+        await Assert.That(new HookSpool(_dir, time: TimeProvider.System).IsMarkedEnded(legacyId)).IsTrue();
     }
 
     [Test]
@@ -194,6 +194,6 @@ public class SpoolKeyWideningTests {
         Directory.CreateDirectory(_tdir);
         File.WriteAllText(Path.Combine(_tdir, $"{legacyId}.transcript.jsonl"), "{\"n\":1}\n");
 
-        await Assert.That(new TranscriptSpool(_tdir).HasBacklog(legacyId)).IsTrue();
+        await Assert.That(new TranscriptSpool(_tdir, time: TimeProvider.System).HasBacklog(legacyId)).IsTrue();
     }
 }

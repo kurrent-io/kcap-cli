@@ -12,7 +12,7 @@ public class DaemonRunnerStartupPhaseTests {
     public async Task StartupPhase_WritesTheNamedPhaseToStderr() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        DaemonRunner.StartupPhase("lock acquired");
+        DaemonRunner.StartupPhase(TimeProvider.System,"lock acquired");
 
         await Assert.That(capture.GetCapturedError()).Contains("[startup] lock acquired");
     }
@@ -22,8 +22,8 @@ public class DaemonRunnerStartupPhaseTests {
     public async Task StartupPhase_KeepsPhasesInTheOrderTheyWereReached() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        DaemonRunner.StartupPhase("lock acquired");
-        DaemonRunner.StartupPhase("boot checks done");
+        DaemonRunner.StartupPhase(TimeProvider.System,"lock acquired");
+        DaemonRunner.StartupPhase(TimeProvider.System,"boot checks done");
 
         var lines = capture.GetCapturedError();
         await Assert.That(lines.IndexOf("lock acquired", StringComparison.Ordinal))

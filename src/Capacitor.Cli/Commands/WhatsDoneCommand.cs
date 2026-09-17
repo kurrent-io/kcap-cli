@@ -10,7 +10,7 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 sealed class WhatsDoneCommand(
-        ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses, ICapacitorHttpClient http) {
+        ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses, ICapacitorHttpClient http, TimeProvider time) {
     public async Task<int> HandleGenerateWhatsDone(string baseUrl, string sessionId, string vendor = "claude") {
         // Redirect output to log file (same pattern as WatchCommand)
         var logDir = config.Path("logs");
@@ -44,7 +44,7 @@ sealed class WhatsDoneCommand(
         string recapText;
 
         try {
-            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/recap");
+            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/recap", time);
 
             if (!resp.IsSuccessStatusCode) {
                 log($"Failed to fetch recap: HTTP {(int)resp.StatusCode}");
@@ -83,8 +83,8 @@ sealed class WhatsDoneCommand(
         var prompt = EmbeddedResources.Load("prompt-whats-done.txt") + recapText;
 
         var result = vendor == "codex"
-            ? await CodexCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log, profiles.Resolution.Profile, harnesses)
-            : await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log, profiles.Resolution.Profile, harnesses,
+            ? await CodexCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), time, log, profiles.Resolution.Profile, harnesses)
+            : await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), time, log, profiles.Resolution.Profile, harnesses,
                 systemPrompt: TitleGeneration.HeadlessSummarizerSystemPrompt);
 
         if (result is null) {
@@ -110,7 +110,7 @@ sealed class WhatsDoneCommand(
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
-            using var postResp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/whats-done", httpContent);
+            using var postResp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/whats-done", httpContent, time);
 
             log(
                 postResp.IsSuccessStatusCode
@@ -172,5 +172,5 @@ sealed class WhatsDoneCommand(
         return text.Length > 30_000 ? text[^30_000..] : text;
     }
 
-    static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [whats-done] {message}");
+    void Log(string message) => Console.Error.WriteLine($"[{time.GetLocalNow():HH:mm:ss.fff}] [whats-done] {message}");
 }

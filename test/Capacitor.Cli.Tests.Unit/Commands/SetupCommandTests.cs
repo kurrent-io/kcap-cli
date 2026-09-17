@@ -15,14 +15,14 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class SetupCommandTests {
     // Never reached: these tests drive the import and discovery steps, which do not provision.
     static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
-    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory(), TimeProvider.System);
     static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
     static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
-    static readonly IAuthProxyClient Proxy = new AuthProxyClient(new HttpClient());
+    static readonly IAuthProxyClient Proxy = new AuthProxyClient(new HttpClient(), TimeProvider.System);
 
     // Memoized per baseUrl, and every WireMock server here gets its own ephemeral port, so sharing
     // one instance across tests carries no cross-test state.
-    static readonly AuthProviderDiscovery Discovery = new(HttpFactory);
+    static readonly AuthProviderDiscovery Discovery = new(HttpFactory, TimeProvider.System);
 
     [TempHome] public required TempHome Home { get; init; }
 
@@ -34,12 +34,12 @@ public class SetupCommandTests {
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir));
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System);
 
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>
         new SetupFacadeFactory(Config.Root, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy,
-            Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults);
+            Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System);
 
     // --- The browser leg's one outcome line ---
 

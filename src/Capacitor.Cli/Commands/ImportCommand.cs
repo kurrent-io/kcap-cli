@@ -19,7 +19,9 @@ namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, GitProviderRouter router) {
+        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time) {
+    static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
+
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
     /// channel-based dispatcher in ImportChainsAsync and the TTY slot-row
@@ -679,10 +681,11 @@ class ImportCommand(
     /// indistinguishable from the process having died.
     /// </summary>
     static int WriteEmptyDiscoveryReport(
-            Action<ImportDiscoveryResult> sink, IReadOnlyList<HarnessId> scanned, DateTimeOffset? windowsAsOf) {
+            Action<ImportDiscoveryResult> sink, IReadOnlyList<HarnessId> scanned, DateTimeOffset? windowsAsOf,
+            TimeProvider time) {
         sink(new ImportDiscoveryResult(
             ImportDiscoverySummary.Build(
-                [], new Dictionary<string, (string, string)?>(), DiscoveryWindows(windowsAsOf)),
+                [], new Dictionary<string, (string, string)?>(), DiscoveryWindows(windowsAsOf ?? time.GetUtcNow())),
             scanned));
 
         return 0;
@@ -705,8 +708,8 @@ class ImportCommand(
     /// The same keys the first-run flow reports under, so the picker there and this command's own
     /// output cannot offer different windows.
     /// </summary>
-    internal static IReadOnlyList<ImportDiscoveryWindow> DiscoveryWindows(DateTimeOffset? now = null) {
-        var today = DateOnly.FromDateTime((now ?? DateTimeOffset.UtcNow).UtcDateTime);
+    internal static IReadOnlyList<ImportDiscoveryWindow> DiscoveryWindows(DateTimeOffset asOf) {
+        var today = DateOnly.FromDateTime(asOf.UtcDateTime);
 
         return [.. FirstRunImportWindows.All.Select(
             key => new ImportDiscoveryWindow(key, FirstRunImportWindows.Since(key, today)))];
@@ -773,7 +776,7 @@ class ImportCommand(
 
         // --- Sources ---
         // A caller that names none means Claude only.
-        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router)];
+        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time)];
 
         // --- No-source exit policy ---
         var available = sources.Where(s => s.IsAvailable).ToList();
@@ -790,7 +793,7 @@ class ImportCommand(
                 return 1;
             }
 
-            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, [], windowsAsOf);
+            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, [], windowsAsOf, time);
 
             display.Line("No coding-agent sessions found. Install Claude, Codex, or Cursor and try again.");
 
@@ -839,14 +842,14 @@ class ImportCommand(
             // Keep the message aligned with the dead branch lower in this method
             // (cleanup follow-up) so downstream tooling sees consistent output.
             if (filterSession is not null) {
-                if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf);
+                if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf, time);
 
                 await Console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
 
                 return 1;
             }
 
-            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf);
+            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf, time);
 
             display.Line("No transcript files found.");
 
@@ -942,7 +945,7 @@ class ImportCommand(
                     async (cwd, _) => {
                         try {
                             // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
+                            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false);
                             repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
                         } catch {
                             repoByCwd[cwd] = null;
@@ -971,7 +974,7 @@ class ImportCommand(
                     sources.SelectMany((src, i) =>
                         discoveriesPerSource[i].Select(d => (d.SessionId, src.DiscoveryAge(d)))),
                     resolved,
-                    DiscoveryWindows(windowsAsOf)),
+                    DiscoveryWindows(windowsAsOf ?? time.GetUtcNow())),
                 ScannedVendors(sources)));
 
             return 0;
@@ -1184,7 +1187,7 @@ class ImportCommand(
 
         // Capture scope is decided here, over every source's output at once, and nowhere else.
         var captureScope = new CaptureScope(router, config, home,
-                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos);
+                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
 
         if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications);
 
@@ -1418,7 +1421,7 @@ class ImportCommand(
                             await concurrencyLimit.WaitAsync();
 
                             try {
-                                var rc = await new WhatsDoneCommand(config, profiles, harnesses, http)
+                                var rc = await new WhatsDoneCommand(config, profiles, harnesses, http, time)
                                     .GenerateForSessionAsync(baseUrl, sid, _ => { }, vnd.VendorId);
 
                                 if (rc == 0) Interlocked.Increment(ref summariesGenerated);
@@ -1526,7 +1529,7 @@ class ImportCommand(
             if (existing.Count > 0) {
                 display.BeginPhase("Making existing sessions private");
 
-                var unprivatized = await SetVisibilityNoneForAll(httpClient, baseUrl, existing, display.Indented);
+                var unprivatized = await SetVisibilityNoneForAll(httpClient, baseUrl, existing, time, display.Indented);
 
                 if (unprivatized.Count > 0) {
                     var blocked = unprivatized.ToHashSet(StringComparer.Ordinal);
@@ -1909,7 +1912,7 @@ class ImportCommand(
                     : "Sharing imported sessions with your workspace");
 
                 var lost = await SetVisibilityForAll(
-                    httpClient, baseUrl, [.. touched], explicitVisibility, display.Indented);
+                    httpClient, baseUrl, [.. touched], explicitVisibility, time, display.Indented);
 
                 visibilityFailures += lost.Count;
 
@@ -1957,7 +1960,7 @@ class ImportCommand(
                                 }
 
                                 seenS = sList.Count;
-                                await Task.Delay(250);
+                                await Task.Delay(ProgressPollGap, time);
                             }
 
                             try { await Task.WhenAll(backgroundTasks); } catch {
@@ -2548,16 +2551,33 @@ class ImportCommand(
         var sessionsAffected = sessionCwds.Values.Count(missing.Contains);
         var sortedRoots      = roots.OrderBy(c => c, StringComparer.Ordinal).ToList();
 
+        var families = DetectWorktreeFamilies(sortedRoots);
+        var covered  = families.SelectMany(f => f.Paths).ToHashSet(StringComparer.Ordinal);
+        var listed   = sortedRoots.Where(r => !covered.Contains(r)).ToList();
+
         var sessionWord = sessionsAffected == 1 ? "session references" : "sessions reference";
         var pathWord    = sortedRoots.Count == 1 ? "path that no longer exists" : "distinct paths that no longer exist";
-        display.Line($"{sessionsAffected} {sessionWord} {sortedRoots.Count} {pathWord} on disk:");
+        display.Line($"{sessionsAffected} {sessionWord} {sortedRoots.Count} {pathWord} on disk{(listed.Count > 0 ? ":" : ".")}");
 
         const int sampleSize = 5;
-        foreach (var cwd in sortedRoots.Take(sampleSize)) display.Line($"  {ShortenHome(cwd, home.Path)}");
+        foreach (var cwd in listed.Take(sampleSize)) display.Line($"  {ShortenHome(cwd, home.Path)}");
 
-        if (sortedRoots.Count > sampleSize) {
-            display.Line($"  ... and {sortedRoots.Count - sampleSize} more");
+        if (listed.Count > sampleSize) {
+            display.Line($"  ... and {listed.Count - sampleSize} more");
         }
+
+        foreach (var family in families) {
+            var sessions = sessionCwds.Values.Count(c => family.Paths.Any(p => IsSelfOrDescendant(c, p)));
+            var parent   = ShortenHome(family.Parent, home.Path);
+            var project  = ShortenHome(family.Project, home.Path);
+            var sep      = SeparatorOf(family.Parent);
+            var word     = sessions == 1 ? "session" : "sessions";
+
+            display.Line($"{sessions} {word} under {parent}{sep} ({family.Paths.Count} paths) belong to {project}, which still exists:");
+            display.Line($"  kcap remap '{parent}{sep}*' {project}");
+        }
+
+        if (listed.Count == 0) return;
 
         var hint = cwdRemap is { Count: > 0 }
             ? "Run `kcap remap <from> <to>` to update or add mappings to their new on-disk paths."
@@ -2565,6 +2585,108 @@ class ImportCommand(
 
         display.Line(hint);
     }
+
+    /// <summary>
+    /// Missing paths sharing a parent directory, under two or more slugs, whose
+    /// own parent is a still-present checkout — the shape a cleaned-up worktree
+    /// family leaves behind, and the one a single wildcard remap recovers.
+    /// </summary>
+    internal readonly record struct WorktreeFamily(string Parent, string Project, IReadOnlyList<string> Paths);
+
+    internal static List<WorktreeFamily> DetectWorktreeFamilies(IEnumerable<string> missingRoots) =>
+        DetectWorktreeFamilies(missingRoots, IsRepoOnDisk);
+
+    // Internal seam so tests can declare which paths are repositories without
+    // laying out real git directories.
+    internal static List<WorktreeFamily> DetectWorktreeFamilies(IEnumerable<string> missingRoots, Func<string, bool> isRepo) {
+        var groups    = new Dictionary<string, (string Project, List<string> Paths, HashSet<string> Slugs)>(StringComparer.Ordinal);
+        var repoCache = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        foreach (var path in missingRoots) {
+            if (Locate(path) is not var (parent, project, slug)) continue;
+
+            if (!groups.TryGetValue(parent, out var group)) {
+                groups[parent] = group = (project, [], new(StringComparer.Ordinal));
+            }
+
+            group.Paths.Add(path);
+            group.Slugs.Add(slug);
+        }
+
+        var families = new List<WorktreeFamily>();
+
+        foreach (var (parent, group) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
+            // One dead slug is a path to name, not a family to describe — and two
+            // paths under the same slug are one worktree, not two.
+            if (group.Slugs.Count < 2) continue;
+
+            families.Add(new(parent, group.Project, group.Paths));
+        }
+
+        return families;
+
+        // The session's cwd is not always the worktree root: one recorded in
+        // <worktree>/src has to reach past its own subdirectory to find the
+        // repository, or the family it belongs to never forms.
+        (string Parent, string Project, string Slug)? Locate(string path) {
+            var slugPath = path;
+            var parent   = TrimLastSegment(path);
+            var project  = parent is null ? null : TrimLastSegment(parent);
+
+            while (parent is not null && project is not null) {
+                if (Repo(project)) return (parent, project, LastSegment(slugPath));
+
+                slugPath = parent;
+                parent   = project;
+                project  = TrimLastSegment(project);
+            }
+
+            return null;
+        }
+
+        bool Repo(string path) {
+            if (repoCache.TryGetValue(path, out var known)) return known;
+
+            return repoCache[path] = isRepo(path);
+        }
+    }
+
+    static string LastSegment(string path) {
+        var parent = TrimLastSegment(path);
+
+        return (parent is null ? path : path[parent.Length..]).Trim('/', '\\');
+    }
+
+    /// <summary>
+    /// The separator <paramref name="path"/> is written with, so a suggested
+    /// rule is spelled the way the transcript spelled its cwd. A pattern mixing
+    /// the two matches nothing: the head is compared literally.
+    /// </summary>
+    static char SeparatorOf(string path) {
+        for (var i = path.Length - 1; i >= 0; i--) {
+            if (CwdRemapper.IsSeparator(path[i])) return path[i];
+        }
+
+        return '/';
+    }
+
+    /// <summary>
+    /// A checkout root, not merely a path inside one: the suggestion names the
+    /// repository the sessions belong to, and a non-root parent would produce a
+    /// rule that points at a directory rather than at the repo.
+    /// </summary>
+    static bool IsRepoOnDisk(string path) {
+        if (!Directory.Exists(path)) return false;
+
+        var dotGit = Path.Combine(path, ".git");
+
+        return Directory.Exists(dotGit) || File.Exists(dotGit);
+    }
+
+    static bool IsSelfOrDescendant(string path, string ancestor) =>
+        path.Length >= ancestor.Length
+        && path.StartsWith(ancestor, StringComparison.Ordinal)
+        && (path.Length == ancestor.Length || CwdRemapper.IsSeparator(path[ancestor.Length]));
 
     /// <summary>
     /// Drop any path from <paramref name="paths"/> whose parent (at any depth)
@@ -2582,12 +2704,6 @@ class ImportCommand(
         return roots;
 
         static bool HasAncestorIn(string path, IReadOnlySet<string> set) {
-            // Walk parent directories: /a/b/c → /a/b → /a (stop at the first
-            // segment). Trim the last separator-delimited segment ourselves
-            // instead of Path.GetDirectoryName, which on Windows normalizes
-            // '/' → '\' and would break the Ordinal set comparison for
-            // forward-slash transcript cwds. Both '/' and '\' are
-            // honored so mixed-style paths collapse consistently on every OS.
             var parent = TrimLastSegment(path);
 
             while (parent is not null) {
@@ -2596,27 +2712,33 @@ class ImportCommand(
             }
 
             return false;
-
-            static string? TrimLastSegment(string p) {
-                var i = p.Length - 1;
-
-                // Skip trailing separators (e.g. a stray "/a/b/").
-                while (i >= 0 && CwdRemapper.IsSeparator(p[i])) i--;
-
-                // Find the separator that ends the parent segment.
-                while (i >= 0 && !CwdRemapper.IsSeparator(p[i])) i--;
-
-                // No separator left, or only a leading-root separator remains
-                // ("/foo" → root) → no further ancestor to test.
-                if (i <= 0) return null;
-
-                // Collapse any run of separators so "/a//b" trims cleanly to "/a".
-                var end = i;
-                while (end > 0 && CwdRemapper.IsSeparator(p[end - 1])) end--;
-
-                return end <= 0 ? null : p[..end];
-            }
         }
+    }
+
+    /// <summary>
+    /// The parent of <paramref name="p"/>, or null once no meaningful ancestor
+    /// is left ("/foo" → root). Trims the last separator-delimited segment
+    /// rather than calling <c>Path.GetDirectoryName</c>, which on Windows
+    /// normalizes '/' → '\' and would break Ordinal comparison against
+    /// forward-slash transcript cwds. Both separators are honored so
+    /// mixed-style paths resolve consistently on every OS.
+    /// </summary>
+    internal static string? TrimLastSegment(string p) {
+        var i = p.Length - 1;
+
+        // Skip trailing separators (e.g. a stray "/a/b/").
+        while (i >= 0 && CwdRemapper.IsSeparator(p[i])) i--;
+
+        // Find the separator that ends the parent segment.
+        while (i >= 0 && !CwdRemapper.IsSeparator(p[i])) i--;
+
+        if (i <= 0) return null;
+
+        // Collapse any run of separators so "/a//b" trims cleanly to "/a".
+        var end = i;
+        while (end > 0 && CwdRemapper.IsSeparator(p[end - 1])) end--;
+
+        return end <= 0 ? null : p[..end];
     }
 
     /// <summary>
@@ -2720,7 +2842,7 @@ class ImportCommand(
 
             async ValueTask DetectOne(string cwd) {
                 // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
+                var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false);
                 repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
             }
 
@@ -2842,7 +2964,7 @@ class ImportCommand(
             }
 
             var result = await TitleGeneration.GenerateAsync(
-                userText, assistantText, _ => { }, profiles.Resolution.Profile, harnesses, vendor.VendorId);
+                userText, assistantText, time, _ => { }, profiles.Resolution.Profile, harnesses, vendor.VendorId);
 
             if (result is null) {
                 return TitleResult.Skipped;
@@ -2860,7 +2982,7 @@ class ImportCommand(
 
             var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.SessionTitlePayload);
             using var content     = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-            using var titleResp   = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-title", content);
+            using var titleResp   = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-title", content, time);
 
             return TitleResult.Generated;
         } catch {
@@ -3061,7 +3183,7 @@ class ImportCommand(
                     session.SessionId,
                     session.FilePath,
                     agentId: null,
-                    startLine: session.ResumeFromLine,
+                    startLine: session.ResumeFromLine, time: time,
                     progress: perSessionProgress,
                     vendor: session.Vendor,
                     failOnError: true
@@ -3083,7 +3205,7 @@ class ImportCommand(
 
                 using var endContent = new StringContent(resumeEndHook.ToJsonString(), Encoding.UTF8, "application/json");
                 using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, ct: ct, retryStatuses: true);
+                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
 
                 if (!endResp.IsSuccessStatusCode) {
                     events.OnSessionErrored(slot, session.SessionId, $"resume session-end failed: HTTP {(int)endResp.StatusCode}");
@@ -3143,7 +3265,7 @@ class ImportCommand(
         if (cwd is not null) {
             // The imported session-start payload carries no PR fields (only owner/repo/branch/user),
             // so skip the PR/MR provider round-trip.
-            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false);
 
             if (repo is not null || codexRepo is not null) {
                 var repoNode = new JsonObject();
@@ -3180,7 +3302,7 @@ class ImportCommand(
                 session.Vendor.VendorId,
                 session.FilePath,
                 GitRepository.FindRoot,
-                root => RepositoryDetection.DetectRepositoryAsync(router, config, root, detectPullRequest: false));
+                root => RepositoryDetection.DetectRepositoryAsync(router, config, root, time, detectPullRequest: false));
 
             if (evidenceNode is not null) startHook["repository"] = evidenceNode;
         }
@@ -3194,7 +3316,7 @@ class ImportCommand(
         try {
             using var startContent = new StringContent(startHook.ToJsonString(), Encoding.UTF8, "application/json");
             using var startResp    = await httpClient.PostWithRetryAsync(
-                $"{baseUrl}/hooks/session-start/{session.Vendor.VendorId}", startContent, ct: ct, retryStatuses: true);
+                $"{baseUrl}/hooks/session-start/{session.Vendor.VendorId}", startContent, time, ct: ct, retryStatuses: true);
 
             if (!startResp.IsSuccessStatusCode) {
                 events.OnSessionErrored(slot, session.SessionId, $"session-start failed: HTTP {(int)startResp.StatusCode}");
@@ -3217,6 +3339,7 @@ class ImportCommand(
                 session.SessionId,
                 meta,
                 session.EncodedCwd,
+                time,
                 perSessionProgress,
                 session.Vendor
             );
@@ -3247,7 +3370,7 @@ class ImportCommand(
         try {
             using var endContent = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
             using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, ct: ct, retryStatuses: true);
+                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
 
             if (endResp.IsSuccessStatusCode) {
                 try {
@@ -3322,8 +3445,9 @@ class ImportCommand(
             HttpClient            httpClient,
             string                baseUrl,
             IReadOnlyList<string> sessionIds,
+            TimeProvider          time,
             string                indent = ""
-        ) => SetVisibilityForAll(httpClient, baseUrl, sessionIds, "none", indent);
+        ) => SetVisibilityForAll(httpClient, baseUrl, sessionIds, "none", time, indent);
 
     /// <summary>
     /// Failures are logged inline (one line per session) but never throw — the import already
@@ -3337,6 +3461,7 @@ class ImportCommand(
             string                baseUrl,
             IReadOnlyList<string> sessionIds,
             string                visibility,
+            TimeProvider          time,
             string                indent = ""
         ) {
         var lost = new List<string>();
@@ -3348,7 +3473,7 @@ class ImportCommand(
             try {
                 using var resp = await httpClient.PutWithRetryAsync(
                     $"{baseUrl}/api/sessions/{sessionId}/visibility",
-                    content,
+                    content, time,
                     retryStatuses: true
                 );
 

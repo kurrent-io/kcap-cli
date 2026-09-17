@@ -27,7 +27,12 @@ namespace Capacitor.Cli.Harness.Gemini;
 internal sealed class GeminiImportSource : IImportSource {
     readonly string _tmpDir;
 
-    public GeminiImportSource(string tmpDir) => _tmpDir = tmpDir;
+    readonly TimeProvider _time;
+
+    public GeminiImportSource(string tmpDir, TimeProvider time) {
+        _tmpDir = tmpDir;
+        _time   = time;
+    }
 
     static StringComparison PathComparison =>
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
@@ -246,7 +251,7 @@ internal sealed class GeminiImportSource : IImportSource {
                 sessionId:  classification.SessionId,
                 filePath:   transcriptPath,
                 agentId:    null,
-                startLine:  startLine,
+                startLine:  startLine, time: _time,
                 vendor:     Vendor,
                 progress:   ctx.Progress);
         } catch {
@@ -305,12 +310,12 @@ internal sealed class GeminiImportSource : IImportSource {
         return payload;
     }
 
-    static async Task<bool> PostSyntheticHookAsync(
+    async Task<bool> PostSyntheticHookAsync(
         HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
     ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, _time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
@@ -393,7 +398,8 @@ internal sealed class GeminiImportSource : IImportSource {
                 subSent = await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl,
                     sessionId:  parentSessionIdDashless, filePath: d.File,
-                    agentId:    agentId, startLine: 0, vendor: Vendor, failOnError: true, progress: progress);
+                    agentId:    agentId, startLine: 0, time: _time, vendor: Vendor, failOnError: true,
+                    progress:   progress);
             } catch {
                 continue; // leave subagent-stop unsent; a re-import retries (idempotent)
             }
@@ -547,8 +553,8 @@ internal sealed class GeminiImportSource : IImportSource {
         }
     }
 
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
-        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
+    async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
+        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", _time, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");

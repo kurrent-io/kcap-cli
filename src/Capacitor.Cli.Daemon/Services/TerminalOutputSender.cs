@@ -43,6 +43,7 @@ internal sealed partial class TerminalOutputSender {
     readonly Func<string, string, CancellationToken, Task> _send;
     readonly Func<bool>                                   _isConnected;
     readonly ILogger                                       _logger;
+    readonly TimeProvider                                  _time;
     readonly TimeSpan                                      _retryDelay;
     readonly int                                           _maxConnectedAttempts;
     long                                                   _dropped;
@@ -51,6 +52,7 @@ internal sealed partial class TerminalOutputSender {
             Func<string, string, CancellationToken, Task> send,
             Func<bool>                                    isConnected,
             ILogger                                       logger,
+            TimeProvider                                  time,
             int                                           capacity             = 2000,
             TimeSpan?                                     retryDelay           = null,
             int                                           maxConnectedAttempts = 5
@@ -58,6 +60,7 @@ internal sealed partial class TerminalOutputSender {
         _send                 = send;
         _isConnected          = isConnected;
         _logger               = logger;
+        _time                 = time;
         _retryDelay           = retryDelay ?? TimeSpan.FromMilliseconds(500);
         _maxConnectedAttempts = Math.Max(1, maxConnectedAttempts);
         _channel = Channel.CreateBounded<(string, string)>(
@@ -148,7 +151,7 @@ internal sealed partial class TerminalOutputSender {
                         }
 
                         try {
-                            await Task.Delay(_retryDelay, ct);
+                            await Task.Delay(_retryDelay, _time, ct);
                         } catch (OperationCanceledException) {
                             return;
                         }

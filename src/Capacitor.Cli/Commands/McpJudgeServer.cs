@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -14,7 +13,7 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup) {
+        TelemetryStartup startup, TimeProvider time) {
     /// <summary>
     /// Run as a session-scoped MCP server. All tool calls must use <paramref name="expectedSessionId"/>.
     /// </summary>
@@ -35,7 +34,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         // MCP servers are long-lived and denylisted under the top-level "mcp" command
         // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
         // "mcp-server" is what lets per-tool-call events leave at all.
-        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
         telemetry.AddSharedProperty("logged_in", loggedIn);
 
         await using var mcp = new McpTelemetry(telemetry);
@@ -97,7 +96,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -106,7 +105,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                mcp.ToolCalled("kcap-judge", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-judge", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
     }

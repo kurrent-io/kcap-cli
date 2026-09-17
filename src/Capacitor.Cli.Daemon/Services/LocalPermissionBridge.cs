@@ -32,6 +32,7 @@ internal sealed partial class LocalPermissionBridge(
         ServerConnection               server,
         ILogger<LocalPermissionBridge> logger,
         ILoopbackPortSource            ports,
+        TimeProvider time,
         PermissionPromptBroker?        broker      = null,
         PermissionDecisionLog?         decisionLog = null
     ) : IHostedService, IAsyncDisposable {
@@ -43,6 +44,10 @@ internal sealed partial class LocalPermissionBridge(
     internal static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan RequestReadTimeout   = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan ShutdownDrain        = TimeSpan.FromSeconds(2);
+    static readonly          TimeSpan DrainPollGap         = TimeSpan.FromMilliseconds(10);
+
+    // Jittered so two bridges racing for the same port don't retry in lockstep.
+    static TimeSpan BindRetryGap() => TimeSpan.FromMilliseconds(Random.Shared.Next(10, 60));
 
     readonly PermissionPromptBroker _broker      = broker ?? new();
     readonly PermissionDecisionLog? _decisionLog = decisionLog;
@@ -144,7 +149,7 @@ internal sealed partial class LocalPermissionBridge(
             var port = ports.Reserve();
             if (!TryClaimPort(port)) {
                 if (attempt < MaxBindAttempts)
-                    await Task.Delay(Random.Shared.Next(10, 60), cancellationToken);
+                    await Task.Delay(BindRetryGap(), time, cancellationToken);
                 continue;
             }
 
@@ -170,7 +175,7 @@ internal sealed partial class LocalPermissionBridge(
                 if (attempt == MaxBindAttempts) throw;
 
                 LogBindRetry(logger, attempt, port, ex.Message);
-                await Task.Delay(Random.Shared.Next(10, 60), cancellationToken);
+                await Task.Delay(BindRetryGap(), time, cancellationToken);
             } catch {
                 CloseSilently(listener);
                 ReleasePortClaim(port);
@@ -224,9 +229,9 @@ internal sealed partial class LocalPermissionBridge(
 
         // Closing the listener before the drain would abort the very responses the claims promised.
         lock (_admission) _admitting = false;
-        var drainDeadline = DateTime.UtcNow + ShutdownDrain;
-        while (Volatile.Read(ref _inFlight) > 0 && DateTime.UtcNow < drainDeadline)
-            await Task.Delay(10, CancellationToken.None);
+        var drainDeadline = time.GetUtcNow().UtcDateTime + ShutdownDrain;
+        while (Volatile.Read(ref _inFlight) > 0 && time.GetUtcNow().UtcDateTime < drainDeadline)
+            await Task.Delay(DrainPollGap, time, CancellationToken.None);
 
         // Close exactly once, before awaiting the accept loop. Stop() alone releases the port but
         // leaves HttpListener's prefix registered until a later Close(); another bridge can claim
@@ -238,7 +243,7 @@ internal sealed partial class LocalPermissionBridge(
 
         if (_acceptLoop is not null) {
             try {
-                await _acceptLoop.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
+                await _acceptLoop.WaitAsync(TimeSpan.FromSeconds(2), time, cancellationToken);
             } catch {
                 /* shutting down */
             }
@@ -543,7 +548,7 @@ internal sealed partial class LocalPermissionBridge(
             // below, so this reads under its own bounded RequestReadTimeout instead. Capped at
             // MaxPermissionRequestBodyBytes so an unbounded read from the local hook can't exhaust
             // the daemon's memory.
-            using var readCts = new CancellationTokenSource(RequestReadTimeout);
+            using var readCts = new CancellationTokenSource(RequestReadTimeout, time);
             var       body    = await ReadCappedBodyAsync(context.Request.InputStream, MaxPermissionRequestBodyBytes, readCts.Token);
 
             if (body is null) {
@@ -635,7 +640,7 @@ internal sealed partial class LocalPermissionBridge(
                     node["agent_id"]?.GetValue<string>(), canonicalSessionId, node["cwd"]?.GetValue<string>()));
                 var pending = attributed is { } a
                     ? BuildPending(Guid.NewGuid().ToString("N"), a.AgentId, canonicalSessionId!, vendor, toolName, toolInput, suggestions,
-                        DateTimeOffset.UtcNow.ToString("O"), ToolUseIdOf(node))
+                        time.GetUtcNow().ToString("O"), ToolUseIdOf(node))
                     : null;
 
                 // The launched agent's own policy answers before a human is asked. The vendor gate
@@ -646,7 +651,7 @@ internal sealed partial class LocalPermissionBridge(
                     try {
                         policy = ClaudeHostedPolicySeam.Evaluate(
                             canonicalSessionId!, governed.AgentId, snapshot, toolName, toolInput,
-                            node["cwd"]?.GetValue<string>());
+                            node["cwd"]?.GetValue<string>(), time);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
                     }
@@ -657,12 +662,12 @@ internal sealed partial class LocalPermissionBridge(
                                 ? PermissionSettlements.Allow
                                 : PermissionSettlements.Deny;
                             _decisionLog?.Record(new PermissionDecisionRecord(
-                                DateTimeOffset.UtcNow.ToString("O"), governed.AgentId, canonicalSessionId!, vendor,
+                                time.GetUtcNow().ToString("O"), governed.AgentId, canonicalSessionId!, vendor,
                                 toolName ?? "", behavior, PermissionSettlements.SourcePolicy));
                             _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
                             // No Register: a call the policy answered raises no card, and the
                             // decision log plus the run event are its audit trail.
-                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor));
+                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
 
                             return;
                         }
@@ -691,21 +696,21 @@ internal sealed partial class LocalPermissionBridge(
                         // Shutdown: claim rather than inspect. Losing means another party settled first.
                         if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
                                 PermissionSettlements.Deny, PermissionSettlements.SourceDaemonShutdown)) {
-                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor));
+                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor), time);
                             return;
                         }
                         settlement = await settlementTask;
                     }
 
                     _decisionLog?.Record(new PermissionDecisionRecord(
-                        DateTimeOffset.UtcNow.ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
+                        time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
                         pending.ToolName, settlement.Outcome, settlement.Source));
-                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor));
+                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor), time);
                     return;
                 }
             }
 
-            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor));
+            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor), time);
         } catch (Exception ex) {
             LogBridgeHandlerError(logger, ex);
 
@@ -722,8 +727,8 @@ internal sealed partial class LocalPermissionBridge(
     /// token before the drain, and a claimed answer must still reach the hook. A failed write
     /// aborts the connection rather than leaving it open for the caller's Close() to fault on
     /// already-sent headers.
-    static async Task WriteResponseAsync(HttpListenerContext context, string responseJson) {
-        using var writeCts = new CancellationTokenSource(ResponseWriteTimeout);
+    static async Task WriteResponseAsync(HttpListenerContext context, string responseJson, TimeProvider time) {
+        using var writeCts = new CancellationTokenSource(ResponseWriteTimeout, time);
         var bytes = Encoding.UTF8.GetBytes(responseJson);
         context.Response.ContentType     = "application/json";
         context.Response.StatusCode      = 200;
@@ -986,7 +991,7 @@ internal sealed partial class LocalPermissionBridge(
             return null;
         }
 
-        using var readCts = new CancellationTokenSource(RequestReadTimeout);
+        using var readCts = new CancellationTokenSource(RequestReadTimeout, time);
         var       body    = await ReadCappedBodyAsync(context.Request.InputStream, MaxPermissionRequestBodyBytes, readCts.Token);
 
         if (body is null) {

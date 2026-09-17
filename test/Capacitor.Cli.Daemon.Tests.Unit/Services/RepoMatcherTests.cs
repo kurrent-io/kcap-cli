@@ -25,7 +25,7 @@ public class RepoMatcherTests {
         return root;
     }
 
-    static RepoMatcher NewMatcher() => new(new(), NullLogger<RepoMatcher>.Instance);
+    static RepoMatcher NewMatcher() => new(new(), NullLogger<RepoMatcher>.Instance, TimeProvider.System);
 
     [Test]
     public async Task FindAsync_MatchingHttpsOrigin_ReturnsRoot() {
@@ -150,7 +150,7 @@ public class RepoMatcherTests {
         using var tmp = new TempDir();
         var repo = MakeTempRepo(tmp, "repo", "https://github.com/contoso/widgets.git");
         var config = new DaemonConfig { AllowedRepoPaths = [repo] };
-        var matcher = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
+        var matcher = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
 
         // Pass empty server candidates — repo should still surface from AllowedRepoPaths.
         var result = await matcher.FindAsync("contoso", "widgets", [], CancellationToken.None);

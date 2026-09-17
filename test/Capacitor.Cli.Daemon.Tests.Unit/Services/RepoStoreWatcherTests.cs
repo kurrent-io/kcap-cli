@@ -24,6 +24,7 @@ public class RepoStoreWatcherTests {
                 stat: () => File,
                 advertised: () => Advertised,
                 isReady: () => Ready,
+                time: TimeProvider.System,
                 publish: () => {
                     Publishes++;
                     if (PublishThrow is { } ex) return Task.FromException(ex);

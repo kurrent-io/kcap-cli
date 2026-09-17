@@ -50,7 +50,7 @@ public sealed class ClaudeHookCommand(
     };
 
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
         spool.ReapOlderThan(TimeSpan.FromDays(30));
 
         return HandleWithDeps(
@@ -133,7 +133,7 @@ public sealed class ClaudeHookCommand(
 
                 var rendered = hosted.IsRendered;
 
-                return await new Cli.Harness.Claude.ClaudePolicySeam(config)
+                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time)
                     .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out);
             } catch { return 0; }
         }
@@ -142,7 +142,8 @@ public sealed class ClaudeHookCommand(
         // into the same degraded arm a client-creation timeout already uses — keeping capture and
         // the spool intact without inventing a second disposition for a not-usable AuthAttempt.
         var created = HookHttp.IsPostable(Url)
-            ? await BoundedAuth.CreateClientWithinAsync(clientFactory, clientCap, () => RefreshTokenHandoff.Spawn(config, profiles.Name, starter))
+            ? await BoundedAuth.CreateClientWithinAsync(
+                clientFactory, clientCap, clock.Time, () => RefreshTokenHandoff.Spawn(config, profiles.Name, starter))
             : null;
 
         if (created is null) {
@@ -214,28 +215,29 @@ public sealed class ClaudeHookCommand(
             NormalizeGuidField(node, "session_id");
             NormalizeGuidField(node, "agent_id");
             if (command == "session-end" && node["ended_at"] is null)
-                node["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
+                node["ended_at"] = clock.Time.GetUtcNow().ToString("O");
             // Surface 3: the degraded arm spools via this path and bypasses HandleCore's stamp, so a
             // replayed session-start must still carry the harness inventory (the hook-ingest carrier).
-            if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses);
+            if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
             return node.ToJsonString();
         } catch { return body; }
     }
 
-    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget) {
-        var winner = await Task.WhenAny(inner, Task.Delay(budget));
+    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget, TimeProvider time) {
+        var winner = await Task.WhenAny(inner, Task.Delay(budget, time));
         return winner == inner ? await inner : 0;
     }
 
     // Await repo enrichment but never past the remaining hook budget. If it can't finish in time,
     // proceed with the un-enriched body (repo info still reaches the session via the watcher's own
     // detection) so the bounded POST/spool path is always reached before Claude kills the hook.
-    static async Task<string> AwaitEnrichmentWithinBudget(Task<string> enrichment, string fallbackBody, TimeSpan budget) {
+    static async Task<string> AwaitEnrichmentWithinBudget(
+            Task<string> enrichment, string fallbackBody, TimeSpan budget, TimeProvider time) {
         if (budget <= TimeSpan.Zero) {
             _ = enrichment.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
             return fallbackBody;
         }
-        var winner = await Task.WhenAny(enrichment, Task.Delay(budget));
+        var winner = await Task.WhenAny(enrichment, Task.Delay(budget, time));
         if (winner != enrichment) {
             _ = enrichment.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default); // observe if it later faults
             return fallbackBody;
@@ -299,7 +301,7 @@ public sealed class ClaudeHookCommand(
 
     internal async Task<bool> IsSessionExcludedAsync(Profile? profile, string body, HookBudget budget) {
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, body,
-                                                  profile?.AllowedRepos, profile?.ExcludedRepos, budget.Remaining)) {
+                                                  profile?.AllowedRepos, profile?.ExcludedRepos, clock.Time, budget.Remaining)) {
             return true;
         }
 
@@ -366,7 +368,7 @@ public sealed class ClaudeHookCommand(
 
                 // Surface 3: attach this machine's harness inventory, session-start only (the
                 // injections above apply to every event; the inventory is a session-start signal).
-                if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses);
+                if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
 
                 body = node.ToJsonString();
             }
@@ -400,7 +402,7 @@ public sealed class ClaudeHookCommand(
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
-            return await new PermissionRequestCommand(config, profiles, hosted, http, watchers)
+            return await new PermissionRequestCommand(config, profiles, hosted, http, watchers, clock.Time)
                 .Handle(body, selfHeal, stdout);
         }
 
@@ -432,13 +434,13 @@ public sealed class ClaudeHookCommand(
         if (command == "session-start") {
             // Awaited INSIDE the session-start block after EnsureWatcherRunning so it never delays
             // transcript-capture start.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, clock.Time, budget.Remaining, detectPullRequest: false);
         } else if (command is "session-end" or "subagent-stop") {
             // Budgeted so a slow git probe can't push the bounded POST/spool path past the hook
             // deadline. The await below is also budget-bounded as a hard backstop.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, clock.Time, budget.Remaining, detectPullRequest: false);
         } else {
-            body = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, detectPullRequest: false);
+            body = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, clock.Time, detectPullRequest: false);
         }
 
         // Resolve the V2 profile once for repo/path exclusion and
@@ -505,7 +507,7 @@ public sealed class ClaudeHookCommand(
                                 }
                             },
                             effectiveCap
-                        );
+                        , clock.Time);
 
                         if (!drained) {
                             await Console.Error.WriteLineAsync(
@@ -518,7 +520,7 @@ public sealed class ClaudeHookCommand(
                     Console.Error.WriteLine($"[kcap] session-end pre-hook failed: {ex.Message}");
                 }
 
-                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, budget.Remaining);
+                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, budget.Remaining, clock.Time);
 
                 break;
             }
@@ -550,7 +552,7 @@ public sealed class ClaudeHookCommand(
                                 }
                             },
                             effectiveCap
-                        );
+                        , clock.Time);
 
                         if (!drained) {
                             await Console.Error.WriteLineAsync(
@@ -562,7 +564,7 @@ public sealed class ClaudeHookCommand(
                     Console.Error.WriteLine($"[kcap] subagent-stop pre-hook failed: {ex.Message}");
                 }
 
-                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, budget.Remaining);
+                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, budget.Remaining, clock.Time);
 
                 break;
             }
@@ -716,7 +718,7 @@ public sealed class ClaudeHookCommand(
                     // postBody carries the coordination-notices capability; the spool below uses the
                     // capability-free `body` so a replay never claims notices it cannot render.
                     using var content = new StringContent(postBody, Encoding.UTF8, "application/json");
-                    resp = await client.PostOnceAsync($"{Url}/hooks/session-start", content, remaining, CancellationToken.None);
+                    resp = await client.PostOnceAsync($"{Url}/hooks/session-start", content, clock.Time, remaining, CancellationToken.None);
                 }
             } catch { resp = null; }
 
@@ -757,7 +759,7 @@ public sealed class ClaudeHookCommand(
                         var planContent = ReadPlanFile(resolvedSlug, harnesses.Of<ClaudeHarness>().Paths);
 
                         if (planContent is not null) {
-                            await PostPlanContentAsync(client, Url, sessionId, planContent);
+                            await PostPlanContentAsync(client, clock.Time, Url, sessionId, planContent);
                         }
                     }
                 } catch {
@@ -797,10 +799,10 @@ public sealed class ClaudeHookCommand(
 
                     // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
                     var workItemsNudge = WorkItemsNudgeEmitter.Resolve(
-                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config));
+                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
                     var plansNudge = PlansNudgeEmitter.Resolve(
                         HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
-                    var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses);
+                    var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
                         lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge);
@@ -828,7 +830,7 @@ public sealed class ClaudeHookCommand(
                 if (node is not null) {
                     // Stamped before the body is frozen so a spooled replay carries the count too.
                     if (sessionId is not null) StampPassThroughCount(node, sessionId);
-                    node["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
+                    node["ended_at"] = clock.Time.GetUtcNow().ToString("O");
                     body             = node.ToJsonString();
                 }
             } catch { }
@@ -852,7 +854,7 @@ public sealed class ClaudeHookCommand(
             try {
                 if (remaining > TimeSpan.Zero) {
                     using var content = new StringContent(body, Encoding.UTF8, "application/json");
-                    resp = await client.PostOnceAsync($"{Url}/hooks/session-end", content, remaining, CancellationToken.None);
+                    resp = await client.PostOnceAsync($"{Url}/hooks/session-end", content, clock.Time, remaining, CancellationToken.None);
                 }
             } catch { resp = null; }
 
@@ -905,7 +907,7 @@ public sealed class ClaudeHookCommand(
                 try {
                     if (remaining > TimeSpan.Zero) {
                         using var content = new StringContent(body, Encoding.UTF8, "application/json");
-                        resp = await client.PostOnceAsync($"{Url}/hooks/subagent-stop", content, remaining, CancellationToken.None);
+                        resp = await client.PostOnceAsync($"{Url}/hooks/subagent-stop", content, clock.Time, remaining, CancellationToken.None);
                     }
                 } catch { resp = null; }
 
@@ -939,7 +941,7 @@ public sealed class ClaudeHookCommand(
         HttpResponseMessage response;
 
         try {
-            response = await client.PostWithRetryAsync($"{Url}/hooks/{command}", sharedContent);
+            response = await client.PostWithRetryAsync($"{Url}/hooks/{command}", sharedContent, clock.Time);
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(Url, ex);
 
@@ -1155,7 +1157,7 @@ public sealed class ClaudeHookCommand(
         try {
             var remaining = budget.Remaining;
             if (remaining <= TimeSpan.Zero) return task.IsCompletedSuccessfully ? task.Result : null;
-            return await task.WaitAsync(remaining);
+            return await task.WaitAsync(remaining, budget.Time);
         } catch { return null; }
     }
 
@@ -1171,10 +1173,10 @@ public sealed class ClaudeHookCommand(
         }
     }
 
-    static async Task PostPlanContentAsync(HttpClient httpClient, string url, string sessionId, string planContent) {
+    static async Task PostPlanContentAsync(HttpClient httpClient, TimeProvider time, string url, string sessionId, string planContent) {
         var       obj         = new JsonObject { ["plan_content"] = planContent };
         using var planPayload = new StringContent(obj.ToJsonString(), Encoding.UTF8, "application/json");
-        await httpClient.PostWithRetryAsync($"{url}/api/sessions/{sessionId}/plan", planPayload);
+        await httpClient.PostWithRetryAsync($"{url}/api/sessions/{sessionId}/plan", planPayload, time);
     }
 
     /// <summary>
@@ -1186,7 +1188,7 @@ public sealed class ClaudeHookCommand(
         async (route, body) => {
             try {
                 using var content = new StringContent(body, Encoding.UTF8, "application/json");
-                using var resp    = await client.PostOnceAsync($"{Url}/hooks/{route}", content, perAttempt, CancellationToken.None);
+                using var resp    = await client.PostOnceAsync($"{Url}/hooks/{route}", content, clock.Time, perAttempt, CancellationToken.None);
                 if (!resp.IsSuccessStatusCode) return HookSpool.OutcomeOf((int)resp.StatusCode);
                 if (route == "session-end") {
                     try {

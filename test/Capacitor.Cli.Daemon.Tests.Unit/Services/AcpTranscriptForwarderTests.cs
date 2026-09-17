@@ -54,7 +54,8 @@ public class AcpTranscriptForwarderTests {
     static AcpTranscriptForwarder NewForwarder(
             Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> send,
             ChannelReader<AcpEventEnvelope>                                envelopes
-        ) => new(send, InitialEnvelope, envelopes, NullLogger.Instance, FastRetryDelay, FastRetryDelay);
+        ) => new(send, InitialEnvelope, envelopes, NullLogger.Instance, TimeProvider.System,
+                 FastRetryDelay, FastRetryDelay);
 
     // ── Seq assignment ───────────────────────────────────────────────────────────────────────────
 
@@ -106,6 +107,7 @@ public class AcpTranscriptForwarderTests {
 
         var forwarder = new AcpTranscriptForwarder(
             send: Send, initialEnvelope: null, envelopes: channel.Reader, logger: NullLogger.Instance,
+            time: TimeProvider.System,
             initialSendRetryDelay: FastRetryDelay, maxSendRetryDelay: FastRetryDelay, resumeFromSeq: resumeFromSeq);
 
         await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -325,7 +327,7 @@ public class AcpTranscriptForwarderTests {
         }
 
         var forwarder = new AcpTranscriptForwarder(
-            Send, InitialEnvelope, channel.Reader, NullLogger.Instance,
+            Send, InitialEnvelope, channel.Reader, NullLogger.Instance, TimeProvider.System,
             FastRetryDelay, FastRetryDelay, maxStalledGapResends: cap, stalledGapResendDelay: FastRetryDelay);
 
         await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -360,7 +362,7 @@ public class AcpTranscriptForwarderTests {
         }
 
         var forwarder = new AcpTranscriptForwarder(
-            Send, InitialEnvelope, channel.Reader, NullLogger.Instance,
+            Send, InitialEnvelope, channel.Reader, NullLogger.Instance, TimeProvider.System,
             FastRetryDelay, FastRetryDelay, maxStalledGapResends: 3, stalledGapResendDelay: FastRetryDelay);
 
         await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);

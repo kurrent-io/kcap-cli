@@ -464,7 +464,9 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        // The wall clock, not a stopped one: the second call reaches Contended only by exhausting a
+        // real lock wait, and the gap between its attempts is measured on whatever clock it is given.
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
             readPlist: _ => null,
             plistExists: _ => false,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
@@ -475,7 +477,7 @@ public class ServiceVerifyStartTests {
         await Assert.That(sut.LastGateReason).IsNotNull();
 
         // Hold the lock so the second call exits Contended before any gate evaluation.
-        using var held = ServiceTxnLock.TryAcquire(Daemons.Store, Id, TimeSpan.FromSeconds(1));
+        using var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, Id, TimeSpan.FromSeconds(1), TimeProvider.System);
         await Assert.That(held).IsNotNull();
 
         using (var capture = ConsoleOutput.StartErrorCapture()) {

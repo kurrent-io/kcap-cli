@@ -100,6 +100,7 @@ public class LoopbackOwnershipTests {
 
         var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
             Github, "client-id", "http://127.0.0.1:1/exchange", new RecordingBrowser(), NoTelemetry.Join,
+            TimeProvider.System,
             browser: fake, timeout: TimeSpan.FromSeconds(1));
 
         await Assert.That(token).IsNull();
@@ -211,8 +212,8 @@ public class LoopbackOwnershipTests {
 
     /// <summary>
     /// The value handed to <c>join</c>, or null when the site passes none. Named form first, then
-    /// the fourth positional slot; a ternary in the <c>hint</c> slot carries no top-level comma, so
-    /// depth-aware splitting is enough to keep the slots aligned.
+    /// the fifth positional slot (launcher, time, progress, hint, join); a ternary in the <c>hint</c>
+    /// slot carries no top-level comma, so depth-aware splitting is enough to keep the slots aligned.
     /// </summary>
     static string? JoinArgument(string arguments) {
         var parts = SplitTopLevel(arguments);
@@ -222,7 +223,7 @@ public class LoopbackOwnershipTests {
             if (colon > 0 && part[..colon].Trim() == "join") return part[(colon + 1)..].Trim();
         }
 
-        return parts.Count >= 4 && !parts[3].Contains(':') ? parts[3].Trim() : null;
+        return parts.Count >= 5 && !parts[4].Contains(':') ? parts[4].Trim() : null;
     }
 
     static List<string> SplitTopLevel(string arguments) {
@@ -278,11 +279,11 @@ public class LoopbackOwnershipTests {
             "namespace Fixture;",
             "static class Owned {",
             "    static void Simple() {",
-            "        using var browser = new LoopbackBrowser(progress: progress, join: join);",
+            "        using var browser = new LoopbackBrowser(TimeProvider.System,progress: progress, join: join);",
             "    }",
             "    static void NullableTernary(object? injected) {",
             "        using LoopbackBrowser? created =",
-            "            injected is null ? new LoopbackBrowser(progress: progress, join: join) : null;",
+            "            injected is null ? new LoopbackBrowser(TimeProvider.System,progress: progress, join: join) : null;",
             "    }",
             "}",
         ]);
@@ -300,7 +301,7 @@ public class LoopbackOwnershipTests {
             "static class Leaked {",
             "    static void Go() {",
             "        var options = new OidcClientOptions {",
-            "            Browser = new LoopbackBrowser(progress: progress, join: join),",
+            "            Browser = new LoopbackBrowser(TimeProvider.System,progress: progress, join: join),",
             "        };",
             "    }",
             "}",
@@ -322,7 +323,7 @@ public class LoopbackOwnershipTests {
             "namespace Fixture;",
             "static class Nulled {",
             "    static void Go() {",
-            "        using var browser = new LoopbackBrowser(progress: progress, join: null);",
+            "        using var browser = new LoopbackBrowser(TimeProvider.System,progress: progress, join: null);",
             "    }",
             "}",
         ]);
@@ -341,7 +342,7 @@ public class LoopbackOwnershipTests {
             "namespace Fixture;",
             "static class Joinless {",
             "    static void Go() {",
-            "        using var browser = new LoopbackBrowser(progress: progress);",
+            "        using var browser = new LoopbackBrowser(TimeProvider.System,progress: progress);",
             "    }",
             "}",
         ]);
@@ -362,7 +363,7 @@ public class LoopbackOwnershipTests {
             "namespace Fixture.Nested;",
             "static class BrandNewFacade {",
             "    static void Go() {",
-            "        var browser = new LoopbackBrowser(progress: progress);",
+            "        var browser = new LoopbackBrowser(TimeProvider.System,progress: progress);",
             "    }",
             "}",
         ]);

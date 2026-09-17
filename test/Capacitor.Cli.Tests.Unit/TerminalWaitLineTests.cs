@@ -14,7 +14,7 @@ public class TerminalWaitLineTests {
     static (TerminalWaitLine Line, StringWriter Control) Build(bool tty = true, int? width = 80) {
         var control = new StringWriter();
 
-        return (new TerminalWaitLine(tty, control, () => width), control);
+        return (new TerminalWaitLine(tty, TimeProvider.System, control, () => width), control);
     }
 
     [Test]
@@ -132,7 +132,7 @@ public class TerminalWaitLineTests {
     public async Task Widening_the_terminal_past_the_minimum_starts_drawing_again() {
         var control = new StringWriter();
         int? width  = 3;
-        var line    = new TerminalWaitLine(tty: true, control, () => width);
+        var line    = new TerminalWaitLine(tty: true, TimeProvider.System, control, () => width);
 
         line.Show("waiting", null);
         await Assert.That(line.Drawn).IsEqualTo(0);
@@ -150,7 +150,7 @@ public class TerminalWaitLineTests {
     public async Task Narrowing_mid_wait_takes_the_block_down_and_restores_the_cursor() {
         var control = new StringWriter();
         int? width  = 80;
-        var line    = new TerminalWaitLine(tty: true, control, () => width);
+        var line    = new TerminalWaitLine(tty: true, TimeProvider.System, control, () => width);
 
         line.Show("waiting", "t to carry on here");
         await Assert.That(line.Drawn).IsEqualTo(2);
@@ -187,7 +187,7 @@ public class TerminalWaitLineTests {
     [Test]
     public async Task Pinned_follows_the_next_draw_after_the_terminal_narrows() {
         int? width = 80;
-        var line   = new TerminalWaitLine(tty: true, new StringWriter(), () => width);
+        var line   = new TerminalWaitLine(tty: true, TimeProvider.System, new StringWriter(), () => width);
 
         line.Show("waiting", null);
         await Assert.That(line.Pinned).IsTrue();
@@ -207,7 +207,7 @@ public class TerminalWaitLineTests {
     public async Task A_width_that_changes_mid_draw_does_not_throw_or_draw_at_the_wrong_width() {
         var samples = new Queue<int?>([80, null, 3, 80]);
         var line    = new TerminalWaitLine(
-            tty: true, new StringWriter(), () => samples.Count > 0 ? samples.Dequeue() : 80);
+            tty: true, TimeProvider.System, new StringWriter(), () => samples.Count > 0 ? samples.Dequeue() : 80);
 
         line.Show("waiting", "t to carry on here");
 

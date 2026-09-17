@@ -16,12 +16,13 @@ static class RepositoryDetection {
     //     nested repos have owner=null and must re-derive.
     internal const int CacheSchemaVersion = 3;
 
-    internal static CommandRunner DefaultRunner => RunCommandAsync;
+    internal static CommandRunner DefaultRunner(TimeProvider time) =>
+        (cmd, arguments, cwd, timeout) => RunCommandAsync(cmd, arguments, cwd, time, timeout);
 
     public static async Task<string> EnrichWithRepositoryInfo(
             GitProviderRouter router,
-            ConfigRoot config, string json, TimeSpan? budget = null, bool detectPullRequest = true,
-            CommandRunner? run = null) {
+            ConfigRoot config, string json, TimeProvider time, TimeSpan? budget = null,
+            bool detectPullRequest = true, CommandRunner? run = null) {
         try {
             var node = JsonNode.Parse(json);
 
@@ -35,7 +36,7 @@ static class RepositoryDetection {
                 return json;
             }
 
-            var repo = await DetectRepositoryAsync(router, config, cwd, budget, detectPullRequest, run);
+            var repo = await DetectRepositoryAsync(router, config, cwd, time, budget, detectPullRequest, run);
 
             if (repo is null) {
                 return json;
@@ -67,12 +68,13 @@ static class RepositoryDetection {
     /// Fail-open: forwards the original payload unchanged on any error or non-git dir.
     /// </summary>
     public static async Task<string> EnrichWithRepositoryInfoFromCwd(
-            GitProviderRouter router, ConfigRoot config, string json, string cwd, TimeSpan? budget = null) {
+            GitProviderRouter router, ConfigRoot config, string json, string cwd, TimeProvider time,
+            TimeSpan? budget = null) {
         try {
             if (string.IsNullOrEmpty(cwd)) return json;
             if (JsonNode.Parse(json) is not JsonObject obj) return json;
 
-            var repo = await DetectRepositoryAsync(router, config, cwd, budget);
+            var repo = await DetectRepositoryAsync(router, config, cwd, time, budget);
             if (repo is null) return json;
 
             obj["repository"] = BuildRepositoryNode(repo);
@@ -124,20 +126,20 @@ static class RepositoryDetection {
     // passes false: it never emits PR fields, so that per-cwd round-trip is pure wasted latency.
     public static async Task<RepositoryPayload?> DetectRepositoryAsync(
             GitProviderRouter router,
-            ConfigRoot config, string cwd, TimeSpan? budget = null, bool detectPullRequest = true,
-            CommandRunner? run = null) {
+            ConfigRoot config, string cwd, TimeProvider time, TimeSpan? budget = null,
+            bool detectPullRequest = true, CommandRunner? run = null) {
         if (budget is { } b0 && b0 <= TimeSpan.Zero) return null;
-        run ??= DefaultRunner;
+        run ??= DefaultRunner(time);
         try {
             // Bound the git/gh probes by the remaining hook budget so a slow repo never
             // overruns the deadline. When no budget is set, keep the historical 5s/2s caps.
-            var sw     = Stopwatch.StartNew();
+            var started = time.GetTimestamp();
             var gitCap = budget is { } b
                 ? TimeSpan.FromSeconds(Math.Min(5, Math.Max(0, b.TotalSeconds)))
                 : TimeSpan.FromSeconds(5);
 
             // Try loading cached base info
-            var cache = LoadCache(config, cwd);
+            var cache = LoadCache(config, cwd, time);
 
             string? userName, userEmail, remoteUrl, owner, repoName, branch, host;
 
@@ -185,7 +187,7 @@ static class RepositoryDetection {
                         RepoName      = repoName,
                         Host          = host,
                         SchemaVersion = CacheSchemaVersion,
-                        CachedAt      = DateTimeOffset.UtcNow
+                        CachedAt      = time.GetUtcNow()
                     }
                 );
             }
@@ -197,7 +199,7 @@ static class RepositoryDetection {
 
             var ghCap = TimeSpan.FromSeconds(2);
             if (budget is { } bgh) {
-                var remainingBudget = bgh - sw.Elapsed;
+                var remainingBudget = bgh - time.GetElapsedTime(started);
                 ghCap = TimeSpan.FromSeconds(Math.Min(2, Math.Max(0, remainingBudget.TotalSeconds)));
             }
 
@@ -208,7 +210,7 @@ static class RepositoryDetection {
             // Import passes detectPullRequest:false: it discards PR fields, so the round-trip is
             // wasted latency. ResolveAndDetectPrAsync owns the split of providerCap across probes.
             if (detectPullRequest && providerCap > TimeSpan.Zero && host is not null) {
-                var pr = await ResolveAndDetectPrAsync(router, host, owner, repoName, branch, cwd, providerCap, run);
+                var pr = await ResolveAndDetectPrAsync(router, host, owner, repoName, branch, cwd, providerCap, run, time);
 
                 if (pr is not null) {
                     prNumber  = pr.Number;
@@ -240,7 +242,6 @@ static class RepositoryDetection {
     /// Resolves the git provider for <paramref name="host"/> and detects the current PR/MR within one
     /// <paramref name="providerCap"/> ceiling shared by the probe, the detector and the tracked-branch
     /// fallback: each gets only what the ones before it left, never the full cap.
-    /// <paramref name="getTimestamp"/> is a seam for tests (defaults to <see cref="Stopwatch.GetTimestamp"/>).
     /// </summary>
     internal static async Task<PrInfo?> ResolveAndDetectPrAsync(
             GitProviderRouter router,
@@ -251,12 +252,10 @@ static class RepositoryDetection {
             string        cwd,
             TimeSpan      providerCap,
             CommandRunner run,
-            Func<long>?   getTimestamp = null
-        ) {
+            TimeProvider  time) {
         if (providerCap <= TimeSpan.Zero) return null;
 
-        var getTs = getTimestamp ?? Stopwatch.GetTimestamp;
-        var start = getTs();
+        var start = time.GetTimestamp();
         var kind  = await router.ResolveAsync(host, cwd, providerCap, run);
 
         var detectCap = Remaining();
@@ -273,7 +272,7 @@ static class RepositoryDetection {
         // What is left of providerCap, so every probe after the first draws on one deadline. Elapsed
         // clamps at zero so a non-monotonic timestamp seam can never raise it past providerCap.
         TimeSpan Remaining() {
-            var elapsed = Stopwatch.GetElapsedTime(start, getTs());
+            var elapsed = time.GetElapsedTime(start);
             return providerCap - (elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed);
         }
     }
@@ -295,7 +294,8 @@ static class RepositoryDetection {
             : null;
     }
 
-    static async Task<string?> RunCommandAsync(string cmd, string arguments, string cwd, TimeSpan timeout) {
+    static async Task<string?> RunCommandAsync(
+            string cmd, string arguments, string cwd, TimeProvider time, TimeSpan timeout) {
         Process? process = null;
         try {
             var psi = new ProcessStartInfo(cmd, arguments) {
@@ -311,7 +311,7 @@ static class RepositoryDetection {
                 return null;
             }
 
-            using var cts    = new CancellationTokenSource(timeout);
+            using var cts    = new CancellationTokenSource(timeout, time);
             var       output = await process.StandardOutput.ReadToEndAsync(cts.Token);
             await process.WaitForExitAsync(cts.Token);
 
@@ -333,7 +333,7 @@ static class RepositoryDetection {
         return Path.Combine(config.Path("cache"), $"{hash}.json");
     }
 
-    static GitCacheEntry? LoadCache(ConfigRoot config, string cwd) {
+    static GitCacheEntry? LoadCache(ConfigRoot config, string cwd, TimeProvider time) {
         try {
             var path = GetCachePath(config, cwd);
 
@@ -349,7 +349,7 @@ static class RepositoryDetection {
             }
 
             // 1-hour TTL
-            return DateTimeOffset.UtcNow - entry.CachedAt > TimeSpan.FromHours(1) ? null : entry;
+            return time.GetUtcNow() - entry.CachedAt > TimeSpan.FromHours(1) ? null : entry;
         } catch {
             return null;
         }

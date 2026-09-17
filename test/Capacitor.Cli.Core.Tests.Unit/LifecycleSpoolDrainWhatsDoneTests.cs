@@ -22,7 +22,7 @@ namespace Capacitor.Cli.Core.Tests.Unit;
 /// vendor-suffixed route like <c>"session-end/kiro"</c> — and never otherwise.
 /// </summary>
 public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -37,8 +37,8 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":true}"""));
 
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-end/kiro", $$"""{"session_id":"{{Sid}}"}""");
 
         var calls = new List<(string SessionId, string Vendor)>();
@@ -46,7 +46,7 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
         using var cts    = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await LifecycleSpoolDrain.RunAsync(Markers, client, _server.Url!, life, tx, currentSessionId: null,
             budget: TimeSpan.FromSeconds(5), ct: cts.Token,
-            onWhatsDoneRequested: (sid, vendor) => calls.Add((sid, vendor)));
+            onWhatsDoneRequested: (sid, vendor) => calls.Add((sid, vendor)), time: TimeProvider.System);
 
         await Assert.That(calls).IsEquivalentTo([(Sid, "kiro")]);
     }
@@ -57,8 +57,8 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":true}"""));
 
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-end", $$"""{"session_id":"{{Sid}}"}""");
 
         var calls = new List<(string SessionId, string Vendor)>();
@@ -66,7 +66,7 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
         using var cts    = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await LifecycleSpoolDrain.RunAsync(Markers, client, _server.Url!, life, tx, currentSessionId: null,
             budget: TimeSpan.FromSeconds(5), ct: cts.Token,
-            onWhatsDoneRequested: (sid, vendor) => calls.Add((sid, vendor)));
+            onWhatsDoneRequested: (sid, vendor) => calls.Add((sid, vendor)), time: TimeProvider.System);
 
         await Assert.That(calls).IsEquivalentTo([(Sid, "claude")]);
     }
@@ -77,8 +77,8 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-end/kiro", $$"""{"session_id":"{{Sid}}"}""");
 
         var fired = false;
@@ -86,7 +86,7 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
         using var cts    = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await LifecycleSpoolDrain.RunAsync(Markers, client, _server.Url!, life, tx, currentSessionId: null,
             budget: TimeSpan.FromSeconds(5), ct: cts.Token,
-            onWhatsDoneRequested: (_, _) => fired = true);
+            onWhatsDoneRequested: (_, _) => fired = true, time: TimeProvider.System);
 
         await Assert.That(fired).IsFalse();
     }
@@ -97,8 +97,8 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":true}"""));
 
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-start/kiro", $$"""{"session_id":"{{Sid}}"}""");
 
         var fired = false;
@@ -106,7 +106,7 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
         using var cts    = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await LifecycleSpoolDrain.RunAsync(Markers, client, _server.Url!, life, tx, currentSessionId: null,
             budget: TimeSpan.FromSeconds(5), ct: cts.Token,
-            onWhatsDoneRequested: (_, _) => fired = true);
+            onWhatsDoneRequested: (_, _) => fired = true, time: TimeProvider.System);
 
         await Assert.That(fired).IsFalse();
     }
@@ -117,8 +117,8 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":true}"""));
 
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-end/kiro", $$"""{"session_id":"{{Sid}}"}""");
 
         using var client = new HttpClient();
@@ -126,7 +126,7 @@ public class LifecycleSpoolDrainWhatsDoneTests : IDisposable {
         // No onWhatsDoneRequested — the daemon's periodic drain and callers that don't need
         // the side effect may omit it; this must never throw.
         await LifecycleSpoolDrain.RunAsync(Markers, client, _server.Url!, life, tx, currentSessionId: null,
-            budget: TimeSpan.FromSeconds(5), ct: cts.Token);
+            budget: TimeSpan.FromSeconds(5), ct: cts.Token, time: TimeProvider.System);
 
         await Assert.That(life.HasBacklog(Sid)).IsFalse();
     }

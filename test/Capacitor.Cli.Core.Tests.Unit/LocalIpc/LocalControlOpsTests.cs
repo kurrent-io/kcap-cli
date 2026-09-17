@@ -166,7 +166,7 @@ public class LocalControlOpsTests {
         using var daemons = new TempDaemonStore();
         const string name = "ops";
         await using var server = new ScriptedOpsServer(daemons.Store.SocketPath(name), scripts);
-        var ops = new LocalControlOps(daemons.Store, name) {
+        var ops = new LocalControlOps(daemons.Store, name, TimeProvider.System) {
             ConnectTimeout = TimeSpan.FromSeconds(2),
             ReplyTimeout = TimeSpan.FromSeconds(2),
             StopReplyTimeout = TimeSpan.FromSeconds(2),
@@ -278,7 +278,7 @@ public class LocalControlOpsTests {
     [Test]
     public async Task Stop_empty_agent_id_throws_before_connecting() {
         using var daemons = new TempDaemonStore();
-        var ops = new LocalControlOps(daemons.Store, "nonexistent");
+        var ops = new LocalControlOps(daemons.Store, "nonexistent", TimeProvider.System);
         await Assert.ThrowsAsync<ArgumentException>(
             async () => await ops.StopAgentAsync("", false, CancellationToken.None));
     }
@@ -610,7 +610,7 @@ public class LocalControlOpsTests {
 
         using var daemons = new TempDaemonStore();
 
-        var ops = new LocalControlOps(daemons.Store, "none") { ConnectTimeout = TimeSpan.FromSeconds(2) };
+        var ops = new LocalControlOps(daemons.Store, "none", TimeProvider.System) { ConnectTimeout = TimeSpan.FromSeconds(2) };
         var ex = await Assert.ThrowsAsync<LocalControlOpsException>(
             async () => await ops.StopAgentAsync("a1", false, CancellationToken.None));
         await Assert.That(ex!.Reason).IsEqualTo("daemon_unreachable");

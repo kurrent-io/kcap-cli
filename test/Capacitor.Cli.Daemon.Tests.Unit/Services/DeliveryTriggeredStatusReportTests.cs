@@ -215,7 +215,7 @@ public class DeliveryTriggeredStatusReportTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
-    ) {
+    , TimeProvider.System) {
         readonly Lock                     _gate      = new();
         readonly List<DaemonStatusReport> _completed = [];
         readonly TaskCompletionSource     _entered   = new(TaskCreationOptions.RunContinuationsAsynchronously);

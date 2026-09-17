@@ -19,6 +19,7 @@ public sealed class SpectreTenantProvisioner(
         TenantProvisioningClient client,
         string                   baseUrl,
         CliTelemetry             telemetry,
+        TimeProvider             time,
         Func<bool>?              isInteractive = null,
         RequestedWorkspace?      requested = null) : ITenantProvisioner {
     const int PollIntervalMs = 4000;
@@ -264,7 +265,7 @@ public sealed class SpectreTenantProvisioner(
 
         async Task<ProvisionOffer> PollLoopAsync(Action<string> setStatus) {
             for (var i = 0; i < MaxPolls; i++) {
-                await Task.Delay(PollIntervalMs, ct);
+                await Task.Delay(TimeSpan.FromMilliseconds(PollIntervalMs), time, ct);
                 var status = await client.GetStatusAsync(baseUrl, await tokens.GetAsync(ct), slug, ct);
 
                 switch (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)) {

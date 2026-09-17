@@ -26,7 +26,7 @@ public sealed class CursorHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
-    readonly CursorMarkers  _markers  = new(config);
+    readonly CursorMarkers  _markers  = new(config, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -66,8 +66,8 @@ public sealed class CursorHookCommand(
     /// without knowing whether a {} was owed, while the abandoned inner still held the sole
     /// stdout handle and could write late).
     /// </summary>
-    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget) {
-        var winner = await Task.WhenAny(inner, Task.Delay(budget));
+    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget, TimeProvider time) {
+        var winner = await Task.WhenAny(inner, Task.Delay(budget, time));
         if (winner != inner) return 0;
         return await inner;
     }
@@ -93,7 +93,7 @@ public sealed class CursorHookCommand(
         HandleWithDeps(stdin,
             http.ForHookAsync,
             () => {
-                var s = new HookSpool(config);
+                var s = new HookSpool(config, clock.Time);
                 MigrateLegacyCursorSpool(s, harnesses.Of<CursorHarness>().Paths.SpoolDir);
                 s.ReapOlderThan(TimeSpan.FromDays(30));
                 return s;
@@ -270,7 +270,7 @@ public sealed class CursorHookCommand(
             if (agentHostId is not null) node["agent_host_id"] = agentHostId;
 
             // Surface 3: attach this machine's harness inventory, session-start only.
-            if (eventName == "sessionStart") SessionStartInventory.Stamp(node.AsObject(), config, harnesses);
+            if (eventName == "sessionStart") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
 
             if (eventName == "afterAgentThought") {
                 var sid = TryGetString(node, "session_id") ?? "";
@@ -286,13 +286,13 @@ public sealed class CursorHookCommand(
                 // Touch the hook heartbeat on every invocation carrying a session id — including
                 // telemetry-only hooks — so it reflects "Cursor is still firing hooks" independent
                 // of the tailing watcher's own liveness.
-                _markers.TouchHeartbeat(sessionId, DateTimeOffset.UtcNow);
+                _markers.TouchHeartbeat(sessionId, clock.Time.GetUtcNow());
 
                 // beforeSubmitPrompt is ordering-sensitive: its server-side effect (queuing an
                 // attachment onto the per-session FIFO) must land before transcript-line
                 // normalization can consume it. Create the barrier before anything below posts or
                 // spools it; cleared on a 2xx from the live POST or a later spool-drain delivery.
-                if (eventName == "beforeSubmitPrompt") _markers.CreateBarrier(sessionId, DateTimeOffset.UtcNow);
+                if (eventName == "beforeSubmitPrompt") _markers.CreateBarrier(sessionId, clock.Time.GetUtcNow());
             }
 
             if (sessionId is not null && DisabledSessions.IsDisabled(sessionId, config)) return EmptyOrNull();
@@ -386,7 +386,7 @@ public sealed class CursorHookCommand(
                 // this profile does not admit must not get that far.
                 if (await RepoExclusion.IsOutOfScopeAsync(
                         router, config, new JsonObject { ["cwd"] = workspaceRoot }.ToJsonString(),
-                        activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, budget.Remaining)) {
+                        activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time, budget.Remaining)) {
                     if (sessionId is not null) DisabledSessions.Mark(sessionId, config);
 
                     return EmptyOrNull();
@@ -403,7 +403,7 @@ public sealed class CursorHookCommand(
                     var remaining = budget.Remaining;
                     if (remaining > TimeSpan.Zero) {
                         node = JsonNode.Parse(
-                            await RepositoryDetection.EnrichWithRepositoryInfoFromCwd(router, config, node.ToJsonString(), workspaceRoot, remaining)
+                            await RepositoryDetection.EnrichWithRepositoryInfoFromCwd(router, config, node.ToJsonString(), workspaceRoot, clock.Time, remaining)
                         ) ?? node;
                     }
                 }
@@ -416,7 +416,7 @@ public sealed class CursorHookCommand(
                     if (BudgetExpired()) return DrainOutcome.TransientStop;
                     try {
                         using var content = new StringContent(entryBody, Encoding.UTF8, "application/json");
-                        using var resp    = await client.PostOnceAsync($"{Url}/hooks/{route}", content, HookPostTimeout, ct);
+                        using var resp    = await client.PostOnceAsync($"{Url}/hooks/{route}", content, clock.Time, HookPostTimeout, ct);
                         if (resp.IsSuccessStatusCode) {
                             // Task 8: a spooled beforeSubmitPrompt (user-prompt/cursor)
                             // finally being delivered here means the side-effect barrier this
@@ -493,7 +493,7 @@ public sealed class CursorHookCommand(
                 await CursorTranscriptBackfill.RunAsync(
                     _markers,
                     client, Url, sessionId!, transcriptPath,
-                    budget: BudgetExpired, ct, finalDrain: true);
+                    budget: BudgetExpired, clock.Time, ct, finalDrain: true);
             }
 
             if (BudgetExpired()) {
@@ -532,7 +532,7 @@ public sealed class CursorHookCommand(
                 await CursorTranscriptBackfill.RunAsync(
                     _markers,
                     client, Url, sessionId, transcriptPath,
-                    budget: BudgetExpired, ct);
+                    budget: BudgetExpired, clock.Time, ct);
             }
 
             // §3–§6: the memory index runs strictly AFTER all of the above
@@ -546,9 +546,9 @@ public sealed class CursorHookCommand(
             // orchestration), so re-read it; sessionStart fires once per session and the read is
             // fail-open under the surrounding catch.
             var nudgeProfile   = profiles.Effective;
-            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config));
+            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
             var plansNudge     = PlansNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisablePlansNudge is true, harnesses);
-            var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses);
+            var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,
                 HarnessNudgeEmitter.Combine(workItemsNudge, plansNudge, harnessNudge));
         } catch {
@@ -751,7 +751,7 @@ public sealed class CursorHookCommand(
                 await CursorTranscriptBackfill.RunAsync(
                     _markers,
                     client, Url, parentSessionId, transcriptPath,
-                    budget: budgetExpired, ct, agentId: childSessionId);
+                    budget: budgetExpired, clock.Time, ct, agentId: childSessionId);
             }
             return 0;
         }
@@ -767,7 +767,7 @@ public sealed class CursorHookCommand(
             await CursorTranscriptBackfill.RunAsync(
                 _markers,
                 client, Url, parentSessionId, transcriptPath,
-                budget: budgetExpired, ct, agentId: childSessionId, finalDrain: true);
+                budget: budgetExpired, clock.Time, ct, agentId: childSessionId, finalDrain: true);
         }
 
         if (budgetExpired()) {
@@ -807,7 +807,7 @@ public sealed class CursorHookCommand(
             await CursorTranscriptBackfill.RunAsync(
                 _markers,
                 client, Url, parentSessionId, transcriptPath,
-                budget: budgetExpired, ct, agentId: childSessionId);
+                budget: budgetExpired, clock.Time, ct, agentId: childSessionId);
         }
 
         return 0;
@@ -951,7 +951,7 @@ public sealed class CursorHookCommand(
         try {
             using var content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
             using var resp = await client.PostOnceAsync(
-                $"{Url}/hooks/{routeSegment}", content, HookPostTimeout, ct);
+                $"{Url}/hooks/{routeSegment}", content, clock.Time, HookPostTimeout, ct);
 
             // Cursor posts directly instead of through AgentHookPoster, so the rejected-credential
             // nudge has to be repeated here — otherwise Cursor is the one vendor left with no

@@ -20,6 +20,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     readonly DaemonConfig?                                             _config;
     readonly IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>? _factories;
     readonly ILogger                                                   _logger;
+    readonly TimeProvider                                              _time;
 
     // Seams (assigned from DI in the production ctor; overridden directly in tests).
     internal Func<string, CliBinaryStat?>            StatBinary;
@@ -38,8 +39,9 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     public VendorCliWatcher(
             DaemonConfig config, AgentOrchestrator orchestrator,
             IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> factories,
-            ILogger<VendorCliWatcher> logger) {
+            ILogger<VendorCliWatcher> logger, TimeProvider time) {
         _config    = config;
+        _time      = time;
         _factories = factories;
         _logger    = logger;
         Refresh    = reason => orchestrator.RefreshAdvertisedCapabilities(reason);
@@ -48,8 +50,10 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     }
 
     VendorCliWatcher(IReadOnlyList<(string Vendor, string CliPath)> watched, Action<string> refresh,
-            Func<string, CliBinaryStat?> stat, IReadOnlyDictionary<string, CliBinaryStat?>? baselines) {
+            Func<string, CliBinaryStat?> stat, TimeProvider time,
+            IReadOnlyDictionary<string, CliBinaryStat?>? baselines) {
         _logger    = NullLogger.Instance;
+        _time      = time;
         _recorded  = baselines;
         Watched    = watched;
         Refresh    = refresh;
@@ -58,8 +62,9 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
 
     internal static VendorCliWatcher ForTest(
             IReadOnlyList<(string Vendor, string CliPath)> watched, Action<string> refresh,
-            Func<string, CliBinaryStat?> stat, IReadOnlyDictionary<string, CliBinaryStat?>? baselines = null) =>
-        new(watched, refresh, stat, baselines);
+            Func<string, CliBinaryStat?> stat, TimeProvider time,
+            IReadOnlyDictionary<string, CliBinaryStat?>? baselines = null) =>
+        new(watched, refresh, stat, time, baselines);
 
     internal void PrimeBaselines() {
         foreach (var (vendor, cliPath) in Watched)
@@ -114,7 +119,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         }
         PrimeBaselines();
 
-        using var timer = new PeriodicTimer(PollInterval);
+        using var timer = new PeriodicTimer(PollInterval, _time);
         try {
             while (await timer.WaitForNextTickAsync(ct)) Tick();
         } catch (OperationCanceledException) { /* shutdown */ }

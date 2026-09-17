@@ -21,6 +21,7 @@ static class CodexCliRunner {
     public static async Task<ClaudeCliResult?> RunAsync(
             string            prompt,
             TimeSpan          timeout,
+            TimeProvider      time,
             Action<string>    log,
             Profile?          profile,
             HarnessRegistry   harnesses,
@@ -46,7 +47,7 @@ static class CodexCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, log, profile, harnesses, workingDir, lastMessageFile, model, reasoning, ct);
+            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, lastMessageFile, model, reasoning, ct);
         } finally {
             if (createdWorkingDir) {
                 try { Directory.Delete(workingDir, recursive: true); } catch {
@@ -63,6 +64,7 @@ static class CodexCliRunner {
     static async Task<ClaudeCliResult?> RunCoreAsync(
             string            prompt,
             TimeSpan          timeout,
+            TimeProvider      time,
             Action<string>    log,
             Profile?          profile,
             HarnessRegistry   harnesses,
@@ -138,7 +140,7 @@ static class CodexCliRunner {
             return null;
         }
 
-        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var timeoutCts = new CancellationTokenSource(timeout, time);
         using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try {

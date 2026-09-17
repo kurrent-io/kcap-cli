@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.Http.Json;
 using Capacitor.Cli.Core.Http;
 
@@ -19,6 +18,7 @@ namespace Capacitor.Cli.Core.Auth;
 /// </summary>
 public sealed class WorkOSClient(
         IHttpClientFactory httpFactory,
+        TimeProvider       time,
         TimeSpan?          refreshTimeout = null,
         TimeSpan?          replayBudget   = null,
         TimeSpan?          replayBackoff  = null) {
@@ -55,10 +55,10 @@ public sealed class WorkOSClient(
     /// </summary>
     public async Task<WorkOSRefreshResult> RefreshAsync(
             string clientId, string refreshToken, CancellationToken ct) {
-        var started  = Stopwatch.GetTimestamp();
+        var started  = time.GetTimestamp();
         var consumed = false;
 
-        bool AnotherAttemptFits() => Stopwatch.GetElapsedTime(started) + _refreshTimeout <= _replayBudget;
+        bool AnotherAttemptFits() => time.GetElapsedTime(started) + _refreshTimeout <= _replayBudget;
 
         while (true) {
             var (outcome, body) = await RefreshOnceAsync(clientId, refreshToken, ct);
@@ -73,7 +73,7 @@ public sealed class WorkOSClient(
             consumed |= outcome == Attempt.Unreadable;
 
             if (AnotherAttemptFits()) {
-                await Task.Delay(_replayBackoff, ct);
+                await Task.Delay(_replayBackoff, time, ct);
             }
 
             // A suspended machine or a starved scheduler can stretch the delay past the window.
@@ -89,8 +89,8 @@ public sealed class WorkOSClient(
             string clientId, string refreshToken, CancellationToken ct) {
         // The deadline cancels only the linked token, so a timeout is classified below while the
         // caller's own cancellation still propagates.
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(_refreshTimeout);
+        using var timeout  = new CancellationTokenSource(_refreshTimeout, time);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
 
         HttpResponseMessage response;
         try {

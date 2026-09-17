@@ -56,7 +56,7 @@ internal sealed class TokenRefreshLoop {
     readonly IProactiveTokenRefreshPort _port;
     readonly ILogger                    _logger;
     readonly TimeSpan                   _minAttemptInterval;
-    readonly Func<DateTimeOffset>       _utcNow;
+    readonly TimeProvider              _time;
 
     // Earliest time at which the next refresh ATTEMPT may run; advanced after every attempt.
     DateTimeOffset _nextAttemptAllowedAt = DateTimeOffset.MinValue;
@@ -65,12 +65,12 @@ internal sealed class TokenRefreshLoop {
             IProactiveTokenRefreshPort port,
             ILogger                    logger,
             TimeSpan                   minAttemptInterval,
-            Func<DateTimeOffset>?      utcNow = null
+            TimeProvider               time
         ) {
         _port               = port;
         _logger             = logger;
         _minAttemptInterval = minAttemptInterval;
-        _utcNow             = utcNow ?? (static () => DateTimeOffset.UtcNow);
+        _time               = time;
     }
 
     /// <summary>
@@ -82,19 +82,19 @@ internal sealed class TokenRefreshLoop {
     public async Task TickAsync(CancellationToken ct) {
         try {
             // Skip without hitting the endpoint while the post-attempt gate is still closed.
-            if (_utcNow() < _nextAttemptAllowedAt) {
+            if (_time.GetUtcNow() < _nextAttemptAllowedAt) {
                 return;
             }
 
             switch (await _port.RefreshIfExpiringAsync()) {
                 case ProactiveRefreshOutcome.Refreshed:
-                    _nextAttemptAllowedAt = _utcNow() + _minAttemptInterval;
+                    _nextAttemptAllowedAt = _time.GetUtcNow() + _minAttemptInterval;
                     _logger.LogDebug("Proactive token refresh: token inside the expiry window — refreshed ahead of expiry");
 
                     break;
 
                 case ProactiveRefreshOutcome.Failed:
-                    _nextAttemptAllowedAt = _utcNow() + _minAttemptInterval;
+                    _nextAttemptAllowedAt = _time.GetUtcNow() + _minAttemptInterval;
                     _logger.LogWarning(
                         "Proactive token refresh failed — backing off for {BackoffSeconds:F0}s; run `kcap login` if this persists",
                         _minAttemptInterval.TotalSeconds
@@ -103,7 +103,7 @@ internal sealed class TokenRefreshLoop {
                     break;
 
                 case ProactiveRefreshOutcome.Rejected:
-                    _nextAttemptAllowedAt = _utcNow() + RejectedBackoff;
+                    _nextAttemptAllowedAt = _time.GetUtcNow() + RejectedBackoff;
                     _logger.LogWarning(
                         "Proactive token refresh was rejected — the stored credential is no longer valid; run `kcap login` to re-authenticate"
                     );

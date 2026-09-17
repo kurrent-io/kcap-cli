@@ -30,7 +30,7 @@ public class WorkOSOrgCorrectionTests {
     public async Task Moves_the_session_onto_the_tenants_org() {
         using var server = Switching("""{"access_token":"right","refresh_token":"rt2","organization_id":"org_wanted"}""");
         using var stub   = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
             workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
@@ -45,7 +45,7 @@ public class WorkOSOrgCorrectionTests {
     public async Task Carries_the_signed_in_user_across_the_switch() {
         using var server = Switching("""{"access_token":"right","organization_id":"org_wanted"}""");
         using var stub   = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
             workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
@@ -59,7 +59,7 @@ public class WorkOSOrgCorrectionTests {
     public async Task Refuses_a_switch_that_lands_somewhere_else() {
         using var server = Switching("""{"access_token":"right","organization_id":"org_other"}""");
         using var stub   = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
             workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
@@ -72,7 +72,7 @@ public class WorkOSOrgCorrectionTests {
     public async Task Refuses_when_the_switch_is_denied() {
         using var server = Switching("""{"error":"invalid_grant"}""", status: 401);
         using var stub   = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
             workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
@@ -90,7 +90,7 @@ public class WorkOSOrgCorrectionTests {
     public async Task Switches_without_a_client_secret() {
         using var server = Switching("""{"access_token":"right","organization_id":"org_wanted"}""");
         using var stub   = new StubHost(server.Urls[0]);
-        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
+        var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         await OAuthLoginFlow.CorrectWorkOSOrgAsync(
             workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
@@ -107,7 +107,7 @@ public class WorkOSOrgCorrectionTests {
     public async Task Refuses_when_there_is_no_refresh_token_to_switch_with() {
         // No stub: the switch is refused before a request is built.
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
-            new WorkOSClient(new PlainHttpClientFactory()), "client_d",
+            new WorkOSClient(new PlainHttpClientFactory(), TimeProvider.System), "client_d",
             SignedInTo("org_picked") with { RefreshToken = null }, "org_wanted", CancellationToken.None);
 
         await Assert.That(corrected).IsNull();

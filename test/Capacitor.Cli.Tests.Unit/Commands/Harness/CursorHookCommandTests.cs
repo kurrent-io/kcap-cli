@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 public class CursorHookCommandTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -29,7 +29,7 @@ public class CursorHookCommandTests {
     // none — these tests assert on the memory fragment alone. Claim the window explicitly instead of
     // relying on whichever sibling test happened to claim it in the shared config dir first.
     static void ThrottleHarnessNudge(ConfigRoot root) =>
-        new HarnessOfferStore(root).TryClaimCheck(HarnessNudgeEmitter.CheckThrottle);
+        new HarnessOfferStore(root, TimeProvider.System).TryClaimCheck(HarnessNudgeEmitter.CheckThrottle);
 
     [Before(Test)]
     public void ThrottleNudgeForThisRoot() => ThrottleHarnessNudge(Config.Root);
@@ -163,7 +163,7 @@ public class CursorHookCommandTests {
     [Test, NotInParallel]
     public async Task telemetry_hook_does_not_recovery_spawn_while_an_earlier_canonical_event_is_still_stuck() {
         var sid = Guid.NewGuid().ToString("N");
-        var spool = new HookSpool(Config.PathTo("spool"));
+        var spool = new HookSpool(Config.PathTo("spool"), time: TimeProvider.System);
         spool.Append(sid, "session-start/cursor", $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
 
         var spawner = new FakeWatcherSpawner();
@@ -264,7 +264,7 @@ public class CursorHookCommandTests {
         // whatever the transcript/spool machinery is doing.
         using var fx = new Fixture(Config.Root);
         var       sid = Guid.NewGuid().ToString("N");
-        var       before = DateTimeOffset.UtcNow;
+        var       before = fx.Clock.GetUtcNow();
 
         await fx.HandleAsync($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash"}""");
 
@@ -280,7 +280,7 @@ public class CursorHookCommandTests {
 
         await fx.HandleAsync($$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}","prompt":"hi"}""");
 
-        await Assert.That(Markers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
+        await Assert.That(Markers.BarrierPending(sid, fx.Clock.GetUtcNow(), TimeSpan.FromSeconds(60))).IsFalse();
     }
 
     [Test]
@@ -290,7 +290,7 @@ public class CursorHookCommandTests {
 
         await fx.HandleAsync($$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}","prompt":"hi"}""");
 
-        await Assert.That(Markers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsTrue();
+        await Assert.That(Markers.BarrierPending(sid, fx.Clock.GetUtcNow(), TimeSpan.FromSeconds(60))).IsTrue();
     }
 
     [Test]
@@ -325,7 +325,7 @@ public class CursorHookCommandTests {
         await Assert.That(promptIdx).IsLessThan(transcriptIdx);
         await Assert.That(transcriptIdx).IsLessThan(sessionEndIdx);
 
-        await Assert.That(Markers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
+        await Assert.That(Markers.BarrierPending(sid, fx.Clock.GetUtcNow(), TimeSpan.FromSeconds(60))).IsFalse();
     }
 
     [Test]
@@ -390,7 +390,7 @@ public class CursorHookCommandTests {
             }
         );
         var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50));
+        var exit = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50), TimeProvider.System);
         sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
@@ -400,7 +400,7 @@ public class CursorHookCommandTests {
     [Test]
     public async Task hard_cap_returns_inner_result_when_inner_finishes_first() {
         var inner = Task.FromResult(7);
-        var exit  = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromSeconds(2));
+        var exit  = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromSeconds(2), TimeProvider.System);
         await Assert.That(exit).IsEqualTo(7);
     }
 
@@ -950,7 +950,7 @@ public class CursorHookCommandTests {
         legacyDir.CreateFile($"{Sid}.jsonl",
             $"{{\"hook_event_name\":\"sessionEnd\",\"body\":\"{{\\\"session_id\\\":\\\"{Sid}\\\"}}\"}}\n");
 
-        var spool = new HookSpool(spoolDir);
+        var spool = new HookSpool(spoolDir, time: TimeProvider.System);
         CursorHookCommand.MigrateLegacyCursorSpool(spool, legacyDir);
 
         var migrated = await File.ReadAllTextAsync(spoolDir.PathTo($"{Sid}.jsonl"));
@@ -1011,7 +1011,7 @@ public class CursorHookCommandTests {
             Profiles        = profile is null
                 ? Resolutions.At(StubUrl, config)
                 : Resolutions.Of(profile, serverUrl: StubUrl);
-            Spool           = new HookSpool(_spoolPath);
+            Spool           = new HookSpool(_spoolPath, time: TimeProvider.System);
 
             var handler = new StubHandler(async req => {
                     var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();

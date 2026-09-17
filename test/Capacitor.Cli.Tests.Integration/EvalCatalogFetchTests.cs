@@ -47,7 +47,7 @@ public class EvalCatalogFetchTests : IDisposable {
         var observer = new SilentObserver();
         using var http = new HttpClient();
 
-        var catalog = await EvalCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNotNull();
 
         // The selected ids come from the (alias or dispatch) question list; here pass the catalog ids.
@@ -57,7 +57,7 @@ public class EvalCatalogFetchTests : IDisposable {
 
         var ctx = await EvalService.PrepareAsync(
             _server.Url!, http, profile: null, TestHarnesses.Under(Home), "sess-1", selected, catalog, chain: false, thresholdBytes: null,
-            observer, CancellationToken.None, model: "sonnet", evalRunId: "run-1");
+            observer, TimeProvider.System, CancellationToken.None, model: "sonnet", evalRunId: "run-1");
 
         await Assert.That(ctx).IsNotNull();
         await Assert.That(ctx!.RetrospectivePrompt).IsEqualTo("RETRO {TRACE_JSON}");

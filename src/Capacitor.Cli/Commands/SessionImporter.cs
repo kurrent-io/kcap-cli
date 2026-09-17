@@ -32,6 +32,7 @@ static class SessionImporter {
             string                     sessionId,
             SessionMetadata            metadata,
             string?                    encodedCwd,
+            TimeProvider               time,
             IProgress<ImportProgress>? progress = null,
             HarnessId                  vendor   = HarnessId.Claude
         ) {
@@ -95,7 +96,7 @@ static class SessionImporter {
 
                     // Send agent lifecycle: start → transcript → stop
                     agentTypes.TryGetValue(agentId, out var agentType);
-                    await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress);
+                    await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress, time);
                     sentAgents.Add(agentId);
                     agentIds.Add(agentId);
                 }
@@ -126,7 +127,7 @@ static class SessionImporter {
         foreach (var (agentId, agentPath) in agentTranscripts) {
             if (!sentAgents.Contains(agentId)) {
                 agentTypes.TryGetValue(agentId, out var agentType);
-                await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress);
+                await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress, time);
                 sentAgents.Add(agentId);
                 agentIds.Add(agentId);
             }
@@ -148,7 +149,7 @@ static class SessionImporter {
                 var subAgentId = sub.ChildDashlessId;
 
                 if (!await PostSubagentHookAsync(httpClient, baseUrl, "subagent-start",
-                        CodexSubagentDiscovery.BuildStartPayload(sessionId, subAgentId, subType, sub.FilePath))) {
+                        CodexSubagentDiscovery.BuildStartPayload(sessionId, subAgentId, subType, sub.FilePath), time)) {
                     continue;
                 }
 
@@ -159,7 +160,7 @@ static class SessionImporter {
                 try {
                     subLines = await SendTranscriptBatches(
                         httpClient, baseUrl, sessionId, sub.FilePath, subAgentId,
-                        startLine: 0, progress: progress, vendor: HarnessId.Codex, failOnError: true);
+                        startLine: 0, time, progress: progress, vendor: HarnessId.Codex, failOnError: true);
                 } catch (HttpRequestException) {
                     continue; // leave subagent-stop unsent; a re-import retries (idempotent)
                 }
@@ -167,7 +168,7 @@ static class SessionImporter {
                 progress?.Report(new SubagentFinished(subAgentId, subLines));
 
                 await PostSubagentHookAsync(httpClient, baseUrl, "subagent-stop",
-                    CodexSubagentDiscovery.BuildStopPayload(sessionId, subAgentId, subType, sub.FilePath));
+                    CodexSubagentDiscovery.BuildStopPayload(sessionId, subAgentId, subType, sub.FilePath), time);
 
                 agentIds.Add(subAgentId);
             }
@@ -176,15 +177,17 @@ static class SessionImporter {
         return new ImportResult(sessionId, agentIds, totalSent);
 
         async Task FlushAsync() =>
-            totalSent += await FlushBatchAsync(httpClient, baseUrl, sessionId, agentId: null, batch, vendor, failOnError: false, progress);
+            totalSent += await FlushBatchAsync(
+                httpClient, baseUrl, sessionId, agentId: null, batch, vendor, failOnError: false, progress, time);
     }
 
     /// <summary>POSTs one subagent lifecycle hook; false on any failure so the caller can
     /// fail closed (skip content for an unregistered subagent) instead of streaming anyway.</summary>
-    static async Task<bool> PostSubagentHookAsync(HttpClient httpClient, string baseUrl, string route, JsonObject payload) {
+    static async Task<bool> PostSubagentHookAsync(
+            HttpClient httpClient, string baseUrl, string route, JsonObject payload, TimeProvider time) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content);
+            using var resp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, time);
 
             return resp.IsSuccessStatusCode;
         } catch {
@@ -452,7 +455,8 @@ static class SessionImporter {
             string                     agentPath,
             string                     cwd,
             string                     sessionTranscriptPath,
-            IProgress<ImportProgress>? progress
+            IProgress<ImportProgress>? progress,
+            TimeProvider               time
         ) {
         var resolvedAgentType = agentType ?? "task";
 
@@ -468,13 +472,14 @@ static class SessionImporter {
 
         try {
             using var agentStartContent = new StringContent(agentStartHook.ToJsonString(), Encoding.UTF8, "application/json");
-            await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/subagent-start", agentStartContent);
+            await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/subagent-start", agentStartContent, time);
         } catch {
             // Best effort
         }
 
         progress?.Report(new SubagentStarted(agentId));
-        var agentLines = await SendTranscriptBatches(httpClient, baseUrl, sessionId, agentPath, agentId, startLine: 0, progress: progress);
+        var agentLines = await SendTranscriptBatches(
+            httpClient, baseUrl, sessionId, agentPath, agentId, startLine: 0, time: time, progress: progress);
         progress?.Report(new SubagentFinished(agentId, agentLines));
 
         // Stop agent
@@ -492,7 +497,7 @@ static class SessionImporter {
 
         try {
             using var agentStopContent = new StringContent(agentStopHook.ToJsonString(), Encoding.UTF8, "application/json");
-            await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", agentStopContent);
+            await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", agentStopContent, time);
         } catch {
             // Best effort
         }
@@ -527,6 +532,7 @@ static class SessionImporter {
             string                     filePath,
             string?                    agentId,
             int                        startLine,
+            TimeProvider               time,
             IProgress<ImportProgress>? progress          = null,
             HarnessId                  vendor            = HarnessId.Claude,
             int                        lineNumberOffset  = 0,
@@ -575,7 +581,7 @@ static class SessionImporter {
         async Task FlushAsync() {
             if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
 
-            totalSent += await FlushBatchAsync(httpClient, baseUrl, sessionId, agentId, batch, vendor, failOnError, progress);
+            totalSent += await FlushBatchAsync(httpClient, baseUrl, sessionId, agentId, batch, vendor, failOnError, progress, time);
 
             if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
         }
@@ -601,7 +607,8 @@ static class SessionImporter {
             TranscriptBatchBuffer      batch,
             HarnessId                  vendor,
             bool                       failOnError,
-            IProgress<ImportProgress>? progress
+            IProgress<ImportProgress>? progress,
+            TimeProvider               time
         ) {
         var payload = new TranscriptBatch {
             SessionId   = sessionId,
@@ -623,7 +630,7 @@ static class SessionImporter {
         Exception? cause  = null;
 
         try {
-            using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content);
+            using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content, time);
 
             loss = resp.IsSuccessStatusCode ? null : $"HTTP {(int)resp.StatusCode}";
         } catch (HttpRequestException ex) {

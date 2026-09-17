@@ -79,7 +79,7 @@ public class CursorImportPrTests : IDisposable {
                 detectCalls++;
                 return Task.FromResult<RepositoryPayload?>(
                     new RepositoryPayload { Owner = "acme", RepoName = "widgets" });
-            }, router: new GitProviderRouter());
+            }, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var client = new HttpClient();
 

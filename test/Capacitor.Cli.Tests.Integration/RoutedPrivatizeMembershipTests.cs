@@ -102,7 +102,7 @@ public class RoutedPrivatizeMembershipTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(500));
 
         var stdout = await CaptureStdoutAsync(async () => {
-            await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter()).HandleImport(
+            await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
                 filterCwd: null,
                 minLines: 0,
                 sources: [new ChildContentOutsidePrivateScopeSource()],
@@ -123,7 +123,7 @@ public class RoutedPrivatizeMembershipTests : IDisposable {
 
         var exitCode = 0;
         var stdout = await CaptureStdoutAsync(async () => {
-            exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter()).HandleImport(
+            exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
                 filterCwd: null,
                 minLines: 0,
                 sources: [new ChildContentOutsidePrivateScopeSource()],

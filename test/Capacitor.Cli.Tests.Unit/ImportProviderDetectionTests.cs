@@ -28,7 +28,7 @@ public class ImportProviderDetectionTests {
         var log = new List<string>();
 
         var repo = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
-            "/fake/import/skip-pr", budget: null, detectPullRequest: false, run: Recording(log));
+            "/fake/import/skip-pr", TimeProvider.System, budget: null, detectPullRequest: false, run: Recording(log));
 
         // Base repo info still resolves from git alone…
         await Assert.That(repo!.Owner).IsEqualTo("foo");
@@ -44,7 +44,7 @@ public class ImportProviderDetectionTests {
         var log = new List<string>();
 
         var repo = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
-            "/fake/live/do-pr", budget: null, detectPullRequest: true, run: Recording(log));
+            "/fake/live/do-pr", TimeProvider.System, budget: null, detectPullRequest: true, run: Recording(log));
 
         await Assert.That(log.Any(c => c.StartsWith("gh pr view", StringComparison.Ordinal))).IsTrue(); // provider detection ran
         await Assert.That(repo!.PrNumber).IsEqualTo(7);

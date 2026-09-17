@@ -29,6 +29,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// which kills descendants with the leader at the OS level.</para>
 /// </summary>
 internal static class ProcessReaper {
+    static readonly TimeSpan ConfirmPollGap   = TimeSpan.FromMilliseconds(250);
     static readonly TimeSpan GraceBeforeKill  = TimeSpan.FromSeconds(5);
     static readonly TimeSpan ConfirmAfterKill = TimeSpan.FromSeconds(5);
 
@@ -47,7 +48,8 @@ internal static class ProcessReaper {
     /// <summary>Record-regime reap. Returns true when the target is CONFIRMED gone (dead, killed +
     /// observed dead, or a proven identity mismatch — our agent's process is not there), false when it
     /// may still be alive (kill unconfirmed, SPARED for an unreadable env, or an uncomparable token).</summary>
-    public static async Task<bool> ReapByRecordAsync(AgentPidRecord record, ILogger logger, CancellationToken ct) {
+    public static async Task<bool> ReapByRecordAsync(
+            AgentPidRecord record, ILogger logger, TimeProvider time, CancellationToken ct) {
         var pid = record.Pid;
 
         switch (Classify(pid, record.StartIdentity)) {
@@ -82,21 +84,25 @@ internal static class ProcessReaper {
             }
         }
 
-        return await KillConfirmAsync(pid, record.StartIdentity, record.AgentId, logger, ct);
+        return await KillConfirmAsync(pid, record.StartIdentity, record.AgentId, logger, time, ct);
     }
 
     /// <summary>Marker-regime reap of a recordless survivor. The caller (OrphanReaper) has already
     /// captured the process's start token BEFORE reading its env-marker triple and re-validated it after,
     /// so <paramref name="expectedIdentity"/> is bound to the same incarnation whose markers proved
     /// ownership — no recapture here (which could adopt a replacement after a mid-scan PID reuse).</summary>
-    public static Task<bool> ReapByMarkerAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct)
-        => KillConfirmAsync(pid, expectedIdentity, agentId, logger, ct);
+    public static Task<bool> ReapByMarkerAsync(
+            int pid, string expectedIdentity, string agentId, ILogger logger, TimeProvider time,
+            CancellationToken ct)
+        => KillConfirmAsync(pid, expectedIdentity, agentId, logger, time, ct);
 
     /// <summary>Kill-quarantine retry (spec §6.4(2a)): the entry is a KNOWN-ours process whose death
     /// wasn't confirmed at teardown. Kill it by EXACT identity and report confirmed-gone (drain) vs
     /// still-alive/uncomparable (retain for the next tick).</summary>
-    public static Task<bool> ReapByIdentityAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct)
-        => KillConfirmAsync(pid, expectedIdentity, agentId, logger, ct);
+    public static Task<bool> ReapByIdentityAsync(
+            int pid, string expectedIdentity, string agentId, ILogger logger, TimeProvider time,
+            CancellationToken ct)
+        => KillConfirmAsync(pid, expectedIdentity, agentId, logger, time, ct);
 
     /// <summary>SIGTERM the process group, wait <see cref="GraceBeforeKill"/>, then SIGKILL; confirm the
     /// leader is gone. Re-classifies before/after each step so a pid recycled mid-sequence is detected as
@@ -104,7 +110,9 @@ internal static class ProcessReaper {
     /// leader is alive-and-ours, so a stubborn descendant dies alongside the proven leader; once the
     /// leader is gone we never signal the pgid. Returns true only on confirmed death (or proven recycle),
     /// false on unconfirmed/ambiguous.</summary>
-    static async Task<bool> KillConfirmAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct) {
+    static async Task<bool> KillConfirmAsync(
+            int pid, string expectedIdentity, string agentId, ILogger logger, TimeProvider time,
+            CancellationToken ct) {
         try {
             switch (Classify(pid, expectedIdentity)) {
                 case LeaderState.Dead:      return true;
@@ -116,7 +124,7 @@ internal static class ProcessReaper {
 
             // Poll for a definitive verdict; a transient Ambiguous (a proven-ours leader momentarily
             // unreadable mid-death-transition) keeps polling instead of sparing — see PollForConfirmedDeathAsync.
-            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, GraceBeforeKill, ct)) return true;
+            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, GraceBeforeKill, time, ct)) return true;
 
             // Re-gate before the hard kill: never SIGKILL a recycled/unprovable pid — ambiguity still
             // spares before we escalate, so the safety invariant is unchanged.
@@ -132,7 +140,7 @@ internal static class ProcessReaper {
             // exceed one tick. On Windows the hard signal is a no-op — the soft signal above already
             // tree-killed and the grace poll gave it the full window — so don't add a second long wait there.
             var postKillWindow = OperatingSystem.IsWindows() ? TimeSpan.FromMilliseconds(250) : ConfirmAfterKill;
-            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, postKillWindow, ct)) return true;
+            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, postKillWindow, time, ct)) return true;
 
             logger.LogWarning(
                 "ProcessReaper: pid {Pid} (agent {AgentId}) not confirmed gone within {Grace}s+{Kill}s — retained for next sweep",
@@ -150,18 +158,19 @@ internal static class ProcessReaper {
     /// gone verdict (Dead or a proven pid-recycle). Called only after ownership is proven and the kill
     /// signal sent, so a transient Ambiguous keeps polling (never spares here); returns false at window
     /// expiry so the caller retains the record for the next sweep.</summary>
-    static async Task<bool> PollForConfirmedDeathAsync(int pid, string expectedIdentity, TimeSpan window, CancellationToken ct) {
+    static async Task<bool> PollForConfirmedDeathAsync(
+            int pid, string expectedIdentity, TimeSpan window, TimeProvider time, CancellationToken ct) {
         // Classify, then delay-and-reclassify until the window elapses — the final classify happens
         // AFTER the last delay (when waited >= window), so a death reflected during that last interval
         // is still confirmed rather than dropped.
-        for (var waited = TimeSpan.Zero; ; waited += TimeSpan.FromMilliseconds(250)) {
+        for (var waited = TimeSpan.Zero; ; waited += ConfirmPollGap) {
             switch (Classify(pid, expectedIdentity)) {
                 case LeaderState.Dead:     return true;
                 case LeaderState.Recycled: return true;
             }
 
             if (waited >= window) return false;
-            await Task.Delay(250, ct);
+            await Task.Delay(ConfirmPollGap, time, ct);
         }
     }
 

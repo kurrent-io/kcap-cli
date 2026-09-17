@@ -41,7 +41,7 @@ public class WizardAuthBridgesTests {
     const string BaseUrl = "https://signup.example";
 
     static WorkOSTokenSource Tokens() =>
-        new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
+        new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null), time: TimeProvider.System);
 
     static (WizardTenantProvisioner Provisioner, ScriptedSignupHandler Handler, RecordingAuthProgress Progress, FakeTimeProvider Time)
             NewProvisioner() {
@@ -50,7 +50,7 @@ public class WizardAuthBridgesTests {
         var time     = new FakeTimeProvider();
         var client   = new TenantProvisioningClient(new HttpClient(handler));
 
-        return (new WizardTenantProvisioner(client, BaseUrl, progress, CliTelemetry.Disabled(), time), handler, progress, time);
+        return (new WizardTenantProvisioner(client, BaseUrl, progress, CliTelemetry.Disabled(TimeProvider.System), time), handler, progress, time);
     }
 
     /// The poll's only suspension is Task.Delay(interval, time, ct), whose continuation resumes

@@ -1,0 +1,11 @@
+<Project>
+    <!-- Resolution stops at the first Directory.Build.props found walking up, so the repo-root one
+         has to be imported by hand or none of its settings reach the production projects. -->
+    <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+    <!-- Banned only under src/: a production class reads the clock its composer handed it, so the
+         ambient one is always a defect here. A test may still name a real instant to build a fixture
+         from. -->
+    <ItemGroup>
+        <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" Visible="false" />
+    </ItemGroup>
+</Project>

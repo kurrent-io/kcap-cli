@@ -34,7 +34,7 @@ sealed class OpenCodeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -75,7 +75,7 @@ sealed class OpenCodeHookCommand(
 
         // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
 
         var activeProfile = profiles.Effective;
 
@@ -105,7 +105,7 @@ sealed class OpenCodeHookCommand(
             ["hook_event_name"] = "sessionStart",
             ["session_id"]      = sessionIdRaw,
             ["home_dir"]        = home.Path,
-            ["started_at"]      = DateTimeOffset.UtcNow.ToString("O")
+            ["started_at"]      = clock.Time.GetUtcNow().ToString("O")
         };
 
         if (cwd is not null) {
@@ -129,11 +129,11 @@ sealed class OpenCodeHookCommand(
             forwarded["default_visibility"] = visibility;
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
+        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -176,13 +176,13 @@ sealed class OpenCodeHookCommand(
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = canConsumeFragment
             ? HarnessNudgeEmitter.Combine(
-                WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
+                WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
                 PlansNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisablePlansNudge is true, harnesses))
             : null;
         // The harness nudge is independent of the once-per-session memory lease — it has its own
         // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.
         var combinedNudge = HarnessNudgeEmitter.Combine(
-            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
         await WriteMemoryFragment(stdout, fragment, combinedNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;

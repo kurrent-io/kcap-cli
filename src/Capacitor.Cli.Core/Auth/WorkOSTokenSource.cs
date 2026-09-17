@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Core.Auth;
 // Not thread-safe: the provisioning flow calls GetAsync serially.
 public sealed class WorkOSTokenSource {
     readonly Func<string, CancellationToken, Task<WorkOSAuthResponse?>> refresh;
-    readonly Func<DateTimeOffset>                                       now;
+    readonly TimeProvider                                               time;
     readonly TimeSpan                                                   margin;
 
     string         accessToken;
@@ -25,14 +25,14 @@ public sealed class WorkOSTokenSource {
             string                                              accessToken,
             string?                                             refreshToken,
             Func<string, CancellationToken, Task<WorkOSAuthResponse?>> refresh,
-            Func<DateTimeOffset>?                               now    = null,
+            TimeProvider                                        time,
             TimeSpan?                                           margin = null) {
         this.accessToken  = accessToken;
         this.refreshToken = refreshToken;
         this.refresh      = refresh;
-        this.now          = now    ?? (() => DateTimeOffset.UtcNow);
+        this.time         = time;
         this.margin       = margin ?? TimeSpan.FromSeconds(60);
-        expiresAt         = TokenStore.JwtExpiry(accessToken);
+        expiresAt         = TokenStore.JwtExpiry(accessToken, time);
     }
 
     // The latest refresh token, rotated on each successful refresh. Callers that re-use the refresh
@@ -47,7 +47,7 @@ public sealed class WorkOSTokenSource {
     // tick retries. A genuine cancellation (via ct) is not swallowed.
     public async Task<string> GetAsync(CancellationToken ct) {
         if (refreshToken is null) return accessToken;
-        if (now() < expiresAt - margin) return accessToken;
+        if (time.GetUtcNow() < expiresAt - margin) return accessToken;
 
         WorkOSAuthResponse? refreshed;
         try {
@@ -59,7 +59,7 @@ public sealed class WorkOSTokenSource {
         if (refreshed is { AccessToken.Length: > 0 }) {
             accessToken  = refreshed.AccessToken;
             refreshToken = refreshed.RefreshToken ?? refreshToken;
-            expiresAt    = TokenStore.JwtExpiry(refreshed.AccessToken);
+            expiresAt    = TokenStore.JwtExpiry(refreshed.AccessToken, time);
         }
 
         return accessToken;

@@ -44,7 +44,7 @@ public class UpdateCommandServerRefreshTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader(HttpClientExtensions.ServerVersionHeader, "998.0.0"));
 
-        ServerVersionStore.Set(_server.Urls[0], "997.0.0", Config.Root);
+        ServerVersionStore.Set(_server.Urls[0], "997.0.0", Config.Root, TimeProvider.System);
     }
 
     ProfileContext Profiles(string profileName) =>
@@ -75,7 +75,7 @@ public class UpdateCommandServerRefreshTests : IDisposable {
 
         var command = new UpdateCommand(
             Config.Root, profiles, new NpmRegistryClient(registry),
-            _sp.GetRequiredService<CapacitorServer>(), _sp.GetRequiredService<ICapacitorHttpClient>(), appBundled: false);
+            _sp.GetRequiredService<CapacitorServer>(), _sp.GetRequiredService<ICapacitorHttpClient>(), TimeProvider.System, appBundled: false);
 
         using var output = ConsoleOutput.StartCapture();
         await command.HandleAsync(["--check"]);

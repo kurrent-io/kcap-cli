@@ -93,7 +93,7 @@ public class AcpInteractionBridgePolicyTests {
                 policySnapshot: snapshot,
                 policyVendor: vendor,
                 notifyPolicyDecision: e => harness.Decisions.Add(e),
-                policyCwd: cwd)
+                policyCwd: cwd, time: TimeProvider.System)
         };
 
         return harness;

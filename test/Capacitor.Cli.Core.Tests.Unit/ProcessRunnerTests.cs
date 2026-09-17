@@ -33,7 +33,7 @@ public class ProcessRunnerTests {
     [Test]
     public async Task RunAsync_drains_both_streams_and_returns_the_exit_code() {
         var (fileName, args) = EchoBothStreamsThenExit(3);
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
 
         var result = await runner.RunAsync(fileName, args, new RunOptions(), CancellationToken.None);
 
@@ -44,7 +44,7 @@ public class ProcessRunnerTests {
     [Test]
     public async Task RunAsync_reports_the_exit_code_on_success() {
         var (fileName, args) = EchoBothStreamsThenExit(0);
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
 
         var result = await runner.RunAsync(fileName, args, new RunOptions(), CancellationToken.None);
 
@@ -55,7 +55,7 @@ public class ProcessRunnerTests {
     public async Task RunAsync_captures_stdout() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
 
         var result = await runner.RunAsync("/bin/echo", ["hi"], new RunOptions(), CancellationToken.None);
 
@@ -66,7 +66,7 @@ public class ProcessRunnerTests {
     public async Task RunAsync_env_overlay_adds_without_clobbering_the_rest() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
         var options = new RunOptions(EnvOverlay: new Dictionary<string, string> { ["KCAP_PROFILE"] = "work" });
 
         var result = await runner.RunAsync("/usr/bin/env", [], options, CancellationToken.None);
@@ -80,7 +80,7 @@ public class ProcessRunnerTests {
     public async Task Timeout_kills_the_tree_and_returns_promptly() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
         var sw = Stopwatch.StartNew();
 
         var result = await runner.RunAsync(
@@ -98,7 +98,7 @@ public class ProcessRunnerTests {
 
         using var tmp = new TempDir();
         var marker = tmp.PathTo("marker");
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -118,7 +118,7 @@ public class ProcessRunnerTests {
 
         using var tmp = new TempDir();
         var marker = tmp.PathTo("marker");
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -139,7 +139,7 @@ public class ProcessRunnerTests {
     public async Task ProcessOnly_timeout_kills_the_shell_but_spares_the_grandchild() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
         // Grandchild redirects its own stdio away from the inherited pipe, like a detached daemon.
         var result = await runner.RunAsync(
             "/bin/sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!; wait"],
@@ -162,7 +162,7 @@ public class ProcessRunnerTests {
     public async Task Tree_timeout_kills_the_grandchild_too() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
         var result = await runner.RunAsync(
             "/bin/sh", ["-c", "sleep 30 & echo $!; wait"],
             new RunOptions(Timeout: TimeSpan.FromMilliseconds(500), TimeoutKill: TimeoutKillScope.Tree),
@@ -179,7 +179,7 @@ public class ProcessRunnerTests {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
         using var tmp = new TempDir();
-        var runner = new ProcessRunner();
+        var runner = new ProcessRunner(TimeProvider.System);
         using var cts = new CancellationTokenSource();
         var startedMarker = tmp.PathTo("marker");
         int grandchildPid = -1;

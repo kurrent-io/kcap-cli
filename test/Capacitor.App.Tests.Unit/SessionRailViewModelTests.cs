@@ -34,7 +34,8 @@ public class SessionRailViewModelTests {
             service, remote, new FakeServerLane(), new RepoIdentityResolver(originUrl ?? (_ => null)),
             resolveRepoRoot ?? Resolve, null, null);
         var rail = new SessionRailViewModel(
-            directory, open ?? (_ => { }), openRemote ?? (_ => { }), resolveRepoRoot ?? Resolve);
+            directory, open ?? (_ => { }), openRemote ?? (_ => { }), TimeProvider.System,
+            resolveRepoRoot ?? Resolve);
         return (service, remote, rail);
     }
 

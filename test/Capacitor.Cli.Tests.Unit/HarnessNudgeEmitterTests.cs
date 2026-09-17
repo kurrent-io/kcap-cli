@@ -9,7 +9,7 @@ public class HarnessNudgeEmitterTests {
     static string? Fragment(
             TempConfigRoot config, HarnessId[] detected, HarnessId[]? wired = null, bool optedOut = false) =>
         HarnessNudgeEmitter.ResolveFragment(
-            TestHarnesses.All(detected, wired), new(config.Root), optedOut, Now);
+            TestHarnesses.All(detected, wired), new(config.Root, TimeProvider.System), optedOut, Now);
 
     [Test]
     public async Task Fragment_names_detected_unwired_vendor_and_install_command() {
@@ -43,7 +43,7 @@ public class HarnessNudgeEmitterTests {
     [Test]
     public async Task Second_call_is_throttled_to_null() {
         using var config    = new TempConfigRoot();
-        var       store     = new HarnessOfferStore(config.Root);
+        var       store     = new HarnessOfferStore(config.Root, TimeProvider.System);
         var       harnesses = TestHarnesses.All([HarnessId.Antigravity]);
         var       first     = HarnessNudgeEmitter.ResolveFragment(harnesses, store, false, Now);
         var       second    = HarnessNudgeEmitter.ResolveFragment(harnesses, store, false, Now);
@@ -54,7 +54,7 @@ public class HarnessNudgeEmitterTests {
     [Test]
     public async Task Resolving_stamps_last_offered() {
         using var config = new TempConfigRoot();
-        var       store  = new HarnessOfferStore(config.Root);
+        var       store  = new HarnessOfferStore(config.Root, TimeProvider.System);
         HarnessNudgeEmitter.ResolveFragment(TestHarnesses.All([HarnessId.Antigravity]), store, false, Now);
         await Assert.That(store.Load().Entry(HarnessId.Antigravity)!.LastOffered).IsEqualTo(Now);
     }
@@ -70,7 +70,7 @@ public class HarnessNudgeEmitterTests {
                 UserDataSignal = () => throw new InvalidOperationException("boom"),
             }));
 
-        var result = HarnessNudgeEmitter.ResolveFragment(exploding, new(config.Root), false, Now);
+        var result = HarnessNudgeEmitter.ResolveFragment(exploding, new(config.Root, TimeProvider.System), false, Now);
 
         await Assert.That(result).IsNull();
     }
@@ -79,7 +79,7 @@ public class HarnessNudgeEmitterTests {
     public async Task Notice_has_kcap_prefix_and_stop_asking_hint() {
         using var config = new TempConfigRoot();
         var n = HarnessNudgeEmitter.ResolveNotice(
-            TestHarnesses.All([HarnessId.Antigravity]), new(config.Root), false, Now)!;
+            TestHarnesses.All([HarnessId.Antigravity]), new(config.Root, TimeProvider.System), false, Now)!;
         await Assert.That(n).Contains("kcap: Antigravity detected");
         await Assert.That(n).Contains("kcap harness dismiss antigravity");
     }

@@ -13,7 +13,7 @@ public class RestartCoordinatorTests {
     }
 
     RestartCoordinator NewCoordinator(SpyStrategy spy, Func<bool> isBusy, Func<BinaryStat?> stat) {
-        var c = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy);
+        var c = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, TimeProvider.System);
         c.IsBusy     = isBusy;
         c.StatBinary = stat;
         c.PrimeBaseline();   // capture initial stat as baseline

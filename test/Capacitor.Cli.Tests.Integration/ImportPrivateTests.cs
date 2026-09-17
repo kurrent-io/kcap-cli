@@ -24,7 +24,7 @@ public class ImportPrivateTests : IDisposable {
         await ImportCommand.SetVisibilityNoneForAll(
             client,
             _server.Url!,
-            ["sess1", "sess2", "sess3"]);
+            ["sess1", "sess2", "sess3"], TimeProvider.System);
 
         var requests = _server.LogEntries
             .Where(e => e.RequestMessage.Method == "PUT")
@@ -57,7 +57,7 @@ public class ImportPrivateTests : IDisposable {
         await ImportCommand.SetVisibilityNoneForAll(
             client,
             _server.Url!,
-            ["sess1", "sess2", "sess3"]);
+            ["sess1", "sess2", "sess3"], TimeProvider.System);
 
         var attempted = _server.LogEntries
             .Count(e => e.RequestMessage.Method == "PUT");
@@ -80,7 +80,7 @@ public class ImportPrivateTests : IDisposable {
         using var capture = ConsoleOutput.StartErrorCapture("\n");
 
         var lost = await ImportCommand.SetVisibilityForAll(
-            client, _server.Url!, ["sess1"], "org", indent: "    ");
+            client, _server.Url!, ["sess1"], "org", TimeProvider.System, indent: "    ");
 
         await Assert.That(lost).IsEquivalentTo(new[] { "sess1" });
         await Assert.That(capture.GetCapturedError())

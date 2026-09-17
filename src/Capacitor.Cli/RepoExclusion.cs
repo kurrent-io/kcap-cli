@@ -23,13 +23,13 @@ static class RepoExclusion {
     /// </summary>
     public static async Task<bool> IsOutOfScopeAsync(
             GitProviderRouter router, ConfigRoot config, string body,
-            string[]? allowedRepos, string[]? excludedRepos, TimeSpan? budget = null) {
+            string[]? allowedRepos, string[]? excludedRepos, TimeProvider time, TimeSpan? budget = null) {
         var hasAllowlist = allowedRepos  is { Length: > 0 };
         var hasDenylist  = excludedRepos is { Length: > 0 };
 
         if (!hasAllowlist && !hasDenylist) return false;
 
-        var key = await ResolveKeyAsync(router, config, body, budget);
+        var key = await ResolveKeyAsync(router, config, body, time, budget);
 
         return RepoScope.IsOutOfScope(key, allowedRepos, excludedRepos);
     }
@@ -44,7 +44,7 @@ static class RepoExclusion {
 
     /// <summary><c>owner/repo</c> for the session, or null when it cannot be determined.</summary>
     static async Task<string?> ResolveKeyAsync(
-            GitProviderRouter router, ConfigRoot config, string body, TimeSpan? budget) {
+            GitProviderRouter router, ConfigRoot config, string body, TimeProvider time, TimeSpan? budget) {
         try {
             var payload = JsonNode.Parse(body);
 
@@ -62,7 +62,7 @@ static class RepoExclusion {
             if (cwd is null) return null;
 
             // Matching is on owner/repo only → skip the PR round-trip (~600ms to GitHub).
-            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, budget, detectPullRequest: false);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, budget, detectPullRequest: false);
 
             if (repo?.Owner is not null && repo.RepoName is not null) return $"{repo.Owner}/{repo.RepoName}";
         } catch {

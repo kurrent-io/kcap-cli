@@ -11,7 +11,7 @@ public class LaunchConsentGateTests {
         LaunchConsentDefault def = LaunchConsentDefault.Allow, ILaunchConsentPrompter? prompter = null,
         TimeProvider? time = null, int promptTimeoutSeconds = 5) {
         var dir = tmp.CreateDir(Guid.NewGuid().ToString("N")[..8]);
-        var store = new LaunchConsentStore(dir, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir, NullLogger.Instance, TimeProvider.System);
         store.TryReplace(new LaunchConsentPolicy(def, promptTimeoutSeconds, []), out _);
         var log = new LaunchConsentDecisionLog(dir, NullLogger.Instance);
         var gate = new LaunchConsentGate(store, log, prompter, time ?? TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);

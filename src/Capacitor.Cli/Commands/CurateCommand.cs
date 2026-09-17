@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Commands;
 
 class CurateCommand(
         ConfigRoot config, IRepositoriesApi repositories, GitProviderRouter router,
-        WorkingDirectory workdir) {
+        WorkingDirectory workdir, TimeProvider time) {
     /// <summary>One page is all this command reads; hitting it exactly is what the warning below
     /// reports, so the request and the check must name the same number.</summary>
     const int PageLimit = 100;
@@ -23,7 +23,7 @@ class CurateCommand(
         }
 
         // 2. Identify the repo for the server key.
-        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
+        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time);
         if (repo?.Owner is null || repo.RepoName is null) {
             await Console.Error.WriteLineAsync("Could not determine the repo's owner/name from its git remote.");
             return 1;

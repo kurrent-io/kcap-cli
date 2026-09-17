@@ -15,10 +15,10 @@ public interface IDaemonObservation {
 }
 
 /// Bounded diagnostic dial via LocalControlProbe — correct for any target, at the cost of a fresh socket round trip per call.
-public sealed class OneShotObservation(DaemonStore store, TimeSpan timeout) : IDaemonObservation {
+public sealed class OneShotObservation(DaemonStore store, TimeProvider time, TimeSpan timeout) : IDaemonObservation {
     // Test seam: production always resolves to LocalControlProbe.ProbeAsync itself.
     internal Func<string, TimeSpan, CancellationToken, Task<ProbeResult>> Probe { get; init; } =
-        (name, timeout, ct) => LocalControlProbe.ProbeAsync(store, name, timeout, ct);
+        (name, timeout, ct) => LocalControlProbe.ProbeAsync(store, name, time, timeout, ct);
 
     public async Task<ObservedEvidence?> ObserveAsync(MutationRequest request, CancellationToken ct) {
         var result = await Probe(request.DaemonName, timeout, ct).ConfigureAwait(false);

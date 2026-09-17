@@ -55,6 +55,7 @@ public class PermissionWiringTests {
             Store        = daemons.Store,
             WorktreeRoot = worktrees.PathTo("wt"),
         });
+        services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(Config.Root);
@@ -75,7 +76,7 @@ public class PermissionWiringTests {
             new Dictionary<string, IHostedAgentRuntimeFactory>());
         services.AddSingleton<IHostApplicationLifetime>(new NoopHostLifetime());
         services.AddSingleton(sp => new LaunchConsentGate(
-            new LaunchConsentStore(daemons.Directory, NullLogger.Instance),
+            new LaunchConsentStore(daemons.Directory, NullLogger.Instance, TimeProvider.System),
             new LaunchConsentDecisionLog(daemons.Directory, NullLogger.Instance),
             prompter: null,
             TimeProvider.System,

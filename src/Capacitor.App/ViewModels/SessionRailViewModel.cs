@@ -61,7 +61,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     /// permission service still compile and render.
     public SessionRailViewModel(
             IAgentDirectory directory,
-            Action<string> openLocalSession, Action<string> openRemoteSession,
+            Action<string> openLocalSession, Action<string> openRemoteSession, TimeProvider time,
             Func<string, string>? resolveRepoRoot = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null,
             IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
@@ -98,7 +98,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, tones))
+                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()

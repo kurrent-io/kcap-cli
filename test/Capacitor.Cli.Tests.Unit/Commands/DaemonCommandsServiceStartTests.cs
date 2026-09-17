@@ -15,13 +15,13 @@ public class DaemonCommandsServiceStartTests {
 
     [Test]
     public async Task Verify_flag_is_rejected_on_a_non_launchd_manager() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Start(["--verify"]);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Start(["--verify"]);
         await Assert.That(exit).IsEqualTo(1);
     }
 
     [Test]
     public async Task Verify_flag_is_rejected_on_the_windows_manager_too() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new WindowsScheduledTaskServiceManager(Config.Root), "test-id", Home).Start(["--verify"]);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new WindowsScheduledTaskServiceManager(Config.Root), "test-id", Home, TimeProvider.System).Start(["--verify"]);
         await Assert.That(exit).IsEqualTo(1);
     }
 }

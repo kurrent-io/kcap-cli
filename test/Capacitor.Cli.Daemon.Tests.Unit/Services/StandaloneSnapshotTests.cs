@@ -23,7 +23,7 @@ public class StandaloneSnapshotTests {
     static WorktreeManager NewManager() => NewManager(NoSnapshotBarrier.Instance);
 
     static WorktreeManager NewManager(ISnapshotBarrier barrier) =>
-        new(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, barrier);
+        new(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, barrier, TimeProvider.System);
 
     /// <summary>Entry names directly under a directory, WITHOUT following anything.</summary>
     static string[] EntryNames(string dir) =>

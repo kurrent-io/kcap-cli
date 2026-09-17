@@ -28,7 +28,7 @@ Configuration:
   allow <path>                     Capture only this path (and descendants); empty list allows all
   allow --list                     List allowed paths in the active profile
   allow --remove <path>            Remove a path from the allow list
-  remap <from> <to>                Rewrite a recorded transcript cwd prefix during import (renamed/moved repos)
+  remap <from> <to>                Rewrite a recorded transcript cwd during import; <from> takes one '*' segment
   remap --list                     List configured cwd remaps
   remap --remove <from>            Remove a cwd remap entry
 

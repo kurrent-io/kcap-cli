@@ -9,7 +9,10 @@ namespace Capacitor.Cli.Local;
 /// agent exits or the user detaches. Returns the agent's exit code (or 0 on detach).
 /// </summary>
 internal static class LocalAgentClient {
-    public static async Task<int> RunAsync(string socketPath, LocalFrame opening, CancellationToken outerCt) {
+    static readonly TimeSpan ResizePollGap = TimeSpan.FromMilliseconds(300);
+
+    public static async Task<int> RunAsync(
+            string socketPath, LocalFrame opening, TimeProvider time, CancellationToken outerCt) {
         using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
 
         try {
@@ -102,7 +105,7 @@ internal static class LocalAgentClient {
             var last = TrySize();
             try {
                 while (!ct.IsCancellationRequested && !outPump.IsCompleted) {
-                    await Task.Delay(300, ct);
+                    await Task.Delay(ResizePollGap, time, ct);
                     var cur = TrySize();
                     if (cur != last) { last = cur; if (!readOnly) await Send(SizeFrame()); }
                 }

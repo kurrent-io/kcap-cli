@@ -28,7 +28,7 @@ public class RailWorktreeViewModelTests {
             IObservable<IReadOnlyDictionary<string, PullRequestTone>>? tones = null) =>
         new(path, _ => root, showHeader, cache.AsObservableCache(),
             collapse ?? new RailCollapseState(), selected ?? new BehaviorSubject<string?>(null),
-            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), NotStale, _ => { }, _ => { }, tones);
+            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), NotStale, _ => { }, _ => { }, TimeProvider.System, tones);
 
     static AgentRow SessionRow(string id, string sessionId) =>
         AgentRow.FromLocal(

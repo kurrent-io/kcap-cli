@@ -71,14 +71,14 @@ sealed class SetupAuthProgress(IAuthProgress inner) : IAuthProgress {
 /// a browser opened — a machine with no browser of its own has a human at a different one.</summary>
 /// <param name="keys">Only to tell whether there is a keyboard at all: advertising a key that cannot be
 /// pressed is worse than not offering the way out.</param>
-sealed class SpectreFirstRunFlowProgress(IKeyWatcher? keys = null) : IFirstRunFlowProgress, IDisposable {
+sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = null) : IFirstRunFlowProgress, IDisposable {
     internal static readonly string Offer =
         $"{BrowserFirstRunFlow.HandoverKey} to carry on here  ·  ctrl+c to stop";
 
     internal const string Unreachable = "Can't reach the server. Still trying…";
 
     readonly IKeyWatcher      _keys = keys ?? ConsoleKeyWatcher.Instance;
-    readonly TerminalWaitLine _wait = new(tty: !Console.IsOutputRedirected);
+    readonly TerminalWaitLine _wait = new(tty: !Console.IsOutputRedirected, time: time);
 
     FirstRunFlowStep? _step;
     bool              _healthy = true;
@@ -240,6 +240,7 @@ sealed class SetupImportLane(
         ICapacitorHttpClient http,
         HarnessRegistry harnesses,
         GitProviderRouter router,
+        TimeProvider time,
         Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>>? runner = null) : IFirstRunImportLane {
     /// <summary>One invocation's arguments, so a test can assert what each level asked for without
     /// running an import.</summary>
@@ -255,9 +256,9 @@ sealed class SetupImportLane(
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
             filterCwd:    null,
-            sources:      SetupCommand.BuildImportSources(config, harnesses, router, vendors),
+            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors),
             discoverOnly: true,
             discoverJson: true,
             windowsAsOf:  asOf,
@@ -308,9 +309,9 @@ sealed class SetupImportLane(
     async Task<ImportCommand.ImportRunOutcome?> Run(Pass pass) {
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        await new ImportCommand(config, profiles, home, harnesses, http, router).HandleImport(
+        await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
             filterCwd:          null,
-            sources:            SetupCommand.BuildImportSources(config, harnesses, router, pass.Vendors),
+            sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors),
             since:              pass.Since,
             scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
             skipConfirmation:   true,
@@ -402,14 +403,14 @@ sealed class SetupImportLane(
 /// <see cref="SetupDaemonService"/>. The loop leaves an unadvertised capability outstanding rather than
 /// reporting it, which is the state the screen already renders as having asked.</para>
 /// </summary>
-sealed class SetupMachineActions : IFirstRunMachineActions {
+sealed class SetupMachineActions(TimeProvider time) : IFirstRunMachineActions {
     public IReadOnlyCollection<string> Capabilities { get; } = [FirstRunMachineCapabilities.PathShim];
 
     public async Task<FirstRunMachineActionResult> PerformAsync(string capability, CancellationToken ct) {
         if (capability != FirstRunMachineCapabilities.PathShim)
             throw new ArgumentOutOfRangeException(nameof(capability), capability, "Not a capability this host advertises.");
 
-        var result = await DaemonShimCommands.EvaluateAsync(ct: ct);
+        var result = await DaemonShimCommands.EvaluateAsync(time, ct: ct);
 
         return new FirstRunMachineActionResult(result.Outcome, result.Reason);
     }
@@ -421,7 +422,7 @@ public sealed class SetupCommand(
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
-        ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir) {
+        ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
 
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -816,7 +817,7 @@ public sealed class SetupCommand(
         OfferedIf(detected.Pi,          skipPiFlag,          HarnessId.Pi);
         OfferedIf(detected.OpenCode,    skipOpenCodeFlag,    HarnessId.OpenCode);
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
-        new HarnessOfferStore(config).StampOffered(offeredNow, DateTimeOffset.UtcNow);
+        new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default so subscription auth
@@ -935,18 +936,18 @@ public sealed class SetupCommand(
                 // skipping on it would leave the request outstanding on a server that would have
                 // answered — the browser leg skips there only because it has nothing left to do.
                 if (deferredAuth is AuthStatus.Ok or AuthStatus.NoAuthRequired) {
-                    var channel = new FirstRunFlowClient(deferred);
+                    var channel = new FirstRunFlowClient(deferred, time);
 
                     // The browser is holding the request this leg is about to perform, and enabling a
                     // service can outlast any staleness window — so the beat has to span it. Only for a
                     // flow that finished: every other ending already relinquished, and beating again
                     // would take that back.
                     using var beat = browserAnswers.FlowStillLive
-                        ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, TimeProvider.System)
+                        ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, time)
                         : null;
 
                     await SetupDaemonService.RunAsync(
-                        channel, serverUrl, browserFlowId, config, saved, home);
+                        channel, serverUrl, browserFlowId, config, saved, home, time);
                 }
                 else
                     AnsiConsole.MarkupLine(
@@ -976,7 +977,7 @@ public sealed class SetupCommand(
         // PR/MR detection would run extra provider probes/subprocesses for nothing here.
         var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(
             router,
-            config, workdir.Path, detectPullRequest: false);
+            config, workdir.Path, time, detectPullRequest: false);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
             : null;
@@ -1252,23 +1253,23 @@ public sealed class SetupCommand(
     /// nothing. Filtering the sources rather than the counts afterwards is what makes a reported figure
     /// already scoped to what the user kept.</param>
     internal static IReadOnlyList<IImportSource> BuildImportSources(
-            ConfigRoot config, HarnessRegistry harnesses, GitProviderRouter router,
+            ConfigRoot config, HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time,
             IReadOnlyCollection<HarnessId>? vendors = null) {
         var cursor   = harnesses.Of<CursorHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
 
         IReadOnlyList<IImportSource> all = [
-            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router),
-            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router),
-            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router),
-            new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router),
-            new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir),
-            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, router),
-            new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir, router),
+            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
+            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
+            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time),
+            new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
+            new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
+            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, router, time),
+            new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir, router, time),
             new OpenCodeImportSource(
                     Path.Combine(opencode.DataDir, "opencode.db"),
-                    opencode.ImportLedgerJson),
-            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths)
+                    opencode.ImportLedgerJson, time),
+            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time)
         ];
 
         if (vendors is null) return all;
@@ -1320,9 +1321,9 @@ public sealed class SetupCommand(
     /// The workspace pick, in the browser where one is reachable and in the terminal otherwise. The
     /// composite decides per call, since only the completed login knows which channel it used.
     /// </summary>
-    internal static ITenantPicker DefaultPicker(IBrowserLauncher launcher, Func<bool> canPrompt) =>
+    internal static ITenantPicker DefaultPicker(IBrowserLauncher launcher, Func<bool> canPrompt, TimeProvider time) =>
         new BrowserTenantPicker(
-            launcher, new SpectreTenantPicker(canPrompt), StepProgress, ConsoleKeyWatcher.Instance,
+            launcher, new SpectreTenantPicker(canPrompt), time, StepProgress, ConsoleKeyWatcher.Instance,
             canPrompt: canPrompt);
 
     /// <summary>
@@ -1490,15 +1491,16 @@ public sealed class SetupCommand(
 
                 var report = FirstRunMachineReport.EvaluateCurrent(
                     config, harnesses,
-                    Environment.MachineName, await LoginShellFindsCliAsync());
+                    Environment.MachineName, await LoginShellFindsCliAsync(time), time);
 
-                importing = new SetupImportLane(config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router);
+                importing = new SetupImportLane(
+                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time);
 
-                using var progress = new SpectreFirstRunFlowProgress();
+                using var progress = new SpectreFirstRunFlowProgress(time);
 
                 result = await new BrowserFirstRunFlow(
-                        new FirstRunFlowClient(client), progress, browser,
-                        actions:   new SetupMachineActions(),
+                        new FirstRunFlowClient(client, time), progress, browser, time,
+                        actions:   new SetupMachineActions(time),
                         importing: importing)
                     .RunAsync(serverUrl, report, CancellationToken.None);
             }
@@ -1562,11 +1564,11 @@ public sealed class SetupCommand(
     /// <summary>Whether the login shell resolves the CLI — see <see cref="ILoginShellProbe"/> for why
     /// that differs from this process's PATH. Bounded because it spawns a shell: a probe that did not
     /// finish reports unknown rather than as a hazard, since only an explicit false draws the alarm.</summary>
-    static async Task<bool?> LoginShellFindsCliAsync() {
+    static async Task<bool?> LoginShellFindsCliAsync(TimeProvider time) {
         try {
-            using var cts = new CancellationTokenSource(LoginShellProbeBudget);
+            using var cts = new CancellationTokenSource(LoginShellProbeBudget, time);
 
-            return await new LoginShellProbe(new ProcessRunner(), Environment.GetEnvironmentVariable)
+            return await new LoginShellProbe(new ProcessRunner(time), Environment.GetEnvironmentVariable)
                 .KcapOnPathAsync(cts.Token);
         } catch (Exception) {
             return null;
@@ -1735,11 +1737,11 @@ public sealed class SetupCommand(
 
         var provisioner = chosen == AuthProvider.WorkOS
             ? new SpectreTenantProvisioner(
-                provisioning, endpoints.SignupUrl, telemetry,
+                provisioning, endpoints.SignupUrl, telemetry, time,
                 isInteractive: () => canPrompt, requested: requested)
             : null;
 
-        var result = await facades.Create(provisioner, DefaultPicker(browser, () => canPrompt), requested)
+        var result = await facades.Create(provisioner, DefaultPicker(browser, () => canPrompt, time), requested)
             .DiscoverAsync(chosen, forceDevice, CancellationToken.None);
 
         // WorkOS's own signin_completed/tenant_none fire from inside Core — only GitHub is derived here.
@@ -1886,7 +1888,7 @@ public sealed class SetupCommand(
 
         try {
             var tokens = await store.LoadAsync(profile);
-            if (tokens is null || tokens.IsExpired) {
+            if (tokens is null || tokens.IsExpiredAt(time.GetUtcNow())) {
                 Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
 
                 return;
@@ -1911,7 +1913,7 @@ public sealed class SetupCommand(
                 "application/json");
 
             var pingTask = client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
-            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5)));
+            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time));
 
             if (winner == pingTask) {
                 // Observe the result so any exception is consumed by the outer

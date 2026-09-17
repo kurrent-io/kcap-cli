@@ -20,7 +20,7 @@ public class LocalPermissionBridgeTests {
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridgeOn(ILoopbackPortSource ports) {
         var server = new FakeServerConnection(null);
 
-        return (new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, ports), server);
+        return (new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, ports, TimeProvider.System), server);
     }
 
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridge(
@@ -28,7 +28,7 @@ public class LocalPermissionBridgeTests {
             ILogger<LocalPermissionBridge>? logger = null
         ) {
         var server = new FakeServerConnection(respond);
-        var bridge = new LocalPermissionBridge(server, logger ?? NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
+        var bridge = new LocalPermissionBridge(server, logger ?? NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
 
         return (bridge, server);
     }
@@ -95,6 +95,8 @@ public class LocalPermissionBridgeTests {
     public async Task Daemon_host_registration_disposes_the_bridge_twice_without_terminating() {
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<ServerConnection>(_ => new FakeServerConnection(null));
+
+        builder.Services.AddSingleton(TimeProvider.System);
 
         // The exact two-descriptor registration from DaemonRunner.RunAsync.
         builder.Services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
@@ -1391,7 +1393,7 @@ public class LocalPermissionBridgeTests {
 /// </summary>
 sealed class FakeServerConnection(Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond)
     : ServerConnection(new() { Name = "test", ServerUrl = "http://127.0.0.1:1" }, UnusedTokenStore.Create(),
-        NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance) {
+        NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
     public List<Call> Calls { get; } = [];
     public List<(string SessionId, string RequestId, PermissionDecision Decision)> Responds { get; } = [];
 

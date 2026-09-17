@@ -54,9 +54,10 @@ public class ImportClassifyTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             transcripts,
-            minLines: 15,
+            15,
             CancellationToken.None
         );
 
@@ -85,9 +86,10 @@ public class ImportClassifyTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             transcripts,
-            minLines: 15,
+            15,
             CancellationToken.None
         );
 
@@ -118,9 +120,10 @@ public class ImportClassifyTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             transcripts,
-            minLines: 15,
+            15,
             CancellationToken.None
         );
 
@@ -148,9 +151,10 @@ public class ImportClassifyTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             transcripts,
-            minLines: 15,
+            15,
             CancellationToken.None
         );
 
@@ -176,9 +180,10 @@ public class ImportClassifyTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             transcripts,
-            minLines: 15,
+            15,
             CancellationToken.None
         );
 
@@ -207,9 +212,10 @@ public class ImportClassifyTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             transcripts,
-            minLines: 15,
+            15,
             CancellationToken.None
         );
 
@@ -235,9 +241,10 @@ public class ImportClassifyTests : IDisposable {
             Config.Root,
             Home,
             client,
+            TimeProvider.System,
             _server.Url!,
             paths,
-            minLines: 15,
+            15,
             CancellationToken.None,
             onProbed: () => Interlocked.Increment(ref probedCount)
         );
@@ -270,7 +277,7 @@ public class ImportClassifyTests : IDisposable {
             new GitProviderRouter(),
             Config.Root,
             Home,
-            client, _server.Url!, transcripts,
+            client, TimeProvider.System, _server.Url!, transcripts,
             minLines: 15, ct: CancellationToken.None
         );
 
@@ -302,7 +309,7 @@ public class ImportClassifyTests : IDisposable {
             new GitProviderRouter(),
             Config.Root,
             Home,
-            client, _server.Url!, transcripts,
+            client, TimeProvider.System, _server.Url!, transcripts,
             minLines: 15, ct: CancellationToken.None
         );
 

@@ -400,7 +400,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// pending entry's own 10-minute timeout ever stops tracking.</param>
     public HomeViewModel(
             IDaemonClientService daemon, IAppStateStore state, ILaunchClient launch,
-            Func<Task<string[]>> knownRepos, CancellationToken shutdown = default,
+            Func<Task<string[]>> knownRepos, TimeProvider time, CancellationToken shutdown = default,
             Action<string>? openSession = null, Func<int>? navigationGeneration = null,
             Action<string, int>? openSessionIfCurrent = null, Action? requestSignIn = null,
             IObservable<IReadOnlyList<DaemonInfo>>? daemons = null,
@@ -408,7 +408,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
             IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            IAttachmentUploader? uploader = null, TimeProvider? time = null, string? appServerUrl = null) {
+            IAttachmentUploader? uploader = null, string? appServerUrl = null) {
         _daemon = daemon;
         _state = state;
         _launch = launch;
@@ -424,7 +424,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _localMachineId = localMachineId;
         _directory = directory;
         _uploader = uploader ?? new NoAttachmentUploader();
-        _time = time ?? TimeProvider.System;
+        _time = time;
         _selectedMachine = daemon.DaemonName;
         _machineSelectionChanges = new((daemon.DaemonName, false));
         _retentionTimer = _time.CreateTimer(
@@ -475,7 +475,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // an ImmutableSolidColorBrush) — adding one would have to move Transform below the
         // ObserveOn.
         daemon.Agents.Connect()
-            .Transform(dto => new SessionCardViewModel(dto))
+            .Transform(dto => new SessionCardViewModel(dto, _time))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .SortAndBind(_sessionsSource, RowComparer)
             .Subscribe()
@@ -1186,7 +1186,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         lock (_launchTrackingLock) {
             _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), lane, hadAttachments, uploadedAt);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
-                if (DateTime.UtcNow - recent.At <= RecentFailureTtl) {
+                if (_time.GetUtcNow().UtcDateTime - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
                     _pendingLaunches.Remove(agentId);
                 }
@@ -1235,8 +1235,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     void RecordRecentFailure(LaunchFailure failure) {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
         lock (_launchTrackingLock) {
-            _recentFailures[agentId] = (failure.Reason, DateTime.UtcNow);
-            var cutoff = DateTime.UtcNow - RecentFailureTtl;
+            _recentFailures[agentId] = (failure.Reason, _time.GetUtcNow().UtcDateTime);
+            var cutoff = _time.GetUtcNow().UtcDateTime - RecentFailureTtl;
             foreach (var stale in _recentFailures.Where(kv => kv.Value.At < cutoff).Select(kv => kv.Key).ToList())
                 _recentFailures.Remove(stale);
         }

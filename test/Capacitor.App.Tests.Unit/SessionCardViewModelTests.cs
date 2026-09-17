@@ -12,7 +12,7 @@ public class SessionCardViewModelTests {
 
     [Test]
     public async Task The_card_leads_with_the_session_title_and_keeps_repo_and_vendor_below() {
-        var vm = new SessionCardViewModel(Dto("Fix the login flow"));
+        var vm = new SessionCardViewModel(Dto("Fix the login flow"), TimeProvider.System);
 
         await Assert.That(vm.Title).IsEqualTo("Fix the login flow");
         await Assert.That(vm.Sub).IsEqualTo("/repos/kcap-cli · claude");
@@ -20,7 +20,7 @@ public class SessionCardViewModelTests {
 
     [Test]
     public async Task Without_a_title_the_card_keeps_its_repo_vendor_label() {
-        var vm = new SessionCardViewModel(Dto(null));
+        var vm = new SessionCardViewModel(Dto(null), TimeProvider.System);
 
         await Assert.That(vm.Title).IsEqualTo("kcap-cli · claude");
         await Assert.That(vm.Sub).IsEqualTo("/repos/kcap-cli");
@@ -30,9 +30,9 @@ public class SessionCardViewModelTests {
     /// it, and keeps the running dot because the process is live.
     [Test]
     public async Task Awaiting_input_reads_as_waiting_for_input_on_the_running_dot() {
-        var waiting  = new SessionCardViewModel(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { AwaitingInput = true });
-        var working  = new SessionCardViewModel(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo"));
-        var reviewer = new SessionCardViewModel(Agent("r1", "codex", hasTerminal: false, repoPath: "/repo", kind: "review-flow") with { AwaitingInput = true });
+        var waiting  = new SessionCardViewModel(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { AwaitingInput = true }, TimeProvider.System);
+        var working  = new SessionCardViewModel(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo"), TimeProvider.System);
+        var reviewer = new SessionCardViewModel(Agent("r1", "codex", hasTerminal: false, repoPath: "/repo", kind: "review-flow") with { AwaitingInput = true }, TimeProvider.System);
 
         await Assert.That(waiting.StatusText).IsEqualTo("Waiting for input");
         await Assert.That(waiting.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running"));

@@ -40,7 +40,7 @@ public class SessionImporterProgressTests : IDisposable {
         var totalSent = await SessionImporter.SendTranscriptBatches(
             client, _server.Url!, sessionId: "test", filePath: path,
             agentId: null, startLine: 0, progress: progress
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(totalSent).IsEqualTo(250);
 
@@ -82,7 +82,7 @@ public class SessionImporterProgressTests : IDisposable {
                     var wasQuarantined = quarantined;
                     quarantined = true;
                     return wasQuarantined;
-                });
+                }, time: TimeProvider.System);
         });
     }
 
@@ -141,7 +141,7 @@ public class SessionImporterProgressTests : IDisposable {
             client, _server.Url!, sessionPath, sessionId: "s1",
             new SessionMetadata { Cwd = "/x" }, encodedCwd: null,
             progress: progress
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(result.AgentIds).Contains(agentId);
 
@@ -184,7 +184,7 @@ public class SessionImporterProgressTests : IDisposable {
         var totalSent = await SessionImporter.SendTranscriptBatches(
             client, _server.Url!, sessionId: "s1", filePath: path,
             agentId: null, startLine: 0, progress: progress
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(totalSent).IsEqualTo(3);
 
@@ -211,7 +211,7 @@ public class SessionImporterProgressTests : IDisposable {
         var totalSent = await SessionImporter.SendTranscriptBatches(
             client, _server.Url!, sessionId: "s1", filePath: path,
             agentId: null, startLine: 0, progress: progress
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(totalSent).IsEqualTo(2);
 
@@ -244,7 +244,7 @@ public class SessionImporterProgressTests : IDisposable {
         await SessionImporter.SendTranscriptBatches(
             client, _server.Url!, sessionId: "s1", filePath: path,
             agentId: "agent-1", startLine: 0, progress: progress
-        );
+        , time: TimeProvider.System);
 
         var dropped = events.OfType<BatchDropped>().ToList();
         await Assert.That(dropped.Count).IsEqualTo(2);
@@ -266,7 +266,7 @@ public class SessionImporterProgressTests : IDisposable {
             await SessionImporter.SendTranscriptBatches(
                 client, _server.Url!, sessionId: "s1", filePath: path,
                 agentId: null, startLine: 0, failOnError: true
-            );
+            , time: TimeProvider.System);
         });
 
         await Assert.That(ex.Message).Contains("lines 0-4");
@@ -289,7 +289,7 @@ public class SessionImporterProgressTests : IDisposable {
             client, _server.Url!, path, sessionId: "s1",
             new SessionMetadata { Cwd = "/x" }, encodedCwd: null,
             progress: progress
-        );
+        , time: TimeProvider.System);
 
         await Assert.That(result.LinesSent).IsEqualTo(3);
 

@@ -67,7 +67,7 @@ public class DaemonRunnerCapabilityRefreshTests {
 
     static PtyHostedAgentRuntimeFactory Factory(string vendor, string cliPath) =>
         new(new SpyHostedAgentLauncher(vendor, cliPath), new SpyPtyProcessFactory(),
-            NullLogger<PtyHostedAgentRuntimeFactory>.Instance);
+            NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
     // The startup fingerprint is what the watcher compares against, so it must describe the same
     // file the version probe ran, through the same factory-owned path.

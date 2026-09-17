@@ -4,9 +4,9 @@ using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Http;
 
-internal sealed class ProjectsApi(ICapacitorHttpClient http, CapacitorServer server) : IProjectsApi {
+internal sealed class ProjectsApi(ICapacitorHttpClient http, CapacitorServer server, TimeProvider time) : IProjectsApi {
     public async Task<ProjectsResult> GetProjectsAsync(CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/projects", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/projects", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) {
             var projects = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ListCliProjectSummary, ct);
@@ -18,7 +18,7 @@ internal sealed class ProjectsApi(ICapacitorHttpClient http, CapacitorServer ser
     }
 
     public async Task<ProjectResult> GetProjectAsync(string slug, CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/projects/{Uri.EscapeDataString(slug)}", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/projects/{Uri.EscapeDataString(slug)}", time, ct: token), ct);
 
         if (response.IsSuccessStatusCode) {
             var project = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.CliProjectDetail, ct);

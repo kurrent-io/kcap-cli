@@ -29,6 +29,9 @@ public static class CommandServices {
 
         services.AddSingleton(endpoints);
         services.AddSingleton(clock);
+        // The hook's own clock, not a second one: every deadline a command measures has to share the
+        // provider the budget was anchored on, or a faked one moves only half of them.
+        services.AddSingleton(clock.Time);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
         services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
         services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
@@ -66,7 +69,7 @@ public static class CommandServices {
     public static IServiceCollection AddCapacitorTelemetry(
             this IServiceCollection services, ConfigRoot config, TelemetryStartup startup) {
         services.AddSingleton(startup);
-        services.AddSingleton(_ => CliTelemetry.Start(startup, config));
+        services.AddSingleton(sp => CliTelemetry.Start(startup, config, sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => sp.GetRequiredService<CliTelemetry>().Funnel);
 
         return services;

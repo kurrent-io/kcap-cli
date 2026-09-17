@@ -34,7 +34,7 @@ public readonly record struct MachineTokenResult(string? Token, string? Problem)
 /// explicitly: a <c>SemaphoreSlim</c> release is not a barrier, so a field written inside the gate is
 /// not guaranteed visible to a reader outside it.</para>
 /// </summary>
-public sealed class MachineTokenProvider(MachineAuth machine) : IDisposable {
+public sealed class MachineTokenProvider(MachineAuth machine, TimeProvider time) : IDisposable {
     /// <summary>
     /// Re-mint this long before nominal expiry. A token that expires mid-flight surfaces as a 401 the
     /// caller must interpret; spending a few seconds of a 3600s lifetime avoids that entirely.
@@ -84,7 +84,7 @@ public sealed class MachineTokenProvider(MachineAuth machine) : IDisposable {
         // it queues every caller in the process against whichever one happens to be minting. A rejection
         // has to evict, which is a write, so it goes the long way round.
         if (rejectedToken is null
-            && Reusable(Volatile.Read(ref _cached), credential, tokenUrl) is { } hit) return new(hit, null);
+            && Reusable(Volatile.Read(ref _cached), credential, tokenUrl, time) is { } hit) return new(hit, null);
 
         await _gate.WaitAsync(ct);
 
@@ -99,7 +99,7 @@ public sealed class MachineTokenProvider(MachineAuth machine) : IDisposable {
             }
 
             // Re-check: a mint that finished while this call waited has already published a token.
-            if (Reusable(snapshot, credential, tokenUrl) is { } fresh) return new(fresh, null);
+            if (Reusable(snapshot, credential, tokenUrl, time) is { } fresh) return new(fresh, null);
 
             var (token, expiresIn, problem) = await workos.MintAsync(credential, tokenUrl, ct);
 
@@ -110,7 +110,7 @@ public sealed class MachineTokenProvider(MachineAuth machine) : IDisposable {
             // something whose lifetime we never learned. RFC 6749 does not require the field.
             Volatile.Write(ref _cached, new CachedToken(
                     token, credential.ClientId, tokenUrl,
-                    DateTimeOffset.UtcNow.AddSeconds(expiresIn > 0 ? expiresIn : 300)));
+                    time.GetUtcNow().AddSeconds(expiresIn > 0 ? expiresIn : 300)));
 
             return new(token, null);
         }
@@ -120,11 +120,12 @@ public sealed class MachineTokenProvider(MachineAuth machine) : IDisposable {
     }
 
     /// <summary>The token to serve for this credential and endpoint, or null if it cannot be reused.</summary>
-    static string? Reusable(CachedToken? entry, MachineCredential credential, string tokenUrl) =>
+    static string? Reusable(
+            CachedToken? entry, MachineCredential credential, string tokenUrl, TimeProvider time) =>
         entry is not null
         && string.Equals(entry.ClientId, credential.ClientId, StringComparison.Ordinal)
         && string.Equals(entry.TokenUrl, tokenUrl, StringComparison.Ordinal)
-        && DateTimeOffset.UtcNow < entry.Expiry - RenewMargin
+        && time.GetUtcNow() < entry.Expiry - RenewMargin
             ? entry.Token
             : null;
 }

@@ -69,7 +69,7 @@ public class DaemonRunnerAntigravityFloorTests {
         config.AntigravityPath = stub;
 
         var vendors = DaemonRunner.ComputeUnattendedVendors(
-            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance),
+            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance, TimeProvider.System),
              new FakeFactory("claude", advertised: true)],
             config);
 
@@ -89,7 +89,7 @@ public class DaemonRunnerAntigravityFloorTests {
         config.AntigravityPath = stub;
 
         var vendors = DaemonRunner.ComputeUnattendedVendors(
-            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);
+            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance, TimeProvider.System)], config);
 
         await Assert.That(vendors).IsEquivalentTo(new[] { "antigravity" });
     }
@@ -121,7 +121,7 @@ public class DaemonRunnerAntigravityFloorTests {
             stateDir, DaemonRunner.AntigravityVendor, enabled: true, stub, config.Binaries);
 
         var vendors = DaemonRunner.ComputeUnattendedVendors(
-            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);
+            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance, TimeProvider.System)], config);
 
         await Assert.That(vendors).IsEquivalentTo(new[] { "antigravity" });
     }
@@ -166,7 +166,7 @@ public class DaemonRunnerAntigravityFloorTests {
 
         var spawned = false;
         var factory = new AntigravityHostedAgentRuntimeFactory(
-            config, NullLoggerFactory.Instance,
+            config, NullLoggerFactory.Instance, TimeProvider.System,
             turnSource: (_, _) => {
                 spawned = true;
                 throw new NotSupportedException("the launch itself is not what this test is about");

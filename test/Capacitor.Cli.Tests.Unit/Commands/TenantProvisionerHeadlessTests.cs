@@ -16,7 +16,7 @@ public class TenantProvisionerHeadlessTests {
     const string BaseUrl = "https://signup.example";
 
     static WorkOSTokenSource Tokens() =>
-        new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
+        new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null), time: TimeProvider.System);
 
     /// <summary>Interactivity is injected, not read: the ambient value belongs to whatever host the
     /// suite is running under, so reading it would pass in CI and fail in a developer's terminal.</summary>
@@ -24,6 +24,7 @@ public class TenantProvisionerHeadlessTests {
     public async Task Declines_instead_of_throwing_when_there_is_no_terminal_to_prompt_on() {
         var provisioner = new SpectreTenantProvisioner(
             new TenantProvisioningClient(new HttpClient()), BaseUrl, NoTelemetry.Facade,
+            TimeProvider.System,
             isInteractive: () => false);
 
         var offer = await provisioner.OfferCreateAsync(Tokens());
@@ -229,7 +230,7 @@ public class TenantProvisionerHeadlessTests {
 
     static SpectreTenantProvisioner Provisioner(StubHandler handler, Func<bool> isInteractive, RequestedWorkspace requested) =>
         new(new TenantProvisioningClient(new HttpClient(handler, disposeHandler: false)), BaseUrl,
-            NoTelemetry.Facade, isInteractive, requested);
+            NoTelemetry.Facade, TimeProvider.System, isInteractive, requested);
 
     sealed class StubHandler : HttpMessageHandler {
         public List<string>    Paths                 { get; } = [];

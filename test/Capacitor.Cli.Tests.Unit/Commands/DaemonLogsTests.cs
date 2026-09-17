@@ -15,7 +15,7 @@ public class DaemonLogsTests {
 
     DaemonCommands Sut() => new(
         Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home,
-        TestHarnesses.All(), TestBinaries.None);
+        TestHarnesses.All(), TestBinaries.None, TimeProvider.System);
 
     string LogPath          => Config.Root.Path("daemon.log");
     string StderrCapturePath => System.IO.Path.ChangeExtension(LogPath, null) + ".out.log";

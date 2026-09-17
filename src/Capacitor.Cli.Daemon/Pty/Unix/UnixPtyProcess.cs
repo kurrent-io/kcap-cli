@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
@@ -13,7 +12,13 @@ public sealed class UnixPtyProcess : IPtyProcess {
     public int?    ExitCode      { get; private set; }
     public string? StartIdentity { get; } // never null on Unix: "" (uncapturable) or a real token
 
-    UnixPtyProcess(int masterFd, int childPid, string startIdentity) {
+    static readonly TimeSpan ExitPollGap    = TimeSpan.FromMilliseconds(100);
+    static readonly TimeSpan ExitConfirmGap = TimeSpan.FromMilliseconds(50);
+
+    readonly TimeProvider _time;
+
+    UnixPtyProcess(int masterFd, int childPid, string startIdentity, TimeProvider time) {
+        _time         = time;
         _masterFd     = masterFd;
         Pid           = childPid;
         StartIdentity = startIdentity;
@@ -126,6 +131,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
             string                      command,
             string[]                    args,
             string                      cwd,
+            TimeProvider                time,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
             ushort                      rows     = 40
@@ -157,7 +163,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
                     $"pty_spawn failed: step {result.FailedStep}, errno {result.ErrNo}");
             }
 
-            return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString);
+            return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
         } finally {
             UnixPtyInterop.pty_plan_free(ref plan); // the plan is spent whether spawn succeeded or failed
         }
@@ -236,12 +242,12 @@ public sealed class UnixPtyProcess : IPtyProcess {
 
         SignalGroup(UnixPtyInterop.SIGTERM);
 
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        var deadline = _time.GetUtcNow().UtcDateTime + (timeout ?? TimeSpan.FromSeconds(5));
 
-        while (!HasExited && DateTime.UtcNow < deadline) {
+        while (!HasExited && _time.GetUtcNow().UtcDateTime < deadline) {
             CheckExited();
             if (!HasExited) {
-                await Task.Delay(100);
+                await Task.Delay(ExitPollGap, _time);
             }
         }
 
@@ -285,14 +291,14 @@ public sealed class UnixPtyProcess : IPtyProcess {
             return;
         }
 
-        var sw    = Stopwatch.StartNew();
-        var limit = timeout ?? TimeSpan.FromSeconds(5);
+        var started = _time.GetTimestamp();
+        var limit   = timeout ?? TimeSpan.FromSeconds(5);
 
-        while (!HasExited && sw.Elapsed < limit) {
+        while (!HasExited && _time.GetElapsedTime(started) < limit) {
             CheckExited();
 
             if (!HasExited) {
-                await Task.Delay(50);
+                await Task.Delay(ExitConfirmGap, _time);
             }
         }
     }
@@ -331,7 +337,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
     }
 }
 
-public class UnixPtyProcessFactory(UnixSpawnerThread spawner) : IPtyProcessFactory {
+public class UnixPtyProcessFactory(UnixSpawnerThread spawner, TimeProvider time) : IPtyProcessFactory {
     public IPtyProcess Spawn(
             string                      command,
             string[]                    args,
@@ -340,5 +346,5 @@ public class UnixPtyProcessFactory(UnixSpawnerThread spawner) : IPtyProcessFacto
             ushort                      cols     = 120,
             ushort                      rows     = 40
         )
-        => UnixPtyProcess.Spawn(spawner, command, args, cwd, extraEnv, cols, rows);
+        => UnixPtyProcess.Spawn(spawner, command, args, cwd, time, extraEnv, cols, rows);
 }

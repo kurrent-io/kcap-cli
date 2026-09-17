@@ -22,6 +22,7 @@ internal sealed class CodexApprovalBridge {
     readonly string   _agentId;
     readonly ILogger  _logger;
     readonly TimeSpan _timeout;
+    readonly TimeProvider _time;
 
     // The option ids ARE the codex decision strings, so a resolved SelectedOptionId maps straight to
     // {decision: id}; Kind drives the allow-once / allow-for-session affordances server-side.
@@ -41,11 +42,12 @@ internal sealed class CodexApprovalBridge {
 
     public CodexApprovalBridge(
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
-            string agentId, ILogger logger, TimeSpan timeout) {
+            string agentId, ILogger logger, TimeSpan timeout, TimeProvider time) {
         _requestInteraction = requestInteraction;
         _agentId            = agentId;
         _logger             = logger;
         _timeout            = timeout < MinTimeout ? MinTimeout : timeout > MaxTimeout ? MaxTimeout : timeout;
+        _time               = time;
     }
 
     public async Task<JsonElement?> HandleAsync(AcpRequest request, CancellationToken ct) {
@@ -84,8 +86,8 @@ internal sealed class CodexApprovalBridge {
                 Options:      ApprovalOptions,
                 IsMultiSelect: false);
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(_timeout);
+            using var cap        = new CancellationTokenSource(_timeout, _time);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
 
             var decision = await _requestInteraction(interaction, timeoutCts.Token).ConfigureAwait(false);
 

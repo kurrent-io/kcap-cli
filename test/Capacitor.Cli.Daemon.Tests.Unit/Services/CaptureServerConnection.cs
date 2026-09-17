@@ -15,7 +15,7 @@ sealed class CaptureServerConnection() : ServerConnection(
     UnusedTokenStore.Create(),
     NullLoggerFactory.Instance,
     NullLogger<ServerConnection>.Instance
-) {
+, TimeProvider.System) {
     public            string?                               ConnectionIdForTest { get; init; } = "connection-1";
     internal override string?                               CurrentConnectionId => ConnectionIdForTest;
     public            List<(string AgentId, string Reason)> LaunchFailedCalls   { get; } = [];

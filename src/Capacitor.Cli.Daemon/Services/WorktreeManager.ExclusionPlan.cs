@@ -69,7 +69,7 @@ public partial class WorktreeManager {
     /// <para><c>core.quotePath=false</c> is required, or non-ASCII components come back C-quoted.</para>
     /// </summary>
     internal static async Task<string> ReadGitRelativeCwdAsync(
-            string sourceRepoRoot, string sourceCwd, CancellationToken ct) {
+            string sourceRepoRoot, string sourceCwd, TimeProvider time, CancellationToken ct) {
         // The prefix is only meaningful against the repository whose manifest it will filter, and
         // `rev-parse` reports whatever repository git DISCOVERS at the cwd. A cwd inside a nested
         // repository — or in an entirely different one — would otherwise yield a prefix in a foreign
@@ -77,7 +77,7 @@ public partial class WorktreeManager {
         // "one namespace" invariant this derivation exists to hold. So the work-tree top is captured and
         // required to be the source root before the prefix is trusted.
         var topRaw = await RunGitCaptureBoundedAsync(
-            sourceCwd, GitTimeout, MaxCwdPrefixCaptureBytes, ct, NoQuotedPaths,
+            sourceCwd, GitTimeout, time, MaxCwdPrefixCaptureBytes, ct, NoQuotedPaths,
             "rev-parse", "--show-toplevel");
         var top = ParseSingleLine(topRaw);
         if (top.Length == 0 ||
@@ -86,7 +86,7 @@ public partial class WorktreeManager {
             throw new InvalidOperationException("borrowed_snapshot_cwd_foreign_repository");
 
         var raw = await RunGitCaptureBoundedAsync(
-            sourceCwd, GitTimeout, MaxCwdPrefixCaptureBytes, ct, NoQuotedPaths,
+            sourceCwd, GitTimeout, time, MaxCwdPrefixCaptureBytes, ct, NoQuotedPaths,
             "rev-parse", "--show-prefix");
 
         return ParseGitRelativeCwd(raw);
@@ -227,13 +227,13 @@ public partial class WorktreeManager {
     /// <paramref name="maxBytes"/>. Reads <c>BaseStream</c>, not the <c>StreamReader</c>, because
     /// <c>StandardOutputEncoding</c> alone does not disable the reader's BOM detection.</summary>
     static async Task<byte[]> RunGitCaptureBoundedAsync(
-            string cwd, TimeSpan timeout, int maxBytes, CancellationToken ct, GitConfigOverride[] config,
-            params string[] args) {
-        await ProveConfigTransportIfCarryingAsync(cwd, sourceReadOnly: true, config);
+            string cwd, TimeSpan timeout, TimeProvider time, int maxBytes, CancellationToken ct,
+            GitConfigOverride[] config, params string[] args) {
+        await ProveConfigTransportIfCarryingAsync(cwd, time, sourceReadOnly: true, config);
         var psi = NewGitPsi(cwd, args, sourceReadOnly: true, config);
         using var process = Process.Start(psi)!;
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(timeout);
+        using var cap        = new CancellationTokenSource(timeout, time);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
         using var stdout = new MemoryStream();
         var stderrTask = ReadAllDecodedAsync(process.StandardError.BaseStream, timeoutCts.Token);
         var stderr = "";
@@ -256,9 +256,9 @@ public partial class WorktreeManager {
                 $"git {string.Join(' ', args)} timed out after {timeout.TotalSeconds:F0}s");
         } finally {
             // Every abnormal exit runs through here: the overflow throw and the cancellation branch both
-            // used to kill inline and leave the stderr pump unobserved and the child unreaped.
-            // Process.Dispose is not a termination guarantee.
-            await TerminateAndDrainAsync(process, stderrTask);
+            // Process.Dispose is not a termination guarantee: killing inline would leave the stderr
+            // pump unobserved and the child unreaped.
+            await TerminateAndDrainAsync(process, time, stderrTask);
         }
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr}");
@@ -281,8 +281,8 @@ public partial class WorktreeManager {
     /// <para>Failures here are swallowed deliberately: the reason the command failed is more useful to an
     /// operator than whatever went wrong tidying up after it.</para>
     /// </summary>
-    static async Task TerminateAndDrainAsync(Process process, params Task[] pumps) {
-        using var budget = new CancellationTokenSource(CleanupBudget);
+    static async Task TerminateAndDrainAsync(Process process, TimeProvider time, params Task[] pumps) {
+        using var budget = new CancellationTokenSource(CleanupBudget, time);
         try { if (!process.HasExited) ProcessTree.Kill(process); }
         catch { /* already gone, or tree enumeration failed — the direct kill below is the fallback */ }
         // Tree termination can fail while killing the process itself still succeeds, and returning from
@@ -308,13 +308,13 @@ public partial class WorktreeManager {
     /// directory whose name begins with <c>:</c> or <c>-</c> be read as pathspec syntax. <c>--stdin</c>
     /// paths are literal.</para></summary>
     static async Task RunGitWithNulStdinAsync(
-            string cwd, TimeSpan timeout, IReadOnlyCollection<string> lines,
+            string cwd, TimeSpan timeout, TimeProvider time, IReadOnlyCollection<string> lines,
             CancellationToken ct, params string[] args) {
         var psi = NewGitPsi(cwd, args);
         psi.RedirectStandardInput = true;
         using var process = Process.Start(psi)!;
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(timeout);
+        using var cap        = new CancellationTokenSource(timeout, time);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
         var stderrTask = ReadAllDecodedAsync(process.StandardError.BaseStream, timeoutCts.Token);
         var stdoutTask = ReadAllDecodedAsync(process.StandardOutput.BaseStream, timeoutCts.Token);
         var stderr = "";
@@ -334,9 +334,9 @@ public partial class WorktreeManager {
             throw new InvalidOperationException(
                 $"git {string.Join(' ', args)} timed out after {timeout.TotalSeconds:F0}s");
         } finally {
-            // Covers the cancellation branch AND an IOException mid-write, which previously left a
-            // running child and two unobserved pumps behind.
-            await TerminateAndDrainAsync(process, stdoutTask, stderrTask);
+            // Covers the cancellation branch AND an IOException mid-write, either of which would
+            // otherwise leave a running child and two unobserved pumps behind.
+            await TerminateAndDrainAsync(process, time, stdoutTask, stderrTask);
         }
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr}");

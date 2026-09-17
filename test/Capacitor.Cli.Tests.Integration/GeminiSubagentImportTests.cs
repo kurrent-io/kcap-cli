@@ -71,7 +71,7 @@ public class GeminiSubagentImportTests : IDisposable {
         }
 
         using var client = new HttpClient();
-        var source = new GeminiImportSource(_tempDir);
+        var source = new GeminiImportSource(_tempDir, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         // The nested subagent file must NOT be discovered as its own session.
@@ -143,7 +143,7 @@ public class GeminiSubagentImportTests : IDisposable {
         }
 
         using var client = new HttpClient();
-        var source     = new GeminiImportSource(_tempDir);
+        var source     = new GeminiImportSource(_tempDir, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
             discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
@@ -183,7 +183,7 @@ public class GeminiSubagentImportTests : IDisposable {
         }
 
         using var client = new HttpClient();
-        var source = new GeminiImportSource(_tempDir);
+        var source = new GeminiImportSource(_tempDir, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
@@ -228,7 +228,7 @@ public class GeminiSubagentImportTests : IDisposable {
         }
 
         using var client = new HttpClient();
-        var source = new GeminiImportSource(_tempDir);
+        var source = new GeminiImportSource(_tempDir, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
@@ -273,7 +273,7 @@ public class GeminiSubagentImportTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(500));
 
         using var client = new HttpClient();
-        var source = new GeminiImportSource(_tempDir);
+        var source = new GeminiImportSource(_tempDir, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
@@ -368,7 +368,7 @@ public class GeminiSubagentImportTests : IDisposable {
         }
 
         using var client = new HttpClient();
-        var source = new GeminiImportSource(_tempDir);
+        var source = new GeminiImportSource(_tempDir, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1); // neither nested file is its own top-level session

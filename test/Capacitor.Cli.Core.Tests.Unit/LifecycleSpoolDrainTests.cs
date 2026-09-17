@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Harness.Cursor;
 namespace Capacitor.Cli.Core.Tests.Unit;
 
 public class LifecycleSpoolDrainTests {
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -19,8 +19,8 @@ public class LifecycleSpoolDrainTests {
     public async Task PostTranscript_drops_a_quarantined_cursor_batch_without_posting() {
         using var tmp = new TempDir();
         var sid  = Guid.NewGuid().ToString("N");
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         tx.Append(sid, $$"""{"session_id":"{{sid}}","vendor":"cursor","lines":["x"],"line_numbers":[0]}""");
         Markers.Quarantine(sid, "rewrite detected");
 
@@ -32,7 +32,7 @@ public class LifecycleSpoolDrainTests {
         using var client = new HttpClient(handler);
 
         await LifecycleSpoolDrain.RunAsync(Markers, client, "http://s", life, tx, currentSessionId: null,
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(posted).DoesNotContain("/hooks/transcript");
         // Dropped (permanently discarded), not left spooled for an endless retry loop.
@@ -45,8 +45,8 @@ public class LifecycleSpoolDrainTests {
     public async Task PostTranscript_posts_a_non_quarantined_cursor_batch_normally() {
         using var tmp = new TempDir();
         var sid  = Guid.NewGuid().ToString("N");
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         tx.Append(sid, $$"""{"session_id":"{{sid}}","vendor":"cursor","lines":["x"],"line_numbers":[0]}""");
 
         var posted = new List<string>();
@@ -57,7 +57,7 @@ public class LifecycleSpoolDrainTests {
         using var client = new HttpClient(handler);
 
         await LifecycleSpoolDrain.RunAsync(Markers, client, "http://s", life, tx, currentSessionId: null,
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(posted).Contains("/hooks/transcript");
         await Assert.That(tx.HasBacklog(sid)).IsFalse();
@@ -75,8 +75,8 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task a_401_keeps_the_backlog_and_does_not_mark_the_session_ended() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-start/kiro", """{"phase":"start"}""");
         life.Append(Sid, "session-end/kiro",   """{"phase":"end"}""");
 
@@ -84,7 +84,7 @@ public class LifecycleSpoolDrainTests {
         using var client  = new HttpClient(handler);
 
         await LifecycleSpoolDrain.RunAsync(Markers, client, "http://s", life, tx, currentSessionId: null,
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(life.HasBacklog(Sid)).IsTrue();
         await Assert.That(life.IsMarkedEnded(Sid)).IsFalse();
@@ -95,15 +95,15 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task a_4xx_that_rejects_the_payload_is_still_dropped() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-start/kiro", """{"phase":"start"}""");
 
         using var handler = new StubHandler((_, _) => new HttpResponseMessage(HttpStatusCode.BadRequest));
         using var client  = new HttpClient(handler);
 
         await LifecycleSpoolDrain.RunAsync(Markers, client, "http://s", life, tx, currentSessionId: null,
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(life.HasBacklog(Sid)).IsFalse();
     }
@@ -111,8 +111,8 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task drains_start_then_transcript_then_end_for_a_session_with_no_further_hook() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-start/kiro", """{"phase":"start"}""");
         tx.Append(Sid, """{"phase":"tail"}""");
         life.Append(Sid, "session-end/kiro", """{"phase":"end"}""");
@@ -122,7 +122,7 @@ public class LifecycleSpoolDrainTests {
         await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
             lifecyclePoster: (route, body) => { order.Add($"L:{body}"); return Task.FromResult(DrainOutcome.Delivered); },
             transcriptPoster: body => { order.Add($"T:{body}"); return Task.FromResult(DrainOutcome.Delivered); },
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(order).IsEquivalentTo([
             """L:{"phase":"start"}""",
@@ -134,8 +134,8 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task holds_session_end_when_transcript_backlog_remains() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-start/kiro", """{"phase":"start"}""");
         tx.Append(Sid, """{"phase":"tail"}""");
         life.Append(Sid, "session-end/kiro", """{"phase":"end"}""");
@@ -145,7 +145,7 @@ public class LifecycleSpoolDrainTests {
             lifecyclePoster: (route, body) => { order.Add($"L:{body}"); return Task.FromResult(DrainOutcome.Delivered); },
             // Transcript poster reports a transient failure — the tail never fully drains.
             transcriptPoster: body => { order.Add($"T:{body}"); return Task.FromResult(DrainOutcome.TransientStop); },
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         // session-start delivered, transcript attempted, but session-end withheld because the
         // transcript still has backlog — cross-spool ordering must not let session-end race ahead.
@@ -160,8 +160,8 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task delivers_needs_import_marker_even_when_transcript_bytes_exceeded_cap() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"), capBytes: 32); // tiny cap
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), capBytes: 32, time: TimeProvider.System); // tiny cap
         life.Append(Sid, "session-start/kiro", """{"phase":"start"}""");
         tx.Append(Sid, "{\"lines\":[\"" + new string('x', 100) + "\"]}"); // exceeds cap → needs-import marker
         life.Append(Sid, "session-end/kiro", """{"phase":"end"}""");
@@ -172,7 +172,7 @@ public class LifecycleSpoolDrainTests {
         await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
             lifecyclePoster: (route, body) => { order.Add($"L:{route}:{body}"); return Task.FromResult(DrainOutcome.Delivered); },
             transcriptPoster: body => { order.Add($"T:{body}"); return Task.FromResult(DrainOutcome.Delivered); },
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(order).IsEquivalentTo([
             """L:session-start/kiro:{"phase":"start"}""",
@@ -191,8 +191,8 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task marks_session_ended_after_terminal_delivery_and_drops_a_later_straggler() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-start/kiro", """{"phase":"start"}""");
         life.Append(Sid, "session-end/kiro",   """{"phase":"end"}""");
 
@@ -202,7 +202,7 @@ public class LifecycleSpoolDrainTests {
         await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
             lifecyclePoster: Deliver,
             transcriptPoster: body => { order.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(order).IsEquivalentTo(["""{"phase":"start"}""", """{"phase":"end"}"""]);
         await Assert.That(life.IsMarkedEnded(Sid)).IsTrue();
@@ -215,7 +215,7 @@ public class LifecycleSpoolDrainTests {
         await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
             lifecyclePoster: Deliver,
             transcriptPoster: body => { order.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(order).IsEmpty(); // never delivered
         await Assert.That(life.HasBacklog(Sid)).IsFalse(); // discarded, not left pending retry
@@ -224,14 +224,14 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task does_not_mark_ended_when_the_terminal_post_only_transiently_fails() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         life.Append(Sid, "session-end/kiro", """{"phase":"end"}""");
 
         await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
             lifecyclePoster: (_, _) => Task.FromResult(DrainOutcome.TransientStop),
             transcriptPoster: _ => Task.FromResult(DrainOutcome.Delivered),
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         // A transient failure must not be mistaken for "session ended" — the entry stays
         // spooled so a later pass can retry it, exactly as before.
@@ -242,8 +242,8 @@ public class LifecycleSpoolDrainTests {
     [Test]
     public async Task current_session_id_drains_first() {
         using var tmp = new TempDir();
-        var life = new HookSpool(tmp.Path);
-        var tx   = new TranscriptSpool(tmp.PathTo("tx"));
+        var life = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var tx   = new TranscriptSpool(tmp.PathTo("tx"), time: TimeProvider.System);
         const string other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         life.Append(other, "session-start/kiro", """{"who":"other"}""");
         life.Append(Sid, "session-start/kiro", """{"who":"current"}""");
@@ -252,7 +252,7 @@ public class LifecycleSpoolDrainTests {
         await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: Sid,
             lifecyclePoster: (route, body) => { order.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
             transcriptPoster: body => { order.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(order[0]).IsEqualTo("""{"who":"current"}""");
         await Assert.That(order).Contains("""{"who":"other"}""");

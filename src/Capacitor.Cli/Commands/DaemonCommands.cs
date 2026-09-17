@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class DaemonCommands(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries) {
+        HarnessRegistry harnesses, BinaryProbe binaries, TimeProvider time) {
     string LogPath { get; } = config.Path("daemon.log");
 
     /// <summary>The sibling capture for the daemon's raw stderr/stdout — where a detached start points
@@ -41,8 +41,8 @@ public sealed class DaemonCommands(
             "status"  => await Status(remaining),
             "logs"    => await Logs(),
             "doctor"  => await DoctorAsync(remaining),
-            "service" => await DaemonServiceCommands.DispatchAsync(store, config, profiles, home, remaining),
-            "shim"    => await DaemonShimCommands.DispatchAsync(remaining),
+            "service" => await DaemonServiceCommands.DispatchAsync(store, config, profiles, home, time, remaining),
+            "shim"    => await DaemonShimCommands.DispatchAsync(remaining, time),
             "consent" => await DaemonConsentCommand.HandleAsync(store, profiles, remaining),
             "reviewer" => await DaemonReviewerCommand.HandleAsync(store, profiles, binaries, remaining),
             _         => PrintUsage()
@@ -686,7 +686,7 @@ public sealed class DaemonCommands(
 
         var servingProbes = entries
             .Where(e => e.Entry is { } pe && DaemonPidProbe.IsOurDaemon(pe.Pid, pe.StartToken))
-            .ToDictionary(e => e.Name, e => HelloProbe.RunAsync(store, e.Name, ServingProbeTimeout));
+            .ToDictionary(e => e.Name, e => HelloProbe.RunAsync(store, e.Name, time, ServingProbeTimeout));
 
         await Task.WhenAll(servingProbes.Values);
 
@@ -982,7 +982,7 @@ public sealed class DaemonCommands(
 
     /// <summary>Service manager for this OS, or null if the OS is unsupported.</summary>
     IServiceManager? TryServiceManager() {
-        try { return ServiceManagerFactory.ForCurrentOs(config, home); }
+        try { return ServiceManagerFactory.ForCurrentOs(config, home, time); }
         catch (PlatformNotSupportedException) { return null; }
     }
 

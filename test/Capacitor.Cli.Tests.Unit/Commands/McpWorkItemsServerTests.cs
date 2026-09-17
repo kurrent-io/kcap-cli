@@ -9,7 +9,7 @@ public class McpWorkItemsServerTests {
 
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpWorkItemsServer Server() =>
-        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup);
+        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup, TimeProvider.System);
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 

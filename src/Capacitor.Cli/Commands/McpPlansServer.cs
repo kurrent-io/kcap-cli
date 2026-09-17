@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
@@ -19,7 +18,7 @@ namespace Capacitor.Cli.Commands;
 /// its hash and snapshot are the CLI's; the server keys it off the path and the workspace root the
 /// same way discovery keys a repo file. Same stdio JSON-RPC loop as <see cref="McpWorkItemsServer"/>.</summary>
 sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup, WorkingDirectory workdir) {
+        TelemetryStartup startup, WorkingDirectory workdir, TimeProvider time) {
     /// <summary>The server's per-artifact transport cap; a larger document is declared by hash only.</summary>
     internal const int MaxSnapshotBytes = 256 * 1024;
 
@@ -45,7 +44,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
         // MCP servers are long-lived and denylisted under the top-level "mcp" command; the
         // reportable pseudo-command "mcp-server" is what lets per-tool-call events leave.
-        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
         telemetry.AddSharedProperty("logged_in", loggedIn);
 
         await using var mcp = new McpTelemetry(telemetry);
@@ -72,7 +71,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         }
 
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -81,7 +80,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                mcp.ToolCalled("kcap-plans", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-plans", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -251,7 +250,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var body = await response.Content.ReadAsStringAsync();
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
-            return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl), isError: true);
+            return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
 
         if (!response.IsSuccessStatusCode)
             return BuildToolResult(id, $"Error: HTTP {(int)response.StatusCode} — {body}", isError: true);

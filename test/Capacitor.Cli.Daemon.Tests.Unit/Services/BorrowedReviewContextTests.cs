@@ -24,7 +24,7 @@ public class BorrowedReviewContextTests {
         await File.WriteAllBytesAsync(repo.PathTo(".mcp.json"), privateBytes);
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root.Path }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
+            new DaemonConfig { WorktreeRoot = root.Path }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var snapshot = await manager.CreateBorrowedSnapshotAsync(repo.Path, "review", CancellationToken.None);
 
         try {
@@ -57,10 +57,10 @@ public class BorrowedReviewContextTests {
                 .IsNotEqualTo(Convert.ToBase64String(privateBytes));
 
             var sidecarRoot = snapshot.ReviewContextRoot!;
-            await WorktreeManager.RemoveAsync(snapshot);
+            await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System);
             await Assert.That(Directory.Exists(sidecarRoot)).IsFalse();
         } finally {
-            if (Directory.Exists(snapshot.SnapshotRoot!)) await WorktreeManager.RemoveAsync(snapshot);
+            if (Directory.Exists(snapshot.SnapshotRoot!)) await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System);
         }
     }
 
@@ -81,7 +81,7 @@ public class BorrowedReviewContextTests {
             var encoded = manifest["entries"]![0]!["base64"]!.GetValue<string>();
             await Assert.That(encoded).IsEqualTo(Convert.ToBase64String(staged));
             await Assert.That(encoded).IsNotEqualTo(Convert.ToBase64String(unstaged));
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -132,7 +132,7 @@ public class BorrowedReviewContextTests {
             await Assert.That(manifest["entries"]![0]!["byteCount"]!.GetValue<long>())
                 .IsEqualTo(256L * 1024);
             await Assert.That(manifest["omittedForCapacity"]!.AsArray()).IsEmpty();
-        } finally { await WorktreeManager.RemoveAsync(exact); }
+        } finally { await WorktreeManager.RemoveAsync(exact, TimeProvider.System); }
 
         // One byte past the cap no longer refuses the launch: the build succeeds, the config
         // stays out of the executable tree, and the manifest declares the omission by path,
@@ -159,7 +159,7 @@ public class BorrowedReviewContextTests {
                 .IsEqualTo(Convert.ToHexString(SHA256.HashData(overBytes)).ToLowerInvariant());
             await Assert.That(record["base64"]).IsNull();
             await Assert.That(record["text"]).IsNull();
-        } finally { await WorktreeManager.RemoveAsync(over); }
+        } finally { await WorktreeManager.RemoveAsync(over, TimeProvider.System); }
     }
 
     [Test]
@@ -187,7 +187,7 @@ public class BorrowedReviewContextTests {
             var omitted = manifest["omittedForCapacity"]!.AsArray();
             await Assert.That(omitted.Count).IsEqualTo(1);
             await Assert.That(omitted[0]!["path"]!.GetValue<string>()).IsEqualTo(".cursor/mcp.json");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -219,7 +219,7 @@ public class BorrowedReviewContextTests {
             await Assert.That(omitted[0]!["path"]!.GetValue<string>()).IsEqualTo(".mcp.json");
             await Assert.That(omitted[0]!["byteCount"]!.GetValue<long>())
                 .IsEqualTo(256L * 1024 + 1);
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -318,7 +318,7 @@ public class BorrowedReviewContextTests {
             await Assert.That(manifest["entries"]!.AsArray().Count).IsEqualTo(1);
             await Assert.That(manifest["entries"]![0]!["base64"]!.GetValue<string>())
                 .IsEqualTo(Convert.ToBase64String(expected));
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -428,7 +428,7 @@ public class BorrowedReviewContextTests {
                 var manifest = JsonNode.Parse(
                     snapshot.ReviewContextGeneration!.JsonUtf8)!.AsObject();
                 await Assert.That(manifest["entries"]!.AsArray().Count).IsEqualTo(1);
-            } finally { await WorktreeManager.RemoveAsync(snapshot); }
+            } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
         }
     }
 
@@ -447,7 +447,7 @@ public class BorrowedReviewContextTests {
             await Assert.That(entry["base64"]!.GetValue<string>())
                 .IsEqualTo(Convert.ToBase64String(bytes));
             await Assert.That(entry["text"]).IsNull();
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -464,7 +464,7 @@ public class BorrowedReviewContextTests {
             await Assert.That(manifest["omittedForCapacity"]!.AsArray()).IsEmpty();
             await Assert.That(File.Exists(Path.Combine(
                 snapshot.SnapshotRoot!, ".mcp.json"))).IsFalse();
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     static GitRepo NewGitRepo() {
@@ -477,7 +477,8 @@ public class BorrowedReviewContextTests {
     }
 
     static WorktreeManager Manager(string root) => new(
-        new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
+        new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance,
+        NoSnapshotBarrier.Instance, TimeProvider.System);
 
     static byte[] RawIndexRecord(string oid, ReadOnlySpan<byte> pathPrefix, byte trailingByte) {
         using var bytes = new MemoryStream();

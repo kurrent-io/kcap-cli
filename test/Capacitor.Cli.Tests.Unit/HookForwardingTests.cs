@@ -21,7 +21,7 @@ public class PostWithRetryTests : IDisposable {
 
         using var client   = new HttpClient();
         using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
-        var       response = await client.PostWithRetryAsync($"{_server.Url}/hooks/session-start", content);
+        var       response = await client.PostWithRetryAsync($"{_server.Url}/hooks/session-start", content, TimeProvider.System);
 
         await Assert.That((int)response.StatusCode).IsEqualTo(200);
     }
@@ -39,7 +39,7 @@ public class PostWithRetryTests : IDisposable {
         using var client   = new HttpClient(handler);
         using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
         var       response = await client.PostWithRetryAsync(
-            "http://localhost/hooks/test", content, timeout: TimeSpan.FromSeconds(15));
+            "http://localhost/hooks/test", content, TimeProvider.System, timeout: TimeSpan.FromSeconds(15));
 
         await Assert.That((int)response.StatusCode).IsEqualTo(200);
         await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo("recovered");

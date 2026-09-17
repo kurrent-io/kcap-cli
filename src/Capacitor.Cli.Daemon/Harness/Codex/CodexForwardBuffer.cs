@@ -31,6 +31,7 @@ namespace Capacitor.Cli.Daemon.Harness.Codex;
 internal sealed class CodexForwardBuffer : IDisposable {
     readonly Channel<AcpEventEnvelope> _channel;
     readonly TimeSpan          _stallTimeout;
+    readonly TimeProvider      _time;
     readonly CancellationToken _shutdown;
     readonly Action<TimeSpan>  _onStall;
     readonly TranscriptJournal? _journal;
@@ -39,11 +40,12 @@ internal sealed class CodexForwardBuffer : IDisposable {
     int _stalled;
 
     public CodexForwardBuffer(
-            int capacity, TimeSpan stallTimeout, CancellationToken shutdown, Action<TimeSpan> onStall,
-            TranscriptJournal? journal = null, ILogger? logger = null) {
+            int capacity, TimeSpan stallTimeout, TimeProvider time, CancellationToken shutdown,
+            Action<TimeSpan> onStall, TranscriptJournal? journal = null, ILogger? logger = null) {
         _channel = Channel.CreateBounded<AcpEventEnvelope>(new BoundedChannelOptions(capacity) {
             SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
         _stallTimeout = stallTimeout;
+        _time         = time;
         _shutdown     = shutdown;
         _onStall      = onStall;
         _journal      = journal;
@@ -79,8 +81,8 @@ internal sealed class CodexForwardBuffer : IDisposable {
 
     /// <summary>True only when <paramref name="env"/> actually entered the channel.</summary>
     bool WriteCanonicalBlocking(AcpEventEnvelope env) {
-        using var stall = CancellationTokenSource.CreateLinkedTokenSource(_shutdown);
-        stall.CancelAfter(_stallTimeout);
+        using var cap   = new CancellationTokenSource(_stallTimeout, _time);
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(_shutdown, cap.Token);
         try {
             // Blocks the read-loop thread until space frees — the app-server blocks on stdout (lossless).
             _channel.Writer.WriteAsync(env, stall.Token).AsTask().GetAwaiter().GetResult();

@@ -115,7 +115,7 @@ public class AntigravityImportUsagePassTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
-        var source = new AntigravityImportSource(new(new(_home), ""));
+        var source = new AntigravityImportSource(new(new(_home), ""), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);
@@ -170,7 +170,7 @@ public class AntigravityImportUsagePassTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
-        var source = new AntigravityImportSource(new(new(_home), ""));
+        var source = new AntigravityImportSource(new(new(_home), ""), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(

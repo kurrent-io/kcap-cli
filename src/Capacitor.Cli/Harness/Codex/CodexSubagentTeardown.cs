@@ -29,7 +29,7 @@ namespace Capacitor.Cli.Harness.Codex;
 /// subagent — or one step — never skips the rest; re-import recovers). Mirrors
 /// <see cref="GeminiSubagentTeardown"/>.
 /// </summary>
-sealed class CodexSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers) {
+sealed class CodexSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time) {
 
     /// <summary>
     /// Time budget for the teardown on a shutdown path (the parent-exit watchdog), so a slow
@@ -62,7 +62,7 @@ sealed class CodexSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient
         using var client  = await http.ForBackgroundAsync();
         var       payload = CodexSubagentDiscovery.BuildStopPayload(sessionId, agentId, agentType, subFile);
         using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content);
+        await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content, time);
     }
 
     static async Task SafeAsync(Func<Task> op) {
