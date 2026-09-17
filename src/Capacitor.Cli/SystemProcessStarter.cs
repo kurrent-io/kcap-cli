@@ -57,8 +57,9 @@ public sealed class SystemProcessStarter : IProcessStarter {
         if (psi.RedirectStandardOutput) process.StandardOutput.Close();
         if (psi.RedirectStandardError) process.StandardError.Close();
 
-        // The wrapper is NOT disposed here: it owns the stdin pipe being handed back, and the
-        // caller has not written the payload yet. Closing that stream is what releases it.
-        return (process.Id, process.StandardInput.BaseStream);
+        // The wrapper cannot be disposed here — it owns the stdin pipe being handed back, and the
+        // caller has not written the payload yet — so the returned stream owns it instead and
+        // releases it on close.
+        return (process.Id, new ChildStdinStream(process.StandardInput.BaseStream, process));
     }
 }

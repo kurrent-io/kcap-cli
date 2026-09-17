@@ -89,6 +89,7 @@ static partial class ProcessHelpers {
         }
 
         var attributeList = nint.Zero;
+        var initialized   = false;
 
         try {
             // CreatePipe made BOTH ends inheritable. A child holding the writing end too would
@@ -104,6 +105,8 @@ static partial class ProcessHelpers {
             if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size)) {
                 throw new Win32Exception(Marshal.GetLastPInvokeError());
             }
+
+            initialized = true;
 
             var inheritable = childEnd;
 
@@ -142,13 +145,30 @@ static partial class ProcessHelpers {
             CloseHandle(created.hProcess);
             CloseHandle(created.hThread);
 
-            var standardInput = new FileStream(new SafeFileHandle(parentEnd, ownsHandle: true), FileAccess.Write);
-            parentEnd = nint.Zero; // the stream owns it now
+            // Ownership moves to the SafeFileHandle BEFORE the stream is built. Constructing it
+            // inside the FileStream call would leave a throwing constructor with two owners of one
+            // handle value — the finally below and the temporary's finalizer — and the second close
+            // could land on whatever Windows had reused the value for by then.
+            var writeHandle = new SafeFileHandle(parentEnd, ownsHandle: true);
+            parentEnd = nint.Zero;
 
-            return (created.dwProcessId, standardInput);
+            try {
+                return (created.dwProcessId, new FileStream(writeHandle, FileAccess.Write));
+            } catch {
+                // The child is already running and its pid is about to be lost, so nothing else
+                // could stop it: the caller's fallback runs the work inline and two owners of it
+                // would duplicate the result.
+                writeHandle.Dispose();
+                TerminateQuietly(created.dwProcessId);
+
+                throw;
+            }
         } finally {
             if (attributeList != nint.Zero) {
-                DeleteProcThreadAttributeList(attributeList);
+                if (initialized) {
+                    DeleteProcThreadAttributeList(attributeList);
+                }
+
                 Marshal.FreeHGlobal(attributeList);
             }
 
@@ -160,6 +180,13 @@ static partial class ProcessHelpers {
                 CloseHandle(parentEnd);
             }
         }
+    }
+
+    static void TerminateQuietly(int pid) {
+        try {
+            using var child = Process.GetProcessById(pid);
+            child.Kill(entireProcessTree: true);
+        } catch { }
     }
 
     static char[] Terminated(string value) {
