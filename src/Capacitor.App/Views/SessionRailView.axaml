@@ -91,8 +91,8 @@
                 </Button>
             </StackPanel>
 
-            <!-- The one daemon indicator: dot + word + tenant, with the full identity (daemon,
-                 version, server, agent count) one hover away rather than a block of chrome. -->
+            <!-- Two rows: status + org on the first, version + help on the second. Daemon name,
+                 server URL, and agent count stay on the hover tooltip — a URL will not fit here. -->
             <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
                 <ToolTip.Tip>
                     <StackPanel Spacing="3" MaxWidth="260">
@@ -109,12 +109,30 @@
                                    IsVisible="{Binding RestartPendingText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                 </ToolTip.Tip>
-                <DockPanel Margin="16,10,16,14" Background="Transparent">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+                <StackPanel Margin="16,10,16,12" Spacing="6" Background="Transparent">
+                    <DockPanel>
+                        <TextBlock x:Name="RailTenantText" DockPanel.Dock="Right" Text="{Binding TenantName}"
+                                   FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}"
+                                   VerticalAlignment="Center" Margin="8,0,0,0"
+                                   TextTrimming="CharacterEllipsis"
+                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <Ellipse Width="7" Height="7" Fill="{Binding StatusDotBrush}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ConnectionDisplay}" FontSize="11.5"
+                                       Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="update pending" FontSize="11.5"
+                                       Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
+                                       IsVisible="{Binding RestartPending}" />
+                        </StackPanel>
+                    </DockPanel>
+                    <DockPanel>
                         <!-- Its own ToolTip.Tip outranks the footer Border's daemon tooltip while the
                              pointer is over the button. -->
-                        <Button x:Name="RailHelpButton" Classes="kcapChip" Width="22" Height="22" Padding="0" CornerRadius="6"
-                                ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support" VerticalAlignment="Center">
+                        <Button x:Name="RailHelpButton" DockPanel.Dock="Right" Classes="kcapChip"
+                                Width="22" Height="22" Padding="0" CornerRadius="6"
+                                ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support"
+                                VerticalAlignment="Center">
                             <PathIcon Width="14" Height="14" Foreground="{StaticResource KcapMutedBrush}"
                                       Data="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zm0 3.2a3 3 0 0 0-3 3h1.8a1.2 1.2 0 1 1 1.7 1.1c-.9.4-1.4 1.1-1.4 2.2h1.8c0-.5.2-.8.7-1a3 3 0 0 0-1.6-5.3zM11 15.5v1.8h1.8v-1.8z" />
                             <Button.Flyout>
@@ -141,25 +159,12 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <TextBlock Text="{Binding Rail.HostedText, FallbackValue=''}" FontSize="11.5"
-                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                        <Ellipse Width="7" Height="7" Fill="{Binding StatusDotBrush}" VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding ConnectionDisplay}" FontSize="11.5"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                        <TextBlock Text="·" FontSize="11.5" Foreground="{StaticResource KcapFaintBrush}"
-                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" FontSize="11.5"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
-                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="·" FontSize="11.5" Foreground="{StaticResource KcapFaintBrush}"
-                                   IsVisible="{Binding RestartPending}" />
-                        <TextBlock Text="update pending" FontSize="11.5"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
-                                   IsVisible="{Binding RestartPending}" />
-                    </StackPanel>
-                </DockPanel>
+                        <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay}" FontSize="11.5"
+                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </DockPanel>
+                </StackPanel>
             </Border>
 
             <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="10,0,10,4">
@@ -241,6 +246,7 @@
                                                                             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                                                                 <Ellipse Grid.Column="0" Width="7" Height="7" Fill="{Binding StatusDot}"
                                                                                          Classes.pulsing="{Binding IsStarting}"
+                                                                                         IsVisible="{Binding !NeedsYou}"
                                                                                          VerticalAlignment="Top" Margin="0,4,0,0" />
                                                                                 <StackPanel Grid.Column="1" Spacing="3">
                                                                                     <!-- Title stands alone on its line; a plain TextBlock in this vertical
@@ -249,7 +255,8 @@
                                                                                     <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
                                                                                                Classes="rowTitle" IsVisible="{Binding HasTitle}"
                                                                                                Foreground="{StaticResource KcapTextBrush}"
-                                                                                               TextTrimming="CharacterEllipsis" />
+                                                                                               TextTrimming="CharacterEllipsis"
+                                                                                               ToolTip.Tip="{Binding Primary}" />
                                                                                     <!-- WrapPanel, not a fixed row: chips + meta wrap to a second line rather
                                                                                          than overflow the 310px rail when a vendor token, model id, or daemon
                                                                                          name is unusually long. Each label is also individually width-capped and

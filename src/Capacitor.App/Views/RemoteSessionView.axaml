@@ -15,7 +15,8 @@
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                 <StackPanel Spacing="2" VerticalAlignment="Center" Margin="0,0,8,0">
                     <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
-                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding Title}" />
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding StatusDot}" />
                         <TextBlock x:Name="RemoteStatus" Text="{Binding StatusText}" FontSize="13"

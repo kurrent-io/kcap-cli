@@ -16,11 +16,9 @@ using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Headless rendering acceptance for the deliverable's identity block (spec §8): boot a real
-/// MainWindow against a fake service pre-fed (Connected, snapshot), Show() it, and assert the
-/// rendered text actually contains the daemon name/version/server URL/agent count — not just
-/// that the VM's properties hold the right values (MainWindowViewModelTests already covers
-/// that in isolation).
+/// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
+/// the connection word, tenant, and daemon version; daemon name and server URL stay on the
+/// hover tooltip. MainWindowViewModelTests covers the same properties in isolation.
 public class MainWindowSmokeTests {
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
@@ -45,7 +43,7 @@ public class MainWindowSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task MainWindow_renders_the_connection_word_and_tenant_not_the_identity_block() {
+    public async Task MainWindow_renders_connection_tenant_and_version_not_daemon_name_or_url() {
         // Rendered text, so no immediate scheduler: an OAPH delivered immediately notifies
         // before its value is readable, and a binding that reads on the notification keeps the
         // stale one. The dispatcher scheduler sets the value first, as it does in the app.
@@ -77,11 +75,9 @@ public class MainWindowSmokeTests {
             return texts;
         });
 
-        // The rail footer is the one daemon indicator: word + tenant on screen, the identity
-        // block (name/version/URL) demoted to its hover tooltip — rendered text must NOT
-        // carry it.
         await Assert.That(rendered).Contains("Connected");
         await Assert.That(rendered).Contains("kurrent");
+        await Assert.That(rendered).Contains("1.2.3");
         await Assert.That(rendered).DoesNotContain("daemon-a");
         await Assert.That(rendered).DoesNotContain("http://localhost:9999");
     }
@@ -601,7 +597,8 @@ public class MainWindowSmokeTests {
                     SelectedEdge: selected.BorderThickness.Left,
                     SiblingEdge: sibling.BorderThickness.Left,
                     SelectedWeight: Title(selected).FontWeight,
-                    SiblingWeight: Title(sibling).FontWeight);
+                    SiblingWeight: Title(sibling).FontWeight,
+                    TitleTip: ToolTip.GetTip(Title(selected)));
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
@@ -612,6 +609,7 @@ public class MainWindowSmokeTests {
             await Assert.That(seen.SiblingEdge).IsEqualTo(0);
             await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
             await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
+            await Assert.That(seen.TitleTip).IsEqualTo("Fix the flaky test");
         });
     }
 
@@ -698,8 +696,7 @@ public class MainWindowSmokeTests {
 
             var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
             await Assert.That(help.IsEnabled).IsTrue();
-            // It leads the right-docked footer stack; the hosted-count text follows it.
-            await Assert.That(((StackPanel)help.Parent!).Children[0]).IsSameReferenceAs(help);
+            await Assert.That(DockPanel.GetDock(help)).IsEqualTo(Dock.Right);
             await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
             await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
 

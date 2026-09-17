@@ -98,6 +98,7 @@ public sealed partial class WorkContextViewModel {
     int SettledCount => _parts.Count(p => p.IsSettled);
     public bool HasParts => _parts.Count > 0;
     public bool HasBlockers => _blockedBy.Count > 0;
+    public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasIssue => Issue is not null;
     public bool HasContributors => _contributors.Count > 0;
     public bool HasRelated => HasPullRequestContext || HasSeparateIssue || (ShowsLegacyLinks && _links.Count > 0);
@@ -216,6 +217,7 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(PartsHeader));
         this.RaisePropertyChanged(nameof(HasParts));
         this.RaisePropertyChanged(nameof(HasBlockers));
+        this.RaisePropertyChanged(nameof(HasTopologyNotes));
         this.RaisePropertyChanged(nameof(HasContributors));
         this.RaisePropertyChanged(nameof(PeopleOverflows));
         this.RaisePropertyChanged(nameof(VisibleContributors));

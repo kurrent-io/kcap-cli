@@ -27,17 +27,20 @@ public class SessionCardViewModelTests {
     }
 
     /// A finished turn is the one status the daemon's vocabulary does not spell: the card names
-    /// it, and keeps the running dot because the process is live.
+    /// it, and the dot is waiting — not Connected, which would read as still running.
     [Test]
-    public async Task Awaiting_input_reads_as_waiting_for_input_on_the_running_dot() {
+    public async Task Awaiting_input_reads_as_waiting_for_input_on_the_waiting_dot() {
         var waiting  = new SessionCardViewModel(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { AwaitingInput = true }, TimeProvider.System);
         var working  = new SessionCardViewModel(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo"), TimeProvider.System);
         var reviewer = new SessionCardViewModel(Agent("r1", "codex", hasTerminal: false, repoPath: "/repo", kind: "review-flow") with { AwaitingInput = true }, TimeProvider.System);
 
         await Assert.That(waiting.StatusText).IsEqualTo("Waiting for input");
-        await Assert.That(waiting.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running"));
+        await Assert.That(waiting.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running", true));
+        await Assert.That(waiting.StatusDot).IsNotSameReferenceAs(SessionStatusDots.For("Running"));
         await Assert.That(working.StatusText).IsEqualTo("Running");
+        await Assert.That(working.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running"));
         // A flow participant between rounds waits on the flow, which the user cannot answer.
         await Assert.That(reviewer.StatusText).IsEqualTo("Running");
+        await Assert.That(reviewer.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running"));
     }
 }

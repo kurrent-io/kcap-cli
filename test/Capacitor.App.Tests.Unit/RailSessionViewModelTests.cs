@@ -139,6 +139,7 @@ public class RailSessionViewModelTests {
             using var older   = new RailSessionViewModel(Row(awaitingInput: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             await Assert.That(waiting.NeedsYou).IsTrue();
             await Assert.That(waiting.StatusBadge).IsEqualTo("zzz");
+            await Assert.That(waiting.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running", true));
             await Assert.That(waiting.Tooltip).Contains("waiting for input");
             await Assert.That(working.NeedsYou).IsFalse();
             await Assert.That(working.StatusBadge).IsEqualTo("");

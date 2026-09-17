@@ -53,7 +53,7 @@
                                     <StackPanel Orientation="Horizontal" Spacing="7">
                                         <Ellipse Width="8" Height="8" Fill="{Binding StatusDot}" VerticalAlignment="Center" />
                                         <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{StaticResource KcapTextBrush}"
-                                                   TextTrimming="CharacterEllipsis" />
+                                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
                                     </StackPanel>
                                     <TextBlock Text="{Binding Sub}" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}"
                                                ToolTip.Tip="{Binding RepoFull}" TextTrimming="CharacterEllipsis" />

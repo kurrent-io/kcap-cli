@@ -109,6 +109,8 @@ public class WorkspaceViewSmokeTests {
             };
             foreach (var name in names)
                 await Assert.That(Find<Control>(window, name)).IsNotNull().Because($"{name} should resolve");
+            await Assert.That(ToolTip.GetTip(Find<TextBlock>(window, "WorkspaceTitle")!))
+                .IsEqualTo(vm.Title);
 
             var chatHost = Find<ChatTabView>(window, "ChatHost")!;
             foreach (var name in new[] { "ChatItems", "ChatPhaseNote", "ComposerInput", "SendButton" })

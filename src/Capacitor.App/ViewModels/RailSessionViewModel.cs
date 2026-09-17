@@ -68,7 +68,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         HasModel = Model is not null;
         IsStarting = row.Origin == AgentOrigin.Pending;
         Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age);
-        StatusDot = SessionStatusDots.For(row.Status);
+        StatusDot = SessionStatusDots.For(row);
         Tooltip = IsStarting
             ? Join(row.Id, "Starting", LaunchStages.Label(row.LaunchStage))
             : Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,

@@ -548,7 +548,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         StatusText = info.StatusLabel;
-        StatusDot = SessionStatusDots.For(info.Status);
+        StatusDot = SessionStatusDots.For(info.Status, info.WaitsOnUser);
         _status = info.Status;
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();

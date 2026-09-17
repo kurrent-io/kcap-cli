@@ -231,8 +231,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
-        StatusText = row.Status;
-        StatusDot = SessionStatusDots.For(row.Status);
+        StatusText = SessionStatusDots.Label(row);
+        StatusDot = SessionStatusDots.For(row);
         if (SessionStatusDots.IsTerminal(row.Status)) {
             SessionEnded = true;
             PublishSession(ended: true);
