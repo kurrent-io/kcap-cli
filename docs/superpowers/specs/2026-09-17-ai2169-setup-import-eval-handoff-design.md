@@ -267,10 +267,11 @@ ForegroundImportOutcome {
 ```
 
 On `Complete`, `Selected == Succeeded + Skipped + Failed`: every selected session's own call ended
-in exactly one of the three. On `Incomplete`, the partition is whatever `Outcome` carried (nothing,
-when the pass never finished), so `Succeeded + Skipped + Failed <= Selected`; every unaccounted
-session is treated as not landed, and the background child covers it. A `Fault` after the selection
-checkpoint keeps `RunCandidateIds`; a `Fault` before it yields `null` and `RemainderExists = true`.
+in exactly one of the three. On `Incomplete`, `Outcome` is null — `onFinished` fires only at the
+end of a completed pass, and this design adds no mid-run partition checkpoint — so all three counts
+are zero and every selected session is treated as not landed; the background child covers them, and
+the server watermark makes re-sending what did land a no-op. A `Fault` after the selection checkpoint
+keeps `RunCandidateIds`; a `Fault` before it yields `null` and `RemainderExists = true`.
 
 **Background child.** After the foreground pass and before any picker, setup spawns a detached
 child **iff** `RemainderExists || Failed > 0 || Certainty == Incomplete`. Because routed replay rows
@@ -338,18 +339,28 @@ else `~/.config/kcap`; `run_id` is a fresh GUID in N format. Temp file plus atom
 crash cannot leave a parseable partial. On each write, files older than seven days are pruned.
 Nothing earlier shipped, so `schema_version` starts at 1.
 
-**Owner-only on disk, created by setup.** The file lists up to 500 session ids, the tenant URL and a
-local log path, and the detached log carries repository and path diagnostics. Setup creates **both**
-before anything else touches them, the way `TokenStore` creates `tokens.json`
-(`TokenStore.cs:136-158`): `FileMode.CreateNew` with `FileStreamOptions.UnixCreateMode =
-UserRead | UserWrite`, so nothing is ever opened through a pre-existing path — a file or link already
-at either name makes the create fail, and setup treats that as a write failure (handoff) or a `Failed`
-spawn (log) rather than writing through it. Names are per-run GUIDs (`import-handoff-{run_id}.json`,
-`import-{run_id}.log`), not timestamps. The temp file is created the same way, so the rename carries
-0600 onto the final name. The child only ever opens the log setup created. The config directory is
-the trust boundary, exactly as it is for `tokens.json`: a `KCAP_CONFIG_DIR` pointing at a directory
-other users can write to is outside what the CLI protects, for tokens today and for these files. On
-Windows both files get what `tokens.json` gets, the containing directory's ACLs.
+**Owner-only on disk, created by setup, never through a pre-existing path.** The file lists up to
+500 session ids, the tenant URL and a local log path, and the detached log carries repository and
+path diagnostics. Names are per-run GUIDs (`import-handoff-{run_id}.json`, `import-{run_id}.log`),
+not timestamps. The mode comes from `TokenStore`'s pattern (`FileStreamOptions.UnixCreateMode =
+UserRead | UserWrite`, `TokenStore.cs:139`); the publication does **not** copy `TokenStore`'s
+overwrite (`FileMode.Create` + `File.Move(…, overwrite: true)`), because a pre-existing path here is
+a fault, not a stale file to replace. The exact algorithm:
+
+1. Handoff: create a unique temp `import-handoff-{run_id}.json.{guid}.tmp` with `FileMode.CreateNew`
+   and the owner-only mode; write; flush; close. Publish with `File.Move(temp, final)` **without**
+   `overwrite`, which fails when the final name already exists. Either failure → the write failure
+   path (warn, delete the temp, continue), and nothing is written through whatever was at the name.
+2. Log: create `import-{run_id}.log` with `FileMode.CreateNew` and the owner-only mode, then close
+   it; the child later opens it with `FileMode.Open` for append. A failed create → spawn `Failed`
+   with that reason.
+
+The config directory is the trust boundary, exactly as it is for `tokens.json`: a `KCAP_CONFIG_DIR`
+pointing at a directory other users can write to is outside what the CLI protects, for tokens today
+and for these files. On Windows both files get what `tokens.json` gets, the containing directory's
+ACLs. The observable guarantees, which the tests pin: the final handoff and the log carry 0600 on
+Unix; a file or symlink already at the final handoff name or the log name is left untouched and
+unfollowed; no temp file is left behind on any path.
 
 ```json
 {
@@ -411,7 +422,8 @@ matches decides; `--no-prompt` never reaches this table.
 The import's own outcome outranks the plan gate, so a denied plan never masks a failed import and the
 skill's retry advice is only ever given when a retry is warranted. Rows 1–4 print nothing beyond what
 the step already said; rows 5–7 print one line naming the reason; row 8 proceeds to the picker. Rows
-1–7 leave the Next-steps panel with the guided-tour item alone (itself gated as today).
+1–7 add no eval-watch item to the Next-steps panel, which keeps exactly the items it has today — the
+server-setup item, and the guided-tour item when eligible.
 
 **Plan gate (row 5).** The eval-watch skill reads analytics, which the server denies to Free tenants
 (`analytics_not_in_plan`). Setup consults the cached entitlement the CLI already keeps from the
@@ -603,12 +615,13 @@ cwd repository and refuses to widen silently (`McpAnalyticsServer.BuildQueryBody
 `McpAnalyticsServer.cs:275`), so the skill passes `scope: 'global'` on every call: the cohort spans
 repositories and includes repo-less sessions, whose `repo_hash` is null.
 
-- Cohort arrivals: `SELECT session_id, repo_hash FROM v_an_sessions WHERE session_id IN (…)` over a
-  batch of ids — presence is membership. `repo_hash` is kept per session for the links.
-- Cohort completions: `SELECT session_id, eval_run_id, evaluated_at, overall_score, judge_model
-  FROM v_an_eval_summaries WHERE session_id IN (…)`, same batching.
-- Displayed import progress: the number of cohort ids present in `v_an_sessions` over the number
-  listed — derived from the membership batches, no separate query, never a tenant-wide count.
+- Cohort state, **one query per batch** carrying arrival and completion together:
+  `SELECT s.session_id, s.repo_hash, e.eval_run_id, e.evaluated_at, e.overall_score, e.judge_model
+  FROM v_an_sessions s LEFT JOIN v_an_eval_summaries e ON e.session_id = s.session_id
+  WHERE s.session_id IN (…)`. A row means the session arrived; a non-null `eval_run_id` means it
+  completed. `repo_hash` is kept per session for the links.
+- Displayed import progress: the number of cohort ids present over the number listed — derived from
+  the batch rows, no separate query, never a tenant-wide count.
 - Per-category detail, one session per query and **aggregated server-side** so no row cap can slice
   it: `SELECT category, AVG(score) AS mean FROM v_an_eval_scores WHERE session_id = '<id>' GROUP BY
   category` (one row per category) and `SELECT question_id, score FROM v_an_eval_scores WHERE
@@ -619,21 +632,33 @@ repositories and includes repo-less sessions, whose `repo_hash` is null.
 - There is deliberately no repo-wide or tenant-wide read and no unlisted-arrival narration:
   identifying non-cohort rows would need exactly the scan this contract forbids.
 
-**Batching and truncation — fail closed.** The server clamps every query to its own configured row
-maximum, and a capped result is a *successful* response flagged `truncated: true` (the MCP appends a
-warning trailer). A membership or summary batch asks "which of these ids are present"; a truncated
-answer is incomplete and is never committed. Each batch requests `max_rows` equal to its size; the
-initial size is 100. On truncation the skill halves the batch size (floor 10) and re-issues within
-the same logical poll. If a batch of 10 still truncates, the poll fails and the skill says the
-server's row cap is below what watching needs. The chosen batch size persists across polls. The
-enrichment queries are bounded by construction (one row per category; `LIMIT 2`); should one still
-come back truncated, that session's detail is omitted and it is summarized by `overall_score`
-alone, disclosed.
+**Batching, truncation and the request budget — fail closed.** The server clamps every query to its
+own configured row maximum, and a capped result is a *successful* response flagged `truncated: true`
+(the MCP appends a warning trailer). The server also admits at most 60 analytics query starts per
+user per minute (`AnalyticsQueryOptions.RequestsPerMinute`), rejected starts included, answering 429
+with `Retry-After`. Both bounds shape the batching:
 
-**Logical-poll atomicity.** One poll = every membership and summary batch, each non-truncated. Any
-required-query failure — an error, or a truncation the halving could not clear — discards the whole
-poll: no baseline, dedup or completion state commits from it, and it counts as one error toward the
-two-failure stop. Each successful poll recomputes cohort state from its own full results.
+- A cohort batch asks "which of these ids are present and which completed"; a truncated answer is
+  incomplete and is never committed. Each batch requests `max_rows` equal to its size; the initial
+  size is 100 (five queries for a full 500-id cohort).
+- **Budget: at most 20 cohort queries per poll.** With a poll every 30 seconds that is 40 starts a
+  minute, leaving room for the enrichment queries (at most six over the whole run) and a retry. The
+  smallest batch the budget allows is `floor = ceil(N / 20)` where `N` is the cohort size — 25 for
+  500 ids, 10 for anything up to 200.
+- On truncation the skill halves the batch size, never below `floor`, and re-issues within the same
+  logical poll. If a batch at `floor` still truncates, the poll fails and the skill says the
+  server's row cap is below what watching this many sessions needs — it never buys completeness by
+  spending past the request budget. The chosen batch size persists across polls.
+- A 429 fails the poll; the next poll starts after the later of the 30-second cadence and
+  `Retry-After`. Two in a row stop the watch like any other failure.
+- Enrichment queries are bounded by construction (one row per category; `LIMIT 2`); should one still
+  come back truncated, that session's detail is omitted and it is summarized by `overall_score`
+  alone, disclosed.
+
+**Logical-poll atomicity.** One poll = every cohort batch, each non-truncated. Any required-query
+failure — an error, a 429, or a truncation the halving could not clear within the budget — discards
+the whole poll: no baseline, dedup or completion state commits from it, and it counts as one error
+toward the two-failure stop. Each successful poll recomputes cohort state from its own full results.
 Enrichment queries are optional: their failure or truncation degrades summary content, never poll
 success or stop logic.
 
@@ -737,10 +762,10 @@ repo-less figure labelled as on-disk.
 classification → `Selection == null`, `Outcome == null`, `Fault` set → `Incomplete`,
 `RunCandidateIds == null`, `RemainderExists`, spawn, `cohort: "unknown"`; a throw after the
 selection checkpoint and before execution → `Selection` set, `Outcome == null` → `Incomplete` with
-ids, counts all zero, spawn; a throw during execution → same, with any partition `Outcome` carried;
-a completed pass → `Fault == null`, `Outcome.Partition` set, `Complete ⇒ Selected == Succeeded +
-Skipped + Failed`; `onSelected` fires exactly once and before the first import call (seam ordering);
-nothing escapes `RunAsync`.
+ids, counts all zero, spawn; a throw during execution → the same shape (`Outcome == null`, counts
+zero) even when some selected sessions had already landed; a completed pass → `Fault == null`,
+`Outcome.Partition` set, `Complete ⇒ Selected == Succeeded + Skipped + Failed`; `onSelected` fires
+exactly once and before the first import call (seam ordering); nothing escapes `RunAsync`.
 
 **Spawn decision and status** through `IBackgroundImportSpawner`'s fake: importable remainder →
 spawn; routed replay rows alone (all-watermarked Cursor corpus) → spawn; file-based `AlreadyLoaded`
@@ -766,12 +791,12 @@ pass sends and the stamp the child sends are the same value.
 
 **Handoff file**: written iff the foreground pass ran (accepted prompt → file; declined, skipped,
 unauthenticated and `--no-prompt` → no file); per-run filename under `KCAP_CONFIG_DIR` when set;
-atomic write leaves no parseable partial; temp, final and log files are created by setup with
-`CreateNew` and carry owner-only mode on Unix (asserted with `File.GetUnixFileMode`); a pre-existing
-file or symlink at the handoff name → write failure, nothing written through it; a pre-existing file
-or symlink at the log name → spawn `Failed`, nothing written through it; the child opens only the
-pre-created log and fails at startup when it is absent; §3 shape including `profile` and
-`unattributed_on_disk`; `handoff_suppressed` takes each value of the §4 table from a fixture
+the published handoff and the log carry owner-only mode on Unix (asserted with
+`File.GetUnixFileMode`); an interrupted write leaves no parseable file at the final name and no temp
+behind; a pre-existing file or symlink at the handoff name → write failure, its content and target
+unchanged, no temp left; a pre-existing file or symlink at the log name → spawn `Failed`, its content
+and target unchanged; the child opens only the pre-created log and fails at startup when it is
+absent; §3 shape including `profile` and `unattributed_on_disk`; `handoff_suppressed` takes each value of the §4 table from a fixture
 built for that row, `null` whenever `handoff_offered` is true, and the precedence cases — failed
 import **and** cached denial → `import_failed`; empty cohort **and** cached denial →
 `no_new_sessions`; all-skipped pass with nothing left → `nothing_landed` — resolve as the table says;
@@ -780,8 +805,9 @@ import **and** cached denial → `import_failed`; empty cohort **and** cached de
 
 **Handoff gating and picker**: each row of the §4 table has a fixture and the first matching row wins;
 `--no-prompt` → no handoff, unbounded import, no spawn, no file; a cached analytics denial over a
-successful pass → no picker, no paste block, one line, guided tour alone; no eligible vendor with one
-detected (step 4 declined or failed) → no picker, no paste block, the `kcap plugin install` line;
+successful pass → no picker, no paste block, one line, and a Next-steps panel identical to today's; no
+eligible vendor with one detected (step 4 declined or failed) → no picker, no paste block, the
+`kcap plugin install` line;
 eligibility per vendor (detected, skill present, executable resolves vs not); IDE-only Kiro and
 Antigravity with the skill installed print the paste block; every
 recipe's argv pinned per vendor with the two-line prompt as a single element; Skip and cancel print
@@ -805,9 +831,12 @@ cohort ids** — a recorded response carrying a row for an id outside the cohort
 session) is ignored and never counted, linked or summarized, and no fixture query is ever issued
 without an `IN (…)` or `session_id =` bound to cohort ids; no file and `cohort: "unknown"` both
 close with links and zero queries; repo-less members counted and linked without a repo hash;
-partial-exact over 500 with a listed arrival a capped scan would miss; truncation with a server cap
-below 100 (halving within the poll, floor-10 failure fails the poll); a truncated enrichment response
-omits that session's detail; `analytics_not_in_plan` from the server closing immediately without
+partial-exact over 500 with a listed arrival a capped scan would miss; **request budget**: a 500-id
+cohort never issues more than 20 cohort queries in one poll, so batch size never drops below 25; with
+a server row cap of 10 the poll fails closed and says so rather than tripping the 60-per-minute
+limit; with a cap of 25 every poll succeeds in 20 queries and no 429 ever occurs; a 429 fails the
+poll and the next poll honours `Retry-After`; a truncated enrichment response omits that session's
+detail; `analytics_not_in_plan` from the server closing immediately without
 polling; **binding fails closed**: a `whoami` server that differs from the file's issues zero queries
 and closes with links plus the profile remediation, and a `whoami` failure does the same;
 `skill_not_installed` and `no_agent_detected` files continue as if offered; poll atomicity and
