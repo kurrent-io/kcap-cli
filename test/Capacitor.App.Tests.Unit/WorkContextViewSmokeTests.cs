@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Controls;
@@ -8,6 +9,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
@@ -25,11 +27,14 @@ public class WorkContextViewSmokeTests {
     sealed class Host : IAsyncDisposable {
         public BehaviorSubject<AgentStatusDto?> Presence { get; } = new(null);
         public FakeWorkContextSource Source { get; } = new();
+        public FakeTimeProvider Time { get; } = new();
+        public SessionSubagents Subagents { get; }
         public WorkContextViewModel Vm { get; }
         public Window Window { get; }
 
         public Host() {
-            Vm = new WorkContextViewModel(Presence, Source, new FakeTimeProvider(), new RecordingOpener());
+            Subagents = new SessionSubagents(Time);
+            Vm = new WorkContextViewModel(Presence, Source, Time, new RecordingOpener(), Subagents);
             Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
@@ -140,6 +145,51 @@ public class WorkContextViewSmokeTests {
             var count = host.Find<TextBlock>("WhoCountText");
             await Assert.That(count.Text).IsEqualTo("1 person · 2 sessions");
             await Assert.That(count.IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    /// Each row carries its state in words as well as in the dot, and the failed word is painted
+    /// danger; the section hides whole when the session spawned none and folds on its toggle.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_subagents_section_lists_rows_by_state_and_hides_when_the_session_spawned_none() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var section = host.Find<StackPanel>("SubagentsSection");
+            await Assert.That(section.IsEffectivelyVisible).IsFalse();
+
+            var now = host.Time.GetUtcNow();
+            host.Subagents.Apply(new ChatProjectionResult([], [], [
+                new SubagentSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
+                new SubagentSignal.Started("c2", "Reviewer", "Check the plan", now.AddMinutes(-3)),
+                new SubagentSignal.Detached("c1", "a1"),
+                new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(-132)),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(section.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").Text).IsEqualTo("1 running · 2 total");
+            var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            await Assert.That(texts).Contains("Explore");
+            await Assert.That(texts).Contains("background");
+            await Assert.That(texts).Contains("running · 18s");
+            await Assert.That(texts).Contains("Map desktop chat UI surfaces");
+            await Assert.That(texts).Contains("Reviewer");
+            await Assert.That(texts).Contains("failed · 48s");
+            await Assert.That(texts.Count(t => t == "background")).IsEqualTo(1);
+
+            var failed = section.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "failed · 48s");
+            var danger = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapDangerBrush")!;
+            await Assert.That(((ISolidColorBrush)failed.Foreground!).Color).IsEqualTo(danger.Color);
+            await Assert.That(section.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
+
+            await host.Vm.ToggleSubagentsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").IsEffectivelyVisible).IsTrue();
         });
     }
 }

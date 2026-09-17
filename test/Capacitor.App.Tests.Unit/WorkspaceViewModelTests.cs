@@ -22,6 +22,8 @@ namespace Capacitor.App.Tests.Unit;
 /// so ObserveOn(RxSchedulers.MainThreadScheduler) applies synchronously) and carries
 /// [NotInParallel("AvaloniaSession")] -- see that class's identical header comment.
 public class WorkspaceViewModelTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static WorkspaceViewModel Build(
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
             FakeTimeProvider time, string agentId = "a1", IPermissionService? permissions = null,
@@ -458,6 +460,29 @@ public class WorkspaceViewModelTests {
             source.Default = WorkContextRead.Of(WorkContextReadKind.Ready);
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: "ffffffffffffffffffffffffffffffff"));
             await Assert.That(source.Requested.Count).IsEqualTo(1);
+        });
+    }
+
+    const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+
+    /// One tracker per workspace: what the chat reads off the transcript is what the pane lists.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_chat_and_the_pane_share_one_subagent_tracker() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
+            await Assert.That(vm.WorkContext.HasSubagents).IsTrue();
+            await Assert.That(vm.WorkContext.SubagentsHeader).IsEqualTo("1 running · 1 total");
+            await Assert.That(vm.WorkContext.Subagents.Single().Name).IsEqualTo("Explore");
+            await vm.TeardownAsync();
         });
     }
 }
