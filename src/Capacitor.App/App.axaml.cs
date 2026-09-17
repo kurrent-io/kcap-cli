@@ -550,7 +550,7 @@ public partial class App : Application {
         var repoIdentity = new RepoIdentityResolver();
         var directory = new AgentDirectory(
             service, remoteAgents, serverLane, repoIdentity, GitRepository.ResolveMainRepoRoot,
-            machineId, profiles?.Resolution.ServerUrl);
+            machineId, profiles?.Resolution.ServerUrl, _time);
         _remoteAgents = remoteAgents;
         _directory = directory;
 
@@ -1190,7 +1190,7 @@ public partial class App : Application {
         // just mirrors `service`. The composition root always supplies its own `directory`.
         var resolvedDirectory = directory ?? new AgentDirectory(
             service, remoteAgents ?? new NoRemoteAgents(), lane ?? new NoServerLane(), new RepoIdentityResolver(),
-            GitRepository.ResolveMainRepoRoot, localMachineId, appServerUrl: null);
+            GitRepository.ResolveMainRepoRoot, localMachineId, appServerUrl: null, time);
 
         MainWindowViewModel? vm = null;
         var home = new HomeViewModel(

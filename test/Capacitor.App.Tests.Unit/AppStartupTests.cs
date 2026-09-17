@@ -80,7 +80,7 @@ public class AppStartupTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
             var directory = new AgentDirectory(
                 service, remoteAgents, lane, new RepoIdentityResolver(_ => null), p => p,
-                localMachineId: null, appServerUrl: null);
+                localMachineId: null, appServerUrl: null, TimeProvider.System);
 
             var window = AppUnderTest.BuildAndShowMainWindow(
                 service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),

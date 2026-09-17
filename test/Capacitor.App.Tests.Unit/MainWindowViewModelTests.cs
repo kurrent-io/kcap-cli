@@ -690,7 +690,8 @@ public class MainWindowViewModelTests {
             service.Agents.AddOrUpdate(new AgentStatusDto(
                 "a1", "agent", "claude", "/dev/alpha", "Running", null, null, null, DateTime.UtcNow, null, null));
             var directory = new AgentDirectory(
-                service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null), p => p, null, null);
+                service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null), p => p, null, null,
+                TimeProvider.System);
             var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, p => p);
             var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail);
 

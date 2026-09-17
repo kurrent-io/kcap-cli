@@ -32,7 +32,7 @@ public class SessionRailViewModelTests {
         var remote = new FakeRemoteAgents();
         var directory = new AgentDirectory(
             service, remote, new FakeServerLane(), new RepoIdentityResolver(originUrl ?? (_ => null)),
-            resolveRepoRoot ?? Resolve, null, null);
+            resolveRepoRoot ?? Resolve, null, null, TimeProvider.System);
         var rail = new SessionRailViewModel(
             directory, open ?? (_ => { }), openRemote ?? (_ => { }), TimeProvider.System,
             resolveRepoRoot ?? Resolve);
