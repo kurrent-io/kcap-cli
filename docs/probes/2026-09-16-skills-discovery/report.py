@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -29,6 +30,11 @@ GUI_STATUS = {
 }
 
 
+def _version_key(version: str) -> tuple:
+    """Order versions by their numbers, so 1.9 comes before 1.10."""
+    return tuple(int(p) if p.isdigit() else p for p in re.split(r"(\d+)", version))
+
+
 def load_rows(path: Path) -> list[dict]:
     return json.loads(path.read_text())
 
@@ -39,8 +45,11 @@ def summarise(rows: list[dict]) -> list[dict]:
         by_entry[r["entry"]].append(r)
     consumed_by: dict[str, set[str]] = defaultdict(set)
     for r in rows:
-        if r["scenario"] == "S4" and r["verdict"] in VISIBLE and r["root"]:
-            consumed_by[r["root"]].add(r["entry"])
+        # A root another vendor loads is shared even when that vendor never documented it, so a
+        # leaked sighting counts against isolation exactly like a documented one. Two entries of
+        # one vendor are one consumer: they are the same CLI under different configurations.
+        if r["scenario"] == "S4" and r["verdict"] in VISIBLE + ("leaked",) and r["root"]:
+            consumed_by[r["root"]].add(r["harness"])
     out = []
     for entry in sorted(by_entry):
         rs = by_entry[entry]
@@ -54,7 +63,8 @@ def summarise(rows: list[dict]) -> list[dict]:
         exclusions = sorted({r["exclusion"] for r in rs if r["scenario"] == "S3" and r["verdict"] in VISIBLE})
         reload = sorted({r["mechanism"] for r in rs if r["verdict"] == "visible_after_reload" and r["mechanism"]})
         untested = sorted({r["notes"][:80] for r in rs if r["verdict"] == "untested" and r["scenario"] == "S1"})
-        isolated = [root for root in roots if consumed_by[root] == {entry}]
+        harness = next((r["harness"] for r in rs if r.get("harness")), entry)
+        isolated = [root for root in roots if consumed_by[root] == {harness}]
         s1 = {r["verdict"] for r in rs if r["scenario"] == "S1"}
         if s1 & set(VISIBLE):
             status = "measured"
@@ -65,6 +75,7 @@ def summarise(rows: list[dict]) -> list[dict]:
         else:
             status = "no S1 row"
         measured = status == "measured"
+        proven = {r["version"] for r in rs if r["scenario"] == "S1" and r["verdict"] in VISIBLE}
         ran = {r["scenario"] for r in rs if r["verdict"] != "untested"}
         modes_ran = {r["mode"] for r in rs if r["verdict"] != "untested"}
 
@@ -120,7 +131,7 @@ def summarise(rows: list[dict]) -> list[dict]:
             "Peer hook": cell(arm_cells("S10"), "S10"),
             "Interactive": cell(tui_cells(), "tui"),
             "GUI status": GUI_STATUS.get(entry, "n/a"),
-            "Minimum version": ", ".join(versions) if measured else "—",
+            "Minimum version": min(proven, key=_version_key) if proven else "—",
             "_status": status,
         })
     return out

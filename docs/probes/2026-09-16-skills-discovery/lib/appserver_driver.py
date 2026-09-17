@@ -75,6 +75,14 @@ class AppServerSession(Session):
         self.started_at = time.time()
 
     def start(self) -> None:
+        try:
+            self._start()
+        except BaseException:
+            # The child is already spawned, and a caller that never got the session cannot close it.
+            self.close()
+            raise
+
+    def _start(self) -> None:
         self.child.start()
         self.rpc = _Rpc(self.child)
         init = {"clientInfo": {"name": "kcap-probe", "version": "1"}, "capabilities": {}}

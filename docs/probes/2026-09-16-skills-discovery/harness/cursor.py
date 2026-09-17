@@ -66,7 +66,8 @@ class CursorAdapter(Adapter):
         script.chmod(0o755)
         self._hooks(sb).write_text(json.dumps({"version": 1, "hooks": {"workspaceOpen": [{"command": str(script)}]}},
                                               indent=2) + "\n")
-        return HookInfo(mechanism="project .cursor/hooks.json workspaceOpen pluginPaths", config_path=str(self._hooks(sb)))
+        return HookInfo(mechanism="project .cursor/hooks.json workspaceOpen pluginPaths",
+                        config_path=str(self._hooks(sb)), target=target)
 
     def acp_argv(self) -> list[str]:
         return [self.binary_path() or self.binary, "acp", "--trust"]

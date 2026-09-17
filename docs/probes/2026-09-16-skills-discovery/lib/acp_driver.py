@@ -107,7 +107,12 @@ class AcpSession(Session):
         self.started_at = time.time()
 
     def start(self) -> None:
-        self.loop.run_until_complete(self._start())
+        try:
+            self.loop.run_until_complete(self._start())
+        except BaseException:
+            # The child is already spawned, and a caller that never got the session cannot close it.
+            self.close()
+            raise
 
     async def _start(self) -> None:
         await self.client.start()

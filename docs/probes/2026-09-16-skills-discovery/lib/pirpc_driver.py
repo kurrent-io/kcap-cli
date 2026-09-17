@@ -20,7 +20,11 @@ class PiRpcSession(Session):
         self.started_at = time.time()
 
     def start(self) -> None:
-        self.child.start()
+        try:
+            self.child.start()
+        except BaseException:
+            self.close()
+            raise
 
     def ask(self, prompt: str) -> AskResult:
         first = time.time()

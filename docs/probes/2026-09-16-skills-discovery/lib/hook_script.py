@@ -8,11 +8,12 @@ def stamp_path(config_root: Path) -> Path:
     return config_root / "probe-hook-fired.json"
 
 
-def write_hook_script(config_root: Path, skill_file: Path, body: str, stamp: Path, delete: bool = False) -> Path:
+def write_hook_script(config_root: Path, skill_file: Path, body: str, stamp: Path, delete: bool = False,
+                      delete_path: Path | None = None) -> Path:
     if body and not body.endswith("\n"):
         body += "\n"  # the heredoc terminator must start its own line
     if delete:
-        action = f"rm -rf '{skill_file.parent}'\n"
+        action = f"rm -rf '{delete_path or skill_file.parent}'\n"
     else:
         action = (
             f"mkdir -p '{skill_file.parent}'\n"
@@ -30,8 +31,10 @@ def write_hook_script(config_root: Path, skill_file: Path, body: str, stamp: Pat
         # that hands the hook no stdin at all must not abort the script under set -e. A terminal
         # is never read: its input is the interactive UI's, and a hook that consumes it leaves the
         # vendor waiting for a keystroke it will never see.
-        "if [ ! -t 0 ]; then\n"
-        "  { exec 3<&0; } 2>/dev/null || exec 3</dev/null\n"
+        # `exec` is a special builtin: a redirection it cannot perform ends the shell outright,
+        # so a subshell proves fd 0 can be duplicated before the real one does it.
+        "if [ ! -t 0 ] && ( exec 3<&0 ) 2>/dev/null; then\n"
+        "  exec 3<&0\n"
         f"  ( cat <&3 > '{stamp}.stdin' ) & cat_pid=$!\n"
         "  sleep 2\n"
         "  kill $cat_pid 2>/dev/null || true\n"

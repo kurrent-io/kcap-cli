@@ -410,6 +410,30 @@ from lib.print_driver import print_ask  # noqa: E402
 
 
 class HookOnATerminalTests(unittest.TestCase):
+    def test_hook_survives_a_closed_stdin(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            script = write_hook_script(root, root / "skills" / "x" / "SKILL.md", "body\n", stamp_path(root))
+            # `exec` is a special builtin: a redirection it cannot perform would end the shell.
+            out = subprocess.run(["/bin/sh", "-c", "exec 0<&- ; '" + str(script) + "'"],
+                                 capture_output=True, text=True, timeout=20)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stderr.strip(), "")
+            self.assertTrue((root / "skills" / "x" / "SKILL.md").exists())
+
+    def test_delete_removes_the_skill_not_the_root(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            flat = root / "skills" / "kcap-probe-abc.md"
+            flat.parent.mkdir(parents=True)
+            flat.write_text("body\n")
+            script = write_hook_script(root, flat, "", stamp_path(root), delete=True, delete_path=flat)
+            subprocess.run([str(script)], input="{}", capture_output=True, text=True, timeout=20)
+            self.assertFalse(flat.exists())
+            # A flat layout shares its root with every other skill the vendor owns.
+            self.assertTrue(flat.parent.is_dir())
+
+
     def test_hook_leaves_a_terminal_alone(self):
         import pty as _pty
         with tempfile.TemporaryDirectory() as d:
@@ -627,6 +651,13 @@ class _FailingVendorAdapter(FakeAdapter):
         log.write_text("IneligibleTierError: this client is no longer supported\n")
         return AskResult(reply_text="", raw="", argv=["fake"], started_at=0.0, first_request_at=0.0,
                          stderr_path=str(log), exit_code=41)
+
+
+class _RaisingFreePhaseAdapter(FakeAdapter):
+    """The vendor could not even be inspected."""
+
+    def prepare(self, sb):
+        raise RuntimeError("no such vendor")
 
 
 class _UnparseableAdapter(FakeAdapter):
@@ -1079,6 +1110,29 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("no reload command", recs[0].notes)
             self.assertEqual(a.calls, 0)
 
+    def test_a_later_scenario_still_stands_behind_the_control(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            # A failed control recorded by an earlier sweep still gates a scenario asked for alone.
+            a = _CountingAdapter()
+            probe.Runner(a, out, runs=1, base=Path(d)).run_scenario("print", "S1")
+            arm = out / "fake" / "print" / "S1" / "S1_native"
+            data = json.loads((arm / "run1.json").read_text())
+            data["verdict"] = "not_visible"
+            (arm / "run1.json").write_text(json.dumps(data))
+            fresh = _CountingAdapter()
+            recs = probe.Runner(fresh, out, runs=1, base=Path(d)).run_scenario("print", "S3")
+            self.assertEqual({x.verdict for x in recs}, {"untested"})
+            self.assertTrue(all("S1 failed" in x.notes for x in recs))
+            self.assertEqual(fresh.calls, 0)
+
+    def test_one_aborted_harness_fails_the_sweep(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(probe.ENTRIES, {"fake": _RaisingFreePhaseAdapter}):
+            ok = probe.main(["--harness", "fake", "--mode", "print", "--outdir", str(Path(d) / "out"),
+                             "--base", str(d)])
+            # A sweep that could not run one of its harnesses did not succeed.
+            self.assertEqual(ok, 1)
+
     def test_mode_scenario_table_and_blocked_rows(self):
         with tempfile.TemporaryDirectory() as d:
             r = self._runner(d)
@@ -1350,6 +1404,20 @@ class PtyDriverTests(unittest.TestCase):
     def test_strip_ansi(self):
         self.assertEqual(strip_ansi("\x1b[1mbold\x1b[0m\r\n\x1b]0;title\x07x"), "bold\nx")
 
+    def test_a_split_control_sequence_survives(self):
+        from lib.pty_driver import Terminal
+        whole = "line\r\n\x1b[2;1H\x1b[KPROBE-REPLY: NO-SKILL\x1b]0;title\x07 tail"
+        want = Terminal(6, 60)
+        want.feed(whole)
+        for cut in range(1, len(whole)):
+            with self.subTest(cut=cut):
+                # The operating system splits a read wherever it likes, including mid-sequence.
+                t = Terminal(6, 60)
+                t.feed(whole[:cut])
+                t.feed(whole[cut:])
+                self.assertEqual(t.text(), want.text())
+        self.assertIn("PROBE-REPLY: NO-SKILL tail", want.text())
+
     def test_ask_reads_the_reply_not_the_echoed_prompt(self):
         with tempfile.TemporaryDirectory() as d:
             skill = ProbeSkill.fresh()
@@ -1378,6 +1446,16 @@ class PtyDriverTests(unittest.TestCase):
                 self.assertNotIn("dialog=", s.ask(tui_prompt(skill)).notes)
             finally:
                 s.close()
+
+    def test_a_failed_start_leaves_no_child(self):
+        with tempfile.TemporaryDirectory() as d:
+            # A vendor that draws nothing never becomes ready, and nobody holds the session to close.
+            s = PtySession([sys.executable, "-c", "import time; time.sleep(60)"], Path(d), dict(os.environ),
+                           Path(d) / "t.log", ready_idle=0.3, timeout=2)
+            with self.assertRaises(TimeoutError):
+                s.start()
+            self.assertIsNotNone(s.proc.poll())
+            self.assertTrue(s._log.closed)
 
     def test_spawn_failure_releases_the_terminal(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1552,8 +1630,10 @@ class ReportTests(unittest.TestCase):
             dict(base, scenario="S4", arm="S4/all-roots", root=".x/skills", verdict="visible_first_turn"),
             dict(base, scenario="S4", arm="S4/all-roots", root=".agents/skills", verdict="visible_first_turn"),
             dict(base, scenario="S4", arm="S4/all-roots", root=".y/skills", verdict="leaked"),
-            dict(base, entry="y", scenario="S4", arm="S4/all-roots", root=".agents/skills", verdict="visible_first_turn"),
-            dict(base, entry="y", scenario="S1", arm="S1/native", root=".y/skills", verdict="untested", notes="binary not installed"),
+            dict(base, entry="y", harness="y", scenario="S4", arm="S4/all-roots", root=".agents/skills",
+                 verdict="visible_first_turn"),
+            dict(base, entry="y", harness="y", scenario="S1", arm="S1/native", root=".y/skills",
+                 verdict="untested", notes="binary not installed"),
         ]
         summary = {s["Entry"]: s for s in report.summarise(rows)}
         x = summary["x"]
@@ -1567,6 +1647,40 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(summary["y"]["Minimum version"], "—")
         text = report.render(list(summary.values()))
         self.assertIn("| x | 1.0 |", text)
+
+    def test_two_entries_of_one_vendor_are_one_consumer(self):
+        rows = [
+            _row("v1", "S1", "S1/native", ".v/skills", "visible_first_turn", "print"),
+            _row("v1", "S4", "S4/all-roots", ".v/skills", "visible_first_turn", "print"),
+            _row("v2", "S1", "S1/native", ".v/skills", "visible_first_turn", "print"),
+            _row("v2", "S4", "S4/all-roots", ".v/skills", "visible_first_turn", "print"),
+            _row("other", "S1", "S1/native", ".o/skills", "visible_first_turn", "print"),
+            _row("other", "S4", "S4/all-roots", ".v/skills", "leaked", "print"),
+        ]
+        for r in rows:
+            r["harness"] = "theirs" if r["entry"] == "other" else "ours"
+        import report
+        s = {r["Entry"]: r for r in report.summarise(rows)}
+        # Two configurations of one CLI are one consumer; a vendor that leaks into the root is not.
+        self.assertEqual(s["v1"]["Vendor-isolated destination"], "none")
+        for r in rows:
+            if r["entry"] == "other" and r["scenario"] == "S4":
+                r["root"] = ".o/skills"
+        s = {r["Entry"]: r for r in report.summarise(rows)}
+        self.assertEqual(s["v1"]["Vendor-isolated destination"], ".v/skills")
+        self.assertEqual(s["v2"]["Vendor-isolated destination"], ".v/skills")
+
+    def test_minimum_version_is_the_earliest_proven_one(self):
+        rows = [
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "print"),
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "print"),
+            _row("x", "S1", "S1/native", ".x/skills", "untested", "print"),
+        ]
+        rows[0]["version"], rows[1]["version"], rows[2]["version"] = "1.10.0", "1.9.0", "0.1.0"
+        import report
+        s = {r["Entry"]: r for r in report.summarise(rows)}["x"]
+        # Ordered by number, not by text, and only versions the control actually passed on.
+        self.assertEqual(s["Minimum version"], "1.9.0")
 
     def test_lifecycle_columns(self):
         rows = [
@@ -1715,7 +1829,6 @@ SESSION_ID_CASES = (
 
 
 class AdapterPassTwoTests(unittest.TestCase):
-    """Every adapter's resume launch, session id reader and interactive launch."""
 
     def _stub(self, d: str):
         sb = new_sandbox("PROBE_UNUSED_LEVER", None, [], base=Path(d))

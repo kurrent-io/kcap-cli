@@ -45,11 +45,20 @@ class Terminal:
         self.history: list[str] = []
         self.r = self.c = 0
         self._saved = (0, 0)
+        self._pending = ""
 
     def text(self) -> str:
         return "\n".join(self.history + ["".join(row).rstrip() for row in self.grid])
 
     def feed(self, data: str) -> None:
+        # A read ends wherever the operating system split it, so a control sequence cut in half is
+        # held back until its tail arrives; rendered as text it would land in the middle of a reply.
+        data = self._pending + data
+        self._pending = ""
+        cut = _incomplete_at_end(data)
+        if cut is not None:
+            self._pending = data[cut:]
+            data = data[:cut]
         i, n = 0, len(data)
         while i < n:
             ch = data[i]
@@ -191,6 +200,16 @@ class Terminal:
                 self.grid.pop()
 
 
+# An escape sequence still being typed out: ESC alone, a CSI or OSC whose terminator has not
+# arrived, or a two-character sequence missing its second character.
+INCOMPLETE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*\x1b?|[ -/]*)?\Z")
+
+
+def _incomplete_at_end(data: str) -> int | None:
+    m = INCOMPLETE_RE.search(data)
+    return m.start() if m else None
+
+
 def _take_terminal() -> None:
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
@@ -245,7 +264,12 @@ class PtySession(Session):
             os.close(slave)
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
-        self.wait_ready(self.timeout)
+        try:
+            self.wait_ready(self.timeout)
+        except BaseException:
+            # A child that never became ready is still ours to stop: nobody holds this session.
+            self.close()
+            raise
 
     def _read(self) -> None:
         while True:

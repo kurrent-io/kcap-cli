@@ -260,7 +260,8 @@ mechanisms keep generated skills out of the index without hiding them from any h
   `resources_discover`. No headless reload or registration exists for Claude, Codex, Copilot or agy, so
   their delivery must happen before launch.
 - `info/exclude` and `.gitignore` are both safe for every measured harness.
-- Vendor-isolated destinations exist for Pi, Copilot, Kiro, OpenCode and Cursor; not for Claude or Codex.
+- Vendor-isolated destinations exist for Pi, Copilot, Kiro, OpenCode, Cursor and Antigravity
+  (`.agent/skills`); not for Claude or Codex. Two entries of one vendor count as one consumer.
 - Native loading differs: Claude, Copilot and OpenCode load through a tool of their own; Codex, Pi,
   Kiro and Cursor read the listed file; agy expands a slash command. A prompt that forbids tool use
   defeats the file readers, so the kit forbids searching instead and records listed reads apart from
@@ -350,7 +351,9 @@ has such a command: Codex's palette is `/model /fast /ide /permissions /keymap /
 ## What a startup hook can still change (S6)
 
 Rewriting an existing skill's body from the startup hook reaches the first request on every harness
-except Claude, which keeps serving the body it indexed (`stale`). Deleting the skill is honoured
+that could run the arm except Claude, which keeps serving the body it indexed (`stale`). OpenCode 2.x
+is excluded from that statement: its rewrite rows are untested in both modes, because no local plugin
+loads. Deleting the skill is honoured
 everywhere except Antigravity, which still answers from the deleted skill, and Codex's daemon mode,
 which serves the body while the file is already gone. Cursor's daemon mode records `untested`: no
 Cursor hook fires over ACP, as pass 1 also found. OpenCode 2.x records `untested` throughout, because

@@ -285,7 +285,7 @@ class Runner:
     def _checked(self, res: AskResult, mode: str) -> AskResult:
         """A run that produced no answer is a failure to measure, not a skill that was not there:
         a refusal, a crash and an unparseable stream all leave nothing to judge."""
-        if res.reply_text.strip() and "extract failed:" not in res.notes:
+        if res.reply_text.strip() and not any(m in res.notes for m in ("extract failed:", "timeout")):
             return res
         where = "screen" if mode == "tui" else "output"
         reason = ""
@@ -388,6 +388,7 @@ class Runner:
                                reload_used=reload_used)
         hook = self._hook_dict(sb, info.mechanism, info.config_path)
         notes = "" if hook["fired_at"] is not None or arm == "registration" else "hook never fired"
+        target = info.target or target
         if not target.exists():
             notes = (notes + " skill file absent after the turn").strip()
             verdict = "untested"
@@ -490,7 +491,10 @@ class Runner:
         if arm == "update":
             script = write_hook_script(sb.config_root, target, skill.render(), stamp_path(sb.config_root))
         else:
-            script = write_hook_script(sb.config_root, target, "", stamp_path(sb.config_root), delete=True)
+            gone = a.skill_file(sb, root, old_skill.name) if a.flat_skill_layout \
+                else a.skill_dir(sb, root, old_skill.name)
+            script = write_hook_script(sb.config_root, target, "", stamp_path(sb.config_root), delete=True,
+                                       delete_path=gone)
         info = a.install_startup_hook(sb, script)
         if info is None:
             return self.record(mode, "S6", f"S6/{arm}", root, "none", None, "untested", {}, sb=sb, started=started,
@@ -626,7 +630,7 @@ class Runner:
             raise ValueError(scenario)
         if scenario not in MODE_SCENARIOS[mode]:
             return []
-        gated = scenario not in ("S0", "S1") and not self.s1_ok.get(mode, True)
+        gated = scenario not in ("S0", "S1") and not self._s1_ok(mode)
         native = self.adapter.native_root
         out: list[RunRecord] = []
         if scenario == "S0":
@@ -688,6 +692,16 @@ class Runner:
         else:
             raise ValueError(scenario)
         return out
+
+    def _s1_ok(self, mode: str) -> bool:
+        """The gate holds even when a sweep asks for one later scenario: the recorded control
+        decides, so a harness whose S1 failed never spends turns on the rest."""
+        if mode not in self.s1_ok:
+            d = run_dir(self.outdir, self.adapter.entry, mode, "S1", "S1/native")
+            recs = load_runs(d) if (d / "run1.json").exists() else []
+            if recs:
+                self.s1_ok[mode] = combine([r.verdict for r in recs])[0] == "visible_first_turn"
+        return self.s1_ok.get(mode, True)
 
     def _s4_passes(self, mode: str) -> list[RunRecord]:
         per_pass = len(self._s4_roots())
@@ -795,7 +809,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as ex:  # noqa: BLE001
             aborted += 1
             print(f"{name}: aborted: {ex!r}")
-    return 1 if aborted and not completed else 0
+    return 1 if aborted else 0
 
 
 if __name__ == "__main__":

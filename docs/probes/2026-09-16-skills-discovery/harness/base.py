@@ -14,6 +14,8 @@ from lib.isolation import Sandbox
 class HookInfo:
     mechanism: str
     config_path: str
+    # Where this mechanism actually writes the skill, when that is not the arm's own path.
+    target: Path | None = None
 
 
 @dataclass
