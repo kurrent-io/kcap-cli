@@ -95,6 +95,7 @@ public class ChatTabViewSmokeTests {
         public FakeTerminalAttachClientFactory Attach { get; } = new();
         public RecordingOpener Opener { get; } = new();
         public FakePermissionService Permissions { get; } = new();
+        public SessionSubagents Subagents { get; }
         public TerminalTabViewModel Terminal { get; }
         public ChatTabViewModel Chat { get; }
         public ChatTabView View { get; }
@@ -107,9 +108,10 @@ public class ChatTabViewSmokeTests {
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
         public Host(bool show = true) {
+            Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions);
+                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Subagents);
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;

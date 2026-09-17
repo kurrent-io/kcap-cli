@@ -42,6 +42,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
+    readonly SessionSubagents _subagents;
     readonly CompositeDisposable _disposables = new();
     readonly CancellationTokenSource _lifetime = new();
     // Read once: the source is disposed at teardown, and a retry waking after that still needs a
@@ -101,6 +102,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void RefreshQueue() {
         this.RaisePropertyChanged(nameof(HasQueuedMessages));
         this.RaisePropertyChanged(nameof(QueueSummary));
+    }
+
+    public bool HasRunningSubagents => _subagents.RunningCount > 0;
+    public string SubagentSummary =>
+        _subagents.RunningCount == 1 ? "1 subagent running" : $"{_subagents.RunningCount} subagents running";
+
+    void RefreshSubagents() {
+        this.RaisePropertyChanged(nameof(HasRunningSubagents));
+        this.RaisePropertyChanged(nameof(SubagentSummary));
     }
 
     public PendingCardsViewModel Cards { get; }
@@ -314,16 +324,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public ChatTabViewModel(
             string agentId, IDaemonClientService daemon, ChatInput input, IAttachmentUploader uploader,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
-            string? unavailableNote = null, IObservable<string?>? sessionId = null,
+            SessionSubagents subagents, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
-               unavailableNote, null, sessionId, localDaemonOnAppServer) { }
+               subagents, unavailableNote, null, sessionId, localDaemonOnAppServer) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
             ChatInput input, IAttachmentUploader uploader, Func<string, IChatTranscriptFeed>? openFeed, IUrlOpener opener, TimeProvider time,
-            IPermissionService permissions, string? unavailableNote = null, string? missingNote = null,
+            IPermissionService permissions, SessionSubagents subagents, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null) {
         _input = input;
@@ -335,6 +345,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _opener = opener;
         _time = time;
         _permissions = permissions;
+        _subagents = subagents;
+        _subagents.Changed += RefreshSubagents;
         _lifetimeToken = _lifetime.Token;
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
@@ -541,6 +553,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
+        _subagents.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
         if (info.FeedKey != _queueKey) {
@@ -559,6 +572,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _settledTools.Clear();
         _openGroup = null;
         _marked.Clear();
+        _subagents.Clear();
         _feedKey = key;
         var previous = _lease;
         _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation));
@@ -609,6 +623,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         if (_lifetimeToken.IsCancellationRequested) return;
         RefreshActivityNote();
+        _subagents.Tick();
         if (_lease is not { } lease) return;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return;
         _pendingRead = ReadAndApplyAsync(lease);
@@ -654,6 +669,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _settledTools.Clear();
                 _openGroup = null;
                 _marked.Clear();
+                _subagents.Clear();
                 break;
         }
 
@@ -677,6 +693,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
         var fresh = new List<ChatItemViewModel>();
         foreach (var (projected, offset) in read.Lines) {
+            _subagents.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
                 var acknowledged = _queuedMessages.FirstOrDefault(q => q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
@@ -825,6 +842,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         lease?.Feed.Dispose();
         _timer?.Dispose();
         _timer = null;
+        _subagents.Changed -= RefreshSubagents;
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
         // the cancellation before the channel it is sending through goes away.
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }

@@ -161,7 +161,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
-            opener, time, permissions, missingNote: MissingNote, sessionId: _sessionIds,
+            opener, time, permissions, new SessionSubagents(time), missingNote: MissingNote, sessionId: _sessionIds,
             serverQueue: _sessionIds
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()

@@ -1,6 +1,7 @@
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core;
 using Capacitor.Remote.Models;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Time.Testing;
@@ -247,5 +248,26 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(seed.Status).IsEqualTo(FeedStatus.Reset);
         await Assert.That(seed.Lines.Count).IsEqualTo(1);
         await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
+    }
+
+    /// A notification marked meta yields no row and no input, only its finish; the feed must keep it.
+    [Test]
+    public async Task A_signal_only_projection_survives_the_feed() {
+        using var h = new Harness(vendor: "claude");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","extensions":{"claude_code":{"is_meta":true}}}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the position");
+
+        var line = h.Feed.ReadAppended().Lines.Single();
+        await Assert.That(line.Offset).IsEqualTo(2);
+        await Assert.That(line.Projection.Envelopes).IsEmpty();
+        await Assert.That(line.Projection.SubmittedInputs).IsEmpty();
+        var finished = (SubagentSignal.Finished)line.Projection.Subagents.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
     }
 }
