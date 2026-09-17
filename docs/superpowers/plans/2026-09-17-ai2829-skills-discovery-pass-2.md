@@ -422,8 +422,7 @@ Expected: `OK`; every existing row gains seven `n/a (not run)` cells (or `—` f
         with tempfile.TemporaryDirectory() as d:
             skill = ProbeSkill.fresh()
             repo = _fake_repo(d, None)
-            s = AppServerSession(sys.executable, repo, dict(os.environ), Path(d) / "as.stderr.log", timeout=30,
-                                 extra_argv=[str(SERVERS), "app-server"])
+            s = AppServerSession(str(SERVERS), repo, dict(os.environ), Path(d) / "as.stderr.log", timeout=30)
             s.start()
             try:
                 self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
@@ -447,7 +446,7 @@ Expected: `OK`; every existing row gains seven `n/a (not run)` cells (or `—` f
                 s.close()
 ```
 
-Check how the existing `appserver_ask` test passes the fake binary (`appserver_ask(sys.executable, ..., extra_argv=[str(SERVERS), "app-server"])` or similar) and match it: the session's argv is `[binary, "app-server", *extra_argv]`, so with `sys.executable` as the binary the fake needs its script path and mode after the literal `app-server`. If the existing test uses a different trick (a shim script), reuse that trick.
+The existing `test_appserver_turn` passes `str(SERVERS)` as the binary: the fake script is executable and dispatches on the literal `app-server` argument, so the session's argv `[binary, "app-server"]` runs it directly.
 
 `AdapterTests`:
 
