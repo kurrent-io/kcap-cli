@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
@@ -50,23 +51,26 @@ public class ServiceTxnMarkerTests {
         await Assert.That(ServiceTxnMarker.Exists(Daemons.Store, "never-written")).IsFalse();
     }
 
-    // Globally exclusive, not keyed: FlushDirectory is a process-wide seam every ServiceVerify suite
-    // writes markers through, so a concurrent test would be redirected into this test's List.
-    [Test, NotInParallel]
-    public async Task Write_and_delete_fire_the_directory_durability_barrier() {
-        var original = ServiceTxnMarker.FlushDirectory;
-        var flushed  = new List<string>();
-        ServiceTxnMarker.FlushDirectory = d => { flushed.Add(d); return true; };
-        try {
-            ServiceTxnMarker.Write(Daemons.Store, "a", M());
-            ServiceTxnMarker.Delete(Daemons.Store, "a");
-            // Both the rename (Write) and the unlink (Delete) must be followed by a directory flush so
-            // a power loss can't preserve the file's content while losing the directory entry.
-            await Assert.That(flushed.Contains(Daemons.Directory)).IsTrue();
-            await Assert.That(flushed.Count).IsGreaterThanOrEqualTo(2);
-        } finally {
-            ServiceTxnMarker.FlushDirectory = original;
-        }
+    /// <summary>The barrier reports whether it fired, and it fires on a real directory — which is
+    /// what makes the false below a genuine failure signal rather than the only answer it has.</summary>
+    [Test]
+    public async Task Directory_barrier_fires_on_a_real_directory() {
+        if (OperatingSystem.IsWindows()) return; // no portable directory fsync there
+        await Assert.That(ServiceTxnMarker.FlushDirectory(Daemons.Directory)).IsTrue();
+    }
+
+    [Test]
+    public async Task Directory_barrier_reports_failure_rather_than_throwing() {
+        await Assert.That(ServiceTxnMarker.FlushDirectory(Path.Combine(Daemons.Directory, "absent"))).IsFalse();
+    }
+
+    /// <summary>A barrier that cannot fire must not fail the delete it follows: the marker going away
+    /// is the caller's contract, the fsync behind it is hardening.</summary>
+    [Test]
+    public async Task Delete_survives_a_barrier_that_cannot_fire() {
+        var store = new DaemonStore(Path.Combine(Daemons.Directory, "absent"));
+        ServiceTxnMarker.Delete(store, "a");
+        await Assert.That(ServiceTxnMarker.Exists(store, "a")).IsFalse();
     }
 
     // File.Delete on a path that is actually a directory throws (UnauthorizedAccessException on

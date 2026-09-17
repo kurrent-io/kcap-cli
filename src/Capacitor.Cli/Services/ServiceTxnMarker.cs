@@ -38,9 +38,8 @@ public static partial class ServiceTxnMarker {
 
     /// <summary>
     /// Temp file + rename, flushing the file handle to disk both before and after the rename, then a
-    /// best-effort fsync of the containing directory so a power loss cannot preserve the marker's
-    /// content while losing the rename that published it (§3.4: file + directory flush ordering is
-    /// load-bearing).
+    /// best-effort fsync of the containing directory. The directory flush is what stops a power loss
+    /// preserving the marker's content while losing the rename that published it.
     /// </summary>
     public static void Write(DaemonStore store, string daemonName, TxnMarker marker) {
         store.EnsureDirectory();
@@ -67,8 +66,6 @@ public static partial class ServiceTxnMarker {
         FlushDirectory(Path.GetDirectoryName(path)!); // durably lose the directory entry, not just the file
     }
 
-    // ── directory-durability barrier (§3.4) ──
-
     [LibraryImport("libc", EntryPoint = "open", StringMarshalling = StringMarshalling.Utf8)]
     private static partial int open(string path, int flags);
     [LibraryImport("libc", EntryPoint = "fsync")]
@@ -76,11 +73,9 @@ public static partial class ServiceTxnMarker {
     [LibraryImport("libc", EntryPoint = "close")]
     private static partial int close(int fd);
 
-    /// <summary>Best-effort fsync of a directory entry. Overridable so a test can assert the barrier
-    /// fires on Write/Delete without a real power loss.</summary>
-    internal static Func<string, bool> FlushDirectory = FlushDirectoryViaLibc;
-
-    static bool FlushDirectoryViaLibc(string dir) {
+    /// <summary>Best-effort fsync of a directory entry: false means the barrier did not fire, which
+    /// a caller must tolerate rather than surface.</summary>
+    internal static bool FlushDirectory(string dir) {
         if (OperatingSystem.IsWindows()) return false; // no portable directory fsync on Windows
 
         var fd = -1;
