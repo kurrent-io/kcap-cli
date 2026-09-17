@@ -70,7 +70,7 @@
                 <TextBlock Text="{Binding SectionTitle}" Classes="prSectionTitle" />
                 <StackPanel IsVisible="{Binding IsOverview}" Spacing="10">
                     <TextBlock Text="{Binding DescriptionNote}" Classes="prNote" IsVisible="{Binding DescriptionNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <views:MarkdownView Text="{Binding Description}" OpenLink="{Binding OpenBodyLinkCommand}" />
+                    <views:MarkdownView Text="{Binding Description}" OpenLink="{Binding OpenBodyLinkCommand}" Flavor="GitHub" />
                     <TextBlock Text="Description preview truncated. Open the pull request in your browser for the full text."
                                IsVisible="{Binding DescriptionTruncated}" Classes="prNote" />
                 </StackPanel>
@@ -151,7 +151,7 @@
                                         <SelectableTextBlock Text="{Binding Hunk}" FontFamily="Menlo,Monaco,Consolas,monospace"
                                                              FontSize="11.5" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
                                     </Border>
-                                    <views:MarkdownView Text="{Binding Body}" IsVisible="{Binding HasBody}"
+                                    <views:MarkdownView Text="{Binding Body}" IsVisible="{Binding HasBody}" Flavor="GitHub"
                                         OpenLink="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenBodyLinkCommand}" />
                                     <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
                                     <Button Content="View replies" IsVisible="{Binding IsThread}" Classes="prButton" HorizontalAlignment="Left"
