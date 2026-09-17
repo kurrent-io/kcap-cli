@@ -1,3 +1,4 @@
+using System.Reactive.Subjects;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
@@ -50,10 +51,8 @@ public class MarkdownViewTests {
 
     static Control Strip(Visual host) => All<Control>(host).First(c => c.Classes.Contains("markdown-code-actions"));
 
-    /// What the reader is actually offered: a button the view declined to arm is in the tree but
-    /// hidden, which is indistinguishable from absent and must assert the same way.
     static List<Button> Actions(Visual host, string kind) =>
-        All<Button>(host).Where(b => b.Classes.Contains(kind) && b.IsVisible).ToList();
+        All<Button>(host).Where(b => b.Classes.Contains(kind)).ToList();
 
     static Point Centre(Visual target, Window window) =>
         target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)!.Value;
@@ -319,12 +318,94 @@ public class MarkdownViewTests {
             try {
                 var hosts = Hosts(root);
                 await Assert.That(hosts.Count).IsEqualTo(2);
-                await Assert.That(Strip(hosts[0]).IsVisible).IsFalse();
-                await Assert.That(Strip(hosts[1]).IsVisible).IsFalse();
+                await Assert.That(Strip(hosts[0]).Opacity).IsEqualTo(0);
+                await Assert.That(Strip(hosts[0]).IsHitTestVisible).IsFalse();
+                await Assert.That(Strip(hosts[1]).Opacity).IsEqualTo(0);
 
                 Hover(window, hosts[0]);
-                await Assert.That(Strip(hosts[0]).IsVisible).IsTrue();
-                await Assert.That(Strip(hosts[1]).IsVisible).IsFalse();
+                await Assert.That(Strip(hosts[0]).Opacity).IsEqualTo(1);
+                await Assert.That(Strip(hosts[0]).IsHitTestVisible).IsTrue();
+                await Assert.That(Strip(hosts[1]).Opacity).IsEqualTo(0);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins keyboard reach: hiding the strip by making it invisible would drop its buttons out of
+    /// tab navigation, leaving the whole affordance available to a pointer alone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_action_strip_is_reachable_and_revealed_by_keyboard_focus() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, ran) = ShowRunnable("```bash\n! kcap agent ls\n```");
+            try {
+                var host = Hosts(root)[0];
+                var run = Actions(host, "markdown-code-run").Single();
+                await Assert.That(run.Focusable).IsTrue();
+
+                run.Focus();
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await Assert.That(Strip(host).Opacity).IsEqualTo(1);
+
+                window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(ran).IsEquivalentTo(new[] { "! kcap agent ls" });
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the bang's position: the text is sent verbatim, so a bang the block only reaches past
+    /// some whitespace would send something that is not a command. Copy is offered regardless.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_block_whose_bang_follows_whitespace_offers_copy_alone() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```bash\n   ! kcap agent ls\n```");
+            try {
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the button against the command's own gate: a composer that cannot take the command
+    /// greys the button rather than leaving a live-looking control whose click does nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_run_button_is_disabled_while_the_command_refuses() {
+        await RunOnUiAsync(async () => {
+            var refuse = new BehaviorSubject<bool>(false);
+            var view = new MarkdownView {
+                Text = "```bash\n! kcap agent ls\n```",
+                RunCode = ReactiveCommand.Create<string>(_ => { }, refuse),
+                Width = 400,
+            };
+            var window = new Window { Content = view, Width = 500, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            try {
+                var run = Actions(Hosts(view)[0], "markdown-code-run").Single();
+                await Assert.That(run.IsEffectivelyEnabled).IsFalse();
+
+                refuse.OnNext(true);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(run.IsEffectivelyEnabled).IsTrue();
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the copied text against the block on screen: the line group ends where the block's last
+    /// line does, so a blank line the block shows is a blank line the clipboard carries.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_blank_last_line_survives_the_copy() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```bash\nls -la\n\n```");
+            try {
+                Click(window, Reveal(window, Hosts(root)[0], "markdown-code-copy"));
+                var clipboard = TopLevel.GetTopLevel(root)!.Clipboard!;
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo("ls -la\n");
             } finally { window.Close(); }
         });
     }

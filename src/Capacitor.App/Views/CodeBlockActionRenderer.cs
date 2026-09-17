@@ -26,7 +26,9 @@ public sealed class CodeBlockActionRenderer(MarkdownView view) : AvaloniaObjectR
         var block = scratch.Children[0];
         // A control carries one parent: the scratch panel has to let go before the host adopts it.
         scratch.Children.Clear();
-        renderer.WriteBlock(Host(block, obj.Lines.ToString().TrimEnd('\n', '\r')));
+        // The line group puts its newlines between lines and none after the last, so the text is
+        // already what the block displays: trimming the end would drop a blank line it shows.
+        renderer.WriteBlock(Host(block, obj.Lines.ToString()));
     }
 
     Control Host(Control block, string text) {
@@ -38,9 +40,11 @@ public sealed class CodeBlockActionRenderer(MarkdownView view) : AvaloniaObjectR
         };
         strip.Classes.Add("markdown-code-actions");
         strip.Children.Add(CopyButton(text));
-        // The bang is what makes the block a command the composer can run rather than prose, and a
-        // view with no RunCode — the pull request reader — has nowhere to run one.
-        if (view.RunCode is not null && text.TrimStart().StartsWith('!')) strip.Children.Add(RunButton(text));
+        // The bang is what makes the block a command the composer can run rather than prose, and it
+        // has to be the text's own first character: the text is sent verbatim, so a block that only
+        // reaches a bang past some whitespace would send something that is not a command after all.
+        // A view with no RunCode — the pull request reader — has nowhere to run one either way.
+        if (view.RunCode is not null && text.StartsWith('!')) strip.Children.Add(RunButton(text));
 
         var host = new Panel { Children = { block, strip } };
         host.Classes.Add("markdown-code-host");
@@ -66,11 +70,14 @@ public sealed class CodeBlockActionRenderer(MarkdownView view) : AvaloniaObjectR
         return button;
     }
 
+    /// The command itself, not a click handler that consults it: Avalonia then greys the button
+    /// whenever the composer cannot take the command, instead of leaving a live-looking control
+    /// whose click does nothing. The button unsubscribes when it leaves the tree, so a render per
+    /// streamed delta leaves nothing behind on a command the view model owns for the session.
     Button RunButton(string text) {
         var button = ActionButton("Run it", "markdown-code-run");
-        button.Click += (_, _) => {
-            if (view.RunCode is { } run && run.CanExecute(text)) run.Execute(text);
-        };
+        button.Command = view.RunCode;
+        button.CommandParameter = text;
         return button;
     }
 

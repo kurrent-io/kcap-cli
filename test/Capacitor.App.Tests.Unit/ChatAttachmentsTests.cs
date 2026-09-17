@@ -133,6 +133,31 @@ public class ChatAttachmentsTests {
         });
     }
 
+    /// Pins the code block's gate against the upload window: the channel still reports it can take
+    /// text there, because the send has not reached it, and a second send over the same tray would
+    /// leave one of the two prompts refused with the other holding the chips.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_a_code_block_is_refused_while_a_send_is_uploading() {
+        await RunOnUiAsync(async () => {
+            var h = Hosted();
+            await RunningAsync(h);
+            await Assert.That(await h.Chat.RunCodeCommand.CanExecute.FirstAsync()).IsTrue();
+
+            var send = h.Begin("hi", "a.png");
+            await Assert.That(h.Input.CanAcceptText).IsTrue();
+            await Assert.That(await h.Chat.RunCodeCommand.CanExecute.FirstAsync()).IsFalse();
+
+            h.Release(new UploadOutcome(UploadKind.Uploaded, ["A"], null));
+            await WaitUntilAsync(() => h.Input.Sends.Count == 1, what: "the send that follows the upload");
+            h.Input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+
+            await Assert.That(h.Uploader.Calls.Count).IsEqualTo(1);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Upload_failure_sends_nothing_and_keeps_text_and_chips() {
