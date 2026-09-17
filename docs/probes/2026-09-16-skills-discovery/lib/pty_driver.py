@@ -266,7 +266,13 @@ class PtySession(Session):
     def send(self, text: str) -> None:
         os.write(self.master, text.encode())
 
-    def _answer_dialogs(self) -> None:
+    def _answer_dialogs(self, settled: float = 1.0) -> None:
+        with self._lock:
+            idle = time.time() - self._last
+        # A dialog answered while its list is still being drawn moves a selection that is about to
+        # be redrawn, and the Enter after it then confirms the default.
+        if idle < settled:
+            return
         screen = self.screen()
         for i, (pattern, keys) in enumerate(self.dialogs):
             if i not in self._answered and pattern.search(screen):
