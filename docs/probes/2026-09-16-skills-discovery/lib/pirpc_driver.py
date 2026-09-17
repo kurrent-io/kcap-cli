@@ -16,6 +16,7 @@ class PiRpcSession(Session):
         self.child = JsonlChild(self.argv, cwd, env, stderr_path)
         self.next_id = 0
         self.notes: list[str] = []
+        self._raw_from = 0
         self.started_at = time.time()
 
     def start(self) -> None:
@@ -57,7 +58,11 @@ class PiRpcSession(Session):
             notes.append(f"exception={ex!r}")
         # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
         notes.append(f"tools_used={tools}")
-        return AskResult(reply_text="\n".join(texts), raw=json.dumps(self.child.frames), argv=list(self.argv),
+        # Each turn's raw stream starts where the previous one ended, so a reply parsed from raw
+        # cannot credit an earlier turn's token.
+        raw = json.dumps(self.child.frames[self._raw_from:])
+        self._raw_from = len(self.child.frames)
+        return AskResult(reply_text="\n".join(texts), raw=raw, argv=list(self.argv),
                          started_at=self.started_at, first_request_at=first, stderr_path=str(self.stderr_path),
                          exit_code=self.child.returncode, notes=" ".join(notes))
 

@@ -50,6 +50,7 @@ class PtySession(Session):
         self._last = time.time()
         self._answered: set[int] = set()
         self.notes: list[str] = []
+        self._noted = 0
         self.started_at = time.time()
 
     def start(self) -> None:
@@ -61,6 +62,11 @@ class PtySession(Session):
             # tty and a stuck one can be killed with everything it spawned.
             self.proc = subprocess.Popen(self.argv, cwd=str(self.cwd), env=self.env, stdin=slave, stdout=slave,
                                          stderr=slave, start_new_session=True, preexec_fn=_take_terminal)
+        except BaseException:
+            # No child means close() has nothing to finish: release what was opened for it here.
+            os.close(self.master)
+            self._log.close()
+            raise
         finally:
             os.close(slave)
         self._reader = threading.Thread(target=self._read, daemon=True)
@@ -119,20 +125,25 @@ class PtySession(Session):
         self.send("\r")
         deadline = time.time() + self.timeout
         reply = ""
-        notes = list(self.notes)
+        extra: list[str] = []
         while time.time() < deadline:
             self._answer_dialogs()
             reply = extract_tui_reply(self.screen()[offset:])
             if reply:
                 break
             if self.proc is not None and self.proc.poll() is not None:
-                notes.append(f"tui exited with {self.proc.returncode}")
+                extra.append(f"tui exited with {self.proc.returncode}")
+                # The exit may follow the reply by less than one poll interval.
+                reply = extract_tui_reply(self.screen()[offset:])
                 break
             time.sleep(0.2)
         else:
-            notes.append("timeout")
+            extra.append("timeout")
         if not reply:
-            notes.append("no PROBE-REPLY line on the screen")
+            extra.append("no PROBE-REPLY line on the screen")
+        # Dialog notes belong to the turn that answered them, once.
+        notes = self.notes[self._noted:] + extra
+        self._noted = len(self.notes)
         return AskResult(reply_text=reply, raw=self.screen()[offset:], argv=list(self.argv), started_at=self.started_at,
                          first_request_at=first, stderr_path=str(self.log_path), exit_code=None,
                          notes=" ".join(notes))

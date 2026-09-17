@@ -972,6 +972,9 @@ class AcpDriverTests(unittest.TestCase):
                 self.assertNotIn(skill.body_token, first.reply_text)
                 self.assertGreater(second.first_request_at, first.first_request_at)
                 self.assertIn("tools_used=0", second.notes)
+                self.assertIn("initialize", first.raw)
+                self.assertNotIn("initialize", second.raw)
+                self.assertEqual(second.raw.count("session/prompt"), 1)
             finally:
                 s.close()
 
@@ -1077,9 +1080,14 @@ class JsonlDriversTests(unittest.TestCase):
             s = AppServerSession(str(SERVERS), repo, dict(os.environ), Path(d) / "as.stderr.log", timeout=30)
             s.start()
             try:
-                self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
+                first = s.ask(single_prompt(skill))
+                self.assertIn(NO_SKILL, first.reply_text)
                 write_skill(repo / ".fake" / "skills", skill)
-                self.assertIn(skill.body_token, s.ask(single_prompt(skill)).reply_text)
+                second = s.ask(single_prompt(skill))
+                self.assertIn(skill.body_token, second.reply_text)
+                self.assertIn("thread/start", first.raw)
+                self.assertNotIn("thread/start", second.raw)
+                self.assertEqual(second.raw.count("turn/start"), 1)
             finally:
                 s.close()
 
@@ -1093,7 +1101,9 @@ class JsonlDriversTests(unittest.TestCase):
             try:
                 self.assertIn(NO_SKILL, s.ask(single_prompt(skill)).reply_text)
                 write_skill(repo / ".fake" / "skills", skill)
-                self.assertIn(skill.body_token, s.ask(single_prompt(skill)).reply_text)
+                second = s.ask(single_prompt(skill))
+                self.assertIn(skill.body_token, second.reply_text)
+                self.assertEqual(second.raw.count('"type": "prompt"'), 1)
             finally:
                 s.close()
 
@@ -1139,8 +1149,20 @@ class PtyDriverTests(unittest.TestCase):
                 res = s.ask(tui_prompt(skill))
                 self.assertEqual(res.reply_text, f"PROBE-REPLY: {skill.body_token}")
                 self.assertIn("dialog=", res.notes)
+                self.assertNotIn("dialog=", s.ask(tui_prompt(skill)).notes)
             finally:
                 s.close()
+
+    def test_spawn_failure_releases_the_terminal(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = PtySession(["/nonexistent/kcap-probe-binary"], Path(d), dict(os.environ), Path(d) / "t.log",
+                           ready_idle=0.3, timeout=2)
+            with self.assertRaises(OSError):
+                s.start()
+            s.close()
+            self.assertTrue(s._log.closed)
+            with self.assertRaises(OSError):
+                os.fstat(s.master)
 
     def test_reload_refreshes_a_frozen_catalogue(self):
         with tempfile.TemporaryDirectory() as d:

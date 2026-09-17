@@ -70,6 +70,7 @@ class AppServerSession(Session):
         self.rpc: _Rpc | None = None
         self.tid: str | None = None
         self.notes: list[str] = []
+        self._raw_from = 0
         self.prior_frames: list[dict] = []
         self.started_at = time.time()
 
@@ -130,7 +131,12 @@ class AppServerSession(Session):
             notes.append(f"exception={ex!r}")
         # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
         notes.append(f"tools_used={tools}")
-        return AskResult(reply_text=text, raw=json.dumps(self.prior_frames + self.child.frames), argv=list(self.argv),
+        # Each turn's raw stream starts where the previous one ended (the first includes the
+        # startup exchange), so a reply parsed from raw cannot credit an earlier turn's token.
+        stream = self.prior_frames + self.child.frames
+        raw = json.dumps(stream[self._raw_from:])
+        self._raw_from = len(stream)
+        return AskResult(reply_text=text, raw=raw, argv=list(self.argv),
                          started_at=self.started_at, first_request_at=first, stderr_path=str(self.stderr_path),
                          exit_code=self.child.returncode, notes=" ".join(notes))
 

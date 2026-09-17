@@ -103,6 +103,7 @@ class AcpSession(Session):
         self.client = IsolatedAcpClient(self.argv, str(self.cwd), env, stderr_path)
         self.sid: str | None = None
         self.notes: list[str] = []
+        self._raw_from = 0
         self.started_at = time.time()
 
     def start(self) -> None:
@@ -135,13 +136,19 @@ class AcpSession(Session):
         # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
         notes.append(f"tools_used={tool_calls(self.client.frames[before:])}")
         exit_code = self.client.proc.returncode if self.client.proc is not None else None
-        return AskResult(reply_text=text, raw=json.dumps(self.client.frames), argv=list(self.argv),
+        # Each turn's raw stream starts where the previous one ended (the first includes the
+        # startup exchange), so a reply parsed from raw cannot credit an earlier turn's token.
+        raw = json.dumps(self.client.frames[self._raw_from:])
+        self._raw_from = len(self.client.frames)
+        return AskResult(reply_text=text, raw=raw, argv=list(self.argv),
                          started_at=self.started_at, first_request_at=first, stderr_path=str(self.stderr_path),
                          exit_code=exit_code, notes=" ".join(notes))
 
     def close(self) -> None:
         try:
             self.loop.run_until_complete(self.client.shutdown())
+        except Exception as ex:  # noqa: BLE001
+            self.notes.append(f"close={ex!r}")
         finally:
             self.loop.close()
 
