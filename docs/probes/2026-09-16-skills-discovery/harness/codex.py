@@ -81,8 +81,11 @@ class CodexAdapter(Adapter):
         last = sb.root / "last-message.txt"
         # A file left by an earlier turn would be read as this turn's answer.
         last.unlink(missing_ok=True)
+        # `exec resume` takes a narrower flag set than `exec`: the sandbox and colour flags it
+        # rejects outright, and the session's own recorded sandbox applies instead.
         head = [binary, "exec", *(["resume", resume] if resume else [])]
-        argv = head + ["--json", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
+        sandbox = [] if resume else ["--sandbox", "read-only", "--color", "never"]
+        argv = head + ["--json", "--skip-git-repo-check", *sandbox,
                        "--dangerously-bypass-hook-trust", "--output-last-message", str(last), "-"]
 
         def extract(raw: str) -> str:

@@ -266,7 +266,10 @@ class PtySession(Session):
     def send(self, text: str) -> None:
         os.write(self.master, text.encode())
 
-    def _answer_dialogs(self, settled: float = 1.0) -> None:
+    def _answer_dialogs(self) -> None:
+        # Never longer than the readiness window, or a vendor waiting on the dialog is declared
+        # ready and then typed at instead of answered.
+        settled = min(1.0, self.ready_idle)
         with self._lock:
             idle = time.time() - self._last
         # A dialog answered while its list is still being drawn moves a selection that is about to

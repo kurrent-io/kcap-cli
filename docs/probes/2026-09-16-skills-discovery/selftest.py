@@ -594,6 +594,15 @@ class _FailingVendorAdapter(FakeAdapter):
                          stderr_path=str(log), exit_code=41)
 
 
+class _UnparseableAdapter(FakeAdapter):
+    """The vendor printed something its adapter could not read as an answer."""
+
+    def ask(self, sb, mode, prompt):
+        body = '{"stop_reason": "refusal", "is_error": true}'
+        return AskResult(reply_text=body, raw=body, argv=["fake"], started_at=0.0, first_request_at=0.0,
+                         stderr_path=None, exit_code=0, notes="extract failed: ValueError('is_error')")
+
+
 class _OddLogNameAdapter(FakeAdapter):
     """A driver that names its stderr file outside the *.stderr.log pattern."""
 
@@ -819,7 +828,7 @@ class RunnerTests(unittest.TestCase):
             out = Path(d) / "out"
             recs = probe.Runner(_FailingVendorAdapter(), out, runs=1, base=Path(d)).run_scenario("print", "S1")
             self.assertEqual(recs[0].verdict, "untested")
-            self.assertIn("vendor exit 41", recs[0].notes)
+            self.assertIn("no reply read from the output; exit 41", recs[0].notes)
             self.assertIn("IneligibleTierError", recs[0].notes)
             self.assertTrue(Path(recs[0].stderr_path).exists())
 
@@ -987,6 +996,21 @@ class RunnerTests(unittest.TestCase):
             printed = r.record("print", "S1", "S1/native", ".fake/skills", "none", res, "not_visible", {},
                                name=skill.name)
             self.assertEqual(printed.tokens_found, [skill.token])
+
+    def test_an_answerless_run_is_untested_not_a_negative(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _UnparseableAdapter()).run_scenario("print", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            self.assertIn("no reply read from the output", recs[0].notes)
+            self.assertEqual(recs[0].tokens_found, [])
+
+    def test_a_later_turn_asks_for_the_token_the_skill_carries_now(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            skill = ProbeSkill.fresh()
+            self.assertNotIn("again", r._prompt("print", skill))
+            self.assertIn("again", r._prompt("print", skill, again=True))
+            self.assertIn("PROBE-REPLY", r._prompt("tui", skill, again=True))
 
     def test_mode_scenario_table_and_blocked_rows(self):
         with tempfile.TemporaryDirectory() as d:

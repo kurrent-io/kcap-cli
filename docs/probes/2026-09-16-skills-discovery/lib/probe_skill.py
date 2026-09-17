@@ -65,10 +65,14 @@ NO_SEARCH = (
 )
 
 
-def single_prompt(skill: ProbeSkill) -> str:
+def single_prompt(skill: ProbeSkill, again: bool = False) -> str:
+    # A later turn of the same session asks for the token the skill carries now, so a session that
+    # kept the first answer in its context has to look again to be right.
+    use = "Use it again and reply with the probe token it contains now" if again else \
+        "Use it and reply with only the probe token it contains"
     return (
-        f"You have a skill named {skill.name}. Use it and reply with only the probe token it "
-        f"contains. {NO_SEARCH} If no such skill is listed for you, reply with exactly {NO_SKILL}."
+        f"You have a skill named {skill.name}. {use}. {NO_SEARCH} If no such skill is listed for "
+        f"you, reply with exactly {NO_SKILL}."
     )
 
 
@@ -85,10 +89,12 @@ def multi_prompt() -> str:
 TUI_REPLY_RE = re.compile(r"PROBE-REPLY:\s*\**\s*(PROBE-BODY-[0-9a-f]{12}|NO-SKILL)\b")
 
 
-def tui_prompt(skill: ProbeSkill) -> str:
+def tui_prompt(skill: ProbeSkill, again: bool = False) -> str:
+    use = "Use it again and read the probe token it contains now" if again else \
+        "Use it and read the probe token it contains"
     return (
-        f"You have a skill named {skill.name}. Use it and reply with one line of the form "
-        f"PROBE-REPLY: <value>, where <value> is the probe token the skill contains. {NO_SEARCH} "
+        f"You have a skill named {skill.name}. {use}, then reply with one line of the form "
+        f"PROBE-REPLY: <value>, where <value> is that token. {NO_SEARCH} "
         f"If no such skill is listed for you, the value is {NO_SKILL}."
     )
 

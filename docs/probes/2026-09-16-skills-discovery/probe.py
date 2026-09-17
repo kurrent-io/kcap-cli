@@ -273,27 +273,27 @@ class Runner:
                 session.close()
         else:
             res = self.adapter.ask(sb, mode, prompt)
-        broken = res.exit_code not in (0, None) or any(m in res.notes for m in ("failed:", "exception="))
-        if not res.reply_text.strip() and broken:
-            # A vendor that failed to run said nothing about the skill: that row is untested, and
-            # the stderr tail is the reason a reader needs.
-            reason = ""
-            if res.stderr_path and Path(res.stderr_path).is_file():
-                text = Path(res.stderr_path).read_text(errors="replace")
-                errors = [line.strip() for line in text.splitlines() if "Error" in line or "error" in line]
-                reason = (errors[0] if errors else text[-300:].replace("\n", " | "))[:300]
-            raise RuntimeError(f"vendor exit {res.exit_code} with no reply; {res.notes}; stderr: {reason}")
-        return res
+        return self._checked(res, mode)
 
-    def _prompt(self, mode: str, skill: ProbeSkill) -> str:
+    def _prompt(self, mode: str, skill: ProbeSkill, again: bool = False) -> str:
         # The screen echoes whatever is typed, so the interactive form asks for a marked line.
-        return tui_prompt(skill) if mode == "tui" else single_prompt(skill)
+        return tui_prompt(skill, again) if mode == "tui" else single_prompt(skill, again)
 
     def _ask_session(self, session: Session, mode: str, prompt: str) -> AskResult:
-        res = session.ask(prompt)
-        if mode == "tui" and not res.reply_text.strip():
-            raise RuntimeError(f"no reply read from the screen; {res.notes}")
-        return res
+        return self._checked(session.ask(prompt), mode)
+
+    def _checked(self, res: AskResult, mode: str) -> AskResult:
+        """A run that produced no answer is a failure to measure, not a skill that was not there:
+        a refusal, a crash and an unparseable stream all leave nothing to judge."""
+        if res.reply_text.strip() and "extract failed:" not in res.notes:
+            return res
+        where = "screen" if mode == "tui" else "output"
+        reason = ""
+        if res.stderr_path and Path(res.stderr_path).is_file():
+            text = Path(res.stderr_path).read_text(errors="replace")
+            errors = [line.strip() for line in text.splitlines() if "Error" in line or "error" in line]
+            reason = (errors[0] if errors else text[-300:].replace("\n", " | "))[:300]
+        raise RuntimeError(f"no reply read from the {where}; exit {res.exit_code}; {res.notes}; stderr: {reason}")
 
     def _open(self, sb: Sandbox, mode: str) -> Session:
         session = self.adapter.open_session(sb, mode)
@@ -463,7 +463,7 @@ class Runner:
             else:
                 old = skill.token
                 self._remove_skill(sb, root, skill)
-            second = self._ask_session(session, mode, self._prompt(mode, skill))
+            second = self._ask_session(session, mode, self._prompt(mode, skill, again=True))
         finally:
             session.close()
         reply = parse_reply(second.reply_text, self._raw_for(mode, second), skill.name)
@@ -540,11 +540,12 @@ class Runner:
             old = skill.token
             skill = skill.variant()
         write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
-        res = a.resume(sb, sid, self._prompt(mode, skill))
+        res = a.resume(sb, sid, self._prompt(mode, skill, again=True))
         if res is None:
             return self.record(mode, "S7", f"S7/{arm}", root, "none", first, "untested", {"native": skill.token},
                                sb=sb, started=started, notes=f"turn1={turn1}; no resume launch for this entry",
                                name=skill.name)
+        self._checked(res, mode)
         verdict = judge_update(skill.token, old, parse_reply(res.reply_text, res.raw, skill.name), live=False)
         return self.record(mode, "S7", f"S7/{arm}", root, "none", res, verdict, {"native": skill.token}, sb=sb,
                            started=started, notes=f"turn1={turn1} session={sid}", name=skill.name, prior=first)
@@ -606,7 +607,7 @@ class Runner:
                                    started=started, notes="no startup hook mechanism for this entry", name=skill.name)
             peer = self._ask(sb, "print", self._prompt("print", skill))
             peer_verdict = self._judge_turn("print", peer, skill)
-            second = self._ask_session(session, mode, self._prompt(mode, skill))
+            second = self._ask_session(session, mode, self._prompt(mode, skill, again=True))
         finally:
             session.close()
         hook = self._hook_dict(sb, info.mechanism, info.config_path)
