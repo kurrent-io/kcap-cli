@@ -1755,6 +1755,30 @@ class CursorAdapterTests(unittest.TestCase):
             self.assertEqual(hooks.read_text(), original)
 
 
+class CursorRegistrationTests(unittest.TestCase):
+    def test_registration_names_the_path_it_writes(self):
+        from harness.cursor import CursorAdapter, CursorUserHooksAdapter
+        for cls in (CursorAdapter, CursorUserHooksAdapter):
+            with self.subTest(entry=cls.entry), tempfile.TemporaryDirectory() as d:
+                a = cls()
+                sb = new_sandbox(a.lever, None, [], base=Path(d))
+                try:
+                    skill = ProbeSkill.fresh()
+                    arm_target = a.skill_file(sb, a.native_root, skill.name)
+                    info = a.install_registration(sb, arm_target, skill.render())
+                    # The hook writes into a plugin directory, not the arm's own path, and the arm
+                    # checks the path the mechanism names.
+                    self.assertIsNotNone(info.target)
+                    self.assertNotEqual(info.target, arm_target)
+                    subprocess.run([json.loads(Path(info.config_path).read_text())["hooks"]["workspaceOpen"][0]["command"]],
+                                   capture_output=True, text=True, timeout=20)
+                    self.assertTrue(info.target.exists())
+                    self.assertIn(skill.body_token, info.target.read_text())
+                finally:
+                    getattr(a, "cleanup_hook", lambda _sb: None)(sb)
+                    sb.cleanup()
+
+
 class KiroAdapterTests(unittest.TestCase):
     def test_acp_read_of_the_listed_file_is_the_native_load(self):
         from harness.kiro import classify_kiro_tools

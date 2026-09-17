@@ -173,8 +173,10 @@ the real one: Claude (config directory), Cursor and agy (HOME). They run against
 - **S2 print:** project-level `sessionStart` fires; `hook-creates-root` `not_visible` ×2 and
   `hook-adds-skill` `not_visible` ×2. With the user-level file (`cursor-userhooks`) `hook-adds-skill`
   `not_visible` ×2 and **`hook-creates-root` `not_visible` ×2 then `visible_first_turn` once**: a
-  fire-and-forget hook races Cursor's indexing, and the order decides. `workspaceOpen` never fires in
-  print mode (`registration` untested, skill file absent).
+  fire-and-forget hook races Cursor's indexing, and the order decides. `workspaceOpen` does fire in
+  print mode and its `pluginPaths` route delivers, from the project file and the user file alike:
+  `registration` is `visible_after_reload` ×2 for both, the hook writing the skill into a plugin
+  directory it returns. Over ACP it stays `untested`: no Cursor hook fires there at all.
 - **S2 daemon:** no hook fires in ACP mode, from the project file or the user file; `sessionStart` and
   `workspaceOpen` alike (`untested`, hook never fired).
 - **S3** both exclusions `visible_first_turn` ×2 in both modes.
@@ -247,7 +249,7 @@ mechanisms keep generated skills out of the index without hiding them from any h
 | OpenCode 1.x print | yes | only into an existing root | `chat.system.transform`: no |
 | OpenCode 1.x acp | yes | no | no |
 | OpenCode 2.x | no plugin loads | untested | untested |
-| Cursor print | `sessionStart` yes, `workspaceOpen` no | race (1 of 3) | none |
+| Cursor print | `sessionStart` yes, `workspaceOpen` yes | race (1 of 3) | `workspaceOpen` `pluginPaths` |
 | Cursor acp | no | untested | untested |
 | agy | workspace `PreInvocation` yes, global plugin no | no | none |
 
@@ -256,9 +258,11 @@ mechanisms keep generated skills out of the index without hiding them from any h
 - A file drop from a startup hook reaches the first request only on Kiro (whose `agentSpawn` runs at
   session creation, before the catalogue is built) and, for an existing root, on OpenCode 1.x print
   mode. Everywhere else skills are indexed first, and on Cursor the two race.
-- Pi has an automatic path through its extension API: sync in `session_start`, return the directory from
-  `resources_discover`. No headless reload or registration exists for Claude, Codex, Copilot or agy, so
-  their delivery must happen before launch.
+- Two vendors take a skill handed to them at startup rather than found on disk: Pi, through an
+  extension that writes in `session_start` and returns the directory from `resources_discover`, and
+  Cursor in print mode, through a `workspaceOpen` hook that returns `pluginPaths`. Both are
+  `visible_after_reload`. No headless registration exists for Claude, Codex, Copilot or agy, so their
+  delivery must happen before launch.
 - `info/exclude` and `.gitignore` are both safe for every measured harness.
 - Vendor-isolated destinations exist for Pi, Copilot, Kiro, OpenCode, Cursor and Antigravity
   (`.agent/skills`); not for Claude or Codex. Two entries of one vendor count as one consumer.

@@ -4927,7 +4927,7 @@
       "out/cursor/daemon/S2/S2_hook-adds-skill/run1.json",
       "out/cursor/daemon/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0"
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "cursor",
@@ -4947,7 +4947,7 @@
       "out/cursor/daemon/S2/S2_hook-creates-root/run1.json",
       "out/cursor/daemon/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0"
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "cursor",
@@ -4966,7 +4966,7 @@
     "evidence": [
       "out/cursor/daemon/S2/S2_registration/run1.json"
     ],
-    "notes": "skill file absent after the turn stopReason=end_turn tools_used=0"
+    "notes": "skill file absent after the turn stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "cursor",
@@ -5512,14 +5512,15 @@
     "arm": "S2/registration",
     "root": ".cursor/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_after_reload",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": "project .cursor/hooks.json workspaceOpen pluginPaths",
     "evidence": [
-      "out/cursor/print/S2/S2_registration/run1.json"
+      "out/cursor/print/S2/S2_registration/run1.json",
+      "out/cursor/print/S2/S2_registration/run2.json"
     ],
-    "notes": "skill file absent after the turn tools_used=0 skill_reads=1 searches=0"
+    "notes": "tools_used=1 skill_reads=1 searches=1; tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "cursor",
@@ -6284,14 +6285,15 @@
     "arm": "S2/registration",
     "root": ".cursor/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_after_reload",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": "user ~/.cursor/hooks.json workspaceOpen",
     "evidence": [
-      "out/cursor-userhooks/print/S2/S2_registration/run1.json"
+      "out/cursor-userhooks/print/S2/S2_registration/run1.json",
+      "out/cursor-userhooks/print/S2/S2_registration/run2.json"
     ],
-    "notes": "skill file absent after the turn tools_used=0 skill_reads=1 searches=0"
+    "notes": "tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "gemini",

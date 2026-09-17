@@ -165,7 +165,10 @@ class CursorUserHooksAdapter(CursorAdapter):
         info = super().install_registration(sb, skill_file, body)
         script = json.loads(Path(info.config_path).read_text())["hooks"]["workspaceOpen"][0]["command"]
         Path(info.config_path).unlink()
-        return self._merge(sb, "workspaceOpen", script)
+        merged = self._merge(sb, "workspaceOpen", script)
+        # The plugin directory the hook writes into is the same one either file points at.
+        merged.target = info.target
+        return merged
 
     def cleanup_hook(self, sb: Sandbox) -> None:
         if not self._touched:
