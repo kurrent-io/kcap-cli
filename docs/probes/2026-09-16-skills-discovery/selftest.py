@@ -1572,5 +1572,107 @@ class PiAdapterTests(unittest.TestCase):
             self.assertTrue((sb.config_root / "probe-hook.sh").exists())
 
 
+import importlib  # noqa: E402
+import re  # noqa: E402
+
+from harness import ENTRIES  # noqa: E402
+
+# (entry, the module holding its print driver, the flags a resumed launch must carry)
+RESUME_CASES = (
+    ("claude", "harness.claude", ["--resume", "sid-1"]),
+    ("codex", "harness.codex", ["resume", "sid-1"]),
+    ("copilot", "harness.copilot", ["--resume=sid-1"]),
+    ("pi", "harness.pi", ["--session", "sid-1"]),
+    ("kiro", "harness.kiro", ["--resume"]),
+    ("cursor", "harness.cursor", ["--resume=sid-1"]),
+    ("opencode-v1", "harness.opencode_v1", ["--session", "sid-1"]),
+    ("agy", "harness.agy", ["--conversation", "sid-1"]),
+    ("gemini", "harness.gemini", ["--resume", "sid-1"]),
+)
+
+SESSION_ID_CASES = (
+    ("claude", '{"session_id": "cl-1", "result": "hi"}', "cl-1"),
+    ("codex", '{"type": "thread.started", "thread_id": "cx-1"}\n{"type": "item.completed"}', "cx-1"),
+    ("copilot", '{"type": "assistant.message"}\n{"type": "result", "sessionId": "co-1"}', "co-1"),
+    ("pi", '{"type": "session", "id": "pi-1"}\n{"type": "agent_start"}', "pi-1"),
+    ("cursor", '{"type": "system", "session_id": "cu-1"}', "cu-1"),
+    ("opencode-v1", '{"part": {"sessionID": "oc-1", "type": "text"}}', "oc-1"),
+    ("agy", '{"event": "step_update", "conversation_id": "ag-1"}', "ag-1"),
+)
+
+
+class AdapterPassTwoTests(unittest.TestCase):
+    """Every adapter's resume launch, session id reader and interactive launch."""
+
+    def _stub(self, d: str):
+        sb = new_sandbox("PROBE_UNUSED_LEVER", None, [], base=Path(d))
+        self.addCleanup(sb.cleanup)
+        return sb
+
+    def test_resume_launch_carries_the_session(self):
+        for entry, module_name, expected in RESUME_CASES:
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as d:
+                module = importlib.import_module(module_name)
+                a = ENTRIES[entry]()
+                sb = self._stub(d)
+                a.prepare(sb)
+                seen: list[tuple[list[str], str]] = []
+
+                def fake_print_ask(argv, cwd, env, stderr_path, timeout, stdin_text=None, extract=None):
+                    seen.append((list(argv), stdin_text or ""))
+                    return AskResult(reply_text="", raw="", argv=list(argv), started_at=0.0,
+                                     first_request_at=0.0, stderr_path=None, exit_code=0)
+
+                with mock.patch.object(module, "print_ask", fake_print_ask):
+                    a.resume(sb, "sid-1", "prompt")
+                argv, stdin_text = seen[0]
+                for flag in expected:
+                    self.assertIn(flag, argv)
+                # Codex reads its prompt from stdin; the others carry it in the command line.
+                self.assertIn("prompt", " ".join(argv) + stdin_text)
+
+    def test_session_id_is_read_from_the_vendor_stream(self):
+        for entry, raw, expected in SESSION_ID_CASES:
+            with self.subTest(entry=entry):
+                a = ENTRIES[entry]()
+                res = AskResult(reply_text="", raw=raw, argv=[], started_at=0.0, first_request_at=0.0,
+                                stderr_path=None, exit_code=0)
+                self.assertEqual(a.session_id(res), expected)
+                blank = AskResult(reply_text="", raw="not json", argv=[], started_at=0.0,
+                                  first_request_at=0.0, stderr_path=None, exit_code=0)
+                self.assertIsNone(a.session_id(blank))
+
+    def test_kiro_resumes_the_launch_directory_without_an_id(self):
+        a = ENTRIES["kiro"]()
+        res = AskResult(reply_text="ok", raw="", argv=[], started_at=0.0, first_request_at=0.0,
+                        stderr_path=None, exit_code=0)
+        # Its non-interactive output carries no id, so the arm must still have something to resume.
+        self.assertTrue(a.session_id(res))
+
+    def test_every_declared_mode_has_a_launch(self):
+        with tempfile.TemporaryDirectory() as d:
+            sb = self._stub(d)
+            for entry, cls in ENTRIES.items():
+                with self.subTest(entry=entry):
+                    a = cls()
+                    if "tui" in a.modes:
+                        argv = a.tui_argv(sb)
+                        self.assertTrue(argv, f"{entry} declares tui with no argv")
+                        self.assertNotIn("-p", argv)
+                        self.assertNotIn("--print", argv)
+                    if a.can_resume:
+                        self.assertIsNot(type(a).resume, Adapter.resume, f"{entry} cannot resume")
+                        self.assertIsNot(type(a).session_id, Adapter.session_id, f"{entry} reads no id")
+
+    def test_dialog_answers_are_one_key_at_a_time(self):
+        from lib.pty_driver import KEY_RE
+        for entry, cls in ENTRIES.items():
+            for pattern, keys in cls.tui_dialogs:
+                with self.subTest(entry=entry, dialog=pattern):
+                    self.assertTrue(re.compile(pattern))
+                    # An arrow and its Enter must survive as two keystrokes, not one write.
+                    self.assertEqual("".join(KEY_RE.findall(keys)), keys)
+
+
 if __name__ == "__main__":
     unittest.main()
