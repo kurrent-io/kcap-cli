@@ -410,7 +410,7 @@ unfollowed; no temp file is left behind on any path.
   "scope":                    "all",
   "cohort":                   "exact | partial_exact | unknown",
   "session_ids":              ["<run candidate set, candidate order>"],
-  "foreground_succeeded_ids": ["<own-call Loaded/Resumed ids>"],
+  "foreground_succeeded_ids": ["<ImportRunPartition.SucceededIds, verbatim>"],
   "unattributed_on_disk":     1552,
   "background":               "not_needed | running | exited_zero | failed",
   "background_log":           "<path or null>"
@@ -423,9 +423,12 @@ unfollowed; no temp file is left behind on any path.
   The skill watches exactly those and says so.
 - `cohort: "unknown"` — `Certainty == Incomplete` with `RunCandidateIds == null`; `session_ids` is
   empty and meaningless; the skill queries nothing and closes with links.
-- `foreground_succeeded_ids` lists own-call successes — parents and chain members, never a
-  correlated child. Its consumer is the skill's opening snapshot ("N sessions were imported before
-  you were handed off"); nothing else reads it.
+- `foreground_succeeded_ids` is the completed pass's `ImportRunPartition.SucceededIds`, verbatim —
+  `Loaded`, `Resumed`, and `Skipped` with child content sent (§2 "Terminal partition") — so a Cursor
+  parent that landed only through its children is listed. Parents and chain members only, never a
+  correlated child. Empty on an `Incomplete` pass, where no partition exists. Its consumer is the
+  skill's opening snapshot ("N sessions were imported before you were handed off"); nothing else
+  reads it, and `Succeeded` in §4's table is this list's length.
 - `profile` is the saved profile name the two child processes are pinned to, so the skill can name it
   in a remediation (§5 "Server binding").
 - `unattributed_on_disk` is discovery's figure: sessions found on this machine with no repository
@@ -856,7 +859,9 @@ the published handoff and the log carry owner-only mode on Unix (asserted with
 behind; a pre-existing file or symlink at the handoff name → write failure, its content and target
 unchanged, no temp left; a pre-existing file or symlink at the log name → spawn `Failed`, its content
 and target unchanged; the child opens only the pre-created log and fails at startup when it is
-absent; §3 shape including `profile` and `unattributed_on_disk`; `handoff_suppressed` takes each value of the §4 table from a fixture
+absent; §3 shape including `profile` and `unattributed_on_disk`; `foreground_succeeded_ids` equals
+`ImportRunPartition.SucceededIds`, and the carried-child fixture (a `New` parent landed only through
+its child) lists that parent; `handoff_suppressed` takes each value of the §4 table from a fixture
 built for that row, `null` whenever `handoff_offered` is true, and the precedence cases — failed
 import **and** cached denial → `import_failed`; empty cohort **and** cached denial →
 `no_new_sessions`; all-skipped pass with nothing left → `nothing_landed` — resolve as the table says;
