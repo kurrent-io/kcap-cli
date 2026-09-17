@@ -67,6 +67,19 @@ class ProbeSkillTests(unittest.TestCase):
         r = parse_reply(f"Only {other.name} is available.", "", name=s.name)
         self.assertFalse(r.skill_named)
 
+    def test_a_marked_prompt_ignores_an_earlier_reply(self):
+        from lib.probe_skill import extract_tui_reply, tui_prompt
+        s = ProbeSkill.fresh()
+        later = tui_prompt(s, again=True)
+        self.assertIn("PROBE-MARK-", later)
+        # The transcript a vendor redraws still holds the previous turn's answer.
+        screen = "PROBE-REPLY: NO-SKILL\n" + later + "\nPROBE-REPLY: " + later.split("PROBE-REPLY: ")[1][:15]
+        self.assertEqual(extract_tui_reply(screen, later), "")
+        mark = re.search(r"PROBE-MARK-[0-9a-f]{4}", later).group(0)
+        answered = screen + f"\nPROBE-REPLY: {mark} {s.body_token}\n"
+        self.assertEqual(extract_tui_reply(answered, later), f"PROBE-REPLY: {s.body_token}")
+        self.assertEqual(extract_tui_reply(answered, tui_prompt(s)), "PROBE-REPLY: NO-SKILL")
+
     def test_variant_and_tui_prompt(self):
         from lib.probe_skill import TUI_REPLY_RE, extract_tui_reply, tui_prompt
         s = ProbeSkill.fresh()
@@ -391,7 +404,7 @@ class HookScriptTests(unittest.TestCase):
             self.assertIsNotNone(read_stamp(stamp))
 
 
-from harness.base import Adapter, AskResult, HookInfo  # noqa: E402
+from harness.base import Adapter, AskResult, HookInfo, Session  # noqa: E402
 from harness.fake import FakeAdapter  # noqa: E402
 from lib.print_driver import print_ask  # noqa: E402
 
@@ -841,6 +854,29 @@ class RunnerTests(unittest.TestCase):
             recs = probe.Runner(_ProtocolFailure(), Path(d) / "out", runs=1, base=Path(d)).run_scenario("print", "S1")
             self.assertEqual(recs[0].verdict, "untested")
             self.assertIn("session/new failed", recs[0].notes)
+
+    def test_interactive_log_is_kept_when_the_screen_failed(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            a = FakeAdapter()
+
+            class _NoAnswerSession(Session):
+                def __init__(self, sb):
+                    (sb.root / "fake-tui.log").write_text("the screen as it was\n")
+
+                def ask(self, prompt):
+                    return AskResult(reply_text="", raw="", argv=["fake"], started_at=0.0, first_request_at=0.0,
+                                     stderr_path=None, exit_code=None, notes="timeout")
+
+                def close(self):
+                    return None
+
+            a.open_session = lambda sb, mode: _NoAnswerSession(sb)
+            recs = probe.Runner(a, out, runs=1, base=Path(d)).run_scenario("tui", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            # The screen is the only evidence a failed interactive turn leaves.
+            kept = out / "fake" / "tui" / "S1" / "S1_native" / "run1.fake-tui.log"
+            self.assertEqual(kept.read_text(), "the screen as it was\n")
 
     def test_odd_log_name_is_still_kept(self):
         with tempfile.TemporaryDirectory() as d:

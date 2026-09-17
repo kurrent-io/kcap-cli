@@ -87,21 +87,37 @@ def multi_prompt() -> str:
 # The echoed prompt spells the form with angle brackets, so only a real value matches; a tool
 # panel that shows the skill file carries the token without the prefix and does not match either.
 TUI_REPLY_RE = re.compile(r"PROBE-REPLY:\s*\**\s*(PROBE-BODY-[0-9a-f]{12}|NO-SKILL)\b")
+MARK_RE = re.compile(r"PROBE-MARK-[0-9a-f]{4}")
 
 
 def tui_prompt(skill: ProbeSkill, again: bool = False) -> str:
-    use = "Use it again and read the probe token it contains now" if again else \
-        "Use it and read the probe token it contains"
+    # A vendor that redraws its whole transcript still shows the previous turn's answer, so a
+    # later turn asks for a mark of its own and only a line carrying it counts.
+    if not again:
+        return (
+            f"You have a skill named {skill.name}. Use it and read the probe token it contains, "
+            f"then reply with one line of the form PROBE-REPLY: <value>, where <value> is that "
+            f"token. {NO_SEARCH} If no such skill is listed for you, the value is {NO_SKILL}."
+        )
+    mark = f"PROBE-MARK-{secrets.token_hex(2)}"
     return (
-        f"You have a skill named {skill.name}. {use}, then reply with one line of the form "
-        f"PROBE-REPLY: <value>, where <value> is that token. {NO_SEARCH} "
-        f"If no such skill is listed for you, the value is {NO_SKILL}."
+        f"You have a skill named {skill.name}. Use it again and read the probe token it contains "
+        f"now, then reply with one line of the form PROBE-REPLY: {mark} <value>, where <value> is "
+        f"that token. {NO_SEARCH} If no such skill is listed for you, the value is {NO_SKILL}."
     )
 
 
-def extract_tui_reply(screen: str) -> str:
-    # Every match counts, so the caller passes only the screen region this turn produced.
-    return "\n".join(f"PROBE-REPLY: {m.group(1)}" for m in TUI_REPLY_RE.finditer(screen))
+def reply_re(mark: str | None) -> re.Pattern:
+    if not mark:
+        return TUI_REPLY_RE
+    return re.compile(rf"PROBE-REPLY:\s*\**\s*{re.escape(mark)}\s*\**\s*(PROBE-BODY-[0-9a-f]{{12}}|NO-SKILL)\b")
+
+
+def extract_tui_reply(screen: str, prompt: str = "") -> str:
+    """The reply lines on this screen, keeping only those that carry the prompt's own mark."""
+    found = MARK_RE.search(prompt)
+    mark = found.group(0) if found else None
+    return "\n".join(f"PROBE-REPLY: {m.group(1)}" for m in reply_re(mark).finditer(screen))
 
 
 @dataclass(frozen=True)

@@ -201,7 +201,7 @@ class PtySession(Session):
     def __init__(self, argv: list[str], cwd: Path, env: dict, log_path: Path,
                  dialogs: tuple[tuple[str, str], ...] = (), reload_command: str | None = None,
                  exit_keys: tuple[str, ...] = ("\x03", "\x03", "\x04"), ready_idle: float = 4.0,
-                 timeout: float = 180.0, cols: int = 200, rows: int = 50) -> None:
+                 timeout: float = 180.0, cols: int = 200, rows: int = 50, submit_delay: float = 1.2) -> None:
         self.argv = list(argv)
         self.cwd = Path(cwd)
         self.log_path = Path(log_path)
@@ -212,6 +212,9 @@ class PtySession(Session):
         self.ready_idle = ready_idle
         self.timeout = timeout
         self.cols, self.rows = cols, rows
+        # A composer that opens as the text arrives swallows an Enter sent right behind it, and
+        # the prompt then sits unsent in a follow-up panel.
+        self.submit_delay = submit_delay
         self.proc: subprocess.Popen | None = None
         self.master = -1
         self.term = Terminal(rows, cols)
@@ -310,7 +313,7 @@ class PtySession(Session):
         with self._lock:
             self.term.clear()
         self.send(prompt)
-        time.sleep(0.5)
+        time.sleep(self.submit_delay)
         first = time.time()
         self.send("\r")
         deadline = time.time() + self.timeout
@@ -318,13 +321,13 @@ class PtySession(Session):
         extra: list[str] = []
         while time.time() < deadline:
             self._answer_dialogs()
-            reply = extract_tui_reply(self.screen())
+            reply = extract_tui_reply(self.screen(), prompt)
             if reply:
                 break
             if self.proc is not None and self.proc.poll() is not None:
                 extra.append(f"tui exited with {self.proc.returncode}")
                 # The exit may follow the reply by less than one poll interval.
-                reply = extract_tui_reply(self.screen())
+                reply = extract_tui_reply(self.screen(), prompt)
                 break
             time.sleep(0.2)
         else:
@@ -343,7 +346,7 @@ class PtySession(Session):
             self.term.clear()
         # Enter goes in its own write: inside a burst a TUI's paste detection keeps it as text.
         self.send(line)
-        time.sleep(0.5)
+        time.sleep(self.submit_delay)
         self.send("\r")
         time.sleep(settle if settle is not None else max(self.ready_idle, 1.0))
         self._answer_dialogs()

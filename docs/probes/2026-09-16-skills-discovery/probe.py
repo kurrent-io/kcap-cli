@@ -185,7 +185,7 @@ class Runner:
 
     def _keep_stderr(self, sb: Sandbox, run_path: Path, stderr_path: str | None) -> str | None:
         """Copy the sandbox's stderr logs beside the run file: the sandbox is about to be removed."""
-        wanted = {str(p) for p in sb.root.rglob("*.stderr.log")}
+        wanted = {str(p) for p in sb.root.rglob("*.stderr.log")} | {str(p) for p in sb.root.rglob("*-tui.log")}
         if stderr_path and Path(stderr_path).is_file() and Path(stderr_path).is_relative_to(sb.root):
             wanted.add(stderr_path)
         for src in sorted(wanted):

@@ -42,7 +42,10 @@ class CodexAdapter(Adapter):
         return HookInfo(mechanism="hooks.json SessionStart", config_path=str(hooks))
 
     def tui_argv(self, sb: Sandbox) -> list[str] | None:
-        return [self.binary_path() or self.binary, "--sandbox", "read-only", "-a", "never", "--no-alt-screen"]
+        # The same hook-trust bypass the headless modes pass: without it an unsigned hook is
+        # silently not run, which reads as a harness that has no startup hook at all.
+        return [self.binary_path() or self.binary, "--sandbox", "read-only", "-a", "never",
+                "--dangerously-bypass-hook-trust", "--no-alt-screen"]
 
     def open_session(self, sb: Sandbox, mode: str) -> Session | None:
         if mode != "daemon":
