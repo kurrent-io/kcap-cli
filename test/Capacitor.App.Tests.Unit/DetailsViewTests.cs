@@ -114,13 +114,13 @@ public class DetailsViewTests {
             try {
                 var (block, link) = AllLinks(root).Single();
                 Click(window, block, link);
-                await Assert.That(opened).IsEquivalentTo(new[] { "https://visible.example" });
+                await Assert.That(opened).IsEquivalentTo(new[] { "https://visible.example/" });
 
                 ClickHeader(window, Header(root, 0));
                 ClickHeader(window, Header(root, 0));
                 (block, link) = AllLinks(root).Single();
                 Click(window, block, link);
-                await Assert.That(opened).IsEquivalentTo(new[] { "https://visible.example", "https://visible.example" });
+                await Assert.That(opened).IsEquivalentTo(new[] { "https://visible.example/", "https://visible.example/" });
             } finally { window.Close(); }
         });
     }
