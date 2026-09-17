@@ -34,17 +34,25 @@ offer the flow.
   in the routed plan (`ImportCommand.cs:1305-1315`) so a vendor source can re-assert lifecycle hooks,
   backfill the repository node, or attach a previously unloaded nested child. They are actionable
   work, not new sessions.
-- **Run candidate set**: every session id this setup run may cause to land — the importable set
-  (selected and unselected) plus `ProbeError` ids. Known in full at classification time. The eval-watch
-  cohort (§5) is this set. Replay rows are not candidates: they are already on the server.
+- **Run candidate set**: every top-level session id this setup run may cause to land — the
+  importable set (selected and unselected) minus correlated Cursor children whose parent is in the
+  plan, plus `ProbeError` ids. Known in full at classification time. The eval-watch cohort (§5) is
+  this set. Replay rows are not candidates: they are already on the server. Children are not
+  candidates: they land under their parent, never as a session of their own.
 - **Chain**: file-based sessions (Claude, Codex) sharing a transcript slug, ordered ascending so
   `previous_session_id` continuation links hold.
 - **Routed unit**: one routed session, or a Cursor parent together with its correlated subagent
   children (`SourceMeta["SubagentChildren"]` / `IsSubagentChild` + `ParentSessionId`). Children are
-  imported inline by their parent's call (`CursorImportSource.cs:578-605`) and their own call returns
-  `ImportOutcome.Skipped` (`:422-438`), so the unit is the smallest thing that can run whole. A unit
-  is **eligible** for foreground selection only when its parent is `New` or `Partial`; a unit whose
-  parent is a replay row is left whole to the background child, however its children are classified.
+  imported inline by their parent's call **under the parent's subsession stream**
+  (`CursorImportSource.cs:427-438, 578-605`): they are never top-level sessions on the server, their
+  own call returns `ImportOutcome.Skipped`, and they never appear in `v_an_sessions`. So a unit is
+  **one server session** — the parent — and its children ride with it: they count for nothing, are
+  never selected ids, never candidates, never in the partition. A unit is **eligible** for foreground
+  selection only when its parent is `New` or `Partial`; a unit whose parent is a replay row is left
+  whole to the background child, however its children are classified — the new content lands under
+  the already-present parent either way. A child whose parent is absent from the whole plan is an
+  orphan: `ReconcileOrphanedCursorSubagentChildren` makes it a standalone session, and from then on
+  it is an ordinary routed unit of its own.
 - **Selection unit**: a chain or an eligible routed unit.
 - **Remainder**: unselected `New`/`Partial` classifications, routed replay rows that no selected unit
   carries (§2), and `ProbeError` classifications. File-based `AlreadyLoaded` rows are not remainder:
@@ -202,19 +210,25 @@ capture scope**, and **before any import work starts**, over selection units:
    means a 50-session foreground pass — accepted; unit integrity and determinism beat cap exactness.
 2. If chains yield fewer than `maxSessions`, extend the selection with eligible routed units in
    descending order until the total is reached or the importable set is exhausted. A unit is taken
-   whole and counts its parent plus every `New`/`Partial` child toward the cap.
+   whole and counts **one** toward the cap — its parent; children count for nothing.
 
-**Selected ids versus executed ids.** Selected ids are the `New`/`Partial` members of the selected
-units; they are what the partition below accounts for and what enters the cohort. The foreground
-routed plan additionally *carries* a selected unit's `AlreadyLoaded` children, because the parent's
-call needs them present in `routed` to import inline and their own call short-circuits to `Skipped`
-with nothing sent. Carried children are not selected ids, consume no slot, appear in no partition
-list and are not cohort candidates. A unit whose parent is `AlreadyLoaded` is never eligible, so its
-`New`/`Partial` children are never selected in the foreground: they are remainder, and the
-background child's full plan imports them through the parent's replay exactly as `kcap import --all`
-does today. No replay parent ever runs in the foreground. `AlreadyLoaded` is a classification, not a
-runtime discovery, so watermarked sessions never consume selection slots: a corpus whose five newest
-sessions are watermarked selects the five newest *importable* ones.
+**Selected ids versus executed ids.** Selected ids are the selected chain members and the selected
+routed units' parents — one id per server session; they are what the partition below accounts for
+and what enters the cohort. The foreground routed plan additionally *carries* a selected unit's
+children whatever their classification, because the parent's call needs them present in `routed` to
+import them inline; their own call short-circuits to `Skipped`. Carried children are not selected
+ids, consume no slot, appear in no partition list and are not cohort candidates. A unit whose parent
+is `AlreadyLoaded` is never eligible, so nothing of it runs in the foreground: its `New`/`Partial`
+children are remainder, and the background child's full plan imports them through the parent's
+replay exactly as `kcap import --all` does today; they never become candidates either, because what
+lands is the already-present parent's subsession. No replay parent ever runs in the foreground.
+`AlreadyLoaded` is a classification, not a runtime discovery, so watermarked sessions never consume
+selection slots: a corpus whose five newest sessions are watermarked selects the five newest
+*importable* ones.
+
+**Candidates.** The run candidate set is therefore every `New`/`Partial` classification that is not a
+correlated child of a parent present in the full plan, plus every `ProbeError` classification —
+exactly the ids that can become rows in `v_an_sessions`.
 
 Selection narrows the routed plan **before** `ReconcileOrphanedCursorSubagentChildren`
 (`ImportCommand.cs:1325`), so the reconcile sees exactly the selected units' members (selected ids
@@ -238,7 +252,7 @@ that suppression, so the two never disagree about an id.
 
 ```
 ImportRunSelection(                          // onSelected, after selection, before execution
-    IReadOnlyList<string> RunCandidateIds,   // importable + ProbeError, candidate order (§1)
+    IReadOnlyList<string> RunCandidateIds,   // Terms "Run candidate set", candidate order (§1)
     IReadOnlyList<string> SelectedIds,
     bool                  RemainderExists)   // Terms "Remainder"
 
@@ -388,9 +402,9 @@ unfollowed; no temp file is left behind on any path.
   The skill watches exactly those and says so.
 - `cohort: "unknown"` — `Certainty == Incomplete` with `RunCandidateIds == null`; `session_ids` is
   empty and meaningless; the skill queries nothing and closes with links.
-- `foreground_succeeded_ids` lists own-call successes only. A Cursor child landed inline by its
-  parent is a candidate (it is in `session_ids`) but not listed here. Its consumer is the skill's
-  opening snapshot ("N sessions were imported before you were handed off"); nothing else reads it.
+- `foreground_succeeded_ids` lists own-call successes — parents and chain members, never a
+  correlated child. Its consumer is the skill's opening snapshot ("N sessions were imported before
+  you were handed off"); nothing else reads it.
 - `profile` is the saved profile name the two child processes are pinned to, so the skill can name it
   in a remediation (§5 "Server binding").
 - `unattributed_on_disk` is discovery's figure: sessions found on this machine with no repository
@@ -639,25 +653,31 @@ user per minute (`AnalyticsQueryOptions.RequestsPerMinute`), rejected starts inc
 with `Retry-After`. Both bounds shape the batching:
 
 - A cohort batch asks "which of these ids are present and which completed"; a truncated answer is
-  incomplete and is never committed. Each batch requests `max_rows` equal to its size; the initial
-  size is 100 (five queries for a full 500-id cohort).
-- **Budget: at most 20 cohort queries per poll.** With a poll every 30 seconds that is 40 starts a
-  minute, leaving room for the enrichment queries (at most six over the whole run) and a retry. The
-  smallest batch the budget allows is `floor = ceil(N / 20)` where `N` is the cohort size — 25 for
-  500 ids, 10 for anything up to 200.
-- On truncation the skill halves the batch size, never below `floor`, and re-issues within the same
-  logical poll. If a batch at `floor` still truncates, the poll fails and the skill says the
-  server's row cap is below what watching this many sessions needs — it never buys completeness by
-  spending past the request budget. The chosen batch size persists across polls.
-- A 429 fails the poll; the next poll starts after the later of the 30-second cadence and
-  `Retry-After`. Two in a row stop the watch like any other failure.
+  incomplete and is never committed. Each batch requests `max_rows` equal to its size.
+- **Budget: at most 20 cohort queries per poll, including the first.** With a poll every 30 seconds
+  that is 40 starts a minute, leaving room for the enrichment queries (at most six over the whole
+  run) and a retry. The smallest batch the budget allows is `floor = ceil(N / 20)` where `N` is the
+  cohort size — 25 for 500 ids, 10 for 200, 5 for 100.
+- **No probing.** The first poll runs at batch size `floor` exactly, so it spends at most 20
+  queries. Every successful query body carries the server's effective `max_rows` (the same field the
+  MCP reads for its truncation trailer), so after the first poll the skill knows the cap: it raises
+  the batch to `min(100, cap)` for later polls, or, if the first poll's responses were truncated
+  (cap below `floor`), fails closed at once — the skill says the server's row cap is below what
+  watching this many sessions needs, and never buys completeness by spending past the budget. The
+  `get_analytics_schema` tool cannot supply the cap up front: the MCP returns the schema text and
+  drops the envelope's `max_rows`.
+- **429.** The MCP surfaces a 429 as `Error: HTTP 429 — <detail>`, with no headers. The
+  rate-limit detail reads `Rate limit: N queries/min; retry after Ns.`, so the skill parses
+  `retry after (\d+)s` when present and otherwise waits the full 60-second window; the next poll
+  starts after the later of that delay and the 30-second cadence. A 429 fails the poll; two in a row
+  stop the watch like any other failure. Exposing `retry_after_seconds` structurally through the MCP
+  is a follow-up (Out of scope).
 - Enrichment queries are bounded by construction (one row per category; `LIMIT 2`); should one still
   come back truncated, that session's detail is omitted and it is summarized by `overall_score`
   alone, disclosed.
 
 **Logical-poll atomicity.** One poll = every cohort batch, each non-truncated. Any required-query
-failure — an error, a 429, or a truncation the halving could not clear within the budget — discards
-the whole poll: no baseline, dedup or completion state commits from it, and it counts as one error
+failure — an error, a 429, or a truncated response — discards the whole poll: no baseline, dedup or completion state commits from it, and it counts as one error
 toward the two-failure stop. Each successful poll recomputes cohort state from its own full results.
 Enrichment queries are optional: their failure or truncation degrades summary content, never poll
 success or stop logic.
@@ -741,15 +761,18 @@ yields one deterministic order; the 500 cut over a >500 mixed corpus is stable a
 **Selection** (`SelectForeground`): whole chains to the cap; boundary-chain overshoot; eligible
 routed units taken whole (parent plus children); importable ≤ cap selects everything; all-watermarked
 selects nothing; newest sessions `AlreadyLoaded` → newest importable selected; replay rows never
-selected; **mixed-status units**: an `AlreadyLoaded` parent with a `New` child is ineligible — neither
-runs in the foreground, the child is remainder and the child process imports it through the parent;
-a `New` parent with an `AlreadyLoaded` child is selected with the parent counted, the child carried
-into the plan, absent from every partition list and from the cohort; selection computed after capture
+selected; a routed unit counts one toward the cap however many children it has; **mixed-status
+units**: an `AlreadyLoaded` parent with a `New` child is ineligible — neither runs in the foreground,
+the child is remainder and the child process imports it through the parent, and neither id is a
+candidate; a `New` parent with children of any status is selected with the parent counted and the
+children carried into the plan, absent from every partition list and from the cohort; an orphaned
+child (parent absent from the plan) is its own unit and candidate; selection computed after capture
 scope, before reconcile and before any import (seam ordering); a selected Cursor parent never imports
 a child outside its unit and no child in the plan lacks its parent.
 
-**Terminal partition**: a Cursor child imported inline by its parent lands in `SkippedIds`; a
-quarantined session lands in `SkippedIds`; own-call `Loaded`/`Resumed` land in `SucceededIds`;
+**Terminal partition**: a quarantined session lands in `SkippedIds`; a routed session with no
+sendable content lands in `SkippedIds`; own-call `Loaded`/`Resumed` land in `SucceededIds`; a
+carried child appears in no list;
 `Complete ⇒ Selected == Succeeded + Skipped + Failed`; the per-id partition is taken from the raw
 outcome and disagrees with nothing the Done grid counts.
 
@@ -832,11 +855,12 @@ session) is ignored and never counted, linked or summarized, and no fixture quer
 without an `IN (…)` or `session_id =` bound to cohort ids; no file and `cohort: "unknown"` both
 close with links and zero queries; repo-less members counted and linked without a repo hash;
 partial-exact over 500 with a listed arrival a capped scan would miss; **request budget**: a 500-id
-cohort never issues more than 20 cohort queries in one poll, so batch size never drops below 25; with
-a server row cap of 10 the poll fails closed and says so rather than tripping the 60-per-minute
-limit; with a cap of 25 every poll succeeds in 20 queries and no 429 ever occurs; a 429 fails the
-poll and the next poll honours `Retry-After`; a truncated enrichment response omits that session's
-detail; `analytics_not_in_plan` from the server closing immediately without
+cohort's first poll runs at batch 25 and issues exactly 20 queries, no probe; with a server row cap
+of 10 that first poll fails closed and says so, having spent 20 requests and never tripping the
+60-per-minute limit; with a cap of 25 the first poll succeeds in 20 queries and later polls stay at
+25; with a cap of 300 later polls rise to batch 100 and 5 queries; a 429 whose detail says `retry
+after 37s` delays the next poll 37 seconds, one without the phrase delays it 60; a truncated
+enrichment response omits that session's detail; `analytics_not_in_plan` from the server closing immediately without
 polling; **binding fails closed**: a `whoami` server that differs from the file's issues zero queries
 and closes with links plus the profile remediation, and a `whoami` failure does the same;
 `skill_not_installed` and `no_agent_detected` files continue as if offered; poll atomicity and
@@ -865,3 +889,5 @@ section mentions newest-first prioritization and nothing else changes there.
   the general question is its own change.
 - Making `kcap import`'s discovery resilient to one source failing (today one throwing source aborts
   the whole scan). Setup totalizes the scan as a whole; per-source resilience is its own change.
+- Surfacing `retry_after_seconds` and the effective row cap structurally through the analytics MCP.
+  The skill reads both from the text the MCP returns today.
