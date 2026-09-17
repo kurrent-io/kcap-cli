@@ -1012,6 +1012,15 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("again", r._prompt("print", skill, again=True))
             self.assertIn("PROBE-REPLY", r._prompt("tui", skill, again=True))
 
+    def test_reload_arm_costs_nothing_without_a_reload_command(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = _CountingAdapter()
+            a.tui_reload = None
+            recs = self._runner(d, a).run_scenario("tui", "S5", arms=["reload"])
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            self.assertIn("no reload command", recs[0].notes)
+            self.assertEqual(a.calls, 0)
+
     def test_mode_scenario_table_and_blocked_rows(self):
         with tempfile.TemporaryDirectory() as d:
             r = self._runner(d)

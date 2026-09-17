@@ -83,6 +83,9 @@ class Adapter:
     # dialogs, the slash command that rebuilds its catalogue, the keys that end it.
     tui_dialogs: tuple[tuple[str, str], ...] = ()
     tui_reload: str | None = None
+    # An interactive turn carries the UI's own latency on top of the model's, so it gets longer
+    # than a headless one before the screen is called unreadable.
+    tui_timeout: float = 300.0
     tui_exit: tuple[str, ...] = ("\x03", "\x03", "\x04")
     tui_ready: float = 4.0
 
@@ -124,7 +127,7 @@ class Adapter:
         from lib.pty_driver import PtySession
         session = PtySession(argv, sb.cwd, sb.env, sb.root / f"{self.harness}-tui.log", dialogs=self.tui_dialogs,
                              reload_command=self.tui_reload, exit_keys=self.tui_exit, ready_idle=self.tui_ready,
-                             timeout=self.turn_timeout)
+                             timeout=self.tui_timeout)
         session.start()
         return session
 

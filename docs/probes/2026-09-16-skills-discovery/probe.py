@@ -671,6 +671,11 @@ class Runner:
             for arm in arms or arms_of(mode, scenario):
                 if gated:
                     out += self._blocked(mode, scenario, f"{scenario}/{arm}", native, exclusion)
+                elif arm == "reload" and self.adapter.tui_reload is None:
+                    # Declared, not discovered: asking the first turn would spend a turn to learn
+                    # what the adapter already knows.
+                    out += self._blocked(mode, scenario, f"{scenario}/{arm}", native, exclusion,
+                                         notes="no reload command for this entry")
                 else:
                     out += self.run_arm(lambda a_=arm: fn(mode, a_), mode, scenario, f"{scenario}/{arm}", native, exclusion)
         elif scenario == "S10":
