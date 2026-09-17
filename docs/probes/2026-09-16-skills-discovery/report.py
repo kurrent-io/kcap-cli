@@ -15,7 +15,9 @@ KIT = Path(__file__).resolve().parent
 
 VISIBLE = ("visible_first_turn", "visible_after_reload")
 COLUMNS = ("Entry", "Version tested", "Modes", "Native root", "Roots consumed", "Startup mechanism proven",
-           "Exclusion preserving load", "Vendor-isolated destination", "Reload path", "GUI status", "Minimum version")
+           "Exclusion preserving load", "Vendor-isolated destination", "Reload path", "Live catalogue",
+           "Startup rewrite", "Resume", "Nested cwd", "Worktree", "Peer hook", "Interactive", "GUI status",
+           "Minimum version")
 
 # GUI launch modes the kit cannot drive; the findings carry a manual procedure for each.
 GUI_STATUS = {
@@ -64,6 +66,27 @@ def summarise(rows: list[dict]) -> list[dict]:
             status = "no S1 row"
         measured = status == "measured"
         ran = {r["scenario"] for r in rs if r["verdict"] != "untested"}
+        modes_ran = {r["mode"] for r in rs if r["verdict"] != "untested"}
+
+        def arm_cells(scenario: str, mode: str | None = None) -> list[str]:
+            vals: dict[str, set[str]] = {}
+            for r in rs:
+                if r["scenario"] != scenario or r["verdict"] == "untested":
+                    continue
+                if mode is not None and r["mode"] != mode:
+                    continue
+                vals.setdefault(r["arm"].split("/", 1)[1], set()).add(r["verdict"])
+            return [f"{arm}={'/'.join(sorted(v))}" for arm, v in sorted(vals.items())]
+
+        def tui_cells() -> list[str]:
+            vals: dict[str, set[str]] = {}
+            for r in rs:
+                if r["mode"] != "tui" or r["verdict"] == "untested" or r["scenario"] == "S0":
+                    continue
+                key = r["scenario"] if r["scenario"] == "S1" else r["arm"].split("/", 1)[1]
+                vals.setdefault(key, set()).add(r["verdict"])
+            order = {"S1": 0, "hook-adds-skill": 1, "add": 2, "reload": 3}
+            return [f"{k}={'/'.join(sorted(v))}" for k, v in sorted(vals.items(), key=lambda kv: order.get(kv[0], 9))]
 
         def cell(values: list[str], scenario: str) -> str:
             # A scenario the entry never ran says so, instead of reading as a measured "none".
@@ -71,7 +94,8 @@ def summarise(rows: list[dict]) -> list[dict]:
                 return "; ".join(values)
             if not measured:
                 return "—"
-            return "none" if scenario in ran else "n/a (not run)"
+            ran_it = scenario in modes_ran if scenario == "tui" else scenario in ran
+            return "none" if ran_it else "n/a (not run)"
 
         out.append({
             "Entry": entry,
@@ -84,6 +108,13 @@ def summarise(rows: list[dict]) -> list[dict]:
             "Exclusion preserving load": cell([", ".join(exclusions)] if exclusions else [], "S3"),
             "Vendor-isolated destination": cell([", ".join(isolated)] if isolated else [], "S4"),
             "Reload path": cell(reload, "S2"),
+            "Live catalogue": cell(arm_cells("S5", "daemon"), "S5"),
+            "Startup rewrite": cell(arm_cells("S6"), "S6"),
+            "Resume": cell(arm_cells("S7"), "S7"),
+            "Nested cwd": cell(arm_cells("S8"), "S8"),
+            "Worktree": cell(arm_cells("S9"), "S9"),
+            "Peer hook": cell(arm_cells("S10"), "S10"),
+            "Interactive": cell(tui_cells(), "tui"),
             "GUI status": GUI_STATUS.get(entry, "n/a"),
             "Minimum version": ", ".join(versions) if measured else "—",
             "_status": status,

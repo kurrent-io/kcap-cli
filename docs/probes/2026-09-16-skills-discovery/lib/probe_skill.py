@@ -41,6 +41,10 @@ class ProbeSkill:
             f"{self.body_token}\n"
         )
 
+    def variant(self) -> "ProbeSkill":
+        """The same skill name with a fresh token: what an in-place rewrite of the body looks like."""
+        return ProbeSkill(self.nonce, secrets.token_hex(6))
+
 
 def write_skill(root: Path, skill: ProbeSkill, flat: bool = False) -> Path:
     if flat:
@@ -74,6 +78,23 @@ def multi_prompt() -> str:
         "with <name>=<token> on its own line, reading the token from the skill body. "
         f"{NO_SEARCH} If there are none, reply with exactly {NO_SKILL}."
     )
+
+
+# The echoed prompt spells the form with angle brackets, so only a real value matches; a tool
+# panel that shows the skill file carries the token without the prefix and does not match either.
+TUI_REPLY_RE = re.compile(r"PROBE-REPLY:\s*\**\s*(PROBE-BODY-[0-9a-f]{12}|NO-SKILL)\b")
+
+
+def tui_prompt(skill: ProbeSkill) -> str:
+    return (
+        f"You have a skill named {skill.name}. Use it and reply with one line of the form "
+        f"PROBE-REPLY: <value>, where <value> is the probe token the skill contains. {NO_SEARCH} "
+        f"If no such skill is listed for you, the value is {NO_SKILL}."
+    )
+
+
+def extract_tui_reply(screen: str) -> str:
+    return "\n".join(f"PROBE-REPLY: {m.group(1)}" for m in TUI_REPLY_RE.finditer(screen))
 
 
 @dataclass(frozen=True)

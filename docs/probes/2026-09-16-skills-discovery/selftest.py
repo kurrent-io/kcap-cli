@@ -67,6 +67,24 @@ class ProbeSkillTests(unittest.TestCase):
         r = parse_reply(f"Only {other.name} is available.", "", name=s.name)
         self.assertFalse(r.skill_named)
 
+    def test_variant_and_tui_prompt(self):
+        from lib.probe_skill import TUI_REPLY_RE, extract_tui_reply, tui_prompt
+        s = ProbeSkill.fresh()
+        v = s.variant()
+        self.assertEqual(v.name, s.name)
+        self.assertNotEqual(v.token, s.token)
+        prompt = tui_prompt(s)
+        self.assertNotIn(s.token, prompt)
+        self.assertIn(s.name, prompt)
+        self.assertEqual(extract_tui_reply(prompt), "")
+        screen = f"> {prompt}\n\n  **PROBE-REPLY: {s.body_token}**\n> "
+        self.assertEqual(extract_tui_reply(screen), f"PROBE-REPLY: {s.body_token}")
+        self.assertEqual(extract_tui_reply("PROBE-REPLY: NO-SKILL\n"), "PROBE-REPLY: NO-SKILL")
+        self.assertIsNotNone(TUI_REPLY_RE.search("PROBE-REPLY:  NO-SKILL"))
+        r = parse_reply(extract_tui_reply(screen), "", s.name)
+        self.assertIn(s.token, r.tokens)
+        self.assertFalse(r.skill_named)
+
 
 import os  # noqa: E402
 import tempfile  # noqa: E402
@@ -249,6 +267,22 @@ class VerdictTests(unittest.TestCase):
         self.assertFalse(needs_third_run(["not_visible"]))
         for v in VERDICTS:
             self.assertEqual(combine([v]), (v, False))
+
+    def test_judge_update_and_delete(self):
+        from lib.verdict import judge_delete, judge_update
+        new, old = "a" * 12, "b" * 12
+        r = lambda text: parse_reply(text, text, "kcap-probe-abcdef")  # noqa: E731
+        self.assertEqual(judge_update(new, old, r(f"PROBE-BODY-{new}"), live=True), "visible_live")
+        self.assertEqual(judge_update(new, old, r(f"PROBE-BODY-{new}"), live=False), "visible_first_turn")
+        self.assertEqual(judge_update(new, old, r(f"PROBE-BODY-{old}"), live=True), "stale")
+        self.assertEqual(judge_update(new, None, r("NO-SKILL"), live=True), "not_visible")
+        self.assertEqual(judge_update(new, None, r("kcap-probe-abcdef is listed but empty"), live=True), "catalogue_only")
+        self.assertEqual(judge_delete(old, r("NO-SKILL")), "revoked")
+        self.assertEqual(judge_delete(old, r(f"PROBE-BODY-{old}")), "stale")
+        self.assertEqual(judge_delete(old, r("kcap-probe-abcdef exists but I cannot read it")), "stale")
+        self.assertEqual(judge_delete(old, r("I have no idea")), "not_visible")
+        for v in ("visible_live", "stale", "revoked"):
+            self.assertIn(v, VERDICTS)
 
 
 import json  # noqa: E402
@@ -1090,6 +1124,12 @@ class CopilotAdapterTests(unittest.TestCase):
                          "tools_used=1 skill_loads=1 searches=0")
 
 
+def _row(entry, scenario, arm, root, verdict, mode, mechanism=None):
+    return dict(entry=entry, harness=entry, version="1.0", os="o", mode=mode, scenario=scenario, arm=arm,
+                root=root, exclusion="none", verdict=verdict, flaky=False, runs=2, mechanism=mechanism,
+                evidence=[], notes="")
+
+
 class ReportTests(unittest.TestCase):
     def test_summary_columns(self):
         import report
@@ -1119,6 +1159,29 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(summary["y"]["Minimum version"], "—")
         text = report.render(list(summary.values()))
         self.assertIn("| x | 1.0 |", text)
+
+    def test_lifecycle_columns(self):
+        rows = [
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "print"),
+            _row("x", "S5", "S5/add", ".x/skills", "visible_live", "daemon"),
+            _row("x", "S5", "S5/delete", ".x/skills", "revoked", "daemon"),
+            _row("x", "S6", "S6/update", ".x/skills", "stale", "print"),
+            _row("x", "S6", "S6/update", ".x/skills", "stale", "daemon"),
+            _row("x", "S7", "S7/add", ".x/skills", "untested", "print"),
+            _row("x", "S9", "S9/linked-other", ".x/skills", "not_visible", "print"),
+            _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "tui"),
+            _row("x", "S5", "S5/reload", ".x/skills", "visible_after_reload", "tui", mechanism="/reload"),
+        ]
+        import report
+        s = {r["Entry"]: r for r in report.summarise(rows)}["x"]
+        self.assertEqual(s["Live catalogue"], "add=visible_live; delete=revoked")
+        self.assertEqual(s["Startup rewrite"], "update=stale")
+        self.assertEqual(s["Resume"], "n/a (not run)")
+        self.assertEqual(s["Nested cwd"], "n/a (not run)")
+        self.assertEqual(s["Worktree"], "linked-other=not_visible")
+        self.assertEqual(s["Interactive"], "S1=visible_first_turn; reload=visible_after_reload")
+        self.assertIn("/reload", s["Reload path"])
+        self.assertIn("tui", s["Modes"])
 
 
 class CursorAdapterTests(unittest.TestCase):
