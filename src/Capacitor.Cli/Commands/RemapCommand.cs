@@ -43,21 +43,15 @@ public sealed class RemapCommand(ConfigRoot root) {
 
                 return 1;
             case "--remove":
-                return await Remove(args[2]);
+                return args.Length > 3
+                    ? await TooManyArguments("--remove takes exactly one path")
+                    : await Remove(args[2]);
             default:
                 if (args.Length < 3) return Usage();
 
-                // A glob the shell expanded arrives as many arguments; silently
-                // taking the first two would store a rule for one worktree.
-                if (args.Length > 3) {
-                    await Console.Error.WriteLineAsync(
-                        "Too many arguments. Quote a pattern containing '*' so the shell doesn't expand it:");
-                    await Console.Error.WriteLineAsync("  kcap remap '~/dev/repo/worktrees/*' ~/dev/repo");
-
-                    return 1;
-                }
-
-                return await Add(args[1], args[2]);
+                return args.Length > 3
+                    ? await TooManyArguments("takes exactly two paths")
+                    : await Add(args[1], args[2]);
         }
     }
 
@@ -234,6 +228,20 @@ public sealed class RemapCommand(ConfigRoot root) {
         while (end > 1 && (trimmed[end - 1] == '/' || trimmed[end - 1] == '\\')) end--;
 
         return trimmed[..end];
+    }
+
+    /// <summary>
+    /// The extra arguments are usually a pattern the shell expanded, in which
+    /// case no <c>*</c> survives into <c>args</c> to detect it by — so the
+    /// quoting advice is offered rather than diagnosed. Taking the first two
+    /// arguments anyway would silently store, or remove, one worktree's rule.
+    /// </summary>
+    static async Task<int> TooManyArguments(string expected) {
+        await Console.Error.WriteLineAsync($"Too many arguments: kcap remap {expected}.");
+        await Console.Error.WriteLineAsync("If you meant a wildcard pattern, quote it so the shell doesn't expand it:");
+        await Console.Error.WriteLineAsync("  kcap remap '~/dev/repo/worktrees/*' ~/dev/repo");
+
+        return 1;
     }
 
     static int Usage() {

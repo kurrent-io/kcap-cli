@@ -210,6 +210,37 @@ public class CwdRemapperTests {
     }
 
     [Test]
+    public async Task Apply_prefers_the_wildcard_rule_that_reaches_further() {
+        var rules = new[] {
+            R("/dev/worktrees/*",               "/dev/shallow"),
+            R("/dev/worktrees/*/repo",          "/dev/repo"),
+        };
+
+        await Assert.That(CwdRemapper.Apply("/dev/worktrees/capacitor/repo/src", rules, new("/home/u")))
+            .IsEqualTo("/dev/repo/src");
+
+        // ...and falls back to the shallower one where the deeper tail is absent.
+        await Assert.That(CwdRemapper.Apply("/dev/worktrees/capacitor/other", rules, new("/home/u")))
+            .IsEqualTo("/dev/shallow/other");
+    }
+
+    [Test]
+    public async Task Apply_matches_a_wildcard_head_written_with_the_other_separator() {
+        // A transcript recorded on Windows against a rule typed with '/': the
+        // head has to fail cleanly rather than half-match into the segment scan.
+        var rules  = new[] { R("/dev/repo/worktrees/*", "/dev/repo") };
+        var result = CwdRemapper.Apply(@"\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo(@"\dev\repo\worktrees\ai-1");
+    }
+
+    [Test]
+    public async Task Apply_skips_a_rule_whose_wildcard_is_glued_to_a_following_literal() {
+        var rules  = new[] { R("/dev/*-tree/src", "/dev/repo") };
+        var result = CwdRemapper.Apply("/dev/ai-tree/src", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/ai-tree/src");
+    }
+
+    [Test]
     public async Task Apply_skips_a_rule_whose_wildcard_is_not_a_whole_segment() {
         var rules  = new[] { R("/dev/wt-*", "/dev/repo") };
         var result = CwdRemapper.Apply("/dev/wt-ai-1/src", rules, new("/home/u"));
@@ -264,6 +295,12 @@ public class CwdRemapperTests {
     [Test]
     public async Task TryParseFrom_rejects_a_partial_segment_wildcard() {
         await Assert.That(CwdRemapper.TryParseFrom("/dev/wt-*", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("stand alone as a path segment");
+    }
+
+    [Test]
+    public async Task TryParseFrom_rejects_a_wildcard_glued_to_a_following_literal() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/*-tree/src", out _, out var error)).IsFalse();
         await Assert.That(error).Contains("stand alone as a path segment");
     }
 

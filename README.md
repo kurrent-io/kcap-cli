@@ -2069,7 +2069,7 @@ Entries are stored at the top of `~/.config/kcap/config.json` under `cwd_remap` 
 Semantics:
 
 - `from` / `to` are **path-prefix** rewrites with `~` expanding to the current user's home directory (`~\` is also accepted on Windows). The match requires a path boundary (`from` exactly equal, or `from` followed by `/` — or `\` on Windows), so `from: "~/dev/foo"` will **not** spuriously rewrite `~/dev/foo-cli`.
-- `from` may contain a single `*` standing as a **whole path segment**, matching exactly one segment of the cwd. Everything past that segment is preserved, so `'~/dev/my-repo/worktrees/*' → ~/dev/my-repo` rewrites `~/dev/my-repo/worktrees/ai-2441/src` to `~/dev/my-repo/src`. There is no `**`. Quote the pattern — an unquoted `*` is expanded by your shell before kcap sees it.
+- `from` may contain a single `*` standing as a **whole path segment**, matching exactly one segment of the cwd. It can sit anywhere in the path (`'~/dev/worktrees/*/my-repo'` works as well as a trailing one), and everything past it is preserved, so `'~/dev/my-repo/worktrees/*' → ~/dev/my-repo` rewrites `~/dev/my-repo/worktrees/ai-2441/src` to `~/dev/my-repo/src`. There is no `**`. Quote the pattern — an unquoted `*` is expanded by your shell before kcap sees it.
 - Comparisons follow the host filesystem's case policy: case-insensitive on Windows, case-sensitive elsewhere.
 - When multiple rules could apply to the same transcript cwd, the one matching the **most** of it wins, and a literal `from` beats a wildcard `from` reaching just as far — so a single path can be pointed elsewhere without dropping the family rule.
 - Rules are applied once (no chaining), so the result of one rule isn't fed into another.
