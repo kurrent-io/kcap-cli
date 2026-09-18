@@ -192,7 +192,7 @@ drag-over brush from a style, and a local value would outrank both.
   is never blurred underneath itself. A glass chip inside the goal card samples the
   window backdrop, not the card under it, exactly as in the prototype, where the chips
   sat inside the card's excluded `LiquidGlassSurface`. Every glass template in this
-  design (surface, chip, both flyout presenters) sets the flag on its root.
+  design (surface, chip) sets the flag on its root.
 - A material switch re-applies the template around the same `Content` instance.
 - A `Surface`'s content joins the visual tree on the control's first measure, not on
   assignment as a `Border`'s child does. Under a collapsed ancestor it is never
@@ -215,13 +215,12 @@ shader and the rim, so the two cannot disagree:
 
 | Host | Radius passed to the layer |
 |---|---|
-| `Surface` glass template (cards, the rail, flyout panels) | `GlassCornerRadius`, also used by its content `Border` |
+| `Surface` glass template (cards, the rail) | `GlassCornerRadius`, also used by its content `Border` |
 | chip template | 12 |
 
-Four hosts use it: the `Surface` glass template, the chip template, and the two
-flyout presenter templates. They share the layer, never a whole template, because
-they present different things: `Surface` and `FlyoutPresenter` a `ContentPresenter`,
-`MenuFlyoutPresenter` an `ItemsPresenter`, the chip its own content grid.
+Two hosts use it: the `Surface` glass template and the chip template. They share the
+layer, never a whole template, because they present different things: `Surface` a
+`ContentPresenter`, the chip its own content grid.
 
 Glass parameters, from the prototype:
 
@@ -239,8 +238,8 @@ Glass parameters, from the prototype:
 | Shadow | `#60000000`, r 28, (0,12) | same | `#65000000`, r 20, (4,8) | same |
 | Rim | none | none | `#2EFFFFFF` | `#2EFFFFFF` |
 
-`rail` also sets `HighlightFalloff` 0.65. `panel` starts from the `card` column and is
-tuned during the visual check.
+`rail` also sets `HighlightFalloff` 0.65. `Panel` is the kind the flyout probe draws (see
+Flyouts); no shipping site sets it, and its parameters start from the `card` column.
 
 ### Card migration
 
@@ -452,8 +451,8 @@ asserts pixels. Shader output is the probe's job.
 
 - **Scope:** a `Surface` under a glass scope has a `LiquidGlassSurface` descendant; one
   under a pinned `Opaque` subtree does not; the opaque template never does.
-- **Capture boundary:** the root of every glass template (surface, chip, both flyout
-  presenters) carries `IsExcludedFromCapture`.
+- **Capture boundary:** the root of every glass template (surface, chip) carries
+  `IsExcludedFromCapture`.
 - **Radius:** `GoalCard` is 12 under `Opaque` and 18 under glass, and the layer's shader
   and rim carry the same value as the content `Border`.
 - **Switch:** the same content instance and the goal text survive a material change.
