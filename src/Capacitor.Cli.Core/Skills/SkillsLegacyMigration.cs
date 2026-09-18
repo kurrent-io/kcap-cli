@@ -15,11 +15,18 @@ public static class SkillsLegacyMigration {
         var mineManifest = Load(mine);
         var owned        = mineManifest?.Skills?.Select(e => e.Path).ToList() ?? [];
         var retired      = mineManifest?.Identity;
+        var candidates   = Candidates(configRoot, mine);
+
+        // A sibling that exists but will not parse could be hiding the only other owner of any
+        // owned path; nothing can be proven safe to delete until it is readable or gone.
+        if (candidates.Any(f => File.Exists(f) && Load(f) is null))
+            return new LegacyMigrationPlan(mine, [], owned);
+
         var delete = new List<string>();
         var keep   = new List<string>();
 
         foreach (var path in owned) {
-            var others = Others(configRoot, mine, path);
+            var others = Others(candidates, path);
             // A remaining owner under the same retired identity is not serving it either.
             var liveOwner = others.Any(m => m.Identity is null
                                             || Equals(m.Identity, current)
@@ -29,14 +36,16 @@ public static class SkillsLegacyMigration {
         return new LegacyMigrationPlan(mine, delete, keep);
     }
 
-    static List<SkillsManifest> Others(string configRoot, string minePath, string path) {
+    static List<string> Candidates(string configRoot, string minePath) {
         var skills = Path.Combine(configRoot, "skills");
         if (!Directory.Exists(skills)) return [];
         return [.. Directory.EnumerateFiles(skills, "manifest.json", SearchOption.AllDirectories)
-            .Where(f => !string.Equals(f, minePath, StringComparison.Ordinal))
-            .Select(Load).OfType<SkillsManifest>()
-            .Where(m => (m.Skills ?? []).Any(e => string.Equals(e.Path, path, StringComparison.Ordinal)))];
+            .Where(f => !string.Equals(f, minePath, StringComparison.Ordinal))];
     }
+
+    static List<SkillsManifest> Others(List<string> candidates, string path) =>
+        [.. candidates.Select(Load).OfType<SkillsManifest>()
+            .Where(m => (m.Skills ?? []).Any(e => string.Equals(e.Path, path, StringComparison.Ordinal)))];
 
     static SkillsManifest? Load(string path) {
         try {

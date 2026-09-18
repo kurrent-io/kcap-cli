@@ -57,4 +57,17 @@ public class SkillsLegacyMigrationTests {
 
         await Assert.That(plan.Keep).IsEquivalentTo([shared]);
     }
+
+    [Test]
+    public async Task A_path_is_kept_when_a_sibling_manifest_fails_to_parse() {
+        var shared = Tmp.PathTo("global/kcap-shared");
+        WriteLegacy("aaaa", "agents", "acct-1", shared);
+        var broken = Tmp.CreateDir("config/skills/bbbb/agents");
+        File.WriteAllText(Path.Combine(broken, "manifest.json"), "not json");
+
+        var plan = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "aaaa", "agents", Id("acct-1"));
+
+        await Assert.That(plan.Keep).IsEquivalentTo([shared]);
+        await Assert.That(plan.Delete).IsEmpty();
+    }
 }
