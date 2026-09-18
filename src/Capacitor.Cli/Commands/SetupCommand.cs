@@ -1118,19 +1118,25 @@ sealed class SetupCommand(
       || AgentsSkillsInstaller.HasSkill(paths.AntigravitySkillsDir, GuidedTourSkillName));
 
     /// <summary>
-    /// The plugin is registered AND the directory Claude loads it from ships the skill. The
-    /// registered marketplace path in settings is the artifact that matters — <paramref
-    /// name="pluginDir"/> is only where THIS build would install from, and after an upgrade the
-    /// two can differ. Falls back to it when nothing is registered; false when neither resolves,
-    /// because an unverifiable skill must not be advertised.
+    /// The plugin is registered AND the directory Claude loads it from ships the guided-tour skill.
     /// </summary>
-    static bool ClaudeCarriesGuidedTour(string claudeSettingsPath, string? pluginDir) {
+    static bool ClaudeCarriesGuidedTour(string claudeSettingsPath, string? pluginDir) =>
+        ClaudeCarriesSkill(claudeSettingsPath, pluginDir, GuidedTourSkillName);
+
+    /// <summary>
+    /// The plugin is registered AND the directory Claude loads it from ships <paramref
+    /// name="skillName"/>. The registered marketplace path in settings is the artifact that matters
+    /// — <paramref name="pluginDir"/> is only where THIS build would install from, and after an
+    /// upgrade the two can differ. Falls back to it when nothing is registered; false when neither
+    /// resolves, because an unverifiable skill must not be advertised.
+    /// </summary>
+    internal static bool ClaudeCarriesSkill(string claudeSettingsPath, string? pluginDir, string skillName) {
         if (!ClaudePluginInstaller.IsInstalled(claudeSettingsPath)) return false;
 
         var dir = ClaudePluginInstaller.RegisteredMarketplacePath(claudeSettingsPath) ?? pluginDir;
 
         return dir is not null
-            && File.Exists(Path.Combine(dir, "skills", GuidedTourSkillName, "SKILL.md"));
+            && File.Exists(Path.Combine(dir, "skills", skillName, "SKILL.md"));
     }
 
     /// <summary>Source folder name under <c>kcap/skills/</c>; <c>kcap-</c>-prefixed once installed.</summary>

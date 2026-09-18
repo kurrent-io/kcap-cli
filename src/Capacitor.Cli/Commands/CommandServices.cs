@@ -34,6 +34,7 @@ public static class CommandServices {
         services.AddSingleton(clock.Time);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
         services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
+        services.AddSingleton<IHandoffAgentLauncher, HandoffAgentLauncher>();
         services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
         services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
 
