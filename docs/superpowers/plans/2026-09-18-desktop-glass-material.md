@@ -1570,10 +1570,14 @@ public class GlassChipTests {
         var (window, _) = Show(chip, SurfaceMaterial.SoftGlass);
         try {
             var layer = chip.GetVisualDescendants().OfType<GlassLayer>().Single();
-            var presenter = chip.GetVisualDescendants().OfType<ContentPresenter>().Single();
+            // The vendored glass surface has a presenter of its own, named PART_ContentPresenter, deep
+            // inside the layer: look the chip's up by name, never by type alone.
+            var presenters = chip.GetVisualDescendants().OfType<ContentPresenter>().ToList();
+            var presenter = presenters.Single(p => p.Name == "ChipContent");
             await Assert.That(layer.Kind).IsEqualTo(GlassKind.Chip);
             await Assert.That(layer.CornerRadius).IsEqualTo(new CornerRadius(12));
-            await Assert.That(presenter.Name).IsEqualTo("ChipContent");
+            // What Fluent's per-state styles target is a PART_ContentPresenter in the BUTTON's own template.
+            await Assert.That(presenters.Any(p => p.Name == "PART_ContentPresenter" && ReferenceEquals(p.TemplatedParent, chip))).IsFalse();
             await Assert.That(chip.Padding).IsEqualTo(new Thickness(12, 7));
 
             foreach (var state in new[] { ":pointerover", ":pressed", ":disabled" }) {
