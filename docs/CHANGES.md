@@ -6,6 +6,34 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Status answers the one question a tool driving setup is asking
+
+`kcap status --json` reports what the text lines report, and adds the question none of them answers
+outright: is this machine set up. `configured` is true when a server is set and this CLI holds
+credentials for it, and stays true when that server is unreachable -- reachability is a network fact,
+and a tool that read it as "not set up" would send someone through setup again over a dropped VPN.
+Whether the server still accepts those credentials is `kcap whoami`'s question, and it is left there
+rather than answered twice.
+
+Both outputs read from the same gatherers -- the server probe, the auth resolution, the daemon PID
+sweep -- so they cannot drift into disagreeing about the same machine. That was already the rule
+between the Hooks line and the unconfigured-harness lines below it, and between this command and
+`kcap daemon status`; the JSON payload joins it rather than opening a second source of truth.
+
+## The harness list answers a machine as well as a person
+
+A tool setting kcap up for someone has to ask which coding agents to record, and the honest option
+list is the one this machine can actually produce. `kcap harness list` already knows it, so `--json`
+emits the same report as one document on stdout and nothing else, the contract `kcap import
+--discover --json` set.
+
+Every harness this build knows is listed, present or not, so a consumer can tell "unsupported" from
+"not installed here" without carrying its own vendor list and going stale the day a vendor is added.
+The two detection signals stay apart rather than being ORed the way the nudge inventory folds them:
+a caller offering someone a choice can then say which signal it saw, and one that only wants "is it
+here" ORs them itself. `--json` is refused on `dismiss` and `reset` rather than ignored, because
+ignoring it would hand a caller expecting JSON a line of prose on a subcommand that writes.
+
 ## A code block carries its own copy, and runs itself when it is a command
 
 An agent that wants a command run asks for it in a fenced block, and a reader who cannot lift the

@@ -1,6 +1,13 @@
 kcap status — Show server, auth, hook, and daemon status
 
-Usage: kcap status
+Usage: kcap status [--json]
+
+Options:
+  --json     Report the same facts as one JSON document on stdout and nothing
+             else, for a tool driving setup rather than a person reading it.
+             Carries a top-level `configured` flag: a server is set and this
+             CLI holds credentials for it. An unreachable server is still
+             configured -- that is a network fact, not a setup one.
 
 Reports:
   Server     Configured base URL and reachability check
