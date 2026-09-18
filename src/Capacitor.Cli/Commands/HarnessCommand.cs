@@ -16,8 +16,8 @@ public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses,
 
         var store = new HarnessOfferStore(config, time);
 
-        // Silently ignoring it would hand a caller expecting JSON a table it cannot parse, on a
-        // subcommand whose real work (a dismissal) it did not mean to trigger.
+        // Refused rather than ignored: a caller expecting JSON would get a line of prose back from a
+        // subcommand that has already written to the ledger.
         if (args.Contains("--json") && args[1] != "list") {
             Console.Error.WriteLine("--json only applies to `kcap harness list`.");
             return Task.FromResult(1);
