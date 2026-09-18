@@ -1728,11 +1728,33 @@ public sealed class SetupCommand(
     /// <para>No provisioner is supplied either, so this route cannot create a workspace even against
     /// an account with none.</para>
     /// </summary>
+    /// <summary>
+    /// Whether the arguments already name a workspace, by flag or as a bare token anywhere after the
+    /// verb. Position is not enough: <c>setup acme --discover</c> and <c>setup --discover acme</c>
+    /// both name one, and only the first puts it where the tenant argument is normally read.
+    /// </summary>
+    /// <remarks>A valued flag's value is not a bare token, so the values of the flags that take one
+    /// are excluded before the scan — otherwise <c>--default-visibility private</c> would read as a
+    /// workspace called "private".</remarks>
+    internal static bool NamesAWorkspace(string[] args) {
+        if (GetArg(args, "--server-url") is not null) return true;
+        if (GetArg(args, "--org") is not null) return true;
+        if (GetArg(args, "--slug") is not null) return true;
+
+        string[] valued = ["--server-url", "--org", "--slug", "--default-visibility", "--daemon-name", "--profile"];
+        var values = valued.Select(flag => GetArg(args, flag)).Where(v => v is not null).ToHashSet();
+
+        return args.Skip(1).Any(a => !a.StartsWith('-') && !values.Contains(a));
+    }
+
     async Task<int> RunDiscoverOnlyAsync(string[] args) {
-        // Naming a server answers the question discovery exists to ask, so the pair is a mistake
+        // Naming a workspace answers the question discovery exists to ask, so the pair is a mistake
         // rather than a refinement — and silently ignoring one of them would hide it.
-        if (GetArg(args, "--server-url") is not null || (args.Length > 1 && !args[1].StartsWith('-'))) {
-            await Console.Error.WriteLineAsync("--discover finds the workspaces you belong to; drop the server argument to use it.");
+        if (NamesAWorkspace(args)) {
+            await Console.Error.WriteLineAsync(
+                "--discover reports the workspaces you belong to, so it cannot also be given one.");
+            await Console.Error.WriteLineAsync(
+                "  Drop the workspace argument to discover, or drop --discover to use it.");
 
             return 1;
         }
