@@ -416,7 +416,7 @@ sealed class SetupMachineActions(TimeProvider time) : IFirstRunMachineActions {
     }
 }
 
-public sealed class SetupCommand(
+sealed class SetupCommand(
         ConfigRoot config, ProfileContext profiles,
         TokenStore store, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
@@ -1224,16 +1224,19 @@ public sealed class SetupCommand(
         // Run: DecideImport only returns Run when hasCurrentRepo was true, so currentRepo is
         // guaranteed non-null here.
         var invocation = new ImportInvocation(
-            Repo:               currentRepo!.Value,
+            Scope:              new ImportScope.Repo(currentRepo!.Value.Owner, currentRepo.Value.Name),
+            MaxSessions:        null,
+            CurrentRepo:        currentRepo,
             DefaultVisibility:  defaultVisibility,
             AutoSkipExclusions: true,
             ForcePrivate:       false,
+            SkipTitle:          false,
             Profiles:           profiles);
 
         try {
-            var exitCode = await imports.RunAsync(invocation);
+            var run = await imports.RunAsync(invocation);
 
-            if (exitCode != 0) {
+            if (run.ExitCode != 0) {
                 AnsiConsole.MarkupLine(
                     "  [yellow]⚠[/] Import of past sessions did not complete. Run [cyan]kcap import[/] manually to retry.");
             }

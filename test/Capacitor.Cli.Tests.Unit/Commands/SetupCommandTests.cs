@@ -888,7 +888,7 @@ public class SetupCommandTests {
 
         await Assert.That(captured).IsNotNull();
         await Assert.That(captured!.Profiles.Resolution.ServerUrl).IsEqualTo("https://example.test");
-        await Assert.That(captured.Repo).IsEqualTo(("acme", "widgets"));
+        await Assert.That(captured.CurrentRepo).IsEqualTo(("acme", "widgets"));
         await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
         await Assert.That(captured.AutoSkipExclusions).IsTrue();
         await Assert.That(captured.ForcePrivate).IsFalse();
@@ -931,7 +931,7 @@ public class SetupCommandTests {
 
     [Test]
     public async Task RunImportStepAsync_RunnerThrows_DoesNotPropagateAndCompletes() {
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("boom"));
+        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("boom"));
 
         // Completing without the InvalidOperationException escaping is the assertion —
         // import is best-effort and must never fail setup.
@@ -949,7 +949,7 @@ public class SetupCommandTests {
 
     [Test]
     public async Task RunImportStepAsync_NoCurrentRepo_SkipsWithoutInvokingRunnerOrPrompting() {
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
+        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
 
         await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       null,
@@ -965,7 +965,7 @@ public class SetupCommandTests {
 
     [Test]
     public async Task RunImportStepAsync_SkipImportFlag_SkipsWithoutInvokingRunner() {
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
+        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
 
         await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       ("acme", "widgets"),
@@ -1031,7 +1031,7 @@ public class SetupCommandTests {
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(captured).IsNotNull();
-        await Assert.That(captured!.Repo).IsEqualTo(("acme-auto-import", "widgets"));
+        await Assert.That(captured!.CurrentRepo).IsEqualTo(("acme-auto-import", "widgets"));
         await Assert.That(captured.AutoSkipExclusions).IsTrue();
         await Assert.That(captured.ForcePrivate).IsFalse();
         await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
@@ -1053,7 +1053,7 @@ public class SetupCommandTests {
 
         await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-skip-import", "widgets", Config.Root);
 
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
+        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
 
         var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--skip-import");
 
@@ -1281,7 +1281,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_half_a_pair_before_doing_anything() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme"]);
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--slug");
@@ -1292,7 +1292,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_creating_and_pointing_at_a_server_at_once() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(
             ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
 
         await Assert.That(exit).IsEqualTo(1);
@@ -1304,7 +1304,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_a_provider_that_cannot_create() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--github");
@@ -1315,7 +1315,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_still_requires_a_server_url_with_no_prompt_and_no_answers() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--no-prompt"]);
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--no-prompt"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");

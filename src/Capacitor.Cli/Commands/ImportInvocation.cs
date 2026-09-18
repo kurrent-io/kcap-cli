@@ -8,8 +8,11 @@ namespace Capacitor.Cli.Commands;
 /// <see cref="ISetupImportRunner"/> without running a real import.
 /// </summary>
 public sealed record ImportInvocation(
-    (string Owner, string Name) Repo,
-    string?                     DefaultVisibility,
-    bool                        AutoSkipExclusions,
-    bool                        ForcePrivate,
-    ProfileContext              Profiles);
+    ImportScope                  Scope,
+    int?                         MaxSessions,
+    (string Owner, string Name)? CurrentRepo,
+    string?                      DefaultVisibility,
+    bool                         AutoSkipExclusions,
+    bool                         ForcePrivate,
+    bool                         SkipTitle,
+    ProfileContext               Profiles);
