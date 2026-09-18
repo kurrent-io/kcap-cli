@@ -153,7 +153,7 @@
                  then the daemon on this machine and what it is running. The server URL rides the
                  org's hover — at rail width it wraps to two lines and outweighs its neighbours. -->
             <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
-                <StackPanel x:Name="RailFooterPanel" Margin="16,10,16,10" Spacing="6">
+                <StackPanel x:Name="RailFooterPanel" Margin="16,10,16,10" Spacing="2">
                     <DockPanel>
                         <Button x:Name="RailSignInButton" DockPanel.Dock="Right" Classes="kcapChip"
                                 Content="Sign in" Command="{Binding SignInCommand}"
