@@ -13,9 +13,9 @@ parent's `Stop`. So `AwaitingInput` keeps its one meaning — the parent finishe
 has been handed to it — and the wait badge, `NeedsYou` and the tray's attention are untouched. What
 `AgentStatusDto` gains is a second fact, `live_subagents`: how many subagents the daemon believes
 are running, null until the agent's first subagent report so an older daemon, a vendor whose hooks
-report none and a session that spawned none read alike. The app reads "busy" from the two through
-one predicate, `SessionStatusDots.IsWorking`, so the chat's working note and the rail's pulsing dot
-agree. The pending-card pause is unchanged: a card up means something is blocked on the user, and
+report none and a session that spawned none read alike. The chat's working note reads the two
+through one predicate, `SessionStatusDots.IsWorking`, while the rail's dot pulses off the count
+alone. The pending-card pause is unchanged: a card up means something is blocked on the user, and
 the note cannot know whether the asker is the parent or a subagent whose tool calls raise cards on
 the same lane.
 

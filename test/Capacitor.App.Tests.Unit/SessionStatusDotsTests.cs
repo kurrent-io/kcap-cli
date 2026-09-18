@@ -7,8 +7,6 @@ namespace Capacitor.App.Tests.Unit;
 /// The one busy predicate the chat pane and the rail share: running, and either mid-turn or with
 /// subagents the daemon still counts. Null counts as zero on both facts.
 public class SessionStatusDotsTests {
-    static readonly RepoIdentity Repo = new("path:/repo", "repo");
-
     [Test]
     [Arguments("Running", false, null, true)]
     [Arguments("Running", false, 0, true)]
@@ -20,11 +18,7 @@ public class SessionStatusDotsTests {
     [Arguments("Starting", false, 2, false)]
     [Arguments("Completed", false, 2, false)]
     public async Task Is_working_across_the_verdict_and_the_count(string status, bool? awaitingInput, int? liveSubagents, bool expected) {
-        var dto = WorkspaceFixtures.Agent("a1", "claude", true) with { Status = status, AwaitingInput = awaitingInput, LiveSubagents = liveSubagents };
-
         await Assert.That(SessionStatusDots.IsWorking(status, awaitingInput, liveSubagents)).IsEqualTo(expected);
-        await Assert.That(SessionStatusDots.IsWorking(dto)).IsEqualTo(expected);
-        await Assert.That(SessionStatusDots.IsWorking(AgentRow.FromLocal(dto, Repo))).IsEqualTo(expected);
     }
 
     [Test]
@@ -34,6 +28,6 @@ public class SessionStatusDotsTests {
         });
 
         await Assert.That(row.LiveSubagents).IsNull();
-        await Assert.That(SessionStatusDots.IsWorking(row)).IsFalse();
+        await Assert.That(SessionStatusDots.IsWorking(row.Status, row.AwaitingInput, row.LiveSubagents)).IsFalse();
     }
 }

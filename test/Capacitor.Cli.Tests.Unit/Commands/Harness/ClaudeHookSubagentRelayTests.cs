@@ -79,6 +79,18 @@ public class ClaudeHookSubagentRelayTests {
         await Assert.That(Relayed(bridge, "/tok/claude/input-wait")).IsNull();
     }
 
+    /// The permission hook strips the dashes from its agent_id before the bridge sees it, and the
+    /// daemon matches the two exactly, so a live report must name the subagent the same way.
+    [Test, NotInParallel]
+    public async Task A_subagents_hook_reports_its_id_dashless_as_the_permission_hook_sent_it() {
+        using var bridge = Bridge();
+
+        var exit = await RunAsync(HostedOn(bridge), "SubagentStart", agentId: "3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Relayed(bridge, "/tok/claude/subagent")!["subagent_id"]!.GetValue<string>()).IsEqualTo(SubagentId);
+    }
+
     [Test, NotInParallel]
     public async Task A_subagents_stop_reports_it_gone() {
         using var bridge = Bridge();

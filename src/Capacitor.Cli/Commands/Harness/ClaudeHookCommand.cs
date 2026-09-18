@@ -90,9 +90,14 @@ public sealed class ClaudeHookCommand(
         // set) runs with the parent's environment but is not the parent's turn: it reports the
         // subagent alive or gone and never touches the parent's wait — a background subagent must
         // not clear a wait the parent just began.
-        if (agentId is not null)
+        //
+        // Dashless, as NormalizeGuidField leaves the permission hook's agent_id before the bridge
+        // stores it; the daemon matches the two exactly.
+        var subagentId = agentId?.Replace("-", "");
+
+        if (subagentId is not null)
             await DaemonBridgeRelay.NotifySubagentAsync(
-                hosted, "claude", sessionId, cwd, agentId, live: command != "subagent-stop",
+                hosted, "claude", sessionId, cwd, subagentId, live: command != "subagent-stop",
                 clock.Time.GetUtcNow().ToUnixTimeMilliseconds(), budget.Remaining);
         else if (command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
             await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
@@ -112,10 +117,8 @@ public sealed class ClaudeHookCommand(
         if (command == "stop" && agentId is null)
             await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
 
-        // Dashless, as NormalizeGuidField leaves the permission hook's agent_id before the bridge
-        // stores it; the daemon matches the two exactly.
-        if (command == "subagent-stop" && agentId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: agentId.Replace("-", ""), budget.Remaining);
+        if (command == "subagent-stop" && subagentId is not null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget.Remaining);
 
         var clientCap = budget.Remaining;
 

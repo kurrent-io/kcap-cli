@@ -227,7 +227,9 @@ public class AgentOrchestratorSubagentTests {
     }
 
     /// The report runs inside the callback's hold, ahead of its sweep: its own call arms the timer
-    /// for the new id, and the callback's later sweep finds that deadline already set.
+    /// for the new id, and the callback's later sweep finds that deadline already set. The relay
+    /// call here re-enters `_subagentExpiryLock` on the same thread as the callback holding it;
+    /// production reaches the same end state from another thread, which blocks on the lock instead.
     [Test]
     public async Task A_report_that_lands_while_the_callback_is_rescheduling_still_has_its_expiry_fire() {
         var time = new ManualTimerTimeProvider();

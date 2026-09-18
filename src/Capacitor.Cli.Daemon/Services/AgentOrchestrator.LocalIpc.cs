@@ -81,7 +81,7 @@ internal partial class AgentOrchestrator {
                 TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor,
                 // Null until the agent's first subagent report, a number from then on: the clock's
                 // count only while the agent is live, since nothing runs under a terminal one.
-                LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? a.Status == "Running" ? live : 0 : null))];
+                LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null))];
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame

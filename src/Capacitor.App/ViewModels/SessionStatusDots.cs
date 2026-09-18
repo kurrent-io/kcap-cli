@@ -52,10 +52,6 @@ public static class SessionStatusDots {
     public static bool IsWorking(string status, bool? awaitingInput, int? liveSubagents) =>
         status == "Running" && (awaitingInput == false || liveSubagents > 0);
 
-    public static bool IsWorking(AgentStatusDto dto) => IsWorking(dto.Status, dto.AwaitingInput, dto.LiveSubagents);
-
-    public static bool IsWorking(AgentRow row) => IsWorking(row.Status, row.AwaitingInput, row.LiveSubagents);
-
     /// Display text for the status: the daemon's own word, except for the one state its
     /// vocabulary does not spell, a live agent whose turn is over.
     public static string Label(AgentStatusDto dto) => WaitsOnUser(dto) ? "Waiting for input" : dto.Status;
