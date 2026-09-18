@@ -977,10 +977,15 @@ internal sealed partial class LocalPermissionBridge(
             return;
         }
 
-        var subagentId = Str(node, "subagent_id");
-        var live       = node["live"] is JsonValue verdict && verdict.TryGetValue<bool>(out var l) ? l : (bool?) null;
+        if (!TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId) || subagentId is null) {
+            Close(context, 400);
 
-        if (string.IsNullOrEmpty(subagentId) || live is null) {
+            return;
+        }
+
+        var live = node["live"] is JsonValue verdict && verdict.TryGetValue<bool>(out var l) ? l : (bool?) null;
+
+        if (live is null) {
             Close(context, 400);
 
             return;

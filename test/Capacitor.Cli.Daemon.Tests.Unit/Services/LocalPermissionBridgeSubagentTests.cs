@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -92,13 +93,15 @@ public class LocalPermissionBridgeSubagentTests {
         await using var h = new Harness();
         await h.StartAsync();
 
-        var noSession  = await h.PostAsync(new { agent_id = "agent-1", subagent_id = "sub-1", live = true });
-        var noSubagent = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", live = true });
-        var noVerdict  = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", subagent_id = "sub-1" });
+        var noSession    = await h.PostAsync(new { agent_id = "agent-1", subagent_id = "sub-1", live = true });
+        var noSubagent   = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", live = true });
+        var noVerdict    = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", subagent_id = "sub-1" });
+        var overCapId    = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", subagent_id = new string('x', PermissionWire.MaxAgentIdBytes + 1), live = true });
 
         await Assert.That(noSession.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         await Assert.That(noSubagent.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         await Assert.That(noVerdict.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(overCapId.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         await Assert.That(h.Seen).IsEmpty();
     }
 
