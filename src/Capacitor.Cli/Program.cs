@@ -690,24 +690,38 @@ switch (command) {
             return 1;
         }
 
-        return await Run<ImportCommand>().HandleImport(
-            filterCwd,
-            filterSession,
-            minLines,
-            generateSummaries,
-            sources:                 sources,
-            explicitVendorSelection: explicitVendorSelection,
-            since:                   since,
-            scope:                   resolveResult.Scope, // null => HandleImport runs picker
-            skipConfirmation:        resolveResult.Yes,
-            forcePrivate:            resolveResult.Private,
-            currentRepo:             currentRepo,
-            needOrgPick:             resolveResult.NeedOrgPick,
-            storedOrg:               storedOrg,
-            reimport:                reimport,
-            skipTitle:               skipTitle,
-            discoverOnly:            discoverOnly,
-            discoverJson:            discoverJson);
+        var detached = DetachedImportLog.FromEnvironment(Environment.GetEnvironmentVariable);
+        StreamWriter? detachedLog = null;
+        if (detached is not null) {
+            detachedLog = detached.Open();
+            Console.SetOut(detachedLog);
+            Console.SetError(detachedLog);
+            ProcessHelpers.DetachFromControllingTerminal();
+        }
+
+        try {
+            return await Run<ImportCommand>().HandleImport(
+                filterCwd,
+                filterSession,
+                minLines,
+                generateSummaries,
+                sources:                 sources,
+                explicitVendorSelection: explicitVendorSelection,
+                since:                   since,
+                scope:                   resolveResult.Scope, // null => HandleImport runs picker
+                skipConfirmation:        resolveResult.Yes,
+                forcePrivate:            resolveResult.Private,
+                currentRepo:             currentRepo,
+                needOrgPick:             resolveResult.NeedOrgPick,
+                storedOrg:               storedOrg,
+                defaultVisibility:       detached?.DefaultVisibility,
+                reimport:                reimport,
+                skipTitle:               skipTitle,
+                discoverOnly:            discoverOnly,
+                discoverJson:            discoverJson);
+        } finally {
+            detachedLog?.Dispose();
+        }
     }
     case "watch" when args.Length < 3:
         Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode|antigravity|cursor]");
