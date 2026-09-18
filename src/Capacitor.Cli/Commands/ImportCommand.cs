@@ -655,13 +655,17 @@ class ImportCommand(
     /// </remarks>
     /// <summary>Reports a run that deliberately moved nothing: it reached a decision, and the decision
     /// was that there was nothing to do.</summary>
-    static void ReportNothing(Action<ImportRunOutcome>? onFinished) =>
+    static void ReportNothing(Action<ImportRunOutcome>? onFinished, Action<ImportRunSelection>? onSelected, bool capped) {
+        if (capped) onSelected?.Invoke(ImportRunSelection.Empty);
+
         onFinished?.Invoke(new ImportRunOutcome(
             new FinalCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, RanBackground: false,
                             RequestedSummaries: false),
-            VisibilityFailures: 0));
+            VisibilityFailures: 0,
+            Partition: capped ? ImportRunPartition.Empty : null));
+    }
 
-    internal sealed record ImportRunOutcome(FinalCounts Counts, int VisibilityFailures) {
+    internal sealed record ImportRunOutcome(FinalCounts Counts, int VisibilityFailures, ImportRunPartition? Partition = null) {
         /// <summary>Anything the user asked for that did not happen.</summary>
         internal bool AnythingFailed => Counts.Failed > 0 || VisibilityFailures > 0;
     }
@@ -759,6 +763,8 @@ class ImportCommand(
             DateTimeOffset?               windowsAsOf             = null,
             Action<ImportRunOutcome>?     onFinished              = null,
             Action<ImportDiscoveryResult>? onDiscovered           = null,
+            int?                          maxSessions             = null,
+            Action<ImportRunSelection>?   onSelected              = null,
             bool                          nested                  = false
         ) {
         // A caller that wants the figures rather than the rendering says so by handing one over; the
@@ -799,7 +805,7 @@ class ImportCommand(
 
             // Zero is an answer, and a caller that hears nothing cannot tell it from a run that died
             // before it got here — the same rule the discovery report already follows.
-            ReportNothing(onFinished);
+            ReportNothing(onFinished, onSelected, maxSessions is not null);
 
             return 0;
         }
@@ -855,7 +861,7 @@ class ImportCommand(
 
             // Zero is an answer, and a caller that hears nothing cannot tell it from a run that died
             // before it got here — the same rule the discovery report already follows.
-            ReportNothing(onFinished);
+            ReportNothing(onFinished, onSelected, maxSessions is not null);
 
             return 0;
         }
@@ -1080,7 +1086,7 @@ class ImportCommand(
 
             // Zero is an answer, and a caller that hears nothing cannot tell it from a run that died
             // before it got here — the same rule the discovery report already follows.
-            ReportNothing(onFinished);
+            ReportNothing(onFinished, onSelected, maxSessions is not null);
 
             return 0;
         }
@@ -1322,10 +1328,22 @@ class ImportCommand(
         // or the parent was classified but excluded from import for any other reason) must import
         // standalone rather than being silently dropped by CursorImportSource.ImportSessionAsync's
         // nested-child skip.
-        routed = ReconcileOrphanedCursorSubagentChildren(routed);
         routed.Sort(ImportOrdering.RoutedDispatch);
-
         var chains = BuildImportChains(fileBased);
+
+        // The cap narrows the plan before the reconcile, so the reconcile sees exactly the units
+        // that will run; a child never reaches it without its parent.
+        HashSet<string>? selectedIds = null;
+
+        if (maxSessions is { } cap) {
+            var plan = ForegroundSelection.Select(chains, routed, classifications, cap);
+            chains      = plan.Chains;
+            routed      = plan.Routed;
+            selectedIds = plan.Selection.SelectedIds.ToHashSet(StringComparer.Ordinal);
+            onSelected?.Invoke(plan.Selection);
+        }
+
+        routed = ReconcileOrphanedCursorSubagentChildren(routed);
 
         // --- Import ---
         // ConcurrentBag rather than List: OnTitleTaskReady / OnBackgroundWorkReady
@@ -1344,6 +1362,9 @@ class ImportCommand(
         var       titleFailures      = new ConcurrentBag<(string SessionId, string Reason)>();
         var       summaryFailures    = new ConcurrentBag<(string SessionId, string Reason)>();
         var       importedSessionIds = new ConcurrentBag<string>();
+        var       partitionSucceeded = new ConcurrentBag<string>();
+        var       partitionSkipped   = new ConcurrentBag<string>();
+        var       partitionFailed    = new ConcurrentBag<string>();
 
         void WarnSession(string sessionId, string message) => display.Line(
             $"! {sessionId}: {message}",
@@ -1358,13 +1379,15 @@ class ImportCommand(
                 $"  ↳ imported subagent {aid} ({lines} lines)",
                 $"  [dim]↳[/] imported subagent [cyan]{Markup.Escape(aid)}[/] ({lines} lines)"
             ),
-            OnSessionErrored = (_, sid, reason) => display.Line(
-                $"Skipping {sid} [{reason}]",
-                FormatSkippedReasonMarkup(sid, reason)
-            ),
+            OnSessionErrored = (_, sid, reason) => {
+                if (selectedIds?.Contains(sid) == true) partitionFailed.Add(sid);
+
+                display.Line($"Skipping {sid} [{reason}]", FormatSkippedReasonMarkup(sid, reason));
+            },
             OnSessionWarning = (_, sid, message) => WarnSession(sid, message),
             OnSessionEnded = (_, c, outcome, lines) => {
                 importedSessionIds.Add(c.SessionId);
+                if (selectedIds?.Contains(c.SessionId) == true) partitionSucceeded.Add(c.SessionId);
 
                 var verb = outcome == SessionImportOutcome.Resumed
                     ? $"resuming from line {c.ResumeFromLine}"
@@ -1745,6 +1768,15 @@ class ImportCommand(
                 var result  = await ImportOne(c);
                 var outcome = result.Outcome;
 
+                if (selectedIds?.Contains(c.SessionId) == true) {
+                    switch (outcome) {
+                        case ImportOutcome.Loaded or ImportOutcome.Resumed:      partitionSucceeded.Add(c.SessionId); break;
+                        case ImportOutcome.Skipped when result.SentChildContent: partitionSucceeded.Add(c.SessionId); break;
+                        case ImportOutcome.Skipped:                              partitionSkipped.Add(c.SessionId);   break;
+                        case ImportOutcome.Failed:                               partitionFailed.Add(c.SessionId);    break;
+                    }
+                }
+
                 // Capture for privatization BEFORE any Loaded/Failed/AlreadyLoaded classification
                 // — see the declaration comment on privateScopeSessionIds. Deliberately
                 // unconditional: even a Failed outcome (lifecycle POST failed after content
@@ -2040,7 +2072,19 @@ class ImportCommand(
 
         display.WriteDoneGrid(final, doneBySource);
 
-        onFinished?.Invoke(new ImportRunOutcome(final, visibilityFailures));
+        ImportRunPartition? partition = null;
+
+        if (selectedIds is not null) {
+            var succeeded    = partitionSucceeded.Distinct(StringComparer.Ordinal).ToList();
+            var succeededSet = succeeded.ToHashSet(StringComparer.Ordinal);
+
+            partition = new ImportRunPartition(
+                succeeded,
+                partitionSkipped.Distinct(StringComparer.Ordinal).Where(id => !succeededSet.Contains(id)).ToList(),
+                partitionFailed.Distinct(StringComparer.Ordinal).Where(id => !succeededSet.Contains(id)).ToList());
+        }
+
+        onFinished?.Invoke(new ImportRunOutcome(final, visibilityFailures, partition));
 
         return 0;
     }
