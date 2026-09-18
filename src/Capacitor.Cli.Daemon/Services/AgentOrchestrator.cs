@@ -2550,17 +2550,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             published = true;
             storeLease?.Keep();
 
-            // Slash commands arrive out of band — an ACP available_commands_update after the first
-            // turn, or a snapshot captured during the handshake that this attach flushes at once. The
-            // agent is published, so ReportCommands finds it. PTY runtimes never raise this; Claude is
-            // probed separately.
-            runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
-
-            // Claude has no live command stream, so probe its harness once — off the launch path,
-            // best-effort. Interactive launches only: a review-flow reviewer has no composer.
-            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
-                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
-
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
             // immediately after the process exists (before registration) so a daemon crash right after
             // this leaves a reapable record. FAIL-CLOSED: a write/identity failure throws → the catch
@@ -2568,6 +2557,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             PersistPidRecordOrThrow(agent, runtime.Pid, runtime.StartIdentity);
 
             await RegisterAgentAsync(agent);
+
+            // Slash commands are reported out of band, and the server drops a report for an agent it
+            // has not yet registered — so attach the callback (which synchronously flushes any list
+            // captured during the ACP/Codex handshake) and fire the Claude probe only AFTER
+            // registration is acknowledged, never right after PublishAgent. Later ACP updates flow the
+            // same way. PTY runtimes never raise the callback; Claude has no live stream, so it is
+            // probed once, off the launch path, and only for an interactive launch (a review-flow
+            // reviewer has no composer).
+            runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
+
+            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
+                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
 
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
             // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
@@ -4875,6 +4876,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         await _server.SendTerminalDimensionsAsync(agent.Id, agent.CurrentCols, agent.CurrentRows);
                     } catch (Exception ex) {
                         LogTerminalDimsSendFailed(ex, agent.Id);
+                    }
+
+                    // The command list is server-side in-memory only, and the AgentRegistered above
+                    // replaces a same-slot entry with a null-Commands record (and a server restart
+                    // wiped it), so resend the cached list — otherwise the picker vanishes on every
+                    // reconnect until a later update the one-shot Claude probe / handshake-only lists
+                    // never send. Best-effort, like the dims resend above.
+                    if (agent.Commands is { Count: > 0 } commands) {
+                        try {
+                            await _server.ReportAgentCommandsAsync(agent.Id, commands);
+                        } catch (Exception ex) {
+                            LogReportCommandsFailed(ex, agent.Id);
+                        }
                     }
 
                     // do NOT replay the full output buffer here. The old
