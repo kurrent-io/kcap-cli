@@ -164,6 +164,15 @@ validates each pair against its own recorded root, with the same prune-safety an
 as any other prune. A journal is merged, never replaced: recording a new transition cannot discard
 paths an earlier one is still waiting to delete.
 
+**And reconciled against the plan before it is published.** Merging alone would delete a live file. A
+document renamed away and back — `kcap-x` to `kcap-y`, then back to `kcap-x` before the retry —
+leaves an outstanding intent to delete `kcap-x` while the new plan writes exactly that path; acting
+on the intent afterwards removes the live copy and commits a manifest claiming it exists. So every
+pending publication first cancels the intents whose paths are live destinations in the plan, keeping
+their ownership in the document entries, and compares canonically resolved destinations so an alias
+cannot slip past the check. An anchor moved away and back has the same shape. Identity retirement is
+unaffected, because it deletes the previous identity's paths before any plan exists.
+
 A crash between the write and the manifest save likewise leaves every published path owned, so a
 later sync prunes or rewrites it whatever the snapshot has since done.
 
@@ -314,7 +323,8 @@ removes.
   it changed, and with the replacement fetch failing; two repositories owning one global copy through
   an account switch leave it exactly when a live owner remains; a repository needing recovery while
   another holds a lock across a slow fetch reports incomplete work and retries rather than reporting
-  success.
+  success; a document renamed away and back across a crash, and an anchor moved away and back, both
+  keep the live copy and clear the stale intent.
 - **The command path end to end against a mocked snapshot API.** Manifest read, fetch, plan, write,
   exclude, save, migrate, including the no-change and 304 paths, a same-profile account replacement,
   and a failed replacement fetch. `SyncTargetAsync` has no test today, so this is new coverage rather
