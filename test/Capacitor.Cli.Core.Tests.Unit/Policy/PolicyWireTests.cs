@@ -1,6 +1,7 @@
 namespace Capacitor.Cli.Core.Tests.Unit.Policy;
 
 using Capacitor.Cli.Core.Policy;
+using Microsoft.Extensions.Time.Testing;
 
 public class PolicyWireTests {
     [Test]
@@ -75,5 +76,45 @@ public class PolicyWireTests {
         await Assert.That(upload.Documents[0].Scope).IsEqualTo("user");
         var json = System.Text.Json.JsonSerializer.Serialize(upload, CapacitorJsonContext.Default.PolicySnapshotUploadV1);
         await Assert.That(json).Contains("\"scope\":\"user\"");
+    }
+
+    [Test]
+    public async Task Decision_derives_the_invariant_fields_from_snapshot_mode_and_clock() {
+        var time     = new FakeTimeProvider(new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero));
+        var snapshot = new PolicySnapshot("snap", [], Degraded: true, []);
+        var action   = PolicyWire.ToWire(new CanonicalAction { Kind = ActionKind.Other, Vendor = "claude", RawToolName = "T" });
+
+        var evt = PolicyWire.Decision(
+            sessionId: "sid", agentId: "aid", vendor: "claude", seam: PolicySeams.HostedClaudePermission,
+            snapshot: snapshot, mode: EvaluationMode.TightenOnly,
+            requestedOutcome: "ask", effectiveOutcome: "parked",
+            action: action, matchedRules: [], time: time);
+
+        await Assert.That(evt.EngineVersion).IsEqualTo(PolicyEngine.Version);
+        await Assert.That(evt.SnapshotId).IsEqualTo("snap");
+        await Assert.That(evt.Degraded).IsTrue();
+        await Assert.That(evt.EvaluationMode).IsEqualTo("tighten_only");
+        await Assert.That(evt.DecidedAt).IsEqualTo(time.GetUtcNow().ToString("O"));
+    }
+
+    [Test]
+    public async Task Decision_reports_an_unbound_snapshot_as_unknown_and_undegraded() {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+
+        var evt = PolicyWire.Decision(
+            sessionId: "sid", agentId: null, vendor: "claude", seam: PolicySeams.ClaudePermissionRequest,
+            snapshot: null, mode: EvaluationMode.Full,
+            requestedOutcome: "ask", effectiveOutcome: "prompt_stands",
+            action: PolicyWire.ToWire(new CanonicalAction { Kind = ActionKind.Other, Vendor = "claude", RawToolName = "T" }),
+            matchedRules: [], time: time,
+            failureClass: "evaluation_error", correlationId: "call-1", correlationAmbiguous: true,
+            pendingAskConsumed: true, freshOutcome: "error");
+
+        await Assert.That(evt.SnapshotId).IsEqualTo("unknown");
+        await Assert.That(evt.Degraded).IsFalse();
+        await Assert.That(evt.EvaluationMode).IsEqualTo("full");
+        await Assert.That(evt.FailureClass).IsEqualTo("evaluation_error");
+        await Assert.That(evt.PendingAskConsumed).IsTrue();
+        await Assert.That(evt.FreshOutcome).IsEqualTo("error");
     }
 }
