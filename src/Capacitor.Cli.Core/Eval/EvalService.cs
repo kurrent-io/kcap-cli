@@ -611,7 +611,9 @@ public static class EvalService {
             assessment = assessment with { ToolsUsed = Math.Max(0, result.NumTurns - 1) };
         }
 
-        assessment = assessment with { EvidenceCoverage = CoverageForTextPath(ctx, question) };
+        assessment = assessment with {
+            EvidenceCoverage = ReconcileEvidenceCoverage(assessment.Outcome, CoverageForTextPath(ctx, question))
+        };
 
         observer.OnQuestionCompleted(index, total, assessment, result.InputTokens, result.OutputTokens);
 
@@ -648,6 +650,14 @@ public static class EvalService {
 
         return new() { PolicyVersion = CoveragePolicyVersion, Omissions = omissions };
     }
+
+    /// <summary>An <c>insufficient_evidence</c> outcome cannot honestly carry a complete coverage
+    /// record — zero mechanical loss on a question the judge could not answer is "unknown", not
+    /// "complete and still unanswerable" — so a complete record is nulled for that outcome only.
+    /// <c>not_applicable</c> may stay complete: nothing needed to be evaluated. Mirrors the
+    /// server producer's reconciliation of the same two records.</summary>
+    internal static EvalEvidenceCoverage? ReconcileEvidenceCoverage(string? outcome, EvalEvidenceCoverage? coverage) =>
+        outcome == EvalOutcomes.InsufficientEvidence && coverage is { IsComplete: true } ? null : coverage;
 
     // ── Phase 3: Finalize ──────────────────────────────────────────────────
 
@@ -1080,7 +1090,13 @@ public static class EvalService {
         var json = StripCodeFences(rawResponse.Trim());
 
         EvalQuestionAssessment? parsed;
+        bool outcomeExplicitlyNull;
         try {
+            using var doc = JsonDocument.Parse(json);
+            outcomeExplicitlyNull = doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("outcome", out var outcomeElement)
+                && outcomeElement.ValueKind == JsonValueKind.Null;
+
             parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionAssessment);
         } catch (JsonException) {
             return null;
@@ -1088,8 +1104,12 @@ public static class EvalService {
 
         if (parsed is null) return null;
 
-        // A model that ignores the field (an older prompt, or free-form navigating output) omits
-        // it — read that as assessed, same as the server's parser.
+        // Only an ABSENT outcome key defaults to assessed (a model that ignores the field, or
+        // free-form navigating output) — an explicit JSON null is a parse failure, same as the
+        // server's parser. STJ binds a present non-string value to a JsonException above, so the
+        // explicit-null case is the only one a nullable property lets through silently.
+        if (outcomeExplicitlyNull) return null;
+
         var outcome = parsed.Outcome ?? EvalOutcomes.Assessed;
         if (!EvalOutcomes.All.Contains(outcome)) return null;
         if (string.IsNullOrWhiteSpace(parsed.Finding)) return null;

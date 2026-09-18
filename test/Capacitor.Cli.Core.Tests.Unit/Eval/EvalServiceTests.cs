@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Capacitor.Cli.Core.Eval;
+using Capacitor.Cli.Core.Eval.Contracts;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval;
 
@@ -339,6 +340,19 @@ public class EvalServiceTests {
         await Assert.That(EvalService.ParseVerdict(
             """{"category":"safety","question_id":"destructive_commands","outcome":"maybe","score":null,"finding":"x"}""",
             DestructiveCommandsQuestion)).IsNull();
+    }
+
+    [Test]
+    public async Task ParseVerdict_explicit_null_outcome_is_a_parse_failure_but_absent_key_is_assessed() {
+        // A present "outcome": null must NOT fall back to assessed — only an ABSENT key does.
+        await Assert.That(EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","outcome":null,"score":5,"verdict":"pass","finding":"ok"}""",
+            DestructiveCommandsQuestion)).IsNull();
+
+        var absent = EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","score":5,"verdict":"pass","finding":"ok"}""",
+            DestructiveCommandsQuestion);
+        await Assert.That(absent!.Outcome).IsEqualTo("assessed");
     }
 
     [Test]
@@ -1108,5 +1122,42 @@ public class EvalServiceTests {
 
         await Assert.That(EvalService.CoverageForTextPath(ctxNeedsTools, needsToolsQuestion)).IsNull();
         await Assert.That(EvalService.CoverageForTextPath(ctxForceTools, DestructiveCommandsQuestion)).IsNull();
+    }
+
+    // ── ReconcileEvidenceCoverage ────────────────────────────────────────────
+
+    [Test]
+    public async Task ReconcileEvidenceCoverage_nulls_a_complete_record_for_insufficient_evidence() {
+        var complete = EvalService.CoverageForTextPath(BuildContext(Compaction()), DestructiveCommandsQuestion);
+        await Assert.That(complete!.IsComplete).IsTrue();
+
+        var reconciled = EvalService.ReconcileEvidenceCoverage(EvalOutcomes.InsufficientEvidence, complete);
+        await Assert.That(reconciled).IsNull();
+    }
+
+    [Test]
+    public async Task ReconcileEvidenceCoverage_leaves_an_incomplete_record_alone() {
+        var incomplete = EvalService.CoverageForTextPath(BuildContext(Compaction(toolResultsTruncated: 1)), DestructiveCommandsQuestion);
+        await Assert.That(incomplete!.IsComplete).IsFalse();
+
+        var reconciled = EvalService.ReconcileEvidenceCoverage(EvalOutcomes.InsufficientEvidence, incomplete);
+        await Assert.That(reconciled).IsEqualTo(incomplete);
+    }
+
+    [Test]
+    public async Task ReconcileEvidenceCoverage_leaves_a_complete_record_alone_for_not_applicable() {
+        var complete = EvalService.CoverageForTextPath(BuildContext(Compaction()), DestructiveCommandsQuestion);
+
+        var reconciled = EvalService.ReconcileEvidenceCoverage(EvalOutcomes.NotApplicable, complete);
+        await Assert.That(reconciled).IsEqualTo(complete);
+        await Assert.That(reconciled!.IsComplete).IsTrue();
+    }
+
+    [Test]
+    public async Task ReconcileEvidenceCoverage_leaves_a_complete_record_alone_for_assessed() {
+        var complete = EvalService.CoverageForTextPath(BuildContext(Compaction()), DestructiveCommandsQuestion);
+
+        var reconciled = EvalService.ReconcileEvidenceCoverage(EvalOutcomes.Assessed, complete);
+        await Assert.That(reconciled).IsEqualTo(complete);
     }
 }
