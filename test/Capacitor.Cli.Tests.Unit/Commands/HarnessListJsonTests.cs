@@ -2,6 +2,7 @@ using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -19,7 +20,7 @@ public class HarnessListJsonTests {
 
         await Assert.That(rows.Count).IsEqualTo(HarnessRegistry.Identities.Count);
         await Assert.That(rows.Select(r => r.GetProperty("vendor").GetString()!))
-            .IsEquivalentTo(HarnessRegistry.Identities.Select(i => i.Id.VendorId));
+            .IsEquivalentTo(HarnessRegistry.Identities.Select(i => i.Id.VendorId), CollectionOrdering.Matching);
     }
 
     [Test]
