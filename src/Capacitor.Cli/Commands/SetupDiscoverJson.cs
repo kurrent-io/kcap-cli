@@ -9,13 +9,15 @@ namespace Capacitor.Cli.Commands;
 /// identifies a workspace by origin rather than slug.</param>
 /// <param name="Url">What to hand back as <c>--server-url</c>.</param>
 /// <param name="Name">Display name, when the provider gives one.</param>
-public sealed record DiscoveredWorkspaceJson(string? Slug, string Url, string? Name, string Provider);
+public sealed record DiscoveredWorkspaceJson(string? Slug, string Url, string? Name);
 
 /// <summary>Machine-readable payload for <c>kcap setup --discover --json</c>.</summary>
 /// <param name="Workspaces">Every workspace the sign-in could see, which may be none.</param>
-/// <param name="CanCreate">Whether this account may create a workspace — only an account with none
-/// can, so this is false the moment <paramref name="Workspaces"/> is non-empty.</param>
-/// <param name="Provider">The sign-in route discovery took.</param>
+/// <param name="CanCreate">Whether this account may create a workspace. Only the hosted lane
+/// provisions, and only for an account that belongs to none — a GitHub-App account gets a workspace
+/// by having the app installed on an org, so it is never true there.</param>
+/// <param name="Provider">The sign-in route discovery took. One value for the whole result: every
+/// row came back from that lane.</param>
 public sealed record SetupDiscoverJson(
     IReadOnlyList<DiscoveredWorkspaceJson> Workspaces, bool CanCreate, string Provider);
 
@@ -25,41 +27,15 @@ public partial class SetupDiscoverJsonContext : JsonSerializerContext;
 
 /// <summary>Pure renderer for the discovery payload — kept separate from I/O so it's directly testable.</summary>
 internal static class SetupDiscoverRender {
-    public static SetupDiscoverJson Payload(IReadOnlyList<DiscoveredTenant> tenants, string provider) =>
+    public static SetupDiscoverJson Payload(DiscoveryReport report) =>
         new(
-            [.. tenants.Select(t => new DiscoveredWorkspaceJson(
-                t.Slug,
+            [.. report.Tenants.Select(t => new DiscoveredWorkspaceJson(
+                string.IsNullOrWhiteSpace(t.Slug) ? null : t.Slug,
                 t.Origin,
-                string.IsNullOrWhiteSpace(t.DisplayName) ? null : t.DisplayName,
-                t.Provider))],
-            CanCreate: tenants.Count == 0,
-            provider);
+                string.IsNullOrWhiteSpace(t.DisplayName) ? null : t.DisplayName))],
+            report.CanCreate,
+            report.Provider);
 
     public static string Render(SetupDiscoverJson payload) =>
         JsonSerializer.Serialize(payload, SetupDiscoverJsonContext.Default.SetupDiscoverJson);
-}
-
-/// <summary>
-/// The picker for a discovery that must not choose. It records the rows it was offered and answers
-/// null, which the façade treats as a cancel — and a cancel is strictly pre-boundary, so nothing is
-/// published: no profile written, no workspace activated, no token stored.
-///
-/// <para>Null also means "the picker has already told the user why", so this one stays silent and
-/// the caller renders the report instead.</para>
-/// </summary>
-internal sealed class ReportingTenantPicker : ITenantPicker {
-    public IReadOnlyList<DiscoveredTenant> Offered { get; private set; } = [];
-
-    public DiscoveredTenant? Pick(DiscoveredTenant[] tenants) {
-        Offered = tenants;
-
-        return null;
-    }
-
-    public Task<DiscoveredTenant?> PickAsync(
-            DiscoveredTenant[] tenants, TenantPickContext context, CancellationToken ct) {
-        Offered = tenants;
-
-        return Task.FromResult<DiscoveredTenant?>(null);
-    }
 }

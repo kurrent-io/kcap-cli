@@ -1737,25 +1737,24 @@ public sealed class SetupCommand(
             return 1;
         }
 
-        var json     = args.Contains("--json");
-        var chosen   = OAuthLoginFlow.ChooseDiscoveryProvider(args);
-        var picker   = new ReportingTenantPicker();
-        var device   = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
+        var json   = args.Contains("--json");
+        var chosen = OAuthLoginFlow.ChooseDiscoveryProvider(args);
+        var device = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
 
-        // Progress narrates the sign-in on stderr, so a --json run still shows the user the URL and
-        // code they have to approve without putting a word on stdout.
-        var result = await facades.Create(provisioner: null, picker, requested: null)
-            .DiscoverAsync(chosen, device, CancellationToken.None);
+        // The sign-in still has to show the user a URL and a code. Under --json that narration goes
+        // to stderr, so the document stays the only thing on stdout.
+        var narration = json ? ConsoleAuthProgress.OnStderr("  ") : null;
 
-        // Cancelled is the expected answer: the picker declined on purpose. Anything else means the
-        // sign-in itself did not get far enough to produce a list.
-        if (result is not (AuthResult.Cancelled or AuthResult.Committed)) {
-            StepProgress.ReportFailure(result);
+        var report = await facades.Create(provisioner: null, picker: null, requested: null, narration)
+            .DiscoverOnlyAsync(chosen, device, CancellationToken.None);
+
+        if (report.Error is not null) {
+            await Console.Error.WriteLineAsync($"  {report.Error}");
 
             return 1;
         }
 
-        var payload = SetupDiscoverRender.Payload(picker.Offered, chosen);
+        var payload = SetupDiscoverRender.Payload(report);
 
         if (json) {
             await Console.Out.WriteLineAsync(SetupDiscoverRender.Render(payload));
@@ -1765,7 +1764,9 @@ public sealed class SetupCommand(
 
         if (payload.Workspaces.Count == 0) {
             AnsiConsole.MarkupLine("  No Capacitor workspace found for this account.");
-            AnsiConsole.MarkupLine("  [dim]Create one with `kcap setup --org \"<name>\" --slug <slug>`.[/]");
+            AnsiConsole.MarkupLine(payload.CanCreate
+                ? "  [dim]Create one with `kcap setup --org \"<name>\" --slug <slug>`.[/]"
+                : "  [dim]Ask an admin to install the Kurrent GitHub App on your org, or use `kcap setup --server-url <url>`.[/]");
 
             return 0;
         }

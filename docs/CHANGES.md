@@ -13,15 +13,20 @@ in the middle of a run it then carries through to completion. A tool that has to
 workspace to use has nowhere to stand: the choice has to be made before the only command that could
 inform it.
 
-`kcap setup --discover` signs in, reports what it found, and stops. It changes nothing, and that is
-load-bearing rather than incidental: the picker declines, a decline is strictly pre-boundary, and
-the boundary is where profiles, tenant activation and tokens are all published together. No
-provisioner is supplied either, so the route cannot create a workspace even for an account with none.
+`kcap setup --discover` signs in, reports what it found, and stops. It reaches the rows through the
+proxy directly rather than through the normal discovery flow, because that flow cannot be talked out
+of choosing: a sole workspace is auto-selected before any picker is consulted, so a declining picker
+would configure the machine for exactly the case a report is most needed, and an account with no
+workspace would fail rather than answer. Publishing is a separate step this route never reaches, and
+no provisioner is passed, so nothing is written and nothing is created.
 
-The cost of publishing nothing is that the token is not published either, so the run that follows
-signs in again. That is the trade for a report that cannot leave a machine half-configured, and it
-argues for asking someone which workspace they want when they already know, rather than reaching for
-discovery first.
+`can_create` is the lane's answer rather than a count. Only the hosted lane provisions; a GitHub-App
+account gets a workspace by having the app installed on an org, so telling it that it may create one
+would be a dead end.
+
+Under `--json` the sign-in narrates itself on stderr. The user still has to see the URL and the code
+they are approving, and the document still has to be the only thing on stdout, so the progress sink
+takes the stream to write to rather than assuming stdout.
 
 ## A code block carries its own copy, and runs itself when it is a command
 

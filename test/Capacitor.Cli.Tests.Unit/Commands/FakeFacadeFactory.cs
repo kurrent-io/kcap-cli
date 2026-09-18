@@ -9,6 +9,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// </summary>
 sealed class FakeFacadeFactory(Func<ITenantProvisioner?, OnboardingFacade> build) : IOnboardingFacadeFactory {
     public OnboardingFacade Create(
-            ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null) =>
+            ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null,
+            IAuthProgress? progress = null) =>
         build(provisioner);
 }

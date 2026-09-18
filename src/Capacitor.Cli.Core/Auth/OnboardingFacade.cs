@@ -279,6 +279,76 @@ public sealed class OnboardingFacade(
         return result;
     }
 
+    /// <summary>
+    /// Sign in and report the workspaces this account can reach, without choosing one. Publishes
+    /// nothing: no profile, no activation, no token, and no workspace created — the commit boundary
+    /// is never entered, and no provisioner is consulted.
+    ///
+    /// <para>Deliberately not <see cref="DiscoverAsync"/> with a declining picker. A sole workspace
+    /// is auto-selected before any picker is asked, so that route would configure the machine for
+    /// the one case a report is most needed, and an account with none would fail rather than answer.</para>
+    /// </summary>
+    public Task<DiscoveryReport> DiscoverOnlyAsync(string provider, bool forceDevice, CancellationToken ct) =>
+        DiscoverOnlyCoreAsync(provider, forceDevice, ct);
+
+    async Task<DiscoveryReport> DiscoverOnlyCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
+        var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
+
+        if (proxyConfig is null)
+            return DiscoveryReport.Failure(provider, "Cannot reach the Kurrent auth service.", AuthFailureReason.Unreachable);
+
+        return provider switch {
+            AuthProvider.WorkOS    => await ListWorkOSAsync(proxyConfig, forceDevice, ct),
+            AuthProvider.GitHubApp => await ListGitHubAsync(proxyConfig, forceDevice, ct),
+            _                      => DiscoveryReport.Failure(provider, $"Unknown auth provider '{provider}'."),
+        };
+    }
+
+    async Task<DiscoveryReport> ListWorkOSAsync(
+            ProxyConfigResponse proxyConfig, bool forceDevice, CancellationToken ct) {
+        if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId))
+            return DiscoveryReport.Failure(AuthProvider.WorkOS, "This server isn't configured for WorkOS sign-in.");
+
+        var auth = WorkOSOrglessLogin is not null
+            ? await WorkOSOrglessLogin(ct)
+            : await OAuthLoginFlow.AcquireWorkOSAsync(
+                  workos, proxyConfig.WorkOSClientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
+                  browser: null, apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
+                  ct: ct, progress: progress, keys: KeyWatcher);
+
+        if (auth is null)
+            return DiscoveryReport.Failure(AuthProvider.WorkOS, "WorkOS sign-in failed.", AuthFailureReason.SigninDenied);
+
+        var result = await proxy.DiscoverWorkOSTenantsAsync(endpoints.ProxyUrl, auth.AccessToken, ct);
+
+        if (result.Error != DiscoveryError.None)
+            return DiscoveryReport.Failure(AuthProvider.WorkOS, TenantDiscovery.Describe(result.Error));
+
+        // The hosted lane is the only one that can provision, and only for an account with none.
+        return new DiscoveryReport(result.Tenants, AuthProvider.WorkOS, CanCreate: result.Tenants.Length == 0);
+    }
+
+    async Task<DiscoveryReport> ListGitHubAsync(
+            ProxyConfigResponse proxyConfig, bool forceDevice, CancellationToken ct) {
+        if (string.IsNullOrEmpty(proxyConfig.GitHubClientId))
+            return DiscoveryReport.Failure(AuthProvider.GitHubApp, "Cannot reach the Kurrent auth service.", AuthFailureReason.Unreachable);
+
+        var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
+            github, proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice, launcher,
+            telemetry.Join, time, ct, progress);
+
+        if (accessToken is null)
+            return DiscoveryReport.Failure(AuthProvider.GitHubApp, "GitHub sign-in did not complete.", AuthFailureReason.SigninDenied);
+
+        var (tenants, error) = await new TenantDiscovery(proxy, picker).ListAsync(endpoints.ProxyUrl, accessToken, ct);
+
+        // GitHub-App discovery has nothing to create with: a workspace arrives by having the app
+        // installed on an org, so reporting that this account may create one would be a dead end.
+        return error is not null
+            ? DiscoveryReport.Failure(AuthProvider.GitHubApp, error)
+            : new DiscoveryReport(tenants, AuthProvider.GitHubApp, CanCreate: false);
+    }
+
     async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
         var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
 

@@ -16,6 +16,23 @@ public sealed record AuthIdentity(string Profile, string CanonicalServer);
 public enum AuthFailureReason { Other, Unreachable, SigninDenied, NoTenantsFound, ProvisioningInProgress }
 
 /// <summary>
+/// What a sign-in found, for a caller that has to ask someone which workspace to use before it can
+/// name one. Nothing here was published: the commit boundary is not entered on this route.
+/// </summary>
+/// <param name="CanCreate">Whether this account may create a workspace. Only the hosted lane
+/// provisions, and only for an account that belongs to none.</param>
+public sealed record DiscoveryReport(
+        DiscoveredTenant[] Tenants,
+        string             Provider,
+        bool               CanCreate,
+        string?            Error  = null,
+        AuthFailureReason  Reason = AuthFailureReason.Other) {
+    public static DiscoveryReport Failure(
+            string provider, string error, AuthFailureReason reason = AuthFailureReason.Other) =>
+        new([], provider, CanCreate: false, error, reason);
+}
+
+/// <summary>
 /// Outcome of an onboarding operation. <see cref="Cancelled"/> is strictly pre-boundary — once the
 /// boundary is entered every publication runs to completion and the answer is
 /// <see cref="Committed"/>, never a torn stop. <see cref="Retarget"/> is the WorkOS "I already have
