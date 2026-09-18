@@ -82,7 +82,7 @@ public class InlinePairingTests {
     public async Task Unmatched_and_unknown_tags_stay_source() {
         await Assert.That(Trees.Dump("a <b>x")).IsEqualTo("doc(p('a ',tag('<b>'),'x'))");
         await Assert.That(Trees.Dump("a x</b>")).IsEqualTo("doc(p('a x',tag('</b>')))");
-        await Assert.That(Trees.Dump("a <span>x</span>")).IsEqualTo("doc(p('a ',tag('<span>'),'x',tag('</span>')))");
+        await Assert.That(Trees.Dump("a <iframe>x</iframe>")).IsEqualTo("doc(p('a ',tag('<iframe>'),'x',tag('</iframe>')))");
     }
 
     /// Block-only tags that Markdig parsed mid-paragraph have no block to become.

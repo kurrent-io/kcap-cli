@@ -6,6 +6,49 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The pull request reader shows images and folds details as an outline
+
+Review bots build a finding as a `<details>` per finding holding a `<details>` per section, and a
+box per level read as boxes in boxes. Only an outermost section is a card now — the chat's tool
+group, same fill, chevron and hover row — and a nested one is a header row with its content set in
+beneath it. Each keeps its author's `open` state: a bot chooses which sections a reader sees first,
+and github.com honours the same choice. Toggling one re-renders the document, and the header the
+reader pressed is held at its viewport Y through that frame's layout — then released, so a scroll
+of the reader's own a moment later is not undone. The jump that survived that fix was not the
+re-render at all: a press focuses the comment's viewer, and the reader's scroll brought the focused
+viewer into view — a viewer taller than the reader scrolls its top to the top, under the pointer,
+so the release landed on body text and the section never toggled. The reader's scroll no longer
+scrolls on focus change, as the chat's already did. The row list is also edited in place now
+rather than replaced on every page load and refresh: a row's control holds what its data does
+not — sections the reader opened, a loaded image — and a rebuild dropped all of it and left the
+saved offset pointing into a document of different heights. Three shapes bots draw around nothing are dropped
+before rendering (`BlockTidy`): a rule at the start or end of its container, one rule of two in a
+row, and a quote or a `dd` holding only details sections — a hairline beside, or a second inset
+under, sections already set in; Qodo's file list wraps every level in `dl`/`dd`, so three levels
+came to over 100px of inset. A `pre` inside a section is prose set in monospace, so it loses its box.
+
+Those cards borrow the border colour the comment list used to rule comments apart, so a comment
+ending in a card ran into the next one. Comments now sit 22px off their rule, drawn in
+`KcapBorderStrongBrush` — a token a hair lighter than `KcapBorderBrush`, for a rule that has to
+read across chrome in the ordinary border colour — and the last comment carries no rule, since
+there is nothing beneath it to separate.
+
+Images were alt-text links because the app fetched nothing agent-authored. The reader's content is
+pull request comments, so it now fetches images — through `MarkdownImages`, the one loader: https
+only, no cookies or credentials, an 8 MiB cap, a 15 s timeout, and one outcome per URL for the
+process, because a details toggle re-renders the whole document and a URL that failed once must not
+be retried on every toggle. An SVG is recognised by its bytes, since badge services serve one from
+a path with no extension. Chat is unchanged and still renders an image as its source text.
+
+Two layout facts shaped the rendering. A paragraph's line height is exact, and a line takes an
+embedded control's full height as its ascent: a control taller than the font's ascent pushes the
+text down inside the line and clips its descenders. So a paragraph of nothing but images — a
+screenshot, a badge row, a divider — renders as a row of block images at natural size, capped to
+the viewer's width; an image beside text is embedded in the line at 18px, measured 6px shorter
+than it is so it hangs into the descent the line already has instead of moving the baseline.
+Until its bytes arrive an image shows its label, and keeps it if they never do; a press opens the
+enclosing anchor when the policy would, else the image itself.
+
 ## The restart setup asks for now carries its own message
 
 Hooks, skills and MCP servers are read when an agent session starts, so the session that runs setup

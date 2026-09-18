@@ -14,6 +14,8 @@
             <SolidColorBrush x:Key="KcapSurfaceBrush" Color="#12151D" />
             <SolidColorBrush x:Key="KcapSurfaceRaisedBrush" Color="#191D27" />
             <SolidColorBrush x:Key="KcapBorderBrush" Color="#2A3040" />
+            <!-- A rule that must read where content already carries Border-coloured chrome. -->
+            <SolidColorBrush x:Key="KcapBorderStrongBrush" Color="#414A5E" />
             <SolidColorBrush x:Key="KcapTextBrush" Color="#F1F3F7" />
             <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border.
                  Faint was #6F7687 (~3.7:1 on Raised) — too dim for real copy. -->

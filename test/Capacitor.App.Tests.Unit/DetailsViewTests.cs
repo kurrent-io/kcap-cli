@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -18,7 +19,9 @@ public class DetailsViewTests {
 
     static ToggleButton Header(Visual root, int ordinal) => Headers(root).Single(b => b.Tag is int tag && tag == ordinal);
 
-    static string HeaderText(ToggleButton header) => Reads((TextBlock)header.Content!);
+    static TextBlock Label(ToggleButton header) => ((Grid)header.Content!).Children.OfType<TextBlock>().Single();
+
+    static string HeaderText(ToggleButton header) => Reads(Label(header));
 
     /// A pointer click on the header's centre; a toggle re-renders, so callers re-query the tree.
     static void ClickHeader(Window window, ToggleButton header) {
@@ -45,7 +48,7 @@ public class DetailsViewTests {
                 var header = Header(root, 0);
                 await Assert.That(header.IsChecked).IsFalse();
                 await Assert.That(HeaderText(header)).Contains("Agent Prompt");
-                await Assert.That(Spans<Avalonia.Controls.Documents.Bold>(((TextBlock)header.Content!).Inlines!).Count()).IsEqualTo(1);
+                await Assert.That(Spans<Avalonia.Controls.Documents.Bold>(Label(header).Inlines!).Count()).IsEqualTo(1);
                 await Assert.That(All<TextBlock>(root).Select(Reads).Any(t => t.Contains("hidden body"))).IsFalse();
                 await Assert.That(All<Border>(root).Count(b => b.Classes.Contains("markdown-details"))).IsEqualTo(1);
             } finally { window.Close(); }
@@ -87,6 +90,29 @@ public class DetailsViewTests {
                 ClickHeader(window, Header(root, 1));
                 await Assert.That(SelectedText(root)).DoesNotContain("inner body");
                 await Assert.That(Header(root, 0).IsChecked).IsTrue();
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Only the outermost section is a card; one inside another is a bare header row with its
+    /// content set in, so nesting reads as an outline rather than boxes in boxes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_the_outermost_section_is_a_card() {
+        await RunOnUiAsync(async () => {
+            const string nested = "<details open>\n<summary>Outer</summary>\n\n> <details open>\n> <summary>Inner</summary>\n>\n> inner body\n>\n> </details>\n\n</details>";
+            var (window, root, _) = Show(nested, MarkdownFlavor.GitHub);
+            try {
+                var borders = All<Border>(root).Where(b => b.Classes.Contains("markdown-details")).ToList();
+                await Assert.That(borders.Count).IsEqualTo(2);
+                var outer = borders.Single(b => !b.Classes.Contains("markdown-details-nested"));
+                var inner = borders.Single(b => b.Classes.Contains("markdown-details-nested"));
+                await Assert.That(outer.BorderThickness.Left).IsEqualTo(1);
+                await Assert.That(inner.BorderThickness.Left).IsEqualTo(0);
+                await Assert.That(inner.Background).IsNull().Or.IsEqualTo(Brushes.Transparent);
+                var content = All<StackPanel>(inner).Single(p => p.Classes.Contains("markdown-details-content"));
+                await Assert.That(content.Margin.Left).IsGreaterThan(0);
+                foreach (var header in Headers(root)) await Assert.That(All<Avalonia.Controls.Shapes.Path>(header).Count(p => p.Classes.Contains("markdown-details-chevron"))).IsEqualTo(1);
             } finally { window.Close(); }
         });
     }
@@ -186,6 +212,39 @@ public class DetailsViewTests {
                 var selected = SelectedText(root);
                 await Assert.That(selected).Contains("alpha");
                 await Assert.That(selected).Contains("beta");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// The header the reader pressed stays where it was on screen while the section below it
+    /// grows or shrinks; the scroll offset absorbs the change instead of the header.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_toggled_header_keeps_its_place_in_the_viewport() {
+        await RunOnUiAsync(async () => {
+            var body = string.Concat(Enumerable.Repeat("line\n\n", 30));
+            var view = new MarkdownView { Flavor = MarkdownFlavor.GitHub, Text = $"<details>\n<summary>S</summary>\n\n{body}</details>", Width = 400 };
+            var scroll = new ScrollViewer { Content = new StackPanel { Children = { new Border { Height = 600 }, view, new Border { Height = 2000 } } } };
+            var window = new Window { Content = scroll, Width = 500, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            try {
+                scroll.Offset = new Vector(0, 500);
+                window.UpdateLayout();
+                var before = Header(window, 0).TranslatePoint(new Point(0, 0), scroll)!.Value.Y;
+                await Assert.That(before).IsGreaterThan(0).And.IsLessThan(400);
+
+                ClickHeader(window, Header(window, 0));
+                await Assert.That(Header(window, 0).IsChecked).IsTrue();
+                await Assert.That(Header(window, 0).TranslatePoint(new Point(0, 0), scroll)!.Value.Y).IsEqualTo(before).Within(1);
+
+                scroll.Offset = new Vector(0, scroll.Offset.Y + 100);
+                window.UpdateLayout();
+                var moved = Header(window, 0).TranslatePoint(new Point(0, 0), scroll)!.Value.Y;
+                ClickHeader(window, Header(window, 0));
+                await Assert.That(Header(window, 0).IsChecked).IsFalse();
+                await Assert.That(Header(window, 0).TranslatePoint(new Point(0, 0), scroll)!.Value.Y).IsEqualTo(moved).Within(1);
             } finally { window.Close(); }
         });
     }

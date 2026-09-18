@@ -7,7 +7,14 @@ public sealed class LinkScope {
 
     public bool Inside => _depth > 0;
 
-    public void Enter() => _depth++;
+    /// The outermost hyperlink's target, which is what an image inside it opens.
+    public string? Url { get; private set; }
 
-    public void Exit() => _depth--;
+    public void Enter(string? url) {
+        if (_depth++ == 0) Url = url;
+    }
+
+    public void Exit() {
+        if (--_depth == 0) Url = null;
+    }
 }

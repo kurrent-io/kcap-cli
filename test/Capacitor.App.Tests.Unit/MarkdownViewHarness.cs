@@ -6,6 +6,7 @@ using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Capacitor.App.Services;
 using Capacitor.App.Views;
 using MarkView.Avalonia;
 using MarkView.Avalonia.Rendering.Inlines;
@@ -87,4 +88,26 @@ internal static class MarkdownViewHarness {
     }
 
     public static void Click(Window window, TextBlock block, MarkdownHyperlink link) => ClickAt(window, block, StartOf(block, link));
+
+    public static IEnumerable<MarkdownImage> Images(Visual root) => All<MarkdownImage>(root);
+
+    public static void ClickCentre(Window window, Control control) {
+        var point = control.TranslatePoint(new Point(control.Bounds.Width / 2, control.Bounds.Height / 2), window)!.Value;
+        window.MouseMove(point);
+        window.MouseDown(point, MouseButton.Left);
+        window.MouseUp(point, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// Hands `bytes` to every image the view asks for while `body` runs; the picture arrives on
+    /// the dispatcher, which is pumped before the body sees the tree.
+    public static async Task WithImageBytes(byte[]? bytes, Func<Task> body) {
+        var prior = MarkdownImages.Fetch;
+        MarkdownImages.Clear();
+        MarkdownImages.Fetch = (_, _) => Task.FromResult(bytes);
+        try { await body(); } finally {
+            MarkdownImages.Fetch = prior;
+            MarkdownImages.Clear();
+        }
+    }
 }
