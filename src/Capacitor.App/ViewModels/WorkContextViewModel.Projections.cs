@@ -96,9 +96,8 @@ public sealed partial class WorkContextViewModel {
     }
 
     public string PartsHeader => _parts.Count switch {
-        0     => "0 parts",
-        1     => $"{SettledCount} of 1 part",
-        var n => $"{SettledCount} of {n} parts",
+        0     => "0",
+        var n => $"{SettledCount} of {n}",
     };
     int SettledCount => _parts.Count(p => p.IsSettled);
     public bool HasParts => _parts.Count > 0;
@@ -128,8 +127,6 @@ public sealed partial class WorkContextViewModel {
     public bool PeopleOverflows => _contributors.Count > VisiblePeopleCap;
     public IEnumerable<WorkContextPersonViewModel> VisibleContributors =>
         PeopleExpanded || !PeopleOverflows ? _contributors : _contributors.Take(VisiblePeopleCap);
-    /// People first, since that is what the section lists; the session count follows because one
-    /// person can hold several. With nobody listed the session count stands alone.
     public string WhoCountText {
         get {
             var sessions = _sessionCount switch {
@@ -137,7 +134,7 @@ public sealed partial class WorkContextViewModel {
                 1     => "1 session",
                 var n => $"{n} sessions",
             };
-            if (_contributors.Count == 0) return sessions;
+            if (_contributors.Count == 0 || !PeopleOverflows) return sessions;
             var people = _contributors.Count == 1 ? "1 person" : $"{_contributors.Count} people";
             return sessions.Length == 0 ? people : $"{people} · {sessions}";
         }

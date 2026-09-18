@@ -559,7 +559,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Parts[1].Mark).IsEqualTo(WorkContextPartMark.Unknown);
             await Assert.That(h.Vm.Parts[2].Mark).IsEqualTo(WorkContextPartMark.Settled);
             await Assert.That(h.Vm.Parts[2].IsSettled).IsTrue();
-            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 3 parts");
+            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 3");
             await Assert.That(h.Vm.BlockedBy[0]).IsEqualTo("Pin the helper");
             await Assert.That(h.Vm.HasBlockers).IsTrue();
             await Assert.That(h.Vm.CycleNote).IsEqualTo("Dependencies could not be fully resolved");
@@ -578,7 +578,7 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
 
             await Assert.That(h.Vm.Parts[0].Mark).IsEqualTo(WorkContextPartMark.Settled);
-            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 1 part");
+            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 1");
             await h.Vm.TeardownAsync();
         });
     }
@@ -595,7 +595,7 @@ public class WorkContextViewModelTests {
 
             await Assert.That(h.Vm.Key).IsNull();
             await Assert.That(h.Vm.Title).IsEqualTo("Daemon tests flake");
-            await Assert.That(h.Vm.PartsHeader).IsEqualTo("0 parts");
+            await Assert.That(h.Vm.PartsHeader).IsEqualTo("0");
             await Assert.That(h.Vm.HasParts).IsFalse();
             await Assert.That(h.Vm.HasBlockers).IsFalse();
             await Assert.That(h.Vm.CycleNote).IsEqualTo("Dependencies form a cycle");
@@ -1094,9 +1094,9 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// The section lists people, so its count names people first; the session count stays beside
-    /// it because one person can hold several sessions. Without a listed contributor the requester
-    /// row stands in and the session count alone is shown.
+    /// With every contributor visible the header names sessions only; past the cap it adds a people
+    /// count. Without listed contributors the requester row stands in and the session count alone
+    /// is shown.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_who_count_names_people_before_sessions_and_the_requester_row_is_the_fallback() {
@@ -1118,17 +1118,17 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { "Ada Lovelace", "github:7", "👩 Grace" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.Initial)).IsEquivalentTo(new[] { "A", "G", "👩" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.LastActivityText)).IsEquivalentTo(new[] { "2h ago", "3d ago", "" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.WhoCountText).IsEqualTo("3 people · 4 sessions");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("4 sessions");
             await Assert.That(h.Vm.PeopleOverflows).IsFalse();
             await Assert.That(h.Vm.VisibleContributors.Count()).IsEqualTo(3);
             await h.Vm.TogglePeopleCommand.Execute();
             await Assert.That(h.Vm.PeopleExpanded).IsFalse();
 
             await h.TickAsync();
-            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 person · 2 sessions");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("2 sessions");
 
             await h.TickAsync();
-            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 person · 1 session");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 session");
 
             await h.TickAsync();
             await Assert.That(h.Vm.HasContributors).IsFalse();
@@ -1434,14 +1434,14 @@ public class WorkContextViewModelTests {
             h.Subagents.Apply(Spawn("c2", now));
             await Assert.That(h.Vm.HasSubagents).IsTrue();
             await Assert.That(h.Vm.Subagents).Count().IsEqualTo(2);
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 running · 2 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 running");
             await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasSubagents));
             await Assert.That(raised).Contains(nameof(WorkContextViewModel.SubagentsHeader));
 
             h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running · 2 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 of 2 running");
             h.Subagents.Apply(Finish("c2", now.AddSeconds(6)));
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2");
             await Assert.That(h.Vm.HasSubagents).IsTrue();
             await h.Vm.TeardownAsync();
         });
@@ -1459,7 +1459,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
             h.Subagents.Apply(Spawn("c1", h.Time.GetUtcNow()));
             await Assert.That(h.Vm.HasSubagents).IsTrue();
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running · 1 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running");
 
             gate.SetResult(WorkContextRead.Of(WorkContextReadKind.Unreachable, "no response"));
             await h.Vm.PendingReadForTesting!;
@@ -1508,6 +1508,7 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
 
             await Assert.That(h.Vm.PeopleOverflows).IsTrue();
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("5 people · 5 sessions");
             await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await h.Vm.TogglePeopleCommand.Execute();
             await Assert.That(h.Vm.PeopleExpanded).IsTrue();

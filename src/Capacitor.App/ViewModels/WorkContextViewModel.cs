@@ -110,7 +110,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         get {
             var running = _subagents.RunningCount;
             var total = _subagents.Rows.Count;
-            return running > 0 ? $"{running} running · {total} total" : $"{total} total";
+            return running switch {
+                0                     => $"{total}",
+                var r when r == total => $"{r} running",
+                var r                 => $"{r} of {total} running",
+            };
         }
     }
 

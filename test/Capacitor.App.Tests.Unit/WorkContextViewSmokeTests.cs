@@ -144,13 +144,13 @@ public class WorkContextViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_who_row_counts_people_before_sessions() {
+    public async Task The_who_row_shows_sessions_when_every_contributor_is_listed() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
 
             var count = host.Find<TextBlock>("WhoCountText");
-            await Assert.That(count.Text).IsEqualTo("1 person · 2 sessions");
+            await Assert.That(count.Text).IsEqualTo("2 sessions");
             await Assert.That(count.IsEffectivelyVisible).IsTrue();
 
             var list = host.Find<ItemsControl>("ContributorList");
@@ -327,7 +327,7 @@ public class WorkContextViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(section.IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").Text).IsEqualTo("1 running · 2 total");
+            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").Text).IsEqualTo("1 of 2 running");
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             await Assert.That(texts).Contains("Explore");
             await Assert.That(texts).Contains("running in background · 18s");
