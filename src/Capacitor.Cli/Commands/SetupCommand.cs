@@ -1030,7 +1030,15 @@ public sealed class SetupCommand(
         // live until it restarts — so tell them, but only when something was actually
         // installed (no point promising recording we never wired up).
         var restartTip = LiveRecordingRestartTip(installResult);
-        if (restartTip is not null) AnsiConsole.MarkupLine($"\n  {restartTip}");
+
+        if (restartTip is not null) {
+            AnsiConsole.MarkupLine($"\n  {restartTip}");
+
+            // The same reminder, left for the next session to deliver through the hooks this run
+            // installed. Armed on the same condition as the tip — with nothing wired up there is
+            // nothing to announce.
+            new FirstRunNoticeStore(config).Arm();
+        }
 
         // Setup itself is user-scope and works fine outside a repo, but sessions recorded
         // from non-repo directories have no owner/repo/branch/PR enrichment (see

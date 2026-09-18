@@ -549,8 +549,9 @@ public sealed class CursorHookCommand(
             var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
             var plansNudge     = PlansNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisablePlansNudge is true, harnesses);
             var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
+            var firstRunNotice = FirstRunNoticeEmitter.Resolve(nudgeProfile?.DisableFirstRunNotice is true, config, HarnessId.Cursor, harnesses);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,
-                HarnessNudgeEmitter.Combine(workItemsNudge, plansNudge, harnessNudge));
+                HarnessNudgeEmitter.Combine(workItemsNudge, plansNudge, harnessNudge, firstRunNotice));
         } catch {
             // Fail-open per design: any exception (budget cancellation,
             // transcript-file IO race, JSON quirk we missed) must never crash Cursor's agent

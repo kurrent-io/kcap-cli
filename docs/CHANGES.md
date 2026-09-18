@@ -6,6 +6,39 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The restart setup asks for now carries its own message
+
+Hooks, skills and MCP servers are read when an agent session starts, so the session that runs setup
+has none of them: it is not recorded, and it cannot run the guided tour. Setup says so in the
+terminal, which works for someone watching it and is the weakest link the moment a tool did the
+install — one line at the end of a long transcript, which it has to remember to pass on.
+
+So the next session says it instead. Setup leaves a one-shot marker, and the next session to start
+with hooks in place carries a SessionStart fragment saying kcap is wired in, and offering the tour.
+That session is the one that can say it: the fragment is delivered by the hook whose presence is the
+thing being announced.
+
+It claims no more than that. Setup arms the marker on every run that installs hooks, a re-run on a
+machine recorded for months included, so the fragment says setup completed before this session
+started and never that this is the first wired session. Whether this particular session reaches the
+server is a separate question with its own notice — a rejected token already says so — and a
+fragment asserting "you are being recorded" would be the line contradicting it. The tour is offered
+only where the MCP servers it reads through are registered, the same call setup's own Next-steps box
+makes.
+
+Resolving takes the marker, so it is resolved only where the output is going to be delivered —
+OpenCode's older-plugin gate discards this stdout, and outside that gate the one notice would be
+spent on a session that never showed it. The marker is claimed under the config lock, so several
+agents started at once deliver it once between them rather than each — a bare delete races, and a
+rename only picks a single winner where the filesystem makes renaming atomic, which is not the same
+on every platform. The claim never waits for the lock: it runs on the SessionStart hook path, where
+the budget belongs to session capture. A session with no marker waiting returns on a file probe and
+never takes the lock, which is every session but one per setup; the probe is repeated under the
+lock, and that one decides. Opting out with `disable_first_run_notice` suppresses the fragment
+without consuming the marker, so turning the notice back on before the next session still delivers
+it. It is armed only when setup actually installed something — with nothing wired up there is
+nothing to announce.
+
 ## The desktop chat shows a session's subagents
 
 A Claude session's subagents are read off the transcript alone: an `Agent` or `Task` call starts a
