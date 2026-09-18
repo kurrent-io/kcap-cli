@@ -102,9 +102,12 @@ Delete any `bin/` or `obj/` that came along. Expected contents: 13 `.cs` files, 
 ```xml
 <Project>
     <!-- Deliberately does not import the repo-root file: vendored source stays byte-identical to
-         upstream, so it cannot meet warnings-as-errors, enforced code style or the banned-API list. -->
+         upstream, so it cannot meet warnings-as-errors, enforced code style or the banned-API list.
+         The analyzers are off as well: the root .editorconfig reaches this directory by ancestry,
+         not by import, and would raise its CA severities on unmodified upstream code. -->
     <PropertyGroup>
         <Deterministic>true</Deterministic>
+        <EnableNETAnalyzers>false</EnableNETAnalyzers>
     </PropertyGroup>
 </Project>
 ```

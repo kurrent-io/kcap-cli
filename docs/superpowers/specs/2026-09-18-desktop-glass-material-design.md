@@ -81,8 +81,10 @@ The demo, browser and test projects are not copied.
   joins `Capacitor.slnx` and is referenced only by `Capacitor.App`.
 - A `Directory.Build.props` in `src/ThirdParty/` does not import the root one, which
   takes that subtree out of warnings-as-errors, code-style enforcement and the
-  banned-API analyzer. The files stay byte-identical to upstream and an upstream diff
-  stays trivial. The vendored `.csproj` states the properties it needs (nullable,
+  banned-API analyzer. It also sets `EnableNETAnalyzers` to false: the root
+  `.editorconfig` reaches the directory by ancestry, not by import, and would raise
+  its CA severities on unmodified upstream code. The files stay byte-identical to
+  upstream and an upstream diff stays trivial. The vendored `.csproj` states the properties it needs (nullable,
   language version) itself, as upstream's does.
 - `src/ThirdParty/LiquidGlassAvaloniaUI/VENDORED.md` records the source URL, tag,
   commit and every local patch with its reason. One patch is planned: the
