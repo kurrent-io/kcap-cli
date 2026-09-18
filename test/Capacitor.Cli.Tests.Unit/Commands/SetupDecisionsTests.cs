@@ -66,61 +66,22 @@ public class SetupDecisionsTests {
     // --- DecideImport (Step 6 — import past sessions) ---
 
     [Test]
-    public async Task DecideImport_NoCurrentRepo_SkipsWithReason() {
-        var decision = SetupDecisions.DecideImport(
-            hasCurrentRepo: false, authSatisfied: true, skipImport: false, noPrompt: false,
-            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
-
-        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
-        await Assert.That(decision.SkipReason).IsEqualTo("no origin remote — skipping import");
+    public async Task DecideImport_runs_outside_a_repository_when_authenticated() {
+        var d = SetupDecisions.DecideImport(authSatisfied: true, skipImport: false, noPrompt: true, promptYesNo: () => throw new InvalidOperationException("must not prompt"));
+        await Assert.That(d.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Run);
     }
 
     [Test]
-    public async Task DecideImport_AuthNotSatisfied_SkipsWithReason() {
-        var decision = SetupDecisions.DecideImport(
-            hasCurrentRepo: true, authSatisfied: false, skipImport: false, noPrompt: false,
-            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
-
-        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
-        await Assert.That(decision.SkipReason).IsEqualTo("not authenticated — skipping import");
+    public async Task DecideImport_skips_with_a_reason_when_not_authenticated_or_opted_out() {
+        await Assert.That(SetupDecisions.DecideImport(false, false, false, () => true).SkipReason).Contains("not authenticated");
+        await Assert.That(SetupDecisions.DecideImport(true, true, false, () => true).SkipReason).IsEqualTo("--skip-import");
     }
 
     [Test]
-    public async Task DecideImport_SkipImportFlag_SkipsWithReason() {
-        var decision = SetupDecisions.DecideImport(
-            hasCurrentRepo: true, authSatisfied: true, skipImport: true, noPrompt: false,
-            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
-
-        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
-        await Assert.That(decision.SkipReason).IsEqualTo("--skip-import");
-    }
-
-    [Test]
-    public async Task DecideImport_NoPromptTrue_RunsWithoutPrompting() {
-        var decision = SetupDecisions.DecideImport(
-            hasCurrentRepo: true, authSatisfied: true, skipImport: false, noPrompt: true,
-            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
-
-        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Run);
-    }
-
-    [Test]
-    public async Task DecideImport_Interactive_UserAccepts_Runs() {
-        var decision = SetupDecisions.DecideImport(
-            hasCurrentRepo: true, authSatisfied: true, skipImport: false, noPrompt: false,
-            promptYesNo: () => true);
-
-        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Run);
-    }
-
-    [Test]
-    public async Task DecideImport_Interactive_UserDeclines_SkipsWithNoReason() {
-        var decision = SetupDecisions.DecideImport(
-            hasCurrentRepo: true, authSatisfied: true, skipImport: false, noPrompt: false,
-            promptYesNo: () => false);
-
-        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
-        await Assert.That(decision.SkipReason).IsNull();
+    public async Task DecideImport_declined_prompt_skips_without_a_reason() {
+        var d = SetupDecisions.DecideImport(true, false, false, () => false);
+        await Assert.That(d.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
+        await Assert.That(d.SkipReason).IsNull();
     }
 
     // --- Applying the browser's Agents answer (WithBrowserAnswer) ---

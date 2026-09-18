@@ -1217,8 +1217,7 @@ sealed class SetupCommand(
             return;
         }
 
-        var decision = SetupDecisions.DecideImport(
-            currentRepo is not null, authSatisfied, skipImport, noPrompt, promptYesNo);
+        var decision = SetupDecisions.DecideImport(authSatisfied, skipImport, noPrompt, promptYesNo);
 
         if (decision.Outcome == SetupDecisions.ImportOutcome.Skip) {
             if (decision.SkipReason is not null)
@@ -1227,8 +1226,6 @@ sealed class SetupCommand(
             return;
         }
 
-        // Run: DecideImport only returns Run when hasCurrentRepo was true, so currentRepo is
-        // guaranteed non-null here.
         var invocation = new ImportInvocation(
             Scope:              new ImportScope.Repo(currentRepo!.Value.Owner, currentRepo.Value.Name),
             MaxSessions:        null,
