@@ -2201,6 +2201,7 @@ after a `--all` dismiss is still offered once.
 
 ```bash
 kcap status         # server health check
+kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # skip the browser, sign in with a device code instead
