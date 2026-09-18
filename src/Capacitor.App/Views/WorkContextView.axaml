@@ -356,7 +356,7 @@
                     <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Subagents}" Margin="0,10,0,0" IsVisible="{Binding SubagentsExpanded}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:SubagentRow">
-                                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="9" Margin="0,0,0,8">
+                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="9" Margin="0,0,0,8">
                                     <!-- Pulsing warning while running, success done, danger failed, neutral stopped. -->
                                     <Panel Grid.Row="0" Grid.Column="0" Width="8" Height="8" VerticalAlignment="Center">
                                         <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" Background="{StaticResource KcapWarningBrush}" IsVisible="{Binding IsRunning}" />
@@ -364,14 +364,12 @@
                                         <Ellipse Width="8" Height="8" Fill="{StaticResource KcapDangerBrush}" IsVisible="{Binding IsFailed}" />
                                         <Ellipse Width="8" Height="8" Fill="{StaticResource KcapFaintBrush}" IsVisible="{Binding IsStopped}" />
                                     </Panel>
-                                    <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                                        <TextBlock Text="{Binding Name}" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                        <TextBlock Text="background" FontSize="10" Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
-                                                   IsVisible="{Binding IsBackground}" />
-                                    </StackPanel>
-                                    <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" />
-                                    <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding Description}" FontSize="10.5"
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Name}" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Row="0" Grid.Column="2" Text="background" FontSize="10" Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
+                                               IsVisible="{Binding IsBackground}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding Description}" FontSize="10.5"
                                                Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
                                                IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                 </Grid>

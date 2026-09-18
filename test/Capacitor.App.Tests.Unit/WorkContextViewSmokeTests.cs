@@ -192,4 +192,34 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").IsEffectivelyVisible).IsTrue();
         });
     }
+
+    /// A horizontal StackPanel measures its children unbounded, so the name's ellipsis only
+    /// engages once the tag and the state sit in their own columns.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_background_subagent_name_stays_clear_of_the_tag_and_the_state() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var now = host.Time.GetUtcNow();
+            var longName = new string('x', 80);
+            host.Subagents.Apply(new ChatProjectionResult([], [], [
+                new SubagentSignal.Started("c1", longName, "", now.AddSeconds(-18)),
+                new SubagentSignal.Detached("c1", "a1"),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var section = host.Find<StackPanel>("SubagentsSection");
+            var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).ToList();
+            var name = texts.Single(t => t.Text == longName);
+            var tag = texts.Single(t => t.Text == "background");
+            var state = texts.Single(t => t.Text == "running · 18s");
+
+            await Assert.That(name.Bounds.Right).IsLessThanOrEqualTo(tag.Bounds.Left);
+            await Assert.That(name.Bounds.Right).IsLessThanOrEqualTo(state.Bounds.Left);
+            await Assert.That(state.Bounds.Right).IsLessThanOrEqualTo(host.Window.Bounds.Width);
+        });
+    }
 }
