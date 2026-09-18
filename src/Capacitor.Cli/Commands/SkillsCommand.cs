@@ -35,6 +35,12 @@ class SkillsCommand(
     /// A run reporting both reads as incomplete, since a retry is owed either way.</summary>
     const int Incomplete = 2;
 
+    /// <summary>The credential a sync with no stored token and no machine credential records. A server
+    /// whose auth discovery reports that none is required answers an unauthenticated request, so
+    /// identity cannot refuse on a missing token; the fetch decides, and a later sign-in reads as an
+    /// identity change that retires this catalogue.</summary>
+    const string AnonymousAccount = "anonymous";
+
     /// <summary>The harness trees skills materialize into, relative to a session's anchor. A null
     /// vendor is a SHARED tree (several harnesses read it): its snapshot is fetched vendor-less, so
     /// unknown-excludes keeps vendor-restricted docs out of it — those reach their harness through a
@@ -86,9 +92,9 @@ class SkillsCommand(
             await Console.Error.WriteLineAsync("No server URL is configured — run `kcap setup`.");
             return Failed;
         }
-        var identity = await ResolveIdentityAsync(serverUrl);
+        var (identity, problem) = await ResolveIdentityAsync(serverUrl);
         if (identity is null) {
-            await Console.Error.WriteLineAsync("Not authenticated. Run 'kcap login' to authenticate.");
+            await Console.Error.WriteLineAsync(problem ?? "Not authenticated. Run 'kcap login' to authenticate.");
             return Failed;
         }
 
@@ -106,28 +112,52 @@ class SkillsCommand(
         return exitCode;
     }
 
-    /// <summary>One target's sync. The publication owns the per-worktree manifest lock for its whole
-    /// life and has released it by the time it returns, because the two locks the tail needs are
-    /// shared and ordered outside it. <c>Settled</c> is false for an outcome that never reached a
-    /// saved manifest, which is the one case the tail must not run on.</summary>
+    /// <summary>One target's sync. The attempt owns the per-worktree manifest lock for its whole life
+    /// and has released it by the time it returns, because the two locks the tail needs are shared and
+    /// ordered outside it. <c>Settled</c> is false for an outcome that never reached a saved manifest,
+    /// which is the one case the tail must not run on.
+    ///
+    /// <para>The machine-wide migration lock is needed only by a retirement, and whether this run is
+    /// one is certain only once the manifest has been read under the inner lock — from where the
+    /// outer lock can no longer be taken in order. So the lock-free read decides the first attempt,
+    /// and an attempt that finds otherwise hands both locks back rather than holding a shared lock
+    /// while it waits for a lock a peer legitimately holds across its fetch. One retry, so it
+    /// terminates.</para></summary>
     async Task<int> SyncTargetAsync(
             SkillsTarget target, string anchor, string gitDir, string hash, string repoHome,
             SkillsIdentity identity, bool dryRun, bool auto) {
-        var (code, settled) = await PublishTargetAsync(
-            target, anchor, gitDir, hash, repoHome, identity, dryRun, auto);
+        var retiring = LoadQuietly(ManifestPath(gitDir, target.Key)) is { } peeked
+                       && Retiring(peeked, identity);
 
-        return settled
-            ? Math.Max(code, await FinishTargetAsync(hash, target, anchor, gitDir, identity, auto))
-            : code;
+        var attempt = await AttemptTargetAsync(
+            target, anchor, gitDir, hash, repoHome, identity, dryRun, auto, takeMigration: retiring);
+        if (attempt.NeedsMigration)
+            attempt = await AttemptTargetAsync(
+                target, anchor, gitDir, hash, repoHome, identity, dryRun, auto, takeMigration: true);
+
+        return attempt.Settled
+            ? Math.Max(attempt.Code, await FinishTargetAsync(hash, target, anchor, gitDir, identity, auto))
+            : attempt.Code;
     }
 
-    async Task<(int Code, bool Settled)> PublishTargetAsync(
+    async Task<(int Code, bool Settled, bool NeedsMigration)> AttemptTargetAsync(
             SkillsTarget target, string anchor, string gitDir, string hash, string repoHome,
-            SkillsIdentity identity, bool dryRun, bool auto) {
+            SkillsIdentity identity, bool dryRun, bool auto, bool takeMigration) {
         void Info(string line) { if (!auto) Console.WriteLine(line); }
 
         var manifestPath = ManifestPath(gitDir, target.Key);
         var root         = target.Root(anchor);
+        var reported     = new HashSet<string>(StringComparer.Ordinal);
+
+        // One line per refused deletion per run: an intent refused before the fetch is retried after
+        // it, and refusing twice says nothing the first line did not.
+        async Task ReportStuckAsync(IEnumerable<PendingPrune> stuck) {
+            foreach (var recorded in stuck)
+                if (reported.Add(recorded.Path))
+                    await Console.Error.WriteLineAsync(
+                        $"Could not remove {recorded.Path}: it does not resolve to a kcap directory "
+                      + $"under {recorded.Root}; it stays recorded for the next sync.");
+        }
 
         // What an auto run may skip: a periodic refresh is exactly what a lock holder is already
         // doing, while recovery, a retired credential and a moved anchor are work only this run
@@ -135,15 +165,12 @@ class SkillsCommand(
         // wait and never a decision to write.
         var owed = auto && Owed(LoadQuietly(manifestPath), identity, anchor);
 
-        // Lock order is migration, then repository, then the per-worktree manifest, and no path
-        // takes them the other way round. Migration is machine-wide, so it is released before the
-        // fetch — a shared lock must never span a network request, and the only thing it spans here
-        // is a bounded wait for the inner lock. It is taken for every run rather than only for a
-        // retirement because whether this is one is knowable only once the manifest has been read
-        // under the inner lock, by which point up-ordering is no longer possible.
-        var migrationLock = TryAcquire(SkillsLocks.Migration);
-        if (migrationLock is null)
-            return (await ContendedAsync("retiring global skills", target, auto), false);
+        // Lock order is migration, then repository, then the per-worktree manifest, and no path takes
+        // them the other way round. Migration is released before the fetch: a shared lock must never
+        // span a network request.
+        var migrationLock = takeMigration ? TryAcquire(SkillsLocks.Migration) : null;
+        if (takeMigration && migrationLock is null)
+            return (await ContendedAsync("retiring global skills", target, auto), false, false);
 
         // One sync per (worktree, target) at a time, machine-wide: a burst of session starts must
         // collapse to ONE refresh — the throttle alone cannot do that, since every child of the
@@ -152,51 +179,82 @@ class SkillsCommand(
         var manifestLock = TryAcquire(SkillsLocks.Manifest(gitDir, target.Key),
                                       auto && !owed ? TimeSpan.FromMilliseconds(1) : null);
         if (manifestLock is null) {
-            migrationLock.Dispose();
-            if (auto) return (owed ? Incomplete : 0, false);
+            migrationLock?.Dispose();
+            if (auto) return (owed ? Incomplete : 0, false, false);
             await Console.Error.WriteLineAsync(
                 $"Another kcap skills sync is already running for this repo ({target.Key}).");
-            return (Failed, false);
+            return (Failed, false, false);
         }
         using var heldManifestLock = manifestLock;
 
-        SkillsManifest?    manifest = null;
-        List<PendingPrune> journal  = [];
+        SkillsManifest?    manifest   = null;
+        List<PendingPrune> journal    = [];
+        DateTimeOffset?    lastSynced = null;
+        var                failed     = false;
         try {
-            if (!TryLoadManifest(manifestPath, out manifest)) return (Failed, false);
-            if (auto && AutoThrottled(manifest, time.GetUtcNow()) && !Owed(manifest, identity, anchor))
-                return (0, false);
+            if (!TryLoadManifest(manifestPath, out manifest)) return (Failed, false, false);
 
-            journal = [.. manifest?.PendingPrunes ?? []];
+            if (manifest is not null && Retiring(manifest, identity) && migrationLock is null)
+                return (0, false, true);
+
+            if (auto && AutoThrottled(manifest, time.GetUtcNow()) && !Owed(manifest, identity, anchor))
+                return (0, false, false);
+
+            journal    = [.. manifest?.PendingPrunes ?? []];
+            lastSynced = manifest?.SyncedAt;
 
             if (manifest is not null && Retiring(manifest, identity)) {
                 // Ahead of the fetch and unconditional: a replacement that fails must leave nothing
                 // of the previous account behind, locally or in the global trees. The ledger is then
-                // saved owning nothing, so the failure cannot leave it claiming what was just
-                // deleted — nor the retired credential it was fetched under.
+                // saved owning nothing but the deletions that were refused — dropping those rows
+                // would leave their directories with nothing able to prune them — and with no
+                // synced_at, so a failed replacement cannot be read as a completed refresh.
                 if (!dryRun) {
+                    List<PendingPrune> refusedPrunes = [];
                     var owning = OldRoot(manifest, target, anchor);
-                    foreach (var entry in manifest.Skills ?? [])
-                        PruneRecorded(new PendingPrune(entry.Path, owning), target);
-                    foreach (var outstanding in journal) PruneRecorded(outstanding, target);
-                    RetireLegacy(hash, target, identity);
-                    SaveManifest(manifestPath, BuildManifest(null, [], anchor, identity, target,
-                                                             repoHome, pending: false, []));
+                    foreach (var entry in manifest.Skills ?? []) {
+                        var recorded = new PendingPrune(entry.Path, owning);
+                        if (!PruneRecorded(recorded, target)) refusedPrunes.Add(recorded);
+                    }
+                    foreach (var outstanding in journal)
+                        if (!PruneRecorded(outstanding, target)) refusedPrunes.Add(outstanding);
+
+                    foreach (var copy in RetireLegacy(hash, target, identity)) {
+                        failed = true;
+                        await Console.Error.WriteLineAsync(
+                            $"Could not remove the global copy {copy}; it stays recorded for the next sync.");
+                    }
+
+                    journal = refusedPrunes;
+                    if (refusedPrunes.Count > 0) {
+                        failed = true;
+                        await ReportStuckAsync(refusedPrunes);
+                    }
+                    SaveManifest(manifestPath,
+                                 BuildManifest(null, [], anchor, identity, target, repoHome,
+                                               syncedAt: null, pending: false, journal));
+                } else {
+                    journal.Clear();
                 }
-                manifest = null;
-                journal.Clear();
+                manifest   = null;
+                lastSynced = null;
             } else if (manifest is not null && Moved(manifest, anchor)) {
                 // Neither the conditional request nor the planner compares destinations, so a
                 // manifest recorded at another anchor is discarded as a cache and kept as a ledger:
                 // every document is rewritten at the new paths, and every old path is queued for
-                // deletion beside the root that authorises deleting it.
+                // deletion beside the root that authorises deleting it. Nothing has been applied at
+                // the new anchor yet, so the previous stamp does not carry over either.
                 var owning = OldRoot(manifest, target, anchor);
-                journal  = [.. SkillsJournal.Merge(journal, (manifest.Skills ?? [])
+                journal    = [.. SkillsJournal.Merge(journal, (manifest.Skills ?? [])
                     .Select(entry => new PendingPrune(entry.Path, owning)))];
-                manifest = manifest with { Skills = [], Etag = null };
+                manifest   = manifest with { Skills = [], Etag = null };
+                lastSynced = null;
             }
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
+            return (Failed, false, false);
         } finally {
-            migrationLock.Dispose();
+            migrationLock?.Dispose();
         }
 
         // Metadata alone cannot prove a skill is served: a deleted or hand-edited SKILL.md must be
@@ -212,31 +270,35 @@ class SkillsCommand(
             fetched = await repositories.GetSkillsSnapshotAsync(hash, target.Vendor, conditional);
         } catch (CapacitorApiException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
-            return (Failed, false);
+            return (Failed, false, false);
         }
 
         // A 304 is only ever answered to a conditional request, and only a manifest supplies one.
         if (fetched is SkillsSnapshotResult.NotModified && manifest is not null) {
             Info($"[{target.Key}] skills up to date ({manifest.Skills?.Length ?? 0} materialized).");
-            if (dryRun) return (0, false);
-            // Unchanged metadata still has to clear an interrupted publication and carry out any
-            // deletion still owed, so it settles like any other outcome.
-            var stale = Settle(manifestPath, manifest with {
-                SyncedAt = time.GetUtcNow(), Anchor = anchor, Identity = identity,
-                Exposure = Exposure(target),
-            }, target);
-            await ReportStuckAsync(stale);
-            return (stale.Length > 0 ? Failed : 0, true);
+            if (dryRun) return (0, false, false);
+            try {
+                // Unchanged metadata still has to clear an interrupted publication and carry out any
+                // deletion still owed, so it settles like any other outcome.
+                var stale = Settle(manifestPath, manifest with {
+                    Anchor = anchor, Identity = identity, Exposure = Exposure(target),
+                }, target, completed: time.GetUtcNow());
+                await ReportStuckAsync(stale);
+                return (failed || stale.Length > 0 ? Failed : 0, true, false);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
+                return (Failed, false, false);
+            }
         }
         if (fetched is SkillsSnapshotResult.NotFound) {
             await Console.Error.WriteLineAsync(
                 "Repo not found or not visible for this profile. Check `kcap whoami` / your active profile.");
-            return (Failed, false);
+            return (Failed, false, false);
         }
         if (fetched is not SkillsSnapshotResult.Found found) {
             await Console.Error.WriteLineAsync(
                 $"Server reported this repo's skills unchanged ({target.Key}) with nothing recorded to serve.");
-            return (Failed, false);
+            return (Failed, false, false);
         }
 
         var dto      = found.Snapshot;
@@ -248,7 +310,7 @@ class SkillsCommand(
         if (unsafeSlugs.Count > 0) {
             foreach (var u in unsafeSlugs)
                 await Console.Error.WriteLineAsync($"Refusing snapshot: unsafe slug '{u.Slug}'.");
-            return (Failed, false);
+            return (Failed, false, false);
         }
         var plan   = SkillsSyncPlanner.Plan(manifest, snapshot);
         var writes = plan.Writes.Concat(plan.Unchanged.Where(u => drifted.Contains(u.DocId))).ToList();
@@ -264,33 +326,42 @@ class SkillsCommand(
             Info($"{(dryRun ? "would write" : "write"),-12} {SkillsMaterializer.SkillDirFor(root, w.Slug)} (v{w.Version})");
         foreach (var p in owedPrunes)
             Info($"{(dryRun ? "would prune" : "prune"),-12} {p.Path}");
-        if (dryRun) return (0, false);
+        if (dryRun) return (0, false, false);
 
-        // Ownership before the write, in both directions: a crash between here and the final save
-        // leaves every planned path and every owed deletion recorded, so a later sync can finish
-        // whichever half was interrupted.
-        if (writes.Count > 0 || owedPrunes.Length > 0)
-            SaveManifest(manifestPath, BuildManifest(dto.Etag, snapshot, anchor, identity, target,
-                                                     repoHome, pending: true, owedPrunes));
+        List<SkillSnapshotItem> refused = [];
+        PendingPrune[]          stuck;
+        SkillSnapshotItem[]     published;
+        try {
+            // Ownership before the write, in both directions: a crash between here and the final
+            // save leaves every planned path and every owed deletion recorded, so a later sync can
+            // finish whichever half was interrupted.
+            if (writes.Count > 0 || owedPrunes.Length > 0)
+                SaveManifest(manifestPath, BuildManifest(dto.Etag, snapshot, anchor, identity, target,
+                                                         repoHome, lastSynced, pending: true, owedPrunes));
 
-        var refused = new List<SkillSnapshotItem>();
-        foreach (var w in writes)
-            if (!SkillsMaterializer.Write(root, anchor, w)) refused.Add(w);
-        foreach (var w in refused)
-            await Console.Error.WriteLineAsync(
-                $"Refused to write {SkillsMaterializer.SkillDirFor(root, w.Slug)}: it does not resolve inside {anchor}.");
+            foreach (var w in writes)
+                if (!SkillsMaterializer.Write(root, anchor, w)) refused.Add(w);
+            foreach (var w in refused)
+                await Console.Error.WriteLineAsync(
+                    $"Refused to write {SkillsMaterializer.SkillDirFor(root, w.Slug)}: it does not resolve inside {anchor}.");
 
-        // A path that was not published is not owned, and the etag goes with it: a 304 answered to a
-        // recorded etag would report "up to date" over a document that never landed.
-        var refusedIds = refused.Select(w => w.DocId).ToHashSet();
-        var published  = refusedIds.Count == 0
-            ? snapshot
-            : snapshot.Where(s => !refusedIds.Contains(s.DocId)).ToArray();
-        var stuck = Settle(
-            manifestPath,
-            BuildManifest(refusedIds.Count == 0 ? dto.Etag : null, published, anchor, identity, target,
-                          repoHome, pending: false, owedPrunes),
-            target);
+            // A path that was not published is not owned, and the etag goes with it: a 304 answered
+            // to a recorded etag would report "up to date" over a document that never landed. A run
+            // that published only part of the snapshot earns no refresh stamp either.
+            var refusedIds = refused.Select(w => w.DocId).ToHashSet();
+            published = refusedIds.Count == 0
+                ? snapshot
+                : snapshot.Where(s => !refusedIds.Contains(s.DocId)).ToArray();
+            stuck = Settle(
+                manifestPath,
+                BuildManifest(refusedIds.Count == 0 ? dto.Etag : null, published, anchor, identity,
+                              target, repoHome, lastSynced, pending: false, owedPrunes),
+                target,
+                completed: refusedIds.Count == 0 ? time.GetUtcNow() : lastSynced);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
+            return (Failed, false, false);
+        }
         await ReportStuckAsync(stuck);
 
         Info(writes.Count == 0 && owedPrunes.Length == 0
@@ -298,7 +369,7 @@ class SkillsCommand(
             : $"[{target.Key}] synced {writes.Count - refused.Count} skill(s), "
             + $"pruned {owedPrunes.Length - stuck.Length}; {published.Length} materialized.");
 
-        return (refused.Count + stuck.Length > 0 ? Failed : 0, true);
+        return (failed || refused.Count + stuck.Length > 0 ? Failed : 0, true, false);
     }
 
     /// <summary>The work that has to outlive the manifest lock: retiring the global copies under the
@@ -314,16 +385,33 @@ class SkillsCommand(
         if (migration is null) {
             result = await ContendedAsync("retiring global skills", target, auto);
         } else {
-            using (migration) RetireLegacy(hash, target, identity);
+            using (migration) {
+                try {
+                    foreach (var copy in RetireLegacy(hash, target, identity)) {
+                        result = Failed;
+                        await Console.Error.WriteLineAsync(
+                            $"Could not remove the global copy {copy}; it stays recorded for the next sync.");
+                    }
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
+                    result = Failed;
+                }
+            }
         }
 
         var repository = TryAcquire(SkillsLocks.Repository(hash));
-        if (repository is null) {
+        if (repository is null)
             return Math.Max(result, await ContendedAsync("this repository's exclusion block", target, auto));
+
+        using (repository) {
+            try {
+                SkillsExclusion.Apply(CommonGitDir(anchor, gitDir), RepoRoot(anchor),
+                                      [.. Targets().Select(t => t.Root(anchor))]);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
+                result = Failed;
+            }
         }
-        using (repository)
-            SkillsExclusion.Apply(CommonGitDir(anchor, gitDir), anchor,
-                                  [.. Targets().Select(t => t.Root(anchor))]);
         return result;
     }
 
@@ -333,6 +421,12 @@ class SkillsCommand(
                 $"Another kcap holds the lock for {work} ({target.Key}); this target was left unfinished.");
         return Incomplete;
     }
+
+    /// <summary>A destination the filesystem refused. Reported from the real operation rather than
+    /// from a writability probe, which races and can answer differently from the write it predicts.
+    /// </summary>
+    static string Unwritable(SkillsTarget target, string anchor, Exception ex) =>
+        $"Cannot materialize {target.Key} skills under {anchor}: {ex.Message}";
 
     /// <summary>Whether a target should be synced: a consuming harness is present, or kcap already
     /// owns it — real detection, not destination-parent existence, so a fresh machine with (say)
@@ -369,27 +463,29 @@ class SkillsCommand(
         && !string.Equals(CanonicalPath.Resolve(manifest.Anchor), CanonicalPath.Resolve(anchor),
                           StringComparison.Ordinal);
 
-    /// <summary>The credential a snapshot is fetched under. Read from what is already on disk and
-    /// never refreshed: the subject claim belongs to the account rather than to a token's freshness,
-    /// and refreshing would spend a single-use rotating credential — and a network round-trip — on a
-    /// value that is already stored.</summary>
-    async Task<SkillsIdentity?> ResolveIdentityAsync(string serverUrl) {
+    /// <summary>The credential a snapshot is fetched under, and the problem to report when there is
+    /// none to name. Read from what is already on disk and never refreshed: the subject claim belongs
+    /// to the account rather than to a token's freshness, and refreshing would spend a single-use
+    /// rotating credential — and a network round-trip — on a value that is already stored.</summary>
+    async Task<(SkillsIdentity? Identity, string? Problem)> ResolveIdentityAsync(string serverUrl) {
         // Normalized, so a configured trailing slash does not read as a different server and retire
         // a catalogue nobody changed.
         var server = AppConfig.NormalizeUrl(serverUrl);
 
         // A runner has no token store at all. Its client id is the account it authenticates as and
         // costs nothing to read, where minting the bearer it would otherwise be read from is a call.
+        // Half a credential is a state `kcap login` cannot repair and a runner cannot perform, so the
+        // credential's own account of it is what reaches the operator.
         if (machine.Intended)
-            return machine.TryRead(out _) is { } credential
-                ? new SkillsIdentity($"machine:{credential.ClientId}", server)
-                : null;
+            return machine.TryRead(out var problem) is { } credential
+                ? (new SkillsIdentity($"machine:{credential.ClientId}", server), null)
+                : (null, problem);
 
         var stored = await tokens.LoadForProfileAsync(profiles.Name);
         return stored?.AccessToken is { Length: > 0 } accessToken
                && JwtClaims.TryGetString(accessToken, "sub") is { Length: > 0 } account
-            ? new SkillsIdentity(account, server)
-            : null;
+            ? (new SkillsIdentity(account, server), null)
+            : (new SkillsIdentity(AnonymousAccount, server), null);
     }
 
     /// <summary>Per worktree by construction, and removed with the worktree: Git owns this
@@ -400,14 +496,22 @@ class SkillsCommand(
     string LegacyManifestPath(string hash, string targetKey) =>
         config.Path("skills", hash, targetKey, "manifest.json");
 
+    /// <summary>The working tree the anchor sits in, which the exclusion patterns are written
+    /// relative to: <c>info/exclude</c> is resolved from the shared common directory but its
+    /// anchored patterns apply at the top level of whichever working tree reads them, so a linked
+    /// worktree's block is relative to its own root — not to the main checkout's, which its path
+    /// need not sit under at all.</summary>
+    static string RepoRoot(string anchor) => GitRepository.FindRoot(anchor) ?? anchor;
+
     /// <summary>The git directory <c>info/exclude</c> resolves to: a linked worktree shares the main
-    /// checkout's, so one block covers the repository and all its worktrees. Both halves are
+    /// checkout's, so a single file covers the repository and all its worktrees. Both halves are
     /// canonicalized because <see cref="GitRepository.ResolveGitDir"/> resolves links and
     /// <see cref="GitRepository.ResolveMainRepoRoot"/> does not, and under a symlinked path prefix
     /// the two otherwise disagree in shape. A submodule, whose <c>.git</c> is a file rather than a
     /// directory, keeps its own.</summary>
     static string CommonGitDir(string anchor, string gitDir) {
-        var main = CanonicalPath.Resolve(Path.Combine(GitRepository.ResolveMainRepoRoot(anchor), ".git"));
+        var root = GitRepository.ResolveMainRepoRoot(RepoRoot(anchor));
+        var main = CanonicalPath.Resolve(Path.Combine(root, ".git"));
         return Directory.Exists(main) ? main : gitDir;
     }
 
@@ -427,67 +531,77 @@ class SkillsCommand(
                || SkillsMaterializer.Prune(root, root[..^tree.Length], recorded.Path);
     }
 
-    /// <summary>Retires the user-global copies this repository owns; the caller holds the migration
-    /// lock. An empty deletion list with entries still kept is either the planner refusing to decide
-    /// or a catalogue another repository owns outright, and neither is safe to drop. A kept path
-    /// stays recorded, so a later sync can retire it once that owner is gone.</summary>
-    void RetireLegacy(string hash, SkillsTarget target, SkillsIdentity identity) {
+    /// <summary>Retires the user-global copies this repository owns, returning the ones it could not
+    /// remove; the caller holds the migration lock. An empty deletion list with entries still kept is
+    /// either the planner refusing to decide or a catalogue another repository owns outright, and
+    /// neither is safe to drop. A path that is kept — or whose deletion was refused — stays recorded,
+    /// because a directory no manifest owns is one nothing can ever prune.</summary>
+    IReadOnlyList<string> RetireLegacy(string hash, SkillsTarget target, SkillsIdentity identity) {
         // Planning scans every global manifest under the config root, so the common case — nothing
         // left to retire — must not pay for it on each sync.
-        if (!File.Exists(LegacyManifestPath(hash, target.Key))) return;
+        if (!File.Exists(LegacyManifestPath(hash, target.Key))) return [];
 
         var plan = SkillsLegacyMigration.Plan(config.Directory, hash, target.Key, identity);
-        if (plan.Delete.Count == 0 && plan.Keep.Count > 0) return;
+        if (plan.Delete.Count == 0 && plan.Keep.Count > 0) return [];
 
-        foreach (var path in plan.Delete) PruneGlobal(path);
+        List<string> refused = [];
+        List<string> keep    = [.. plan.Keep];
+        foreach (var path in plan.Delete)
+            if (!PruneGlobal(path)) {
+                refused.Add(path);
+                keep.Add(path);
+            }
 
-        if (plan.Keep.Count == 0) {
+        if (keep.Count == 0) {
             try {
                 File.Delete(plan.ManifestPath);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                // The files are gone either way; the next sync retries the manifest's removal.
+                // Every path it owned is gone, so the next sync plans the same empty deletion and
+                // retries the removal.
             }
-            return;
+            return refused;
         }
         if (LoadQuietly(plan.ManifestPath) is { Skills: not null } kept)
             SaveManifest(plan.ManifestPath,
-                         kept with { Skills = [.. kept.Skills.Where(e => plan.Keep.Contains(e.Path))] });
+                         kept with { Skills = [.. kept.Skills.Where(e => keep.Contains(e.Path))] });
+        return refused;
     }
 
     /// <summary>Deletes one user-global directory. Its authorising root is the parent recorded in the
     /// ledger — an absolute path written under a home that may since have moved — so the
     /// <c>kcap-</c> leaf rule, not containment, is what holds the deletion to a directory kcap
-    /// created.</summary>
-    static void PruneGlobal(string path) {
+    /// created. A directory already gone counts as removed.</summary>
+    static bool PruneGlobal(string path) {
         var full = Path.GetFullPath(path);
-        if (Path.GetDirectoryName(full) is { } parent) SkillsMaterializer.Prune(parent, parent, path);
+        if (!Directory.Exists(full)) return true;
+        return Path.GetDirectoryName(full) is { } parent
+               && SkillsMaterializer.Prune(parent, parent, path);
     }
 
     /// <summary>Carries out the deletions a manifest still owes and clears its pending flag, keeping
     /// an intent that was refused so a later run retries it. The ledger is saved after the
-    /// deletions, so an interruption leaves a path owned rather than orphaned.</summary>
-    static PendingPrune[] Settle(string manifestPath, SkillsManifest manifest, SkillsTarget target) {
+    /// deletions, so an interruption leaves a path owned rather than orphaned, and only a settlement
+    /// that left nothing undone earns <paramref name="completed"/> as its refresh stamp — a fresh one
+    /// otherwise would let the throttle read an incomplete sync as a completed one.</summary>
+    static PendingPrune[] Settle(string manifestPath, SkillsManifest manifest, SkillsTarget target,
+                                 DateTimeOffset? completed) {
         List<PendingPrune> stuck = [];
         foreach (var recorded in manifest.PendingPrunes ?? [])
             if (!PruneRecorded(recorded, target)) stuck.Add(recorded);
-        SaveManifest(manifestPath, manifest with { Pending = false, PendingPrunes = [.. stuck] });
+        SaveManifest(manifestPath, manifest with {
+            Pending = false, PendingPrunes = [.. stuck],
+            SyncedAt = stuck.Count == 0 ? completed : manifest.SyncedAt,
+        });
         return [.. stuck];
     }
 
-    static async Task ReportStuckAsync(IReadOnlyList<PendingPrune> stuck) {
-        foreach (var recorded in stuck)
-            await Console.Error.WriteLineAsync(
-                $"Could not remove {recorded.Path}: it does not resolve to a kcap directory under "
-              + $"{recorded.Root}; it stays recorded for the next sync.");
-    }
-
-    SkillsManifest BuildManifest(
+    static SkillsManifest BuildManifest(
             string? etag, IReadOnlyList<SkillSnapshotItem> snapshot, string anchor,
-            SkillsIdentity identity, SkillsTarget target, string repoHome, bool pending,
-            IReadOnlyList<PendingPrune> journal) {
+            SkillsIdentity identity, SkillsTarget target, string repoHome, DateTimeOffset? syncedAt,
+            bool pending, IReadOnlyList<PendingPrune> journal) {
         var root = target.Root(anchor);
         return new() {
-            Etag     = etag, SyncedAt = time.GetUtcNow(), Anchor = anchor, Identity = identity,
+            Etag     = etag, SyncedAt = syncedAt, Anchor = anchor, Identity = identity,
             Exposure = Exposure(target), Pending = pending, PendingPrunes = [.. journal],
             Skills   = [.. snapshot.Select(s => new SkillsManifestEntry {
                 DocId = s.DocId, Slug = s.Slug, Version = s.Version, ContentHash = s.ContentHash,
@@ -545,13 +659,15 @@ class SkillsCommand(
         return true;
     }
 
-    /// <summary>Reads a manifest, treating an unreadable or unparseable file as absent. A caller
-    /// that must not act on a superseded copy holds the lock that owns the file first.</summary>
+    /// <summary>Reads a manifest, treating an unreadable or unparseable file as absent. A caller that
+    /// must not act on a superseded copy holds the lock that owns the file first.</summary>
     static SkillsManifest? LoadQuietly(string path) {
         try {
-            return File.Exists(path)
-                ? JsonSerializer.Deserialize(File.ReadAllText(path), CapacitorJsonContext.Default.SkillsManifest)
-                : null;
+            // FileShare.ReadWrite: a plain read denies Write to every other handle, and on Windows
+            // that sharing is mandatory — this file has a concurrent writer by design, whose atomic
+            // replace would fail mid-publication.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return JsonSerializer.Deserialize(stream, CapacitorJsonContext.Default.SkillsManifest);
         } catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) {
             return null;
         }
