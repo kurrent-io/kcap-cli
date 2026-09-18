@@ -752,11 +752,11 @@ until that repository's sync clears its share.
 A skill restricted to one vendor still lands only in that vendor's tree — a Claude-only skill
 goes to `.claude/skills` and nowhere else — but Copilot, Cursor, and OpenCode read
 `.claude/skills` too, so any of them working in the same checkout can see a skill approved only
-for Claude Code. Claude and Kiro are also the only vendors with a tree of their own here, so a
-skill restricted to Codex, Copilot, Cursor, OpenCode, Pi, or Antigravity is not delivered at all:
-the only tree those harnesses read is fetched without a vendor, which keeps every vendor-restricted
-doc out of it. Requires `kcap login` and a repo checkout (the repo is detected from the working
-directory).
+for Claude Code. Claude and Kiro are also the only vendors whose tree is fetched under their own
+name, so a skill restricted to Codex, Copilot, Cursor, Gemini, OpenCode, Pi, or Antigravity is not
+delivered at all: every tree those harnesses read — `.agents/skills` and `.gemini/skills` alike — is
+fetched without a vendor, which keeps every vendor-restricted doc out of it. Requires `kcap login`
+and a repo checkout (the repo is detected from the working directory).
 
 ```bash
 kcap skills sync              # fetch, write and prune this repo's skills

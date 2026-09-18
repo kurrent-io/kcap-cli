@@ -74,10 +74,10 @@ Antigravity actually reads; a Gemini-only machine must still adopt `.gemini/skil
 today and which an adoption rule driven by measured readers alone would silently stop doing.
 
 **Which restrictions can be delivered at all.** Only a restriction to Claude or Kiro has a tree
-fetched with that vendor. A skill restricted to Codex, Copilot, Cursor, OpenCode, Pi or Antigravity
-is excluded from every request this design makes, because the only tree those harnesses read is
-fetched without a vendor. That is a bounded limitation of the four-tree decision, recorded for #962,
-not a promise this design keeps.
+fetched with that vendor. A skill restricted to Codex, Copilot, Cursor, Gemini, OpenCode, Pi or
+Antigravity is excluded from every request this design makes, because every tree those harnesses
+read — `.agents/skills` and `.gemini/skills` alike — is fetched without a vendor. That is a bounded
+limitation of the four-tree decision, recorded for #962, not a promise this design keeps.
 
 ## The anchor
 
@@ -200,8 +200,10 @@ The per-worktree manifest lock no longer covers what stays shared: the legacy gl
 global directories it owns, and `info/exclude`, which Git resolves to one file for the repository and
 all its worktrees.
 
-Two further locks, both in the config root, and always acquired in this order: the migration lock,
-then the repository lock, then the per-worktree manifest lock. No path takes them in another order.
+Two further locks, both in the config root. One pair ever nests: the migration lock outside the
+per-worktree manifest lock, and no path takes that pair the other way round. The repository lock is
+taken alone, before any target starts and while nothing else is held, so it nests with neither —
+which is what lets the exclusion block be written ahead of the first file.
 
 The **repository lock** covers the read-modify-write of the exclusion block, which Git resolves to one
 file for the repository and all its worktrees.
