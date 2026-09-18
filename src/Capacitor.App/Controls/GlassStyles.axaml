@@ -1,0 +1,106 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:kcap="clr-namespace:Capacitor.App.Controls"
+        xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI">
+    <Styles.Resources>
+        <Color x:Key="KcapGlassCardTintSoft">#65151D29</Color>
+        <Color x:Key="KcapGlassCardTintLiquid">#35151D29</Color>
+        <Color x:Key="KcapGlassCardSurfaceSoft">#3812151D</Color>
+        <Color x:Key="KcapGlassCardSurfaceLiquid">#1812151D</Color>
+        <Color x:Key="KcapGlassCardShadow">#60000000</Color>
+        <Color x:Key="KcapGlassRailTintSoft">#344E667C</Color>
+        <Color x:Key="KcapGlassRailTintLiquid">#284E667C</Color>
+        <Color x:Key="KcapGlassRailSurface">#462F3745</Color>
+        <Color x:Key="KcapGlassRailShadow">#65000000</Color>
+        <Color x:Key="KcapGlassChipTint">#16DCEFFF</Color>
+        <Color x:Key="KcapGlassChipTintHover">#30DCEFFF</Color>
+        <Color x:Key="KcapGlassChipSurface">#302C3F52</Color>
+        <Color x:Key="KcapGlassChipSurfacePressed">#80172533</Color>
+        <Color x:Key="KcapGlassChipShadow">#40040C16</Color>
+        <SolidColorBrush x:Key="KcapGlassRimBrush" Color="#2EFFFFFF" />
+        <SolidColorBrush x:Key="KcapGlassFocusBrush" Color="#B8E9F5" />
+    </Styles.Resources>
+
+    <!-- Card and Panel -->
+    <Style Selector="kcap|GlassLayer[Kind=Card] /template/ glass|LiquidGlassSurface#PART_Glass,
+                     kcap|GlassLayer[Kind=Panel] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="ShadowColor" Value="{StaticResource KcapGlassCardShadow}" />
+        <Setter Property="ShadowRadius" Value="28" />
+        <Setter Property="ShadowOffset" Value="0,12" />
+    </Style>
+    <Style Selector="kcap|GlassLayer[Kind=Card][(kcap|MaterialScope.Material)=SoftGlass] /template/ glass|LiquidGlassSurface#PART_Glass,
+                     kcap|GlassLayer[Kind=Panel][(kcap|MaterialScope.Material)=SoftGlass] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="BlurRadius" Value="14" />
+        <Setter Property="RefractionHeight" Value="12" />
+        <Setter Property="RefractionAmount" Value="5" />
+        <Setter Property="ChromaticAberration" Value="False" />
+        <Setter Property="Vibrancy" Value="1.1" />
+        <Setter Property="TintColor" Value="{StaticResource KcapGlassCardTintSoft}" />
+        <Setter Property="SurfaceColor" Value="{StaticResource KcapGlassCardSurfaceSoft}" />
+        <Setter Property="HighlightOpacity" Value="0.35" />
+        <Setter Property="HighlightWidth" Value="0.7" />
+    </Style>
+    <Style Selector="kcap|GlassLayer[Kind=Card][(kcap|MaterialScope.Material)=LiquidGlass] /template/ glass|LiquidGlassSurface#PART_Glass,
+                     kcap|GlassLayer[Kind=Panel][(kcap|MaterialScope.Material)=LiquidGlass] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="BlurRadius" Value="5" />
+        <Setter Property="RefractionHeight" Value="22" />
+        <Setter Property="RefractionAmount" Value="32" />
+        <Setter Property="ChromaticAberration" Value="True" />
+        <Setter Property="Vibrancy" Value="1.3" />
+        <Setter Property="TintColor" Value="{StaticResource KcapGlassCardTintLiquid}" />
+        <Setter Property="SurfaceColor" Value="{StaticResource KcapGlassCardSurfaceLiquid}" />
+        <Setter Property="HighlightOpacity" Value="0.7" />
+        <Setter Property="HighlightWidth" Value="1.1" />
+    </Style>
+
+    <!-- Rail -->
+    <Style Selector="kcap|GlassLayer[Kind=Rail] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="RefractionHeight" Value="18" />
+        <Setter Property="Vibrancy" Value="0.8" />
+        <Setter Property="HighlightFalloff" Value="0.65" />
+        <Setter Property="SurfaceColor" Value="{StaticResource KcapGlassRailSurface}" />
+        <Setter Property="ShadowColor" Value="{StaticResource KcapGlassRailShadow}" />
+        <Setter Property="ShadowRadius" Value="20" />
+        <Setter Property="ShadowOffset" Value="4,8" />
+    </Style>
+    <Style Selector="kcap|GlassLayer[Kind=Rail][(kcap|MaterialScope.Material)=SoftGlass] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="BlurRadius" Value="24" />
+        <Setter Property="RefractionAmount" Value="5" />
+        <Setter Property="TintColor" Value="{StaticResource KcapGlassRailTintSoft}" />
+        <Setter Property="HighlightOpacity" Value="0.28" />
+        <Setter Property="HighlightWidth" Value="0.75" />
+    </Style>
+    <Style Selector="kcap|GlassLayer[Kind=Rail][(kcap|MaterialScope.Material)=LiquidGlass] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="BlurRadius" Value="18" />
+        <Setter Property="RefractionAmount" Value="14" />
+        <Setter Property="TintColor" Value="{StaticResource KcapGlassRailTintLiquid}" />
+        <Setter Property="HighlightOpacity" Value="0.42" />
+        <Setter Property="HighlightWidth" Value="1" />
+    </Style>
+
+    <!-- Chip -->
+    <Style Selector="kcap|GlassLayer[Kind=Chip] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="RefractionHeight" Value="8" />
+        <Setter Property="Vibrancy" Value="1.05" />
+        <Setter Property="TintColor" Value="{StaticResource KcapGlassChipTint}" />
+        <Setter Property="SurfaceColor" Value="{StaticResource KcapGlassChipSurface}" />
+        <Setter Property="ShadowEnabled" Value="True" />
+        <Setter Property="ShadowColor" Value="{StaticResource KcapGlassChipShadow}" />
+        <Setter Property="ShadowRadius" Value="7" />
+        <Setter Property="ShadowOffset" Value="0,2" />
+    </Style>
+    <Style Selector="kcap|GlassLayer[Kind=Chip][(kcap|MaterialScope.Material)=SoftGlass] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="BlurRadius" Value="8" />
+        <Setter Property="RefractionAmount" Value="6" />
+        <Setter Property="ChromaticAberration" Value="False" />
+        <Setter Property="HighlightOpacity" Value="0.45" />
+        <Setter Property="HighlightWidth" Value="0.65" />
+    </Style>
+    <Style Selector="kcap|GlassLayer[Kind=Chip][(kcap|MaterialScope.Material)=LiquidGlass] /template/ glass|LiquidGlassSurface#PART_Glass">
+        <Setter Property="BlurRadius" Value="3" />
+        <Setter Property="RefractionAmount" Value="12" />
+        <Setter Property="ChromaticAberration" Value="True" />
+        <Setter Property="HighlightOpacity" Value="0.7" />
+        <Setter Property="HighlightWidth" Value="0.9" />
+    </Style>
+</Styles>

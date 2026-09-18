@@ -1,0 +1,19 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:kcap="clr-namespace:Capacitor.App.Controls"
+                    xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI">
+    <ControlTheme x:Key="{x:Type kcap:GlassLayer}" TargetType="kcap:GlassLayer">
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <glass:LiquidGlassSurface x:Name="PART_Glass" IsHitTestVisible="False"
+                                             CornerRadius="{TemplateBinding CornerRadius}" />
+                    <Border x:Name="PART_Rim" IsHitTestVisible="False" BorderThickness="1"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            BorderBrush="{TemplateBinding BorderBrush}" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+</ResourceDictionary>

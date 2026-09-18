@@ -35,6 +35,7 @@
             <SolidColorBrush x:Key="KcapSelectionBrush" Color="#1E2E52" />
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
+                <ResourceInclude Source="avares://Kurrent Capacitor/Controls/GlassLayer.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
@@ -405,5 +406,6 @@
                 </Animation>
             </Style.Animations>
         </Style>
+        <StyleInclude Source="avares://Kurrent Capacitor/Controls/GlassStyles.axaml" />
     </Application.Styles>
 </Application>
