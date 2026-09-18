@@ -330,12 +330,10 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").Text).IsEqualTo("1 running · 2 total");
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             await Assert.That(texts).Contains("Explore");
-            await Assert.That(texts).Contains("background");
-            await Assert.That(texts).Contains("running · 18s");
+            await Assert.That(texts).Contains("running in background · 18s");
             await Assert.That(texts).Contains("Map desktop chat UI surfaces");
             await Assert.That(texts).Contains("Reviewer");
             await Assert.That(texts).Contains("failed · 48s");
-            await Assert.That(texts.Count(t => t == "background")).IsEqualTo(1);
 
             var failed = section.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "failed · 48s");
             var danger = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapDangerBrush")!;
@@ -350,11 +348,11 @@ public class WorkContextViewSmokeTests {
         });
     }
 
-    /// A horizontal StackPanel measures its children unbounded, so the name's ellipsis only
-    /// engages once the tag and the state sit in their own columns.
+    /// The name trims to the pane and the state line sits beneath it, so a long name can push
+    /// neither off the pane.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_long_background_subagent_name_stays_clear_of_the_tag_and_the_state() {
+    public async Task A_long_subagent_name_trims_and_keeps_the_state_line_beneath_it() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
@@ -371,12 +369,15 @@ public class WorkContextViewSmokeTests {
             var section = host.Find<StackPanel>("SubagentsSection");
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).ToList();
             var name = texts.Single(t => t.Text == longName);
-            var tag = texts.Single(t => t.Text == "background");
-            var state = texts.Single(t => t.Text == "running · 18s");
+            var state = texts.Single(t => t.Text == "running in background · 18s");
 
-            await Assert.That(name.Bounds.Right).IsLessThanOrEqualTo(tag.Bounds.Left);
-            await Assert.That(name.Bounds.Right).IsLessThanOrEqualTo(state.Bounds.Left);
-            await Assert.That(state.Bounds.Right).IsLessThanOrEqualTo(host.Window.Bounds.Width);
+            var nameRight = name.TranslatePoint(new Point(name.Bounds.Width, 0), host.Window)!.Value.X;
+            var nameBottom = name.TranslatePoint(new Point(0, name.Bounds.Height), host.Window)!.Value.Y;
+            var stateTop = state.TranslatePoint(new Point(0, 0), host.Window)!.Value.Y;
+            var stateRight = state.TranslatePoint(new Point(state.Bounds.Width, 0), host.Window)!.Value.X;
+            await Assert.That(nameRight).IsLessThanOrEqualTo(host.Window.Bounds.Width);
+            await Assert.That(stateRight).IsLessThanOrEqualTo(host.Window.Bounds.Width);
+            await Assert.That(stateTop).IsGreaterThanOrEqualTo(nameBottom);
         });
     }
 

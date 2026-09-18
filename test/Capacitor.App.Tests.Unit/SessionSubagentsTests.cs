@@ -57,6 +57,7 @@ public class SessionSubagentsTests {
         s.Apply(Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Detached("c1", "a1")));
         await Assert.That(Only(s).IsBackground).IsTrue();
         await Assert.That(Only(s).State).IsEqualTo(SubagentState.Running);
+        await Assert.That(Only(s).StateText).IsEqualTo("running in background · 0s");
         await Assert.That(s.RunningCount).IsEqualTo(1);
 
         s.Apply(Signals(Finished("c1", "a1", at: T0.AddMinutes(2).AddSeconds(41))));
@@ -280,6 +281,16 @@ public class SessionSubagentsTests {
         s.Apply(Result("c3", isError: true));
         await Assert.That(s.RunningCount).IsEqualTo(1);
         await Assert.That(s.Rows.Select(r => r.Name)).IsEquivalentTo(new[] { "second", "first", "third" }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task Elapsed_rolls_minutes_into_hours() {
+        var clock = Clock();
+        var s = new SessionSubagents(clock);
+        s.Apply(Signals(Started("c1", T0)));
+        clock.Advance(TimeSpan.FromHours(25) + TimeSpan.FromMinutes(33) + TimeSpan.FromSeconds(30));
+        s.Tick();
+        await Assert.That(Only(s).StateText).IsEqualTo("running · 25h 33m");
     }
 
     [Test]
