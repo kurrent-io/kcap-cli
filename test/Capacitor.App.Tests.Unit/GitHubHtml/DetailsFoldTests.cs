@@ -37,13 +37,13 @@ public class DetailsFoldTests {
         await Assert.That(Trees.Dump(siblings)).IsEqualTo("doc(details#0{}(p('a')),details#1{}(details#2{}(p('c'))))");
     }
 
-    /// Pins rejection propagation: the inner opener is rejected for its unknown span tag, which
+    /// Pins rejection propagation: the inner opener is rejected for its unknown iframe tag, which
     /// rejects its partner closer with it, and the outer pair folds around both.
     [Test]
     public async Task A_rejected_opener_takes_its_closer_with_it_and_the_outer_pair_still_folds() {
-        const string markdown = "<details><summary>Outer</summary>\n\n<details><span>unsupported</span>\n\ninner body\n\n</details>\n\nouter tail\n\n</details>";
+        const string markdown = "<details><summary>Outer</summary>\n\n<details><iframe>unsupported</iframe>\n\ninner body\n\n</details>\n\nouter tail\n\n</details>";
         await Assert.That(Trees.Dump(markdown))
-            .IsEqualTo("doc(details#0{'Outer'}(html('<details><span>unsupported</span>'),p('inner body'),html('</details>'),p('outer tail')))");
+            .IsEqualTo("doc(details#0{'Outer'}(html('<details><iframe>unsupported</iframe>'),p('inner body'),html('</details>'),p('outer tail')))");
     }
 
     [Test]
@@ -62,8 +62,8 @@ public class DetailsFoldTests {
         const string inItem = "- <details>\n  <summary>S</summary>\n\n  body\n\n  </details>";
         await Assert.That(Trees.Dump(inItem)).IsEqualTo("doc(list(li(details#0{'S'}(p('body')))))");
 
-        const string inQuote = "> <details>\n> <summary>S</summary>\n>\n> body\n>\n> </details>";
-        await Assert.That(Trees.Dump(inQuote)).IsEqualTo("doc(quote(details#0{'S'}(p('body'))))");
+        const string inQuote = "> note\n>\n> <details>\n> <summary>S</summary>\n>\n> body\n>\n> </details>";
+        await Assert.That(Trees.Dump(inQuote)).IsEqualTo("doc(quote(p('note'),details#0{'S'}(p('body'))))");
     }
 
     [Test]
@@ -105,7 +105,7 @@ public class DetailsFoldTests {
     [Test]
     public async Task A_fold_that_would_pass_the_depth_limit_is_refused() {
         static string Quoted(int levels, string line) => string.Concat(Enumerable.Repeat("> ", levels)) + line;
-        static string Fixture(int levels) => string.Join('\n', [Quoted(levels, "<details>"), Quoted(levels, ""), Quoted(levels, "x"), Quoted(levels, ""), Quoted(levels, "</details>")]);
+        static string Fixture(int levels) => string.Join('\n', [Quoted(levels, "y"), Quoted(levels, ""), Quoted(levels, "<details>"), Quoted(levels, ""), Quoted(levels, "x"), Quoted(levels, ""), Quoted(levels, "</details>")]);
 
         var accepted = Trees.Parse(Fixture(96));
         await Assert.That(TreeDump.Of(accepted)).Contains("details#0{}(p('x'))");

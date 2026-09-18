@@ -26,7 +26,7 @@ public class HtmlBlockRuleTests {
 
     [Test]
     public async Task One_unknown_tag_rejects_the_whole_block() {
-        await Untouched("<b>\nbold <span>x</span>\n</b>");
+        await Untouched("<b>\nbold <iframe>x</iframe>\n</b>");
         await Assert.That(Trees.Dump("<b>\nbold x\n</b>")).IsEqualTo("doc(p(em*2('bold x')))");
     }
 
@@ -100,7 +100,7 @@ public class HtmlBlockRuleTests {
 
     [Test]
     public async Task Comments_stay_where_the_block_is_rejected() {
-        await Untouched("<div><!-- m --></div>");
+        await Untouched("<iframe><!-- m --></iframe>");
         await Untouched("<!-- never closed\ntext");
         await Untouched("<!DOCTYPE html>");
         await Untouched("<?xml version=\"1.0\"?>");

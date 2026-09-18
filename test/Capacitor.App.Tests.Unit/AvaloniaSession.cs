@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using ReactiveUI.Primitives.Reactive.Concurrency;
 using ReactiveUI.Reactive;
 using ReactiveUI.Reactive.Builder;
@@ -34,7 +35,12 @@ internal static class AvaloniaSession {
     /// first instead makes the session's later app build fail VerifyAccess in the compositor ctor.
     /// Forcing one dispatch before any test in this assembly runs claims the thread first.
     [Before(Assembly)]
-    public static Task ClaimUiThread() => DispatchAsync(static () => { });
+    public static Task ClaimUiThread() {
+        // The image fetcher is process-global and would reach for the network; a test that
+        // wants bytes back installs its own for the duration.
+        MarkdownImages.Fetch = static (_, _) => Task.FromResult<byte[]?>(null);
+        return DispatchAsync(static () => { });
+    }
 
     /// ReactiveUI's builder state is process-global and effectively one-shot: whatever ran first
     /// keeps its registrations, so every later test inherits an Avalonia scheduler bound to a

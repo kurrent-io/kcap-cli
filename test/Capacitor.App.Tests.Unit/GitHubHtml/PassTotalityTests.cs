@@ -8,7 +8,10 @@ public class PassTotalityTests {
         "<b>", "</b>", "<i>", "</i>", "<code>", "</code>", "<a href=\"https://u.example\">", "<a href=\"javascript:x\">", "<a>", "</a>",
         "<img src=\"https://h/i.png\" alt=\"i\">", "<img src=\"https://h/a%0Ab.png\">", "<br>", "<br/>", "</br>",
         "<details>", "<details open>", "</details>", "<summary>", "</summary>", "<pre>", "</pre>", "<pre><code>", "</code></pre>",
-        "<span>", "</span>", "<div>", "</div>", "<a href=\"", "<!-- c -->", "<!-- open", "<b\n>", "<b/>",
+        "<span>", "</span>", "<div>", "</div>", "<iframe>", "</iframe>", "<a href=\"", "<!-- c -->", "<!-- open", "<b\n>", "<b/>",
+        "<p>", "</p>", "<h2>", "</h2>", "<hr>", "<ul>", "</ul>", "<ol start=\"3\">", "</ol>", "<li>", "</li>", "<dl>", "<dd>", "</dd>", "</dl>",
+        "<blockquote>", "</blockquote>", "<table>", "</table>", "<thead>", "</thead>", "<tr>", "</tr>", "<td colspan=\"2\">", "</td>", "<th>", "</th>",
+        "<picture><source srcset=\"https://h/d.svg\"><img src=\"https://h/l.svg\"></picture>", "<relative-time datetime=\"2026-01-01\">", "</relative-time>", "<sub>\n\n", "\n\n</sub>",
         "text", "more text", " ", "\n", "\n\n", "&amp;", "&#x27;", "&#10;", "**bold**", "*em*", "`code`", "![alt](https://h/x.png)", "![](https://h/y.png)",
         "<https://example.com>", "[l](https://u.example)", "https://bare.example/x", "> ", "- ", "\n> ", "\n- ", "| a | b |\n|---|---|\n| c | d |\n",
     ];

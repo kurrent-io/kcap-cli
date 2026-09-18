@@ -64,14 +64,23 @@ static class InlinePairing {
         }
 
         void Void(HtmlInline html, HtmlToken token) {
-            if (token.Name == "br") {
-                html.ReplaceBy(new LineBreakInline { IsHard = true }, copyChildren: false);
-                Note(1);
-                return;
+            switch (token.Name) {
+                case "br":
+                    html.ReplaceBy(new LineBreakInline { IsHard = true }, copyChildren: false);
+                    Note(1);
+                    return;
+                case "source" or "wbr":
+                    html.Remove();
+                    return;
+                // A rule is a block; mid-paragraph it has none to become.
+                case "hr":
+                    Note(1);
+                    return;
             }
             if (containerDepth + 2 > GitHubHtmlPass.MaxDepth) { Note(1); return; }
             var image = new LinkInline(token.Attribute("src")?.Trim() ?? "", "") { IsImage = true };
             image.AppendChild(new LiteralInline(ImageLabel.For(token.Attribute("alt"), image.Url)));
+            ImageSize.From(token)?.Attach(image);
             html.ReplaceBy(image, copyChildren: false);
             Note(2);
         }
@@ -111,7 +120,7 @@ static class InlinePairing {
             }
 
             var target = name == "a" ? match.Token.Attribute("href")?.Trim() : null;
-            if (name == "a" && string.IsNullOrEmpty(target)) {
+            if (HtmlTags.IsTransparent(name) || (name == "a" && string.IsNullOrEmpty(target))) {
                 match.Node.Remove();
                 close.Remove();
                 Note(inner);

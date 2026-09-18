@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using Capacitor.Cli.Core.PullRequests;
 using ReactiveUI.Reactive;
@@ -25,7 +26,7 @@ public sealed partial class PullRequestContextViewModel {
     public bool ShowsSignIn => _notice.StartsWith("Sign in", StringComparison.Ordinal);
     public bool ShowsLinkGitHub => _notice.StartsWith("Link GitHub", StringComparison.Ordinal);
     public bool ShowReaderContent => CanDisplayReader;
-    IReadOnlyList<PullRequestRow> _visibleRows = [];
+    readonly ObservableCollection<PullRequestRow> _visibleRows = [];
     public IReadOnlyList<PullRequestRow> Rows => _visibleRows;
     public bool HasMore => CanReveal && CurrentSection is { Stopped: false, Next: not null };
     public bool CanReloadEarlier => CanReveal && CurrentSection is { Stopped: false, Evicted: not null };
@@ -54,7 +55,7 @@ public sealed partial class PullRequestContextViewModel {
             : _selected?.Subject is { } subject ? _readers.NoteFor(subject.Provider, subject.Host)
             : _primaryRepo?.Invoke() is { } repository ? _readers.NoteFor(repository.Provider, repository.Host) : null;
         var rows = CanDisplayReader ? CurrentSection?.Pages.SelectMany(page => page.Rows).ToArray() ?? [] : [];
-        if (!_visibleRows.SequenceEqual(rows)) _visibleRows = rows;
+        ReconcileRows(rows);
         if (!_disposed && _hasPullRequest.Value != HasPullRequest) _hasPullRequest.OnNext(HasPullRequest);
         foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
             nameof(Title), nameof(Lifecycle), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel), nameof(ReviewSummary), nameof(CheckSummary),
@@ -63,6 +64,15 @@ public sealed partial class PullRequestContextViewModel {
             nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(SectionTitle),
             nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel) }) this.RaisePropertyChanged(property);
         NotifyPresentation();
+    }
+
+    /// Edits the visible list in place rather than replacing it: a row's control holds state its
+    /// data does not — which sections a reader opened, a loaded image, the scroll extent it
+    /// contributes — and the list rebuilding every row on a page load or refresh lost all of it.
+    void ReconcileRows(PullRequestRow[] rows) {
+        for (var i = 0; i < rows.Length && i < _visibleRows.Count; i++) if (_visibleRows[i] != rows[i]) _visibleRows[i] = rows[i];
+        while (_visibleRows.Count > rows.Length) _visibleRows.RemoveAt(_visibleRows.Count - 1);
+        for (var i = _visibleRows.Count; i < rows.Length; i++) _visibleRows.Add(rows[i]);
     }
     static string Reason<T>(PullRequestRead<T> read) where T : class => read.Kind switch {
         PullRequestReadKind.SignedOut => "Sign in to see pull requests.",

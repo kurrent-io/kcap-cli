@@ -12,21 +12,22 @@ public static class GitHubHtmlPass {
 
     public static void Run(MarkdownDocument document) {
         ProcessContainer(document, 0);
+        BlockTidy.Run(document);
         var ordinal = 0;
         foreach (var details in document.Descendants<DetailsBlock>()) details.Ordinal = ordinal++;
     }
 
     /// Returns the reach of the container's children.
     static int ProcessContainer(ContainerBlock container, int depth) {
-        var items = new List<DetailsFolder.Item>(container.Count);
+        var items = new List<HtmlBlockFolder.Item>(container.Count);
         foreach (var child in container) {
             items.Add(child switch {
-                HtmlBlock html        => new DetailsFolder.Item(child, HtmlBlockReader.Read(html), 1),
-                ContainerBlock nested => new DetailsFolder.Item(child, null, 1 + ProcessContainer(nested, depth + 1)),
-                LeafBlock leaf        => new DetailsFolder.Item(child, null, 1 + InlinePass.Process(leaf, depth + 1)),
-                _                     => new DetailsFolder.Item(child, null, 1),
+                HtmlBlock html        => new HtmlBlockFolder.Item(child, HtmlBlockReader.Read(html), 1),
+                ContainerBlock nested => new HtmlBlockFolder.Item(child, null, 1 + ProcessContainer(nested, depth + 1)),
+                LeafBlock leaf        => new HtmlBlockFolder.Item(child, null, 1 + InlinePass.Process(leaf, depth + 1)),
+                _                     => new HtmlBlockFolder.Item(child, null, 1),
             });
         }
-        return DetailsFolder.Fold(container, depth, items);
+        return HtmlBlockFolder.Fold(container, depth, items);
     }
 }
