@@ -649,10 +649,13 @@ public sealed class MaterialService : IMaterialService, IDisposable {
         Publish();
     }
 
+    // SetAsync resumes off the UI thread while a failure report arrives on it, so the publish is
+    // serialized with the mutation: an unsynchronized one could overwrite a latched failure.
     void Publish() {
-        MaterialState next;
-        lock (_gate) next = Resolve();
-        if (next != _states.Value) _states.OnNext(next);
+        lock (_gate) {
+            var next = Resolve();
+            if (next != _states.Value) _states.OnNext(next);
+        }
     }
 
     MaterialState Resolve() {
@@ -661,7 +664,8 @@ public sealed class MaterialService : IMaterialService, IDisposable {
             : MaterialAvailability.Available;
         var effective = availability != MaterialAvailability.Available ? SurfaceMaterial.Opaque
             : _requested ?? (_environment.ReduceTransparency ? SurfaceMaterial.Opaque : SurfaceMaterial.SoftGlass);
-        return new MaterialState(effective, _requested, availability, _failure, _environment.ReduceTransparency);
+        var reason = availability == MaterialAvailability.PipelineFailed ? _failure : null;
+        return new MaterialState(effective, _requested, availability, reason, _environment.ReduceTransparency);
     }
 
     public void Dispose() => _states.Dispose();
