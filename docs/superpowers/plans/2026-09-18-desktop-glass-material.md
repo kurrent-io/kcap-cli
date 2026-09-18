@@ -2136,6 +2136,19 @@ Run the `MaterialWindowTests`, `MainWindowSmokeTests` and `MainWindowViewModelTe
 
 ### Task 9: Flyouts
 
+**Outcome: the probe failed, so the FAIL path below is what the branch carries.** Glass in a
+`Flyout`'s popup paints no backdrop whether the `GlassLayer` sits in the presenter's template
+or wraps the flyout's content under a transparent presenter (stripe-edge contrast 4.4 inside
+against 10.3–10.4 outside, pixel-identical to the opaque frame with tint, surface and
+highlight zeroed), while a bare overlay-layer `Popup` with the same layer in the same window
+blurs to 0.0. Flyouts stay opaque; `src/` and `test/` are byte-identical to the task's
+baseline; the styles and the wrapping helper of Steps 1–2 exist only as probe-local files
+(`ProbeGlassStyles.axaml`, `GlassFlyouts.cs`) under `docs/probes/2026-09-18-glass-overlay-flyout/`,
+whose `Program.cs` runs both placements and the bare-popup controls in one invocation and
+whose `findings.md` is the record. Steps 4–7 were not carried out. The lead for the follow-up
+is a diagnostic build that instruments the vendored `LiquidGlassBackdropProvider` and
+compares a `Flyout`'s popup with a bare `Popup`.
+
 **Files:**
 - Create: `docs/probes/2026-09-18-glass-overlay-flyout/Probe.csproj`, `Program.cs`, `findings.md`
 - Create: `src/Capacitor.App/Controls/GlassFlyouts.cs`, `src/Capacitor.App/Controls/GlassFlyoutStyles.axaml`
