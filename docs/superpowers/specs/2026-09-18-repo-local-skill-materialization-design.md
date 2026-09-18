@@ -54,8 +54,11 @@ borrows `AntigravityPaths.SkillsDir`, so it gains the first.
 | `kiro` | `.kiro/skills` | `kiro` | Kiro |
 | `gemini` | `.gemini/skills` | none | none measured; kept on the vendor's documentation |
 
-`SkillsTarget` becomes `(Key, RelativePath, Vendor, Readers)` with a `Root(anchor)` accessor.
-`Readers` is the measured list above and is what the manifest records as exposure.
+`SkillsTarget` becomes `(Key, RelativePath, Vendor, Consumers, Readers)` with a `Root(anchor)`
+accessor. The two lists are deliberately different things. `Consumers` is the documented set of
+harnesses a target is meant to serve, and it decides adoption. `Readers` is the measured set above,
+and it is what the manifest records as exposure. `gemini` has a consumer and no measured reader,
+which is precisely the state the evidence supports.
 
 Two notes on that table. Antigravity reads a repository-local `.agents/skills`, which contradicts the
 assumption in `AntigravityPaths.SkillsDir` that it reads no agent-agnostic tree; that comment
@@ -63,11 +66,12 @@ describes the user-global tree, which the probes did not re-test. And nothing wa
 repository-local `.gemini/skills`: Gemini never ran on the probe account, and Antigravity reads
 `.agents/skills` and `.agent/skills` instead.
 
-**Adoption follows the readers, not a hand-written mapping.** A target is adopted when any harness in
-its `Readers` list is installed, or when a manifest for it already exists, or when a legacy global
-manifest for it exists so its files can still be migrated away. Today's mapping sends an
+**Adoption follows the target's consumers.** A target is adopted when any harness in its
+`Consumers` list is installed, or when a manifest for it already exists, or when a legacy global
+manifest for it exists so its files can still be migrated away. Today's hand-written mapping sends an
 Antigravity-only machine to `.gemini/skills` and skips `.agents/skills`, which is the tree
-Antigravity actually reads.
+Antigravity actually reads; a Gemini-only machine must still adopt `.gemini/skills`, which it does
+today and which an adoption rule driven by measured readers alone would silently stop doing.
 
 **Which restrictions can be delivered at all.** Only a restriction to Claude or Kiro has a tree
 fetched with that vendor. A skill restricted to Codex, Copilot, Cursor, OpenCode, Pi or Antigravity
@@ -84,6 +88,13 @@ Pi, Kiro and Cursor find skills only under the directory a session was launched 
 repository root, so a session started in a subdirectory will not see skills anchored at the root.
 That limitation is recorded per target for #962 to act on; this piece does not write into
 subdirectories.
+
+**An anchor change is a transition of its own.** A manifest recorded under a different anchor has the
+right documents at the wrong paths, and neither the conditional request nor the planner would notice:
+the etag would return `304`, and the planner compares document, version, hash and slug, never the
+destination. So a mismatched anchor discards the etag, treats every entry as a write at the new
+paths, and moves every old path into the pending-prune journal below, to be deleted once the new
+copies exist.
 
 ## Containment
 
@@ -114,7 +125,7 @@ The manifest itself records:
   token authenticates as, together with the server URL. The profile name alone is not identity,
   because signing in again replaces the credentials inside one profile and server.
 - `exposure` — the target's `Readers`.
-- `pending` — see the next section.
+- `pending` and `pending_prunes` — see the next section.
 
 **Ownership survives an identity change; the conditional-fetch cache does not.** When the recorded
 identity differs from the current one, the etag is discarded and the recorded paths are still owned.
@@ -123,15 +134,30 @@ owning nothing. A failed replacement fetch — 401, 403, 404 or a transport erro
 files from the previous identity, and the next successful sync materializes from scratch. The
 current code returns early on those branches, which would leave the old catalogue in place.
 
+**The transition also settles outstanding legacy ownership**, under the migration lock and by the
+same overlap rule, without waiting for a replacement snapshot. Migration otherwise runs only after a
+successful local sync, so an account switch whose first fetch fails would leave the previous
+account's global copies loadable — exactly the outcome the paragraph above forbids for local
+files.
+
 ## Crash recovery
 
 Two mechanisms, because the manifest is the only thing that makes a file prunable.
 
-**Ownership is recorded before the write.** The manifest is saved with the planned entries and
-`pending: true` before any file is written, and re-saved with `pending: false` after the writes and
-prunes succeed. A crash between them leaves every published path owned, so a later sync prunes or
-rewrites it even if the snapshot has since revoked or renamed it. Without this, a file written and
-then orphaned by a crash is unowned and survives every future reconciliation.
+**Ownership is recorded before the write, for both directions.** The manifest is saved with the
+planned entries, `pending: true`, and a `pending_prunes` journal before any file is written, then
+re-saved with `pending: false` and an empty journal once the writes and prunes succeed.
+
+The journal is a plain list of paths awaiting deletion, deliberately not part of the document-keyed
+entries. The entries hold one row per document, so a rename — same document, new slug — cannot record
+the old path and the new one at once, and saving only the planned entries would lose the old path
+entirely. A crash between the pending save and the prune would then leave `kcap-old` on disk with
+nothing owning it, even if the document is revoked before the next attempt.
+
+Recovery deletes every path still in the journal, under the same prune-safety and containment rules
+as any other prune, before planning the new snapshot. A crash between the write and the manifest
+save likewise leaves every published path owned, so a later sync prunes or rewrites it whatever the
+snapshot has since done.
 
 **Publication is atomic.** `SKILL.md` is written to a temporary file in its own directory and moved
 into place, as the manifest already is. An interrupted write must never leave a half-file that the
@@ -149,9 +175,18 @@ The per-worktree manifest lock no longer covers what stays shared: the legacy gl
 global directories it owns, and `info/exclude`, which Git resolves to one file for the repository and
 all its worktrees.
 
-A second, repository-wide lock in the config root is held across migration and across the whole
-read-modify-write of the exclusion block. Two worktrees migrating at once therefore serialize, rather
-than both reading the old global manifest and both deleting its directories.
+Two further locks, both in the config root, and always acquired in this order: the migration lock,
+then the repository lock, then the per-worktree manifest lock. No path takes them in another order.
+
+The **repository lock** covers the read-modify-write of the exclusion block, which Git resolves to one
+file for the repository and all its worktrees.
+
+The **migration lock is machine-wide and single-keyed**, not per repository, because legacy ownership
+crosses repositories. Two repositories under two different keys would each observe the other still
+owning a shared directory, each skip deleting it, and each then delete its own manifest, leaving the
+directory globally visible with no manifest able to prune it. The whole legacy critical section —
+scanning the other global manifests, deciding, removing entries and deleting the manifest — happens
+under that one lock, so the last owner out is the one that deletes the files.
 
 **Overlapping legacy ownership.** A global path carries no repository identity — `SkillDirFor`
 combines the root with `kcap-<slug>` and nothing else — so two repositories' global manifests can
@@ -223,22 +258,28 @@ removes.
 
 - **Pure units.** Anchor to root per vendor; manifest path for a main checkout and for a linked
   worktree; an identity change keeping ownership while discarding the etag; the exclusion block
-  idempotent to add and complete to remove; reader-based adoption including the Antigravity-only
-  machine; home and applicability round-tripping through the manifest.
+  idempotent to add and complete to remove; consumer-based adoption for an Antigravity-only and for a
+  Gemini-only machine; home and applicability round-tripping through the manifest.
 - **A real temporary repository with a linked worktree.** Two worktrees receive independent
   materializations; a second repository receives none of the first's skills; user-authored skills
   survive a prune; generated files are untracked and still readable; a destination symlinked outside
   the anchor is refused.
 - **Interruption and concurrency.** A crash after the write and before the manifest save, with the
-  snapshot changing before the retry, still prunes the orphan; two worktrees migrating concurrently
-  serialize; two legacy manifests owning one global path leave it in place.
+  snapshot changing before the retry, still prunes the orphan; a crash straight after the pending
+  save and before each prune, starting from a skill that is then renamed or revoked, still deletes
+  the old path from the journal; two worktrees migrating concurrently serialize; two repositories
+  migrating concurrently through final cleanup leave no ownerless global directory; an account switch
+  after an interrupted migration, whose replacement fetch then fails, leaves no previous-identity
+  files either locally or globally; an anchor change with an identical snapshot and etag still
+  materializes the new paths and removes the old ones.
 - **The command path end to end against a mocked snapshot API.** Manifest read, fetch, plan, write,
   exclude, save, migrate, including the no-change and 304 paths, a same-profile account replacement,
   and a failed replacement fetch. `SyncTargetAsync` has no test today, so this is new coverage rather
   than a rewrite.
 
 `SkillsTargetCatalogTests` pins the four keys, their vendors and that each root's leaf directory is
-`skills`; it is updated for anchor-relative roots, the new `Readers` field and reader-based adoption.
+`skills`; it is updated for anchor-relative roots, the `Consumers` and `Readers` fields, and
+consumer-based adoption.
 
 ## Out of scope
 
@@ -263,9 +304,13 @@ removes.
       touching authored skills, including a file orphaned by a crash before the manifest was saved.
 - [ ] Generated files are untracked, and discovery plus full-body loading still pass for a harness at
       the tree actually written to.
-- [ ] Manifest-owned global copies migrate away, an interrupted migration is retryable, and a copy
-      another repository still owns is left alone.
+- [ ] Manifest-owned global copies migrate away, an interrupted migration is retryable, a copy
+      another repository still owns is left alone, and two repositories finishing at once leave no
+      copy that no manifest can prune.
 - [ ] A credential, server or account change neither reuses another identity's conditional request
-      nor leaves its catalogue in place, including when the replacement fetch fails.
+      nor leaves its catalogue in place, locally or globally, including when the replacement fetch
+      fails and when a migration was interrupted before it.
+- [ ] A sync at a different anchor materializes the new paths and removes the old ones, even when the
+      snapshot and its etag are unchanged.
 - [ ] Server-provided home and applicability metadata survive materialization, with the repository
       home derived for servers that do not send it.
