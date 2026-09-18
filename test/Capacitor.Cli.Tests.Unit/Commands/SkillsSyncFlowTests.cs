@@ -68,6 +68,7 @@ public class SkillsSyncFlowTests {
         await Assert.That(await mainFx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
         await Assert.That(await wtFx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
 
+        // A precondition, not a verdict: both sides are the fixture's own resolution.
         await Assert.That(mainFx.GitDir).IsNotEqualTo(wtFx.GitDir);
         await Assert.That(File.ReadAllText(mainFx.SkillFile("alpha"))).IsEqualTo(Rendered(alpha));
         await Assert.That(File.ReadAllText(wtFx.SkillFile("alpha"))).IsEqualTo(Rendered(alpha));
@@ -97,6 +98,7 @@ public class SkillsSyncFlowTests {
         await Assert.That(await firstFx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
         await Assert.That(await secondFx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
 
+        // A precondition, not a verdict: both hashes are the fixture's own.
         await Assert.That(firstFx.RepoHash).IsNotEqualTo(secondFx.RepoHash);
         await Assert.That(Materialized(firstFx.SkillsRoot)).IsEquivalentTo(["kcap-alpha"]);
         await Assert.That(Materialized(secondFx.SkillsRoot)).IsEquivalentTo(["kcap-beta"]);
@@ -112,8 +114,8 @@ public class SkillsSyncFlowTests {
         fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with { Etag = "etag-1" });
 
         // A kcap- prefix is no claim of ownership: pruning walks the ledger, never the root.
-        var authored  = Tmp.CreateFile(["repo", ".claude", "skills", "authored", "SKILL.md"], "mine");
-        var lookalike = Tmp.CreateFile(["repo", ".claude", "skills", "kcap-not-ours", "SKILL.md"], "also mine");
+        var authored  = repo.CreateFile([".claude", "skills", "authored", "SKILL.md"], "mine");
+        var lookalike = repo.CreateFile([".claude", "skills", "kcap-not-ours", "SKILL.md"], "also mine");
 
         await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
 
@@ -123,13 +125,17 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.ReadManifest().Skills!).IsEmpty();
     }
 
+    /// <summary>The orphan a rename left behind is deleted on the retry, whatever the snapshot has
+    /// since done with the document. The seed is what a crash between the write loop and settlement
+    /// leaves: the flag set, the planned entry at its published path with a file hash that matches
+    /// it, and the old path in the journal beside the root that authorises deleting it.</summary>
     [Test]
     public async Task A_crash_before_the_prune_removes_the_orphan_once_the_rename_moves_on() {
         using var repo  = Checkout("repo");
         var       half  = SkillsSyncFixture.Skill("beta", RenamedDoc);
         var       again = SkillsSyncFixture.Skill("gamma", RenamedDoc, version: 2);
         var       fx    = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-3", again));
-        var       stale = Tmp.CreateFile(["repo", ".claude", "skills", "kcap-alpha", "SKILL.md"], "superseded");
+        var       stale = repo.CreateFile([".claude", "skills", "kcap-alpha", "SKILL.md"], "superseded");
 
         fx.WriteManifest(Owning(fx, fx.Materialize(half)) with {
             Etag          = "etag-2", Pending = true,
@@ -153,6 +159,10 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.Api.Requests.Single().Etag).IsNull();
     }
 
+    /// <summary>A document renamed back to a path the journal still owes a deletion for keeps that
+    /// copy, republished, and the intent is dropped rather than acted on. The seed is what a crash
+    /// between the write loop and settlement leaves: the flag set, the planned entry at its
+    /// published path, and the old path in the journal beside its authorising root.</summary>
     [Test]
     public async Task A_crash_before_the_prune_keeps_the_copy_the_rename_came_back_to() {
         using var repo  = Checkout("repo");
@@ -160,7 +170,7 @@ public class SkillsSyncFlowTests {
         var       back  = SkillsSyncFixture.Skill("alpha", RenamedDoc, version: 2);
         var       fx    = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-3", back));
 
-        Tmp.CreateFile(["repo", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the previous rendering");
+        repo.CreateFile([".claude", "skills", "kcap-alpha", "SKILL.md"], "the previous rendering");
         fx.WriteManifest(Owning(fx, fx.Materialize(half)) with {
             Etag          = "etag-2", Pending = true,
             PendingPrunes = [new PendingPrune(fx.SkillDir("alpha"), fx.SkillsRoot)],
@@ -262,7 +272,7 @@ public class SkillsSyncFlowTests {
         var       owned   = fx.Materialize(alpha);
         var       globals = Tmp.CreateDir("home", ".claude", "skills");
         var       global  = globals.PathTo("kcap-alpha");
-        var       orphan  = Tmp.CreateFile(["repo", ".claude", "skills", "kcap-gone", "SKILL.md"], "revoked");
+        var       orphan  = repo.CreateFile([".claude", "skills", "kcap-gone", "SKILL.md"], "revoked");
 
         Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
         fx.WriteManifest(Owning(fx, owned) with {
