@@ -15,6 +15,19 @@ and a tool that read it as "not set up" would send someone through setup again o
 Whether the server still accepts those credentials is `kcap whoami`'s question, and it is left there
 rather than answered twice.
 
+`configured` is a claim rather than a description, and two credential states that read fine in prose
+cannot support it. A machine credential is diverted by EITHER environment variable, deliberately, so
+that a half-configured runner is diagnosed instead of being told to run a login it cannot -- but only
+both halves authenticate, so one half is its own state and is not configured. A token bound to
+another server is withheld before the request is sent, so it is reported as the wrong server rather
+than as valid; status asks the server-aware accessor the same way an outgoing request does. Whether
+the server still accepts a correctly bound token stays `whoami`'s question.
+
+The daemon sweep now validates the recorded start token, the way `daemon status` and `doctor` do, so
+a recycled PID cannot present a foreign process as a running daemon. A marker that is present but
+unparseable counts as stale rather than being skipped: it is the breadcrumb of a hard death, and the
+file still has to be cleaned up.
+
 Both outputs read from the same gatherers -- the server probe, the auth resolution, the daemon PID
 sweep -- so they cannot drift into disagreeing about the same machine. That was already the rule
 between the Hooks line and the unconfigured-harness lines below it, and between this command and

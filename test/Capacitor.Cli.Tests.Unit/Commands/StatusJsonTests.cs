@@ -37,7 +37,13 @@ public class StatusJsonTests {
     [Arguments("https://acme.kcap.ai", "none", false)]
     [Arguments(null, "valid", false)]
     [Arguments(null, "none", false)]
-    public async Task Configured_needs_a_server_and_credentials(string? serverUrl, string authState, bool expected) {
+    // Either variable alone diverts auth off the token store and then fails, so nothing records
+    // and there is no credential to skip setup on.
+    [Arguments("https://acme.kcap.ai", "machine_incomplete", false)]
+    // A token bound to another server is withheld before the request is sent, so it cannot stand
+    // in for setup however valid it looks in the store.
+    [Arguments("https://acme.kcap.ai", "wrong_server", false)]
+    public async Task Configured_needs_a_server_and_usable_credentials(string? serverUrl, string authState, bool expected) {
         await Assert.That(StatusJsonRender.IsConfigured(serverUrl, authState)).IsEqualTo(expected);
     }
 

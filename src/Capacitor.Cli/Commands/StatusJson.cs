@@ -10,9 +10,14 @@ namespace Capacitor.Cli.Commands;
 public sealed record StatusServerJson(string? Url, bool? Reachable, int? StatusCode);
 
 /// <summary>What this CLI authenticates as.</summary>
-/// <param name="State"><c>machine</c>, <c>valid</c>, <c>expired</c> or <c>none</c>. A machine
-/// credential in the environment replaces the token store rather than adding to it, so it is a
-/// state of its own and carries no expiry.</param>
+/// <param name="State">
+/// <c>machine</c> — both machine variables set, so this CLI records as the machine;
+/// <c>machine_incomplete</c> — one set, which diverts auth off the token store and then fails,
+/// so nothing records and <c>login</c> is not the fix;
+/// <c>valid</c> — a stored token, bound to the configured server;
+/// <c>wrong_server</c> — a token issued by a different server, withheld before any request;
+/// <c>expired</c>; or <c>none</c>.
+/// </param>
 public sealed record StatusAuthJson(string State, string? Identity, DateTimeOffset? ExpiresAt);
 
 /// <param name="UpdateAvailable">The version to move to, or null when current.</param>

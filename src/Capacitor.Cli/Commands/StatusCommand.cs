@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -37,7 +38,7 @@ public sealed class StatusCommand(
         }
 
         // Auth
-        var auth = await ResolveAuthAsync();
+        var auth = await ResolveAuthAsync(server.Url);
 
         if (auth.MachineLine is not null) {
             Console.WriteLine($"  Auth:    {auth.MachineLine}");
@@ -45,9 +46,10 @@ public sealed class StatusCommand(
             Console.Write("  Auth:    ");
 
             await Console.Out.WriteLineAsync(auth.State switch {
-                "valid"   => $"{auth.Identity} ✓ token valid ({FormatExpiry(auth.ExpiresAt!.Value - time.GetUtcNow())})",
-                "expired" => $"{auth.Identity} ✗ token expired (run: kcap login)",
-                _         => "not authenticated (run: kcap login)",
+                "valid"        => $"{auth.Identity} ✓ token valid ({FormatExpiry(auth.ExpiresAt!.Value - time.GetUtcNow())})",
+                "expired"      => $"{auth.Identity} ✗ token expired (run: kcap login)",
+                "wrong_server" => $"✗ token was issued by {auth.IssuedServerUrl ?? "another server"} (run: kcap login)",
+                _              => "not authenticated (run: kcap login)",
             });
         }
 
@@ -88,9 +90,12 @@ public sealed class StatusCommand(
     async Task<int> WriteJsonAsync(string[] args, string? baseUrl) {
         var (current, advisory, bundled) = await ResolveVersionAsync(args);
         var server  = await ProbeServerAsync(baseUrl);
-        var auth    = await ResolveAuthAsync();
-        var entries = await ReadDaemonEntriesAsync(store);
+        var auth    = await ResolveAuthAsync(server.Url);
+        var entries = ReadDaemonEntries(store);
         var live    = entries.Where(e => e.Alive).ToList();
+
+        // The exit-time footer is the human surface for this, and the payload already carries it.
+        if (advisory.Newer) UpdateNotice.MarkReported();
 
         var payload = new StatusJson(
             StatusJsonRender.IsConfigured(server.Url, auth.State),
@@ -109,7 +114,7 @@ public sealed class StatusCommand(
                 harnesses.Detected(h.Id) && !h.Signals.IsWired ? InstallCommandFor(h.Id) : null))],
             new StatusDaemonJson(
                 live.Count > 0,
-                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid))],
+                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid!.Value))],
                 entries.Count > live.Count));
 
         await Console.Out.WriteLineAsync(StatusJsonRender.Render(payload));
@@ -140,17 +145,36 @@ public sealed class StatusCommand(
     /// show a headless runner as recording as the machine AND not authenticated, contradictory and
     /// with irrelevant remediation.
     /// </summary>
-    async Task<AuthSnapshot> ResolveAuthAsync() {
-        if (machine.Diversion is { } diversion) return new AuthSnapshot("machine", null, null, diversion);
+    async Task<AuthSnapshot> ResolveAuthAsync(string? serverUrl) {
+        // Diversion is deliberately raised by EITHER variable, so that a half-configured runner is
+        // diagnosed rather than sent to `kcap login` it cannot run. Only both halves authenticate,
+        // which is the difference between "records as the machine" and "nothing records".
+        if (machine.Diversion is { } diversion)
+            return new AuthSnapshot(
+                machine.TryRead(out _) is not null ? "machine" : "machine_incomplete", null, null, diversion, null);
 
-        if (await tokenStore.GetValidTokensForProfileAsync(profiles.Name) is { } valid)
-            return new AuthSnapshot("valid", valid.GitHubUsername, valid.ExpiresAt, null);
+        // With no server there is nothing to bind a token to, so validity is all that can be said.
+        if (serverUrl is null) {
+            if (await tokenStore.GetValidTokensForProfileAsync(profiles.Name) is { } unbound)
+                return new AuthSnapshot("valid", unbound.GitHubUsername, unbound.ExpiresAt, null, null);
 
-        var raw = await tokenStore.LoadForProfileAsync(profiles.Name);
+            var stored = await tokenStore.LoadForProfileAsync(profiles.Name);
 
-        return raw is not null
-            ? new AuthSnapshot("expired", raw.GitHubUsername, null, null)
-            : new AuthSnapshot("none", null, null, null);
+            return stored is not null
+                ? new AuthSnapshot("expired", stored.GitHubUsername, null, null, null)
+                : new AuthSnapshot("none", null, null, null, null);
+        }
+
+        // The server-aware accessor, not the profile-only one: a token bound elsewhere is withheld
+        // before any request, so reporting it as valid would promise access that never happens.
+        var resolved = await tokenStore.GetValidTokensForServerAsync(profiles.Name, serverUrl);
+
+        return resolved.Status switch {
+            AuthStatus.Ok          => new AuthSnapshot("valid", resolved.Tokens!.GitHubUsername, resolved.Tokens.ExpiresAt, null, null),
+            AuthStatus.WrongServer => new AuthSnapshot("wrong_server", null, null, null, resolved.IssuedServerUrl),
+            AuthStatus.Expired     => new AuthSnapshot("expired", (await tokenStore.LoadForProfileAsync(profiles.Name))?.GitHubUsername, null, null, null),
+            _                      => new AuthSnapshot("none", null, null, null, null),
+        };
     }
 
     /// <summary>The version facts behind the Version line, without printing it.</summary>
@@ -179,7 +203,8 @@ public sealed class StatusCommand(
 
     sealed record ServerProbe(string? Url, bool Reachable, int? StatusCode);
 
-    sealed record AuthSnapshot(string State, string? Identity, DateTimeOffset? ExpiresAt, string? MachineLine);
+    sealed record AuthSnapshot(
+        string State, string? Identity, DateTimeOffset? ExpiresAt, string? MachineLine, string? IssuedServerUrl);
 
     async Task WriteVersionLineAsync(string[] args) {
         Console.Write("  Version: ");
@@ -241,9 +266,8 @@ public sealed class StatusCommand(
     internal static string FormatBundledVersionLine(string current) => $"kcap {current} (bundled with Kurrent Capacitor)";
 
     static async Task WriteAgentStatusAsync(DaemonStore store) {
-        var entries = await ReadDaemonEntriesAsync(store);
-
-        var live = entries.Where(e => e.Alive).ToList();
+        var entries = ReadDaemonEntries(store);
+        var live    = entries.Where(e => e.Alive).ToList();
 
         switch (live.Count) {
             case 0:
@@ -271,36 +295,50 @@ public sealed class StatusCommand(
     /// Every daemon PID file with the name, pid, and whether that process is still there. Shared by
     /// the Daemon line and the JSON payload so they cannot disagree about what is running.
     /// </summary>
-    static async Task<List<(string Name, int Pid, bool Alive)>> ReadDaemonEntriesAsync(DaemonStore store) {
-        var entries = new List<(string Name, int Pid, bool Alive)>();
+    static List<DaemonEntry> ReadDaemonEntries(DaemonStore store) {
+        var entries = new List<DaemonEntry>();
 
         if (!Directory.Exists(store.Directory)) return entries;
 
-        foreach (var pidFile in Directory.EnumerateFiles(store.Directory, "*.pid").OrderBy(f => f)) {
+        List<string> pidFiles;
+
+        // These files are live state: `daemon stop` and `doctor --clean` remove them, so the
+        // directory can change under the sweep. A status read must not die of that.
+        try {
+            pidFiles = [.. Directory.EnumerateFiles(store.Directory, "*.pid").OrderBy(f => f)];
+        } catch (IOException) {
+            return entries;
+        } catch (UnauthorizedAccessException) {
+            return entries;
+        }
+
+        foreach (var pidFile in pidFiles) {
             var name = Path.GetFileNameWithoutExtension(pidFile);
 
             if (string.IsNullOrEmpty(name)) continue;
 
-            var firstLine = (await File.ReadAllTextAsync(pidFile))
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .FirstOrDefault();
-
-            if (!int.TryParse(firstLine, out var pid)) continue;
-
-            var alive = false;
+            DaemonPidProbe.PidEntry? entry;
 
             try {
-                System.Diagnostics.Process.GetProcessById(pid);
-                alive = true;
-            } catch (ArgumentException) {
-                // process gone; treated as stale by the callers
+                entry = DaemonPidProbe.ReadPidFile(store, name);
+            } catch (IOException) {
+                continue;
+            } catch (UnauthorizedAccessException) {
+                continue;
             }
 
-            entries.Add((name, pid, alive));
+            // A present but unparseable marker is a hard-death breadcrumb, not an absence: it is
+            // counted as stale rather than skipped, so the file someone has to clean up is reported.
+            entries.Add(entry is { } e
+                ? new DaemonEntry(name, e.Pid, DaemonPidProbe.IsOurDaemon(e.Pid, e.StartToken))
+                : new DaemonEntry(name, null, false));
         }
 
         return entries;
     }
+
+    /// <param name="Pid">Null when the marker is present but carries no usable PID.</param>
+    sealed record DaemonEntry(string Name, int? Pid, bool Alive);
 
     /// <summary>
     /// Renders the Hooks status line: every harness, wired or not, in registry order. What "wired"
