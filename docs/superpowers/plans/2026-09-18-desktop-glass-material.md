@@ -2781,14 +2781,15 @@ Glass is a control, not a brush — a brush cannot sample what is behind it — 
 own cards stay `Border`s: two are rows of the virtualised list, where a templated control triples
 the visuals, and the view is always opaque. A `Surface`'s content joins the visual tree on first
 measure rather than on assignment, so content under a collapsed ancestor is reached through the
-name scope, never by a visual-tree walk. Three traps shaped it. Content drawn beside the glass is captured into the glass's own backdrop and blurred under
-itself, so every glass template's root sets `IsExcludedFromCapture`. The panel flyouts stay
-opaque: glass in a `Flyout`'s popup never receives a backdrop snapshot — in the presenter's
-template or wrapped around the content alike — while a bare overlay-layer popup with the same
-layer blurs, and the probe under `docs/probes/2026-09-18-glass-overlay-flyout/` is the record and
-the starting point for the follow-up. And Fluent's per-state
-`Button` fills target `PART_ContentPresenter` and survive a `Template` swap, so the glass chip names
-its presenter `ChipContent`, as `RadioButton.kcapChoice` already does.
+name scope, never by a visual-tree walk. Three traps shaped it. Content drawn beside the glass is
+captured into the glass's own backdrop and blurred under itself, so every glass template's root
+sets `IsExcludedFromCapture`. The panel flyouts stay opaque: glass in a `Flyout`'s popup never
+receives a backdrop snapshot — in the presenter's template or wrapped around the content alike —
+while a bare overlay-layer popup with the same layer blurs, and the probe under
+`docs/probes/2026-09-18-glass-overlay-flyout/` is the record and the starting point for the
+follow-up. And Fluent's per-state `Button` fills target `PART_ContentPresenter` and survive a
+`Template` swap, so the glass chip names its presenter `ChipContent`, as `RadioButton.kcapChoice`
+already does.
 
 `LiquidGlassAvaloniaUI` is vendored as source under `src/ThirdParty/` because it is not on
 NuGet.org. It reports nothing when its shader pipeline cannot run, so the copy carries one patch,
@@ -2829,7 +2830,7 @@ The sandbox cannot launch the GUI, so report this list to the user rather than t
 
 1. Each of the three materials applies live to the rail, the goal card and the five launcher chips; the goal text and picker selections survive a switch.
 2. Under glass the rail floats below the window controls with its footer visible; the window still drags by the strip above it and by the launcher's header.
-3. Each chip picker, the Activity panel and the rail's help menu open as glass panels, stay inside the window, dismiss on outside click, and the help menu works from the keyboard.
+3. Each chip picker, the Activity panel and the rail's help menu open as the same opaque panels as before, inside the window, dismiss on outside click, and the help menu works from the keyboard.
 4. Opening a session covers the backdrop with an opaque workspace; closing it brings the launcher back over the glow.
 5. Dragging a file over the goal card shows the primary-colour rim under both materials.
 6. With System Settings → Accessibility → Display → Reduce transparency on and no stored choice, the app starts Opaque with the hint shown.
