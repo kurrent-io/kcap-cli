@@ -1,7 +1,11 @@
 <Project>
-    <!-- Deliberately does not import the repo-root file: vendored source stays byte-identical to
-         upstream, so it cannot meet warnings-as-errors, enforced code style or the banned-API list. -->
+    <!-- Deliberately does not import the repo-root file, and turns the .NET analyzers off:
+         vendored source stays byte-identical to upstream, so it cannot meet warnings-as-errors,
+         enforced code style or the banned-API list, and the root .editorconfig still reaches this
+         directory by filesystem ancestry and would raise its CA severities on unmodified upstream
+         code. -->
     <PropertyGroup>
         <Deterministic>true</Deterministic>
+        <EnableNETAnalyzers>false</EnableNETAnalyzers>
     </PropertyGroup>
 </Project>

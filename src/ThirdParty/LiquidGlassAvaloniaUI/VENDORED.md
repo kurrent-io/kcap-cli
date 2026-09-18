@@ -8,8 +8,8 @@
   projects are not vendored. The package is not published on NuGet.org.
 
 Every file is byte-identical to upstream except the patches below. This directory is exempt
-from the repo's comment, one-type-per-file and namespace rules, and from warnings-as-errors,
-through `src/ThirdParty/Directory.Build.props`.
+from the repo's comment, one-type-per-file and namespace rules, from warnings-as-errors and
+from the .NET analyzers, through `src/ThirdParty/Directory.Build.props`.
 
 ## Local files
 
