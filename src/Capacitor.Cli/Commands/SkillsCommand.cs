@@ -147,8 +147,8 @@ class SkillsCommand(
             Info($"{(dryRun ? "would prune" : "prune"),-12} {p.Path}");
         if (dryRun) return 0;
 
-        foreach (var w in writes) SkillsMaterializer.Write(root, w);
-        foreach (var p in plan.Prunes) SkillsMaterializer.Prune(root, p);
+        foreach (var w in writes) SkillsMaterializer.Write(root, anchor, w);
+        foreach (var p in plan.Prunes) SkillsMaterializer.Prune(root, anchor, p.Path);
         SaveManifest(manifestPath, BuildManifest(dto.Etag, snapshot, root));
         Info($"[{target.Key}] synced {writes.Count} skill(s), pruned {plan.Prunes.Count}; {snapshot.Length} materialized.");
         return 0;

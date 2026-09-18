@@ -30,21 +30,32 @@ public static class SkillsMaterializer {
         }
     }
 
-    public static void Write(string root, SkillSnapshotItem item) {
+    /// <summary>Writes one skill, refusing a destination that leaves the anchor through a link: a
+    /// vendor directory inside the repository may be a symlink to the user-global tree, which would
+    /// publish repository content globally again.</summary>
+    public static bool Write(string root, string anchor, SkillSnapshotItem item) {
         var dir = SkillDirFor(root, item.Slug);
+        if (!CanonicalPath.IsWithin(dir, anchor)) return false;
         Directory.CreateDirectory(dir);
-        File.WriteAllText(SkillFileFor(dir), SkillsSyncPlanner.RenderSkillFile(item));
+        var file = SkillFileFor(dir);
+        if (File.Exists(file) && new FileInfo(file).LinkTarget is not null) return false;
+        // Publish atomically: an interrupted write must not leave a half-file the drift hash then
+        // reads as a hand edit.
+        var tmp = file + ".tmp";
+        File.WriteAllText(tmp, SkillsSyncPlanner.RenderSkillFile(item));
+        File.Move(tmp, file, overwrite: true);
+        return true;
     }
 
-    /// <summary>Deletes one manifest-recorded directory — and only a DIRECT kcap-* child of the
-    /// skills root: a manifest edited by hand must not aim the delete anywhere else (prefix checks
-    /// admit siblings like <c>skills-backup/</c> and nested user directories; parent EQUALITY does
-    /// not).</summary>
-    public static void Prune(string root, SkillsManifestEntry entry) {
-        var full = Path.GetFullPath(entry.Path);
-        if (string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(root), StringComparison.Ordinal)
-                && Path.GetFileName(full).StartsWith("kcap-", StringComparison.Ordinal)
-                && Directory.Exists(full))
-            Directory.Delete(full, recursive: true);
+    /// <summary>Deletes one owned directory: a DIRECT kcap-* child of the given root that also
+    /// resolves inside the anchor.</summary>
+    public static bool Prune(string root, string anchor, string path) {
+        var full = Path.GetFullPath(path);
+        if (!string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(root), StringComparison.Ordinal)) return false;
+        if (!Path.GetFileName(full).StartsWith("kcap-", StringComparison.Ordinal)) return false;
+        if (!CanonicalPath.IsWithin(full, anchor)) return false;
+        if (!Directory.Exists(full)) return false;
+        Directory.Delete(full, recursive: true);
+        return true;
     }
 }

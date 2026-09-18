@@ -3,6 +3,8 @@ using Capacitor.Cli.Core.Skills;
 namespace Capacitor.Cli.Core.Tests.Unit.Skills;
 
 public class SkillsMaterializerTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static SkillSnapshotItem Item(string slug) => new() {
         DocId = Guid.NewGuid(), Slug = slug, Title = "T", Description = "When.", Body = "Body.",
         Version = 1, ContentHash = "h1",
@@ -10,10 +12,9 @@ public class SkillsMaterializerTests {
 
     [Test]
     public async Task Drift_detection_covers_missing_edited_and_untracked_files() {
-        using var tmp = new TempDir();
-        var root = tmp.Path;
+        var root = Tmp.Path;
         var item = Item("retry-rules");
-        SkillsMaterializer.Write(root, item);
+        SkillsMaterializer.Write(root, root, item);
         var dir      = SkillsMaterializer.SkillDirFor(root, item.Slug);
         var rendered = SkillsSyncPlanner.RenderSkillFile(item);
         var entry = new SkillsManifestEntry {
@@ -31,29 +32,59 @@ public class SkillsMaterializerTests {
 
     [Test]
     public async Task Prune_deletes_only_direct_kcap_children_of_the_root() {
-        using var tmp = new TempDir();
-        var root = tmp.Path;
-        var owned = Path.Combine(root, "kcap-mine");
+        var anchor = Tmp.CreateDir("repo");
+        var root   = Tmp.CreateDir("repo/skills");
+        Tmp.CreateDir("repo/skills/kcap-mine");
+        Tmp.CreateDir("repo/skills/user-owned/kcap-nested");
+        var siblingChild = Tmp.CreateDir("repo/skills-backup/kcap-foo");
+        var owned  = Path.Combine(root, "kcap-mine");
         var nested = Path.Combine(root, "user-owned", "kcap-nested");
-        var sibling = root + "-backup";
-        var siblingChild = Path.Combine(sibling, "kcap-foo");
-        Directory.CreateDirectory(owned);
-        Directory.CreateDirectory(nested);
-        Directory.CreateDirectory(siblingChild);
-        try {
-            static SkillsManifestEntry E(string p) => new() {
-                DocId = Guid.NewGuid(), Slug = "s", Version = 1, ContentHash = "h", Path = p,
-            };
-            SkillsMaterializer.Prune(root, E(owned));
-            SkillsMaterializer.Prune(root, E(nested));
-            SkillsMaterializer.Prune(root, E(siblingChild));
 
-            await Assert.That(Directory.Exists(owned)).IsFalse();
-            await Assert.That(Directory.Exists(nested)).IsTrue();        // nested user dir untouched
-            await Assert.That(Directory.Exists(siblingChild)).IsTrue();  // sibling root untouched
-        } finally {
-            Directory.Delete(sibling, recursive: true);
-        }
+        await Assert.That(SkillsMaterializer.Prune(root, anchor, owned)).IsTrue();
+        await Assert.That(SkillsMaterializer.Prune(root, anchor, nested)).IsFalse();
+        await Assert.That(SkillsMaterializer.Prune(root, anchor, siblingChild)).IsFalse();
+
+        await Assert.That(Directory.Exists(owned)).IsFalse();
+        await Assert.That(Directory.Exists(nested)).IsTrue();        // nested user dir untouched
+        await Assert.That(Directory.Exists(siblingChild)).IsTrue();  // sibling root untouched
+    }
+
+    [Test]
+    public async Task A_destination_linked_outside_the_anchor_is_refused() {
+        var anchor  = Tmp.CreateDir("repo");
+        var outside = Tmp.CreateDir("global/skills");
+        var root    = Path.Combine(anchor, ".agents", "skills");
+        Directory.CreateDirectory(Path.GetDirectoryName(root)!);
+        Directory.CreateSymbolicLink(root, outside);
+
+        var written = SkillsMaterializer.Write(root, anchor, Item("x"));
+
+        await Assert.That(written).IsFalse();
+        await Assert.That(Directory.GetDirectories(outside)).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_publication_is_atomic() {
+        var anchor = Tmp.CreateDir("repo");
+        var root   = Tmp.CreateDir("repo/.agents/skills");
+
+        SkillsMaterializer.Write(root, anchor, Item("x"));
+
+        var dir = SkillsMaterializer.SkillDirFor(root, "x");
+        // No partial file is ever left beside the published one.
+        await Assert.That(Directory.GetFiles(dir).Select(Path.GetFileName).OfType<string>()).IsEquivalentTo(["SKILL.md"]);
+    }
+
+    [Test]
+    public async Task A_prune_outside_the_anchor_is_refused() {
+        var anchor  = Tmp.CreateDir("repo");
+        var root    = Tmp.CreateDir("repo/.agents/skills");
+        var outside = Tmp.CreateDir("global/kcap-x");
+
+        var pruned = SkillsMaterializer.Prune(root, anchor, outside);
+
+        await Assert.That(pruned).IsFalse();
+        await Assert.That(Directory.Exists(outside)).IsTrue();
     }
 }
 
