@@ -18,6 +18,9 @@ public sealed class GeminiPaths {
 
     public string Root { get; }
 
+    /// <summary>The repository-local skills tree, resolved against the session's anchor.</summary>
+    public static string RepoSkillsDir(string anchor) => Path.Combine(anchor, ".gemini", "skills");
+
     /// <summary>
     /// Shared settings file (<c>~/.gemini/settings.json</c>) — holds user config
     /// plus the <c>hooks</c> block kcap merges into. NEVER overwrite wholesale.

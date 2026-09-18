@@ -1,45 +1,53 @@
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class SkillsTargetCatalogTests {
-    [TempHome] public required TempHome Home { get; init; }
-
     [Test]
-    public async Task Consumer_presence_maps_each_target_to_its_readers() {
-        static HarnessRegistry Only(HarnessId id) => TestHarnesses.All([id]);
-
-        // A codex-only machine adopts the shared agents tree and nothing vendored.
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Codex), "agents")).IsTrue();
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Codex), "claude")).IsFalse();
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Codex), "kiro")).IsFalse();
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Codex), "gemini")).IsFalse();
-        // The gemini tree is shared by Gemini CLI AND Antigravity.
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Antigravity), "gemini")).IsTrue();
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Gemini), "gemini")).IsTrue();
-        // Claude and Kiro read only their own trees.
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Claude), "claude")).IsTrue();
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Kiro), "kiro")).IsTrue();
-        await Assert.That(SkillsCommand.ConsumerPresent(Only(HarnessId.Kiro), "agents")).IsFalse();
+    public async Task Every_target_is_anchor_relative_and_leafed_skills() {
+        foreach (var t in SkillsCommand.Targets()) {
+            await Assert.That(Path.IsPathRooted(t.RelativePath)).IsFalse();
+            await Assert.That(Path.GetFileName(t.RelativePath)).IsEqualTo("skills");
+            await Assert.That(t.Root("/anchor")).IsEqualTo(Path.Combine("/anchor", t.RelativePath));
+        }
     }
 
     [Test]
-    public async Task Shared_trees_carry_no_vendor_and_vendored_trees_match_their_harness() {
-        var targets = SkillsCommand.Targets(TestHarnesses.Under(Home), new AgentsPaths(Home))
-            .ToDictionary(t => t.Key);
-        await Assert.That(targets.Keys.Order().ToArray())
-            .IsEquivalentTo(new[] { "agents", "claude", "gemini", "kiro" });
+    public async Task The_catalogue_matches_the_measured_roots_and_vendors() {
+        var byKey = SkillsCommand.Targets().ToDictionary(t => t.Key);
 
-        await Assert.That(targets["claude"].Vendor).IsEqualTo("claude");
-        await Assert.That(targets["kiro"].Vendor).IsEqualTo("kiro");
-        // Several harnesses read these trees, so a vendor-restricted doc must never land in
-        // them: no vendor ⇒ unknown-excludes drops every vendor-restricted doc server-side.
-        await Assert.That(targets["agents"].Vendor).IsNull();
-        await Assert.That(targets["gemini"].Vendor).IsNull();
+        await Assert.That(byKey["agents"].RelativePath).IsEqualTo(Path.Combine(".agents", "skills"));
+        await Assert.That(byKey["claude"].RelativePath).IsEqualTo(Path.Combine(".claude", "skills"));
+        await Assert.That(byKey["kiro"].RelativePath).IsEqualTo(Path.Combine(".kiro", "skills"));
+        await Assert.That(byKey["gemini"].RelativePath).IsEqualTo(Path.Combine(".gemini", "skills"));
 
-        foreach (var t in targets.Values)
-            await Assert.That(Path.GetFileName(t.Root)).IsEqualTo("skills");
+        await Assert.That(byKey["agents"].Vendor).IsNull();
+        await Assert.That(byKey["claude"].Vendor).IsEqualTo("claude");
+        await Assert.That(byKey["kiro"].Vendor).IsEqualTo("kiro");
+        await Assert.That(byKey["gemini"].Vendor).IsNull();
+
+        // Measured in the probe matrix; the exposure a manifest records.
+        await Assert.That(byKey["claude"].Readers)
+            .IsEquivalentTo([HarnessId.Claude, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode]);
+        await Assert.That(byKey["gemini"].Readers).IsEmpty();
     }
+
+    [Test]
+    public async Task Adoption_follows_consumers_so_an_unmeasured_tree_is_still_served() {
+        var byKey = SkillsCommand.Targets().ToDictionary(t => t.Key);
+        var gemini = new HarnessRegistryStub(HarnessId.Gemini);
+        var antigravity = new HarnessRegistryStub(HarnessId.Antigravity);
+
+        await Assert.That(SkillsCommand.Adopted(gemini, byKey["gemini"], false, false)).IsTrue();
+        await Assert.That(SkillsCommand.Adopted(antigravity, byKey["agents"], false, false)).IsTrue();
+        await Assert.That(SkillsCommand.Adopted(antigravity, byKey["claude"], false, false)).IsFalse();
+        // A target kcap already owns keeps reconciling so a revocation still reaches it.
+        await Assert.That(SkillsCommand.Adopted(antigravity, byKey["claude"], true, false)).IsTrue();
+        await Assert.That(SkillsCommand.Adopted(antigravity, byKey["claude"], false, true)).IsTrue();
+    }
+}
+
+sealed class HarnessRegistryStub(params HarnessId[] present) : IHarnessDetection {
+    public bool Detected(HarnessId id) => present.Contains(id);
 }

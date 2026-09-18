@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Serialization;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Core.Skills;
 
@@ -38,10 +39,16 @@ public sealed record SkillsManifestEntry {
     [JsonPropertyName("file_hash")]    public string?         FileHash    { get; init; }
 }
 
-/// <summary>One harness tree skills materialize into. A null <see cref="Vendor"/> marks a tree
-/// several harnesses read: the snapshot is fetched WITHOUT a vendor, so unknown-excludes keeps
-/// every vendor-restricted doc out of it — such docs reach their harness via a vendored tree.</summary>
-public sealed record SkillsTarget(string Key, string Root, string? Vendor);
+/// <summary>One harness tree skills materialize into, relative to a session's anchor. A null
+/// <see cref="Vendor"/> marks a tree several harnesses read: the snapshot is fetched WITHOUT a
+/// vendor, so unknown-excludes keeps every vendor-restricted doc out of it. <see cref="Consumers"/>
+/// is the documented set this tree serves and decides adoption; <see cref="Readers"/> is the
+/// measured set and is what a manifest records as exposure.</summary>
+public sealed record SkillsTarget(
+    string Key, string RelativePath, string? Vendor,
+    IReadOnlyList<HarnessId> Consumers, IReadOnlyList<HarnessId> Readers) {
+    public string Root(string anchor) => Path.Combine(anchor, RelativePath);
+}
 
 public sealed record SkillsSyncPlan(
     IReadOnlyList<SkillSnapshotItem>   Writes,

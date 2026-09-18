@@ -1,9 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
-using Capacitor.Cli.Core.Harness.Antigravity;
-using Capacitor.Cli.Core.Harness.Claude;
-using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.PrDetection;
@@ -18,21 +15,31 @@ namespace Capacitor.Cli.Commands;
 /// are untouchable. Nothing is ever written into a repo.
 /// </summary>
 class SkillsCommand(
-        ConfigRoot config, HarnessRegistry harnesses, AgentsPaths agents, IRepositoriesApi repositories,
+        ConfigRoot config, HarnessRegistry harnesses, IRepositoriesApi repositories,
         GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
     // The background refresh keys off each manifest's synced_at, so a burst of session starts
     // costs one network round-trip per interval per target, not one per session.
     static readonly TimeSpan AutoSyncInterval = TimeSpan.FromHours(6);
 
-    /// <summary>The harness trees skills materialize into — the same set the packaged skills
-    /// installer serves. A null vendor is a SHARED tree (several harnesses read it): its snapshot
-    /// is fetched vendor-less, so unknown-excludes keeps vendor-restricted docs out of it — those
-    /// reach their harness through a vendored tree instead.</summary>
-    internal static IReadOnlyList<SkillsTarget> Targets(HarnessRegistry harnesses, AgentsPaths agents) => [
-        new("claude", harnesses.Of<ClaudeHarness>().Paths.UserSkillsDir, "claude"),
-        new("agents", agents.UserSkillsDir, null),
-        new("kiro",   harnesses.Of<KiroHarness>().Paths.SkillsDir, "kiro"),
-        new("gemini", harnesses.Of<AntigravityHarness>().Paths.SkillsDir, null),   // shared: Gemini CLI + Antigravity
+    /// <summary>The harness trees skills materialize into, relative to a session's anchor. A null
+    /// vendor is a SHARED tree (several harnesses read it): its snapshot is fetched vendor-less, so
+    /// unknown-excludes keeps vendor-restricted docs out of it — those reach their harness through a
+    /// vendored tree instead.</summary>
+    internal static IReadOnlyList<SkillsTarget> Targets() => [
+        new("agents", Path.Combine(".agents", "skills"), null,
+            [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
+             HarnessId.Antigravity],
+            [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
+             HarnessId.Antigravity]),
+        new("claude", Path.Combine(".claude", "skills"), "claude",
+            [HarnessId.Claude],
+            [HarnessId.Claude, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode]),
+        new("kiro", Path.Combine(".kiro", "skills"), "kiro",
+            [HarnessId.Kiro], [HarnessId.Kiro]),
+        // No session has confirmed a repository-local .gemini/skills; the tree is kept on the
+        // vendor's documentation, which is why it has a consumer and no reader.
+        new("gemini", Path.Combine(".gemini", "skills"), null,
+            [HarnessId.Gemini, HarnessId.Antigravity], []),
     ];
 
     public async Task<int> HandleSync(bool dryRun, bool auto = false) {
@@ -50,23 +57,19 @@ class SkillsCommand(
         var hash = RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName);
 
         var exitCode = 0;
-        foreach (var target in Targets(harnesses, agents)) {
+        foreach (var target in Targets()) {
             var manifestName = Path.Combine("skills", hash, target.Key, "manifest.json");
-            // Adopt a target only while a consuming harness is present — real detection, not
-            // destination-parent existence: ~/.agents is created by kcap's own installer, so a
-            // fresh machine with (say) Codex installed would otherwise never adopt the shared tree.
-            // A target we already own keeps reconciling (revocation must reach it) even after the
-            // harness is removed.
-            if (!File.Exists(config.Path(manifestName)) && !ConsumerPresent(harnesses, target.Key))
+            var hasManifest = File.Exists(config.Path(manifestName));
+            if (!Adopted(harnesses, target, hasManifest, hasLegacyManifest: false))
                 continue;
             exitCode = Math.Max(exitCode,
-                await SyncTargetAsync(hash, target, manifestName, dryRun, auto));
+                await SyncTargetAsync(hash, target, manifestName, cwd, dryRun, auto));
         }
         return exitCode;
     }
 
     async Task<int> SyncTargetAsync(
-            string hash, SkillsTarget target, string manifestName, bool dryRun, bool auto) {
+            string hash, SkillsTarget target, string manifestName, string anchor, bool dryRun, bool auto) {
         void Info(string line) { if (!auto) Console.WriteLine(line); }
         var manifestPath = config.Path(manifestName);
 
@@ -126,7 +129,7 @@ class SkillsCommand(
             return 1;
         }
         var plan   = SkillsSyncPlanner.Plan(manifest, snapshot);
-        var root   = target.Root;
+        var root   = target.Root(anchor);
         var writes = plan.Writes.Concat(plan.Unchanged.Where(u => drifted.Contains(u.DocId))).ToList();
 
         if (writes.Count == 0 && plan.Prunes.Count == 0) {
@@ -148,21 +151,13 @@ class SkillsCommand(
         return 0;
     }
 
-    /// <summary>Whether any harness that reads this target's tree is installed. The shared trees
-    /// list their consumers: ~/.agents is read by the codex-family harnesses, the gemini tree by
-    /// Gemini CLI and Antigravity; Claude and Kiro read only their own.</summary>
-    internal static bool ConsumerPresent(HarnessRegistry harnesses, string targetKey) {
-        bool Any(params HarnessId[] ids) => ids.Any(harnesses.Detected);
-
-        return targetKey switch {
-            "claude" => Any(HarnessId.Claude),
-            "agents" => Any(HarnessId.Codex, HarnessId.Cursor, HarnessId.Copilot,
-                            HarnessId.Pi, HarnessId.OpenCode),
-            "kiro"   => Any(HarnessId.Kiro),
-            "gemini" => Any(HarnessId.Gemini, HarnessId.Antigravity),
-            _        => false,
-        };
-    }
+    /// <summary>Whether a target should be synced: a consuming harness is present, or kcap already
+    /// owns it — real detection, not destination-parent existence, so a fresh machine with (say)
+    /// Codex installed still adopts the shared tree. A target already owned keeps reconciling
+    /// (revocation must reach it) even after every consumer is removed.</summary>
+    internal static bool Adopted(IHarnessDetection harnesses, SkillsTarget target,
+                                 bool hasManifest, bool hasLegacyManifest) =>
+        hasManifest || hasLegacyManifest || target.Consumers.Any(harnesses.Detected);
 
     internal static bool AutoThrottled(SkillsManifest? manifest, DateTimeOffset now) =>
         // A future stamp (clock correction, tampered file) must read as stale, not as an
