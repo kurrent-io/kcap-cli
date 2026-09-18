@@ -39,21 +39,7 @@ public static class SkillsMaterializer {
         Directory.CreateDirectory(dir);
         var file = SkillFileFor(dir);
         if (File.Exists(file) && new FileInfo(file).LinkTarget is not null) return false;
-        var tmp = file + ".tmp";
-        try {
-            // Unlink whatever sits at the temp name — a planted symlink is removed, not followed —
-            // then create it exclusively (O_CREAT|O_EXCL) so a link re-planted in the gap is
-            // refused rather than written through. Publishing via rename means an interrupted
-            // write never leaves a half-file the drift hash then reads as a hand edit.
-            File.Delete(tmp);
-            using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
-            using (var writer = new StreamWriter(stream))
-                writer.Write(SkillsSyncPlanner.RenderSkillFile(item));
-            File.Move(tmp, file, overwrite: true);
-        } catch {
-            File.Delete(tmp);
-            throw;
-        }
+        AtomicFile.Replace(file, SkillsSyncPlanner.RenderSkillFile(item));
         return true;
     }
 
