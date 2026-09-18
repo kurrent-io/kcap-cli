@@ -676,6 +676,14 @@ public class SetupCommandTests {
         await Assert.That(description).Contains(SetupCommand.GuidedTourPrompt);
     }
 
+    [Test]
+    public async Task Eval_watch_skill_frontmatter_carries_the_pinned_handoff_prompt() {
+        var skill = Path.Combine(RepoTree.SkillsSource(), SetupCommand.EvalWatchSkillName, "SKILL.md");
+        var description = FrontmatterDescription(await File.ReadAllTextAsync(skill));
+
+        await Assert.That(description).Contains(SetupCommand.EvalWatchPrompt);
+    }
+
     /// <summary>
     /// The value of the YAML frontmatter's <c>description:</c> field, flattened to one line.
     /// Throws when there is no frontmatter — an unparseable SKILL.md must fail the test, not
