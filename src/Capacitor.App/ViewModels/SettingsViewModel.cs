@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using Capacitor.App.Materials;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
@@ -24,6 +25,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     readonly Func<MutationRequest, CancellationToken, Task<bool>> _canRetire;
     readonly CancellationTokenSource _lifetime;
     readonly CompositeDisposable _subscriptions = new();
+    readonly IMaterialService? _material;
     AttachStatus _status = new(AttachState.Connecting, null, null);
     DaemonStatusDto? _snapshot;
     int _savedCapacity;
@@ -32,6 +34,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     bool _isBusy;
     bool _needsAppRestart;
     string? _message;
+    MaterialState _materialState = MaterialState.Opaque;
 
     public SettingsViewModel(
             SettingsProfileStore settings, IDaemonClientService service, ILocalControlOps ops,
@@ -40,7 +43,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Func<LifecyclePrompt, CancellationToken, Task<bool>> confirm,
             Func<CancellationToken, Task<bool>> relaunch, bool canRenameOnPlatform,
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
-            bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default) {
+            bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
+            IMaterialService? material = null) {
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -73,6 +77,19 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             _snapshot = snapshot;
             Refresh();
         }).DisposeWith(_subscriptions);
+
+        _material = material;
+        if (material is not null) {
+            _materialState = material.Current;
+            material.States.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(state => {
+                _materialState = state;
+                this.RaisePropertyChanged(nameof(IsOpaque));
+                this.RaisePropertyChanged(nameof(IsSoftGlass));
+                this.RaisePropertyChanged(nameof(IsLiquidGlass));
+                this.RaisePropertyChanged(nameof(MaterialChoicesEnabled));
+                this.RaisePropertyChanged(nameof(MaterialHint));
+            }).DisposeWith(_subscriptions);
+        }
     }
 
     public string Name {
@@ -137,6 +154,36 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> SaveCommand { get; }
     public ReactiveCommand<Unit, Unit> RenameCommand { get; }
+
+    public bool IsOpaque {
+        get => _materialState.Effective == SurfaceMaterial.Opaque;
+        set { if (value) Choose(SurfaceMaterial.Opaque); }
+    }
+
+    public bool IsSoftGlass {
+        get => _materialState.Effective == SurfaceMaterial.SoftGlass;
+        set { if (value) Choose(SurfaceMaterial.SoftGlass); }
+    }
+
+    public bool IsLiquidGlass {
+        get => _materialState.Effective == SurfaceMaterial.LiquidGlass;
+        set { if (value) Choose(SurfaceMaterial.LiquidGlass); }
+    }
+
+    public bool MaterialChoicesEnabled => _material is not null && _materialState.Availability == MaterialAvailability.Available;
+
+    public string? MaterialHint => _materialState switch {
+        { Availability: MaterialAvailability.NotCapable } => "Glass materials need macOS.",
+        { Availability: MaterialAvailability.PipelineFailed } failed => $"Glass is off until the next launch: {failed.FailureReason}.",
+        { Requested: null, ReduceTransparency: true } => "Opaque because Reduce transparency is on. Picking a glass material overrides it.",
+        _ => null,
+    };
+
+    // A radio only ever reports the one that turned on; SetAsync never throws, the store swallows a failed write.
+    void Choose(SurfaceMaterial material) {
+        if (_material is null || material == _materialState.Effective) return;
+        _ = _material.SetAsync(material);
+    }
 
     async Task SaveAsync() {
         if (!CanSave) return;

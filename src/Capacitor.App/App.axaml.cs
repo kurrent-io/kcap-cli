@@ -730,7 +730,7 @@ public partial class App : Application {
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
                 ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
-                needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token);
+                needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token, material: _material);
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
