@@ -40,20 +40,4 @@
         <Setter Property="Background" Value="{StaticResource KcapGlassRailButtonHoverBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource KcapGlassRailButtonBorderHoverBrush}" />
     </Style>
-    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow,
-                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow">
-        <Setter Property="CornerRadius" Value="9" />
-    </Style>
-    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.selected,
-                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.selected,
-                     views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.holdsSelected,
-                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.holdsSelected">
-        <Setter Property="Background" Value="{StaticResource KcapGlassRailRowBrush}" />
-    </Style>
-    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                     views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter,
-                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource KcapGlassRailRowBrush}" />
-    </Style>
 </Styles>
