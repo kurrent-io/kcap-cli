@@ -9,14 +9,6 @@
         <Setter Property="GlassKind" Value="Rail" />
         <Setter Property="GlassCornerRadius" Value="22" />
     </Style>
-    <!-- A flyout's panel. The kcapPanel presenter owns the opaque chrome, so only the glass is the
-         content's: a fill or a border here would draw a second panel inside the first. -->
-    <Style Selector="kcap|Surface.panel">
-        <Setter Property="GlassKind" Value="Panel" />
-        <Setter Property="GlassCornerRadius" Value="12" />
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
-    </Style>
 
     <!-- The root excludes the whole surface from the window snapshot: content drawn beside the
          glass would otherwise be blurred underneath itself. -->

@@ -14,7 +14,7 @@ using Capacitor.App.Materials;
 using LiquidGlassAvaloniaUI;
 
 sealed class ProbeApp : Application {
-    static readonly Uri Base = new("avares://Kurrent Capacitor/");
+    static readonly Uri App = new("avares://Kurrent Capacitor/");
 
     public override void Initialize() {
         RequestedThemeVariant = ThemeVariant.Dark;
@@ -24,22 +24,13 @@ sealed class ProbeApp : Application {
                      ("KcapBorderBrush", "#2A3040"), ("KcapPrimaryBrush", "#F1F3F7"),
                  })
             Resources.Add(key, new SolidColorBrush(Color.Parse(color)));
-        Resources.MergedDictionaries.Add(new ResourceInclude(Base) { Source = new Uri("avares://Kurrent Capacitor/Controls/GlassLayer.axaml") });
-        Resources.MergedDictionaries.Add(new ResourceInclude(Base) { Source = new Uri("avares://Kurrent Capacitor/Controls/Surface.axaml") });
+        Resources.MergedDictionaries.Add(new ResourceInclude(App) { Source = new Uri("avares://Kurrent Capacitor/Controls/GlassLayer.axaml") });
+        Resources.MergedDictionaries.Add(new ResourceInclude(App) { Source = new Uri("avares://Kurrent Capacitor/Controls/Surface.axaml") });
         Styles.Add(new FluentTheme());
-        // The opaque kcapPanel chrome App.axaml ships, so the Opaque frame is the real comparison.
-        Styles.Add(OpaquePanel());
-        Styles.Add(new StyleInclude(Base) { Source = new Uri("avares://Kurrent Capacitor/Controls/GlassStyles.axaml") });
-        Styles.Add(new StyleInclude(Base) { Source = new Uri("avares://Kurrent Capacitor/Controls/SurfaceStyles.axaml") });
-        Styles.Add(new StyleInclude(Base) { Source = new Uri("avares://Kurrent Capacitor/Controls/GlassFlyoutStyles.axaml") });
-    }
-
-    static Style OpaquePanel() {
-        Style style = new(x => x.OfType<FlyoutPresenter>().Class("kcapPanel"));
-        style.Add(new Setter(TemplatedControl.BackgroundProperty, new SolidColorBrush(Color.Parse("#12151D"))));
-        style.Add(new Setter(TemplatedControl.CornerRadiusProperty, new CornerRadius(12)));
-        style.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(0)));
-        return style;
+        Styles.Add(new StyleInclude(App) { Source = new Uri("avares://Kurrent Capacitor/Controls/GlassStyles.axaml") });
+        Styles.Add(new StyleInclude(App) { Source = new Uri("avares://Kurrent Capacitor/Controls/SurfaceStyles.axaml") });
+        // The flyout styles are the probe's own: the app ships no flyout glass.
+        Styles.Add(new StyleInclude(new Uri("avares://Probe/")) { Source = new Uri("avares://Probe/ProbeGlassStyles.axaml") });
     }
 }
 
@@ -66,12 +57,13 @@ static class Program {
             .SetupWithoutStarting();
         LiquidGlassPipeline.Unavailable += reason => _unavailable = reason;
 
-        // A control, so a failure reads as "the flyout path" rather than "the harness": the same
+        // Controls, so a failure reads as "the flyout path" rather than "the harness": the same
         // glass layer over the same stripes, in a bare overlay-layer popup.
         Control("overlay popup", lightDismiss: false);
         Control("overlay popup + light dismiss", lightDismiss: true);
 
-        var ok = Run("Flyout");
+        var ok = Run("flyout, presenter template", "kcapPanelTemplated", wrapContent: false)
+               & Run("flyout, wrapped content", "kcapPanel", wrapContent: true);
 
         var diagnostics = LiquidGlassDiagnostics.Snapshot;
         Console.WriteLine($"pipeline unavailable: {_unavailable ?? "no"}; captures published: {diagnostics.CapturesPublished}");
@@ -82,10 +74,10 @@ static class Program {
 
     static Control Body(string text) => new TextBlock { Text = text, Foreground = Brushes.White, Width = 300, Height = 120 };
 
-    static bool Run(string name) {
-        var glass = Capture("alpha", hideLayer: false, out var material, out var region);
-        var clear = Capture("alpha", hideLayer: true, out _, out _);
-        var other = Capture("omega!!", hideLayer: false, out _, out _);
+    static bool Run(string name, string presenterClass, bool wrapContent) {
+        var glass = Capture("alpha", presenterClass, wrapContent, SurfaceMaterial.SoftGlass, out var material, out var region);
+        var opaque = Capture("alpha", presenterClass, wrapContent, SurfaceMaterial.Opaque, out _, out _);
+        var other = Capture("omega!!", presenterClass, wrapContent, SurfaceMaterial.SoftGlass, out _, out _);
 
         // Both edge samples take the SAME row, the panel covering its left and bare stripes its
         // right: a row picked in window coordinates instead can fall under the panel, and then the
@@ -93,7 +85,7 @@ static class Program {
         var row = region.Y + region.Height / 2;
         var outside = Gradient(glass, row, region.Right + 4, W - 4);
         var inside = Gradient(glass, row, region.X + 20, region.Right - 20);
-        var differs = Diff(glass, clear, region);
+        var differs = Diff(glass, opaque, region);
         // The lower third holds no text in either frame: a blurred ghost of the text would show here.
         var ghost = Diff(glass, other, new PixelRect(region.X + 20, region.Y + region.Height * 2 / 3, region.Width - 40, region.Height / 3 - 10));
 
@@ -101,14 +93,15 @@ static class Program {
         return material == SurfaceMaterial.SoftGlass && differs > region.Width * region.Height / 2 && inside < outside / 4 && ghost == 0;
     }
 
-    // hideLayer opens the same flyout under Opaque: the presenter draws its own chrome and the
-    // Surface adds no glass, which is the frame the glass one has to differ from.
-    static byte[] Capture(string text, bool hideLayer, out SurfaceMaterial material, out PixelRect region) {
-        var flyout = new Flyout { Content = GlassFlyouts.Panel(Body(text)) };
-        flyout.FlyoutPresenterClasses.Add("kcapPanel");
+    static byte[] Capture(
+        string text, string presenterClass, bool wrapContent, SurfaceMaterial material,
+        out SurfaceMaterial inherited, out PixelRect region) {
+        var content = wrapContent ? GlassFlyouts.Panel(Body(text)) : Body(text);
+        var flyout = new Flyout { Content = content };
+        flyout.FlyoutPresenterClasses.Add(presenterClass);
         var owner = new Button { Content = "open", Flyout = flyout, Margin = new Thickness(24) };
         var scope = new Panel { Children = { new Stripes(), owner } };
-        MaterialScope.SetMaterial(scope, hideLayer ? SurfaceMaterial.Opaque : SurfaceMaterial.SoftGlass);
+        MaterialScope.SetMaterial(scope, material);
         GlassFlyouts.FollowMaterial(flyout, owner);
         var window = new Window { Width = W, Height = H, Content = scope };
         window.Show();
@@ -116,8 +109,8 @@ static class Program {
         Pump();
 
         var presenter = (Control)flyout.Popup.Child!;
-        material = MaterialScope.GetMaterial(presenter);
-        if (!hideLayer && !flyout.Popup.IsUsingOverlayLayer)
+        inherited = MaterialScope.GetMaterial(presenter);
+        if (material.IsGlass() && !flyout.Popup.IsUsingOverlayLayer)
             throw new InvalidOperationException("the popup is not in the overlay layer");
 
         var origin = presenter.TranslatePoint(default, window)!.Value;
