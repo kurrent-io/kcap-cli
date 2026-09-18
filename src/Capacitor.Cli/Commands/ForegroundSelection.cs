@@ -1,10 +1,5 @@
 namespace Capacitor.Cli.Commands;
 
-internal sealed record ForegroundPlan(
-    List<List<ImportCommand.SessionClassification>> Chains,
-    List<ImportCommand.SessionClassification>       Routed,
-    ImportRunSelection                              Selection);
-
 /// <summary>Decided before any import work: whole chains newest first to the cap, then eligible
 /// routed units; the boundary unit is taken whole.</summary>
 internal static class ForegroundSelection {

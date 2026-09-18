@@ -984,7 +984,7 @@ public class SetupCommandTests {
         await Assert.That(await File.ReadAllTextAsync(file)).Contains("\"handoff_offered\": true");
     }
 
-    [Test]
+    [Test, NotInParallel]
     public async Task An_unwritable_config_dir_warns_on_the_handoff_file_and_still_completes_the_step() {
         if (OperatingSystem.IsWindows()) return; // no mode bits to take away
         if (Environment.UserName == "root") return; // root ignores the missing write bit

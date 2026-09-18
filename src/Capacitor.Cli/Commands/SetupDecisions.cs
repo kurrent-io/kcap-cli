@@ -109,10 +109,10 @@ internal static class SetupDecisions {
     public record ImportDecision(ImportOutcome Outcome, string? SkipReason);
 
     /// <summary>
-    /// The eligibility + policy decision for Step 6 (import past sessions machine-wide). Guard
-    /// order: auth requirements unsatisfied → skip; <c>--skip-import</c> → skip;
-    /// <c>--no-prompt</c> → run without prompting (mirrors the Step-4 unified-install auto-yes
-    /// under unattended setup); otherwise the caller's interactive yes/no prompt decides.
+    /// The eligibility + policy decision for setup's import step (import past sessions machine-wide).
+    /// Guard order: auth requirements unsatisfied → skip; <c>--skip-import</c> → skip;
+    /// <c>--no-prompt</c> → run without prompting, since unattended setup must not block on a
+    /// question no one can answer; otherwise the caller's interactive yes/no prompt decides.
     /// </summary>
     public static ImportDecision DecideImport(
             bool authSatisfied, bool skipImport, bool noPrompt, Func<bool> promptYesNo) {

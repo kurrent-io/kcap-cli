@@ -19,10 +19,13 @@ session id outside the cohort, discard that row: never count it, link it, or men
 
 ## The safety rule — read this first
 
-Two id grammars gate everything below:
+Three grammars gate everything below:
 - **Run id** (a `(run: <id>)` token, and the file's own `run_id`): `^[0-9a-f]{32}$`.
 - **Session id** (`session_ids`, `foreground_succeeded_ids`, and any id you place in a query):
   `^[A-Za-z0-9_-]{1,128}$`.
+- **Repo hash** (the `repo_hash` field an analytics response returns, used only in the repo-scoped
+  link form): `^[0-9a-f]{16}$`. A `repo_hash` that fails this never reaches a link — fall back to
+  the no-repo-hash link form (section 7).
 
 The `kcap-analytics` MCP takes raw SQL text with no parameter binding, so the session-id grammar is
 the SQL-safety boundary, not just a format check. The class excludes quote, backslash, whitespace
@@ -177,11 +180,11 @@ evals can't be followed from here; your import continues and evals appear in the
 
 1. How to keep watching: prompt `Follow my kcap import` again (with the same `(run: <id>)` line
    when you were bound to one).
-2. Links: with a repo hash `<server_url>/repo/<repo_hash>/sessions/<session_id>?tab=evaluation`;
-   without one `<server_url>/sessions/<session_id>?tab=evaluation`; all results
-   `<server_url>/sessions`. No valid file → `server_url` from `kcap whoami`; if that fails too,
-   say the results live in the Capacitor server UI and that `kcap whoami` prints the URL once
-   logged in.
+2. Links: with a `repo_hash` matching `^[0-9a-f]{16}$`, `<server_url>/repo/<repo_hash>/sessions/<session_id>?tab=evaluation`;
+   otherwise (no `repo_hash`, or one that fails the grammar) `<server_url>/sessions/<session_id>?tab=evaluation`;
+   all results `<server_url>/sessions`. No valid file → `server_url` from `kcap whoami`; if that
+   fails too, say the results live in the Capacitor server UI and that `kcap whoami` prints the URL
+   once logged in.
 3. When `unattributed_on_disk` > 0: "N sessions on disk had no repository match; any of them that
    imported show without one — `kcap remap` places them."
 4. Offer the guided tour with the exact prompt `Start kcap guided tour`.

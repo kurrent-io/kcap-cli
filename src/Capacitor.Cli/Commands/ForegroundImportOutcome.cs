@@ -1,7 +1,5 @@
 namespace Capacitor.Cli.Commands;
 
-internal enum ForegroundCertainty { Complete, Incomplete }
-
 /// <summary>What setup knows after the foreground pass. Incomplete carries no counts: a pass that
 /// did not finish reported no partition, and everything selected is treated as not landed.</summary>
 internal sealed record ForegroundImportOutcome(

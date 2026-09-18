@@ -3,10 +3,6 @@ using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Commands;
 
-internal sealed record HandoffVendor(HarnessId Id, string Label, string? Executable) {
-    public bool Launchable => Executable is not null;
-}
-
 /// <summary>Which detected vendors can answer the eval-watch prompt: the skill must be where that
 /// vendor reads skills, the same oracle the guided-tour offer uses.</summary>
 internal static class HandoffVendorEligibility {

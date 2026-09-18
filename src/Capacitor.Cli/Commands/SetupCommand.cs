@@ -1228,8 +1228,8 @@ sealed class SetupCommand(
         }
     }
 
-    /// <summary>The foreground pass's session cap — the plan's chosen bound on how much of the
-    /// machine's history setup imports before handing the remainder to the background child.</summary>
+    /// <summary>The foreground pass's session cap: how many sessions setup imports inline before
+    /// handing the remainder of the machine's history to the background child.</summary>
     internal const int ForegroundImportCap = 5;
 
     /// <summary>Everything <see cref="RunImportStepAsync"/> needs, so the step is callable without
@@ -1255,8 +1255,8 @@ sealed class SetupCommand(
     internal sealed record ImportStepResult(bool Ran, string? RunId, HandoffDecision? Handoff, string? PasteBlock);
 
     /// <summary>
-    /// Step 6 (import past sessions, machine-wide), extracted from <see cref="HandleAsync"/> so it's
-    /// unit-testable without driving the whole wizard: discovery figures, the accept/decline prompt,
+    /// Setup's import step (import past sessions, machine-wide), extracted from <see cref="HandleAsync"/>
+    /// so it's unit-testable without driving the whole wizard: discovery figures, the accept/decline prompt,
     /// a capped foreground pass, a background child for the remainder, the eval-watch handoff
     /// decision and its file, and the agent picker. Every collaborator it calls
     /// (<see cref="ISetupImportRunner"/>, <see cref="IBackgroundImportSpawner"/>,
@@ -1328,7 +1328,7 @@ sealed class SetupCommand(
             if (run.Fault is { } ex) {
                 AnsiConsole.MarkupLine(
                     $"  [yellow]⚠[/] Import of past sessions failed: {Markup.Escape(ex.Message)}. Run [cyan]kcap import[/] manually to retry.");
-            } else if (run.ExitCode != 0) {
+            } else if (run.ExitCode != 0 || run.Outcome?.AnythingFailed == true) {
                 AnsiConsole.MarkupLine(
                     "  [yellow]⚠[/] Import of past sessions did not complete. Run [cyan]kcap import[/] manually to retry.");
             }
