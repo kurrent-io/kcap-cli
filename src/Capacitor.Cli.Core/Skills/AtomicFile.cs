@@ -6,9 +6,8 @@ public static class AtomicFile {
     public static void Replace(string path, string contents) {
         var tmp = path + ".tmp";
         try {
-            // Unlink whatever sits at the temp name — a planted symlink is removed, not followed —
-            // then create it exclusively (O_CREAT|O_EXCL) so a link re-planted in the gap is
-            // refused rather than written through.
+            // Delete unlinks rather than follows; the exclusive create (O_CREAT|O_EXCL) then
+            // refuses a link re-planted in the gap.
             File.Delete(tmp);
             using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
             using (var writer = new StreamWriter(stream))
