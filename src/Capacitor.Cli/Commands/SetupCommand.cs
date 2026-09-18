@@ -1435,7 +1435,8 @@ sealed class SetupCommand(
         if (line is not null) AnsiConsole.MarkupLine(line);
 
         if (reason is HandoffSuppressedReason.SkillNotInstalled or HandoffSuppressedReason.NoAgentDetected) {
-            var sessionsUrl = Markup.Escape($"{serverUrl.TrimEnd('/')}/sessions");
+            // Point at ended sessions: those are the ones far enough along to carry eval results.
+            var sessionsUrl = Markup.Escape($"{serverUrl.TrimEnd('/')}/sessions?status=ended");
             AnsiConsole.MarkupLine($"  Watch the import and its evals in the Capacitor UI: [cyan]{sessionsUrl}[/]");
 
             if (reason == HandoffSuppressedReason.SkillNotInstalled) {

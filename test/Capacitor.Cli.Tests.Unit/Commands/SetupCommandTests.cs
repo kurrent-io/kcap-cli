@@ -1142,7 +1142,7 @@ public class SetupCommandTests {
         var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(inputs);
 
         await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.SkillNotInstalled);
-        await Assert.That(console.Text).Contains("https://example.test/sessions");
+        await Assert.That(console.Text).Contains("https://example.test/sessions?status=ended");
         await Assert.That(console.Text).Contains("kcap plugin install");
     }
 
@@ -1156,7 +1156,7 @@ public class SetupCommandTests {
         var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(inputs);
 
         await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.NoAgentDetected);
-        await Assert.That(console.Text).Contains("https://example.test/sessions");
+        await Assert.That(console.Text).Contains("https://example.test/sessions?status=ended");
     }
 
     [Test]

@@ -464,7 +464,8 @@ matches decides; `--no-prompt` never reaches this table.
 The import's own outcome outranks the plan gate, so a denied plan never masks a failed import and the
 skill's retry advice is only ever given when a retry is warranted. Rows 1–4 print nothing beyond what
 the step already said; row 5 prints one line naming the reason; rows 6–7 name the reason and also
-print the results link (`{ServerUrl}/sessions`), since nothing is following the run for the user; row
+print the ended-sessions link (`{ServerUrl}/sessions?status=ended`, the sessions far enough along to
+carry eval results), since nothing is following the run for the user; row
 8 proceeds to the picker. Rows 1–7 add no eval-watch item to the Next-steps panel, which keeps exactly
 the items it has today — the server-setup item, and the guided-tour item when eligible.
 
@@ -481,7 +482,7 @@ skill, evaluated per vendor: Claude through the registered plugin marketplace pa
 Antigravity through their own skills directories, every other vendor through the shared
 `~/.agents/skills` tree. A vendor without the skill would receive a prompt nothing answers, so when
 the user declined step 4 or its install failed there is no paste block either: rows 6 and 7 print the
-results link (`{ServerUrl}/sessions`) so the import and its evals stay visible in the Capacitor UI
+ended-sessions link (`{ServerUrl}/sessions?status=ended`) so the import and its evals stay visible in the Capacitor UI
 with no agent following along; row 6 additionally names `kcap plugin install` (with the vendor flag)
 as the way to get the skill so a later run can follow automatically. Setup ends as today.
 
