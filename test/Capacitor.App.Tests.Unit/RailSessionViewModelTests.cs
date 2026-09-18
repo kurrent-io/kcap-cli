@@ -17,10 +17,10 @@ public class RailSessionViewModelTests {
 
     static AgentRow Row(
             string id = "a1", string kind = "agent", string vendor = "claude", string status = "Running",
-            string? model = "Opus 5", string? title = "Fix the flaky test", bool? awaitingInput = null) =>
+            string? model = "Opus 5", string? title = "Fix the flaky test", bool? awaitingInput = null, int? liveSubagents = null) =>
         AgentRow.FromLocal(
             new(id, kind, vendor, "/repo", status, null, null, null, DateTime.UtcNow, model, null,
-                Title: title, AwaitingInput: awaitingInput),
+                Title: title, AwaitingInput: awaitingInput, LiveSubagents: liveSubagents),
             Repo);
 
     static AgentRow LocalRow(string id) => Row(id: id);
@@ -244,6 +244,71 @@ public class RailSessionViewModelTests {
 
             stale.OnNext(false);
             await Assert.That(remote.IsStale).IsFalse();
+        });
+    }
+
+    /// The daemon's count keeps the row visibly busy while only subagents run.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Live_subagents_pulse_the_dot_and_name_the_count() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var two   = new RailSessionViewModel(Row(liveSubagents: 2), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            using var one   = new RailSessionViewModel(Row(liveSubagents: 1), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            using var none  = new RailSessionViewModel(Row(liveSubagents: 0), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            using var older = new RailSessionViewModel(Row(liveSubagents: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+
+            await Assert.That(two.DotPulses).IsTrue();
+            await Assert.That(two.Meta).EndsWith(" · 2 subagents");
+            await Assert.That(two.Tooltip).Contains("2 subagents running");
+            await Assert.That(one.DotPulses).IsTrue();
+            await Assert.That(one.Meta).EndsWith(" · 1 subagent");
+            await Assert.That(one.Tooltip).Contains("1 subagent running");
+            await Assert.That(none.DotPulses).IsFalse();
+            await Assert.That(none.Meta).DoesNotContain("subagent");
+            await Assert.That(none.Tooltip).DoesNotContain("subagent");
+            await Assert.That(older.DotPulses).IsFalse();
+            await Assert.That(older.Meta).DoesNotContain("subagent");
+            await Assert.That(older.Tooltip).DoesNotContain("subagent");
+        });
+    }
+
+    /// The wait badge and the pip answer for the parent as before, so a row can read as both
+    /// waiting on the user and busy.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Live_subagents_leave_the_wait_badge_and_the_pip_as_they_are() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var pending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
+            using var waiting = new RailSessionViewModel(Row(id: "a1", awaitingInput: true, liveSubagents: 2), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            using var busy    = new RailSessionViewModel(Row(id: "a2", awaitingInput: false, liveSubagents: 2), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+
+            await Assert.That(waiting.NeedsYou).IsTrue();
+            await Assert.That(waiting.ShowsIdleBadge).IsTrue();
+            await Assert.That(waiting.DotPulses).IsTrue();
+            await Assert.That(waiting.Tooltip).Contains("waiting for input");
+            await Assert.That(waiting.Tooltip).Contains("2 subagents running");
+            pending.OnNext(new HashSet<string> { "a1" });
+            await Assert.That(waiting.ShowsIdleBadge).IsFalse();
+
+            await Assert.That(busy.NeedsYou).IsFalse();
+            await Assert.That(busy.ShowsIdleBadge).IsFalse();
+            await Assert.That(busy.DotPulses).IsTrue();
+        });
+    }
+
+    /// A remote row carries no count and looks as it did; a pending row still pulses for its start.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_row_is_unchanged_and_a_pending_row_still_pulses() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var remote = new RailSessionViewModel(RemoteRow("r1"), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            var pendingRow = AgentRow.FromPending(new PendingLaunchDto("p1", "claude", "/repo", "t", DateTime.UtcNow, "spawned"), Repo);
+            using var pending = new RailSessionViewModel(pendingRow, new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+
+            await Assert.That(remote.DotPulses).IsFalse();
+            await Assert.That(remote.Meta).DoesNotContain("subagent");
+            await Assert.That(remote.Tooltip).DoesNotContain("subagent");
+            await Assert.That(pending.DotPulses).IsTrue();
         });
     }
 }

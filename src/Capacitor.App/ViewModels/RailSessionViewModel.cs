@@ -30,6 +30,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public bool IsRemote { get; }
     /// A launch the daemon has not published yet: Meta carries its stage instead of an age.
     public bool IsStarting { get; }
+    /// The status dot pulses while the launch is starting or while the daemon counts subagents
+    /// running under the session.
+    public bool DotPulses { get; }
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     internal DateTime CreatedAt { get; }
@@ -68,11 +71,14 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
         HasModel = Model is not null;
         IsStarting = row.Origin == AgentOrigin.Pending;
-        Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age);
+        var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
+        DotPulses = IsStarting || subagents is not null;
+        Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age, subagents);
         StatusDot = SessionStatusDots.For(row);
         Tooltip = IsStarting
             ? Join(row.Id, "Starting", LaunchStages.Label(row.LaunchStage))
             : Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
+                subagents is null ? null : $"{subagents} running",
                 row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
         MachineBadge = row.MachineBadge;
         IsRemote = row.Origin == AgentOrigin.Remote;
