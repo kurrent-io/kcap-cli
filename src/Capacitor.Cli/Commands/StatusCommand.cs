@@ -1,3 +1,5 @@
+using System.Net.Http.Json;
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -23,35 +25,15 @@ public sealed class StatusCommand(
         // doesn't double-print; respects the same opt-outs.
         await WriteVersionLineAsync(args);
 
-        // Server
-        Console.Write("  Server:  ");
-        var server = await ProbeServerAsync(baseUrl);
-
-        if (server.Url is null) {
-            await Console.Out.WriteLineAsync("not configured");
-        } else {
-            Console.Write($"{server.Url} ");
-            await Console.Out.WriteLineAsync(
-                server.Reachable is true ? "✓ reachable"
-                : server.StatusCode is { } code ? $"✗ HTTP {code}"
-                : "✗ unreachable");
-        }
+        // Server. The URL goes out ahead of the probe, which can take its whole timeout: a bare
+        // label would say nothing about what is being waited on.
+        Console.Write(baseUrl is null ? "  Server:  " : $"  Server:  {baseUrl} ");
+        var server = await ProbeServerAsync(http, baseUrl, config, time);
+        await Console.Out.WriteLineAsync(FormatReachability(server));
 
         // Auth
-        var auth = await ResolveAuthAsync(server.Url);
-
-        if (auth.MachineLine is not null) {
-            Console.WriteLine($"  Auth:    {auth.MachineLine}");
-        } else {
-            Console.Write("  Auth:    ");
-
-            await Console.Out.WriteLineAsync(auth.State switch {
-                "valid"        => $"{auth.Identity} ✓ token valid ({FormatExpiry(auth.ExpiresAt!.Value - time.GetUtcNow())})",
-                "expired"      => $"{auth.Identity} ✗ token expired (run: kcap login)",
-                "wrong_server" => $"✗ token was issued by {auth.IssuedServerUrl ?? "another server"} (run: kcap login)",
-                _              => "not authenticated (run: kcap login)",
-            });
-        }
+        var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
+        await Console.Out.WriteLineAsync($"  Auth:    {FormatAuthLine(auth, time.GetUtcNow())}");
 
         // Hooks
         await Console.Out.WriteAsync("  Hooks:   ");
@@ -70,13 +52,7 @@ public sealed class StatusCommand(
                 $"           {h.Label} installed but kcap not configured — run `{InstallCommandFor(h.Id)}`");
         }
 
-        // Daemon: read per-name PID files under
-        // ~/.config/kcap/daemons/ instead of the legacy singleton
-        // at ~/.config/kcap/agent.pid. The top-level `kcap status`
-        // must agree with `kcap daemon status`; previously this
-        // command kept saying "not running" while `daemon status` reported
-        // a healthy daemon because new daemons no longer write the legacy
-        // singleton.
+        // Daemon: the per-name PID files `kcap daemon status` reads, so the two agree.
         Console.Write("  Daemon:  ");
         await WriteAgentStatusAsync(store);
 
@@ -89,93 +65,145 @@ public sealed class StatusCommand(
     /// </summary>
     async Task<int> WriteJsonAsync(string[] args, string? baseUrl) {
         var (current, advisory, bundled) = await ResolveVersionAsync(args);
-        var server  = await ProbeServerAsync(baseUrl);
-        var auth    = await ResolveAuthAsync(server.Url);
-        var entries = ReadDaemonEntries(store);
-        var live    = entries.Where(e => e.Alive).ToList();
+        var server = await ProbeServerAsync(http, baseUrl, config, time);
+        var auth   = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
 
         // The exit-time footer is the human surface for this, and the payload already carries it.
         if (advisory.Newer) UpdateNotice.MarkReported();
 
-        var payload = new StatusJson(
-            StatusJsonRender.IsConfigured(server.Url, auth.State),
-            profiles.Name,
-            new StatusServerJson(server.Url, server.Url is null ? null : server.Reachable, server.StatusCode),
-            new StatusAuthJson(auth.State, auth.Identity, auth.ExpiresAt),
-            new StatusVersionJson(
-                current,
-                advisory is { Newer: true, Target: { } target } ? target : null,
-                advisory.ServerCapped,
-                bundled),
-            [.. harnesses.Select(h => new StatusHarnessJson(
-                h.VendorId,
-                harnesses.Detected(h.Id),
-                h.Signals.IsWired,
-                harnesses.Detected(h.Id) && !h.Signals.IsWired ? InstallCommandFor(h.Id) : null))],
-            new StatusDaemonJson(
-                live.Count > 0,
-                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid!.Value))],
-                entries.Count > live.Count));
+        var payload = BuildPayload(
+            profiles.Name, server, auth, current, advisory, bundled,
+            [.. harnesses.Select(h => {
+                var installed = harnesses.Detected(h.Id);
+                var wired     = h.Signals.IsWired;
+
+                return new StatusHarnessJson(h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null);
+            })],
+            ReadDaemonEntries(store));
 
         await Console.Out.WriteLineAsync(StatusJsonRender.Render(payload));
 
         return 0;
     }
 
+    /// <summary>Pure: the payload from facts already gathered. <c>configured</c> is decided from the
+    /// server URL and the auth state alone — reachability is reported, never consulted.</summary>
+    internal static StatusJson BuildPayload(
+            string profile, ServerReach server, AuthSnapshot auth, string current, UpdateAdvisory advisory, bool bundled,
+            IReadOnlyList<StatusHarnessJson> harnesses, IReadOnlyList<DaemonEntry> daemons) {
+        var live = daemons.Where(e => e.Alive).ToList();
+
+        return new StatusJson(
+            StatusJsonRender.IsConfigured(server.Url, auth.State),
+            profile,
+            new StatusServerJson(server.Url, server.Url is null ? null : server.Reachable, server.StatusCode),
+            new StatusAuthJson(auth.State.Wire, auth.Identity, auth.ExpiresAt),
+            new StatusVersionJson(
+                current,
+                advisory is { Newer: true, Target: { } target } ? target : null,
+                advisory.ServerCapped,
+                bundled),
+            harnesses,
+            new StatusDaemonJson(
+                live.Count > 0,
+                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid!.Value))],
+                daemons.Count > live.Count));
+    }
+
     /// <summary>Reachability, not authorization: a bearer would turn an unauthenticated-but-running
     /// server into a failure, and this probe reports the connection.</summary>
-    async Task<ServerProbe> ProbeServerAsync(string? baseUrl) {
-        if (baseUrl is null) return new ServerProbe(null, false, null);
+    internal static async Task<ServerReach> ProbeServerAsync(
+            ICapacitorHttpClient http, string? baseUrl, ConfigRoot config, TimeProvider time) {
+        if (baseUrl is null) return new ServerReach(null, false, null);
 
+        // Only an answer names the provider. Without one, the last successful discovery on disk
+        // stands in, so a server that asks for no auth stays set up through an outage. Discovery's
+        // own fallback is not used here: it answers "None" for an unreachable server with an empty
+        // token store, which would call a machine nobody set up configured.
         try {
             using var client = http.Anonymous();
             client.Timeout = TimeSpan.FromSeconds(5);
-            var resp = await client.GetAsync($"{baseUrl}/auth/config");
+            using var resp = await client.GetAsync($"{baseUrl}/auth/config");
 
-            return new ServerProbe(baseUrl, resp.IsSuccessStatusCode, resp.IsSuccessStatusCode ? null : (int)resp.StatusCode);
+            return resp.IsSuccessStatusCode
+                ? new ServerReach(baseUrl, true, null, await AnnouncedProviderAsync(resp) ?? LastKnownProvider())
+                : new ServerReach(baseUrl, false, (int)resp.StatusCode, LastKnownProvider());
         } catch {
-            return new ServerProbe(baseUrl, false, null);
+            return new ServerReach(baseUrl, false, null, LastKnownProvider());
+        }
+
+        string? LastKnownProvider() => AuthProviderCache.TryGet(baseUrl, config, time);
+    }
+
+    /// <summary>Read the way discovery reads it, so both agree on what a server announced: a body
+    /// with no provider is <see cref="AuthProvider.None"/>. Null when the body is not that document.</summary>
+    static async Task<string?> AnnouncedProviderAsync(HttpResponseMessage resp) {
+        try {
+            var config = await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AuthDiscoveryResponse);
+
+            return config?.Provider ?? AuthProvider.None;
+        } catch (Exception e) when (e is JsonException or NotSupportedException) {
+            return null;
         }
     }
 
+    internal static string FormatReachability(ServerReach server) =>
+        server.Url is null ? "not configured"
+        : server.Reachable ? "✓ reachable"
+        : server.StatusCode is { } code ? $"✗ HTTP {code}"
+        : "✗ unreachable";
+
     /// <summary>
-    /// A machine-credential diversion REPLACES the token-store answer rather than adding to it: with
+    /// Decided in the order the credential lane picks a source — no auth, then the machine, then the
+    /// token store — and each one REPLACES the ones after it rather than adding to them. With
     /// KCAP_CLIENT_ID/KCAP_CLIENT_SECRET in the environment, MachineAuth.Intended bypasses the token
     /// store entirely, so its state is not what this CLI authenticates with. Reporting both would
     /// show a headless runner as recording as the machine AND not authenticated, contradictory and
     /// with irrelevant remediation.
     /// </summary>
-    async Task<AuthSnapshot> ResolveAuthAsync(string? serverUrl) {
+    internal static async Task<AuthSnapshot> ResolveAuthAsync(
+            TokenStore tokens, MachineAuth machine, string profile, ServerReach server) {
+        if (server.Provider == AuthProvider.None) return new AuthSnapshot(StatusAuthState.NotRequired);
+
         // Diversion is deliberately raised by EITHER variable, so that a half-configured runner is
         // diagnosed rather than sent to `kcap login` it cannot run. Only both halves authenticate,
         // which is the difference between "records as the machine" and "nothing records".
         if (machine.Diversion is { } diversion)
             return new AuthSnapshot(
-                machine.TryRead(out _) is not null ? "machine" : "machine_incomplete", null, null, diversion, null);
+                machine.TryRead(out _) is not null ? StatusAuthState.Machine : StatusAuthState.MachineIncomplete,
+                MachineLine: diversion);
 
         // With no server there is nothing to bind a token to, so validity is all that can be said.
-        if (serverUrl is null) {
-            if (await tokenStore.GetValidTokensForProfileAsync(profiles.Name) is { } unbound)
-                return new AuthSnapshot("valid", unbound.GitHubUsername, unbound.ExpiresAt, null, null);
+        if (server.Url is null) {
+            if (await tokens.GetValidTokensForProfileAsync(profile) is { } unbound)
+                return new AuthSnapshot(StatusAuthState.Valid, unbound.GitHubUsername, unbound.ExpiresAt);
 
-            var stored = await tokenStore.LoadForProfileAsync(profiles.Name);
-
-            return stored is not null
-                ? new AuthSnapshot("expired", stored.GitHubUsername, null, null, null)
-                : new AuthSnapshot("none", null, null, null, null);
+            return await tokens.LoadForProfileAsync(profile) is { } stored
+                ? new AuthSnapshot(StatusAuthState.Expired, stored.GitHubUsername)
+                : new AuthSnapshot(StatusAuthState.None);
         }
 
         // The server-aware accessor, not the profile-only one: a token bound elsewhere is withheld
         // before any request, so reporting it as valid would promise access that never happens.
-        var resolved = await tokenStore.GetValidTokensForServerAsync(profiles.Name, serverUrl);
+        var resolved = await tokens.GetValidTokensForServerAsync(profile, server.Url);
 
         return resolved.Status switch {
-            AuthStatus.Ok          => new AuthSnapshot("valid", resolved.Tokens!.GitHubUsername, resolved.Tokens.ExpiresAt, null, null),
-            AuthStatus.WrongServer => new AuthSnapshot("wrong_server", null, null, null, resolved.IssuedServerUrl),
-            AuthStatus.Expired     => new AuthSnapshot("expired", (await tokenStore.LoadForProfileAsync(profiles.Name))?.GitHubUsername, null, null, null),
-            _                      => new AuthSnapshot("none", null, null, null, null),
+            AuthStatus.Ok          => new AuthSnapshot(StatusAuthState.Valid, resolved.Tokens!.GitHubUsername, resolved.Tokens.ExpiresAt),
+            AuthStatus.WrongServer => new AuthSnapshot(StatusAuthState.WrongServer, IssuedServerUrl: resolved.IssuedServerUrl),
+            AuthStatus.Expired     => new AuthSnapshot(StatusAuthState.Expired, (await tokens.LoadForProfileAsync(profile))?.GitHubUsername),
+            _                      => new AuthSnapshot(StatusAuthState.None),
         };
     }
+
+    internal static string FormatAuthLine(AuthSnapshot auth, DateTimeOffset now) => auth.State switch {
+        StatusAuthState.NotRequired => "not required — this server asks for no auth",
+        StatusAuthState.Machine or StatusAuthState.MachineIncomplete
+                                    => auth.MachineLine!,
+        StatusAuthState.Valid       => $"{auth.Identity} ✓ token valid ({FormatExpiry(auth.ExpiresAt!.Value - now)})",
+        StatusAuthState.Expired     => $"{auth.Identity} ✗ token expired (run: kcap login)",
+        StatusAuthState.WrongServer => $"✗ token was issued by {auth.IssuedServerUrl ?? "another server"} (run: kcap login)",
+        StatusAuthState.None        => "not authenticated (run: kcap login)",
+    };
 
     /// <summary>The version facts behind the Version line, without printing it.</summary>
     async Task<(string Current, UpdateAdvisory Advisory, bool Bundled)> ResolveVersionAsync(string[] args) {
@@ -201,10 +229,14 @@ public sealed class StatusCommand(
     static string InstallCommandFor(HarnessId id) =>
         id.PluginInstallFlag is { } flag ? $"kcap plugin install {flag}" : "kcap plugin install";
 
-    sealed record ServerProbe(string? Url, bool Reachable, int? StatusCode);
+    /// <param name="StatusCode">Set only when the server answered with a failure status.</param>
+    /// <param name="Provider">The auth provider the server announces, or null when that is not
+    /// known. Never a guess: an unanswered probe leaves it to the last answer on disk.</param>
+    internal sealed record ServerReach(string? Url, bool Reachable, int? StatusCode, string? Provider = null);
 
-    sealed record AuthSnapshot(
-        string State, string? Identity, DateTimeOffset? ExpiresAt, string? MachineLine, string? IssuedServerUrl);
+    internal sealed record AuthSnapshot(
+        StatusAuthState State, string? Identity = null, DateTimeOffset? ExpiresAt = null, string? MachineLine = null,
+        string? IssuedServerUrl = null);
 
     async Task WriteVersionLineAsync(string[] args) {
         Console.Write("  Version: ");
@@ -338,7 +370,7 @@ public sealed class StatusCommand(
     }
 
     /// <param name="Pid">Null when the marker is present but carries no usable PID.</param>
-    sealed record DaemonEntry(string Name, int? Pid, bool Alive);
+    internal sealed record DaemonEntry(string Name, int? Pid, bool Alive);
 
     /// <summary>
     /// Renders the Hooks status line: every harness, wired or not, in registry order. What "wired"

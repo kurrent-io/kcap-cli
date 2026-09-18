@@ -29,8 +29,8 @@ measures a height.
 ## Status answers the one question a tool driving setup is asking
 
 `kcap status --json` reports what the text lines report, and adds the question none of them answers
-outright: is this machine set up. `configured` is true when a server is set and this CLI holds
-credentials for it, and stays true when that server is unreachable -- reachability is a network fact,
+outright: is this machine set up. `configured` is true when a server is set and this CLI can
+authenticate to it, and stays true when that server is unreachable -- reachability is a network fact,
 and a tool that read it as "not set up" would send someone through setup again over a dropped VPN.
 Whether the server still accepts those credentials is `kcap whoami`'s question, and it is left there
 rather than answered twice.
@@ -42,6 +42,20 @@ both halves authenticate, so one half is its own state and is not configured. A 
 another server is withheld before the request is sent, so it is reported as the wrong server rather
 than as valid; status asks the server-aware accessor the same way an outgoing request does. Whether
 the server still accepts a correctly bound token stays `whoami`'s question.
+
+The opposite mistake is a server that asks for no auth. The credential lane checks the announced
+provider before it looks for any credential, so such a server is fully usable with an empty token
+store; judged on credentials alone it would read as never set up, and a tool gating setup on
+`configured` would run it on every call. Status resolves auth in the lane's own order -- no auth, then
+the machine, then the token store -- and `not_required` is configured. The provider comes from the
+probe's own answer, which is the document that announces it, at no extra round trip. When the probe
+gets no answer the last successful discovery on disk stands in, so an outage does not unconfigure
+such a server. Discovery's outage fallback is deliberately not used: it answers "None" for an
+unreachable server with an empty token store, which would call a machine nobody set up configured.
+
+The auth states are an enum with a wire spelling rather than strings shared between the resolver, the
+text line and `configured`. A switch that misses a named value is a build error here, so a new state
+cannot fall through to "not authenticated" unnoticed.
 
 The daemon sweep now validates the recorded start token, the way `daemon status` and `doctor` do, so
 a recycled PID cannot present a foreign process as a running daemon. A marker that is present but
