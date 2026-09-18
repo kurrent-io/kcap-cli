@@ -15,5 +15,7 @@ namespace LiquidGlassAvaloniaUI
             if (Interlocked.Exchange(ref s_reported, 1) == 0)
                 Unavailable?.Invoke(reason);
         }
+
+        public static void ResetForTesting() => Interlocked.Exchange(ref s_reported, 0);
     }
 }

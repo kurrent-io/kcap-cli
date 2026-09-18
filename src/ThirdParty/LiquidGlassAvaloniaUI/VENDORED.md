@@ -15,7 +15,8 @@ from the .NET analyzers, through `src/ThirdParty/Directory.Build.props`.
 
 - `LiquidGlassAvaloniaUI.csproj` — targets `net10.0` and takes package versions from the
   repo's central pins. Upstream targets `net8.0` on Avalonia 12.0.1.
-- `LiquidGlassPipeline.cs` — new. A public `Unavailable` event raised once per process.
+- `LiquidGlassPipeline.cs` — new. A public `Unavailable` event raised once per process, with a
+  `ResetForTesting` that puts the latch back to unreported.
 
 ## Patches to upstream files
 

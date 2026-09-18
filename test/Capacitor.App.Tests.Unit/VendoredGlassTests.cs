@@ -32,8 +32,12 @@ public class VendoredGlassTests {
         }
     });
 
+    /// One report per process reaches subscribers. The latch is reset here because the render
+    /// test beside it (a mutable static in vendored production code) can consume it first.
     [Test]
+    [NotInParallel]
     public async Task The_pipeline_reports_unavailability_once() {
+        LiquidGlassPipeline.ResetForTesting();
         var reasons = new List<string>();
         void Handler(string reason) => reasons.Add(reason);
         LiquidGlassPipeline.Unavailable += Handler;
@@ -43,6 +47,6 @@ public class VendoredGlassTests {
         } finally {
             LiquidGlassPipeline.Unavailable -= Handler;
         }
-        await Assert.That(reasons.Count).IsLessThanOrEqualTo(1);
+        await Assert.That(reasons.Count).IsEqualTo(1);
     }
 }
