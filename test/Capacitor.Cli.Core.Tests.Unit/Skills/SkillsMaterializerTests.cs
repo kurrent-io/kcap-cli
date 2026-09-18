@@ -78,13 +78,33 @@ public class SkillsMaterializerTests {
     [Test]
     public async Task A_prune_outside_the_anchor_is_refused() {
         var anchor  = Tmp.CreateDir("repo");
-        var root    = Tmp.CreateDir("repo/.agents/skills");
-        var outside = Tmp.CreateDir("global/kcap-x");
+        var outside = Tmp.CreateDir("global/skills");
+        Tmp.CreateDir("global/skills/kcap-x");
+        var root = Path.Combine(anchor, ".agents", "skills");
+        Directory.CreateDirectory(Path.GetDirectoryName(root)!);
+        Directory.CreateSymbolicLink(root, outside);
 
-        var pruned = SkillsMaterializer.Prune(root, anchor, outside);
+        // The root itself is the link, so the lexical parent-equality and kcap- prefix checks both
+        // pass on this path — only the resolved containment check can refuse it.
+        var pruned = SkillsMaterializer.Prune(root, anchor, Path.Combine(root, "kcap-x"));
 
         await Assert.That(pruned).IsFalse();
-        await Assert.That(Directory.Exists(outside)).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(outside, "kcap-x"))).IsTrue();
+    }
+
+    [Test]
+    public async Task A_symlink_planted_at_the_temp_name_is_not_published_through() {
+        var anchor = Tmp.CreateDir("repo");
+        var root   = Tmp.CreateDir("repo/.agents/skills");
+        var dir    = SkillsMaterializer.SkillDirFor(root, "x");
+        Directory.CreateDirectory(dir);
+        var outsideFile = Tmp.CreateFile("global/secret.txt", "outside content");
+        File.CreateSymbolicLink(SkillsMaterializer.SkillFileFor(dir) + ".tmp", outsideFile);
+
+        SkillsMaterializer.Write(root, anchor, Item("x"));
+
+        await Assert.That(File.ReadAllText(outsideFile)).IsEqualTo("outside content");
+        await Assert.That(new FileInfo(SkillsMaterializer.SkillFileFor(dir)).LinkTarget).IsNull();
     }
 }
 
