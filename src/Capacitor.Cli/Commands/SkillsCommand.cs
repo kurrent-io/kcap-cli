@@ -140,7 +140,10 @@ class SkillsCommand(
             : attempt.Code;
     }
 
-    async Task<(int Code, bool Settled, bool NeedsMigration)> AttemptTargetAsync(
+    /// <summary>One attempt at one target, under the locks <paramref name="takeMigration"/> selects.
+    /// <c>NeedsMigration</c> means the locked read contradicted the lock-free peek that chose them,
+    /// so the caller owes one retry with the migration lock held.</summary>
+    internal async Task<(int Code, bool Settled, bool NeedsMigration)> AttemptTargetAsync(
             SkillsTarget target, string anchor, string gitDir, string hash, string repoHome,
             SkillsIdentity identity, bool dryRun, bool auto, bool takeMigration) {
         void Info(string line) { if (!auto) Console.WriteLine(line); }
@@ -663,10 +666,12 @@ class SkillsCommand(
     /// must not act on a superseded copy holds the lock that owns the file first.</summary>
     static SkillsManifest? LoadQuietly(string path) {
         try {
-            // FileShare.ReadWrite: a plain read denies Write to every other handle, and on Windows
-            // that sharing is mandatory — this file has a concurrent writer by design, whose atomic
-            // replace would fail mid-publication.
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            // A plain read denies Write and Delete to every other handle, and on Windows that
+            // sharing is mandatory — this file has a concurrent writer by design, and its atomic
+            // replace renames over the destination, so both must be shared or the publication
+            // fails inside this read's window.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                              FileShare.ReadWrite | FileShare.Delete);
             return JsonSerializer.Deserialize(stream, CapacitorJsonContext.Default.SkillsManifest);
         } catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) {
             return null;
