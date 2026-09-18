@@ -3,9 +3,10 @@ namespace Capacitor.Cli.Core;
 /// <summary>A realpath-style walk: every component is resolved, not only the leaf, because an
 /// ancestor symlink is how a path outside a boundary textually matches one inside it.</summary>
 public static class CanonicalPath {
-    // A symlink cycle can't loop forever: cap total resolution steps and return the best-resolved
-    // path on hitting the cap. 40 mirrors the common OS-level MAXSYMLINKS limit, so a chain this
-    // walk refuses is one the kernel would refuse too.
+    // A symlink cycle can't loop forever: cap the components this walk resolves and return the
+    // best-resolved path on hitting the cap. 40 is the common OS-level MAXSYMLINKS limit, but the
+    // counter charges a plain component too, so a path of more than 40 segments also comes back
+    // partly unresolved.
     const int MaxResolveSteps = 40;
 
     public static string Resolve(string path) => RealPath(Path.GetFullPath(path));

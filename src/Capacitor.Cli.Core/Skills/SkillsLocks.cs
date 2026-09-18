@@ -3,8 +3,10 @@ using System.Text;
 
 namespace Capacitor.Cli.Core.Skills;
 
-/// <summary>Lock names for skills materialization. Always acquired in this order — migration, then
-/// repository, then manifest — and no shared lock is ever held across a network request.</summary>
+/// <summary>Lock names for skills materialization. One pair ever nests — migration outside the
+/// per-worktree manifest lock, never the other way round. The repository lock is taken alone,
+/// before any target starts and while nothing else is held, so it nests with neither. No shared
+/// lock is ever held across a network request.</summary>
 public static class SkillsLocks {
     /// <summary>One key for the machine: a legacy global directory can be owned by two repositories,
     /// so two keys would let each observe the other as the remaining owner and neither delete it.
