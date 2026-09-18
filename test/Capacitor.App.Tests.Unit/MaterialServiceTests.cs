@@ -94,4 +94,35 @@ public class MaterialServiceTests {
         await Assert.That(unknown.Current.Requested).IsNull();
         await Assert.That(unknown.Current.Effective).IsEqualTo(SurfaceMaterial.SoftGlass);
     }
+
+    [Test]
+    public async Task A_failure_on_a_machine_that_cannot_do_glass_reports_no_reason() {
+        var service = new MaterialService(new InMemoryAppStateStore(), new MaterialEnvironment(false, false), SurfaceMaterial.SoftGlass);
+        service.ReportPipelineFailure("no lease");
+
+        await Assert.That(service.Current.Availability).IsEqualTo(MaterialAvailability.NotCapable);
+        await Assert.That(service.Current.FailureReason).IsNull();
+        await Assert.That(service.Current.Effective).IsEqualTo(SurfaceMaterial.Opaque);
+    }
+
+    /// Cannot prove the absence of a race: pins only that the final state keeps the failure
+    /// whatever the interleaving of SetAsync and ReportPipelineFailure.
+    [Test]
+    public async Task Concurrent_set_and_failure_never_lose_the_failure() {
+        var service = new MaterialService(new InMemoryAppStateStore(), Mac, SurfaceMaterial.SoftGlass);
+
+        var setLoop = Task.Run(async () => {
+            for (var i = 0; i < 200; i++)
+                await service.SetAsync(i % 2 == 0 ? SurfaceMaterial.SoftGlass : SurfaceMaterial.LiquidGlass);
+        });
+        var reportFailure = Task.Run(async () => {
+            await Task.Yield();
+            service.ReportPipelineFailure("no lease");
+        });
+        await Task.WhenAll(setLoop, reportFailure);
+
+        await Assert.That(service.Current.Availability).IsEqualTo(MaterialAvailability.PipelineFailed);
+        await Assert.That(service.Current.FailureReason).IsEqualTo("no lease");
+        await Assert.That(service.Current.Effective).IsEqualTo(SurfaceMaterial.Opaque);
+    }
 }

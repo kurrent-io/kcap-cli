@@ -42,10 +42,13 @@ public sealed class MaterialService : IMaterialService, IDisposable {
         Publish();
     }
 
+    // Publishes are serialized with the mutations that cause them, because SetAsync resumes off
+    // the UI thread and can race ReportPipelineFailure.
     void Publish() {
-        MaterialState next;
-        lock (_gate) next = Resolve();
-        if (next != _states.Value) _states.OnNext(next);
+        lock (_gate) {
+            var next = Resolve();
+            if (next != _states.Value) _states.OnNext(next);
+        }
     }
 
     MaterialState Resolve() {
@@ -54,7 +57,8 @@ public sealed class MaterialService : IMaterialService, IDisposable {
             : MaterialAvailability.Available;
         var effective = availability != MaterialAvailability.Available ? SurfaceMaterial.Opaque
             : _requested ?? (_environment.ReduceTransparency ? SurfaceMaterial.Opaque : SurfaceMaterial.SoftGlass);
-        return new MaterialState(effective, _requested, availability, _failure, _environment.ReduceTransparency);
+        var reason = availability == MaterialAvailability.PipelineFailed ? _failure : null;
+        return new MaterialState(effective, _requested, availability, reason, _environment.ReduceTransparency);
     }
 
     public void Dispose() => _states.Dispose();
