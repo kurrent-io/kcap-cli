@@ -40,6 +40,9 @@ public class ChatTabViewSmokeTests {
     static readonly TimeSpan CrDelay = TimeSpan.FromMilliseconds(150);
     const string ReadCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/repo/x/src/a.cs"}}]}}""";
     const string ReadResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}}""";
+    const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+    const string AgentLaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
+    const string AgentFinishLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}}""";
 
     static string CallLine(int n) => ToolCallLine.Replace("\"t1\"", $"\"t{n}\"");
     static string ResultLine(int n) => ToolResultLine.Replace("\"t1\"", $"\"t{n}\"");
@@ -95,6 +98,7 @@ public class ChatTabViewSmokeTests {
         public FakeTerminalAttachClientFactory Attach { get; } = new();
         public RecordingOpener Opener { get; } = new();
         public FakePermissionService Permissions { get; } = new();
+        public SessionSubagents Subagents { get; }
         public TerminalTabViewModel Terminal { get; }
         public ChatTabViewModel Chat { get; }
         public ChatTabView View { get; }
@@ -107,9 +111,10 @@ public class ChatTabViewSmokeTests {
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
         public Host(bool show = true) {
+            Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions);
+                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Subagents);
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;
@@ -1338,6 +1343,34 @@ public class ChatTabViewSmokeTests {
             await Assert.That(host.Composer.Text).IsEqualTo("pasted text");
             await Assert.That(host.Chat.ComposerText).IsEqualTo("pasted text");
             await Assert.That(host.Chat.Tray.Count).IsEqualTo(1);
+            await host.CloseAsync();
+        });
+    }
+
+    /// The strip sits in its own row between the activity note and the queue banner, shows one
+    /// line with the pulsing dot while anything runs, and leaves with the last finish.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_subagents_banner_is_hidden_at_zero_and_shows_the_summary_above_the_queue_banner() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var banner = host.View.FindControl<Border>("SubagentsBanner")!;
+            var queued = host.View.FindControl<Border>("QueuedMessagesBanner")!;
+            var note = host.View.FindControl<StackPanel>("ChatActivityNote")!;
+            await Assert.That(banner.IsVisible).IsFalse();
+            await Assert.That(Grid.GetRow(note)).IsLessThan(Grid.GetRow(banner));
+            await Assert.That(Grid.GetRow(banner)).IsLessThan(Grid.GetRow(queued));
+            await Assert.That(Grid.GetRow(queued)).IsLessThan(Grid.GetRow(host.View.FindControl<Border>("ComposerCard")!));
+
+            var path = Tmp.CreateFile("sub.jsonl", [AgentCallLine, AgentLaunchLine]);
+            await host.LoadAsync(path);
+            await Assert.That(banner.IsVisible).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "1 subagent running" && t.IsEffectivelyVisible)).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<Border>().Any(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsTrue();
+            await Assert.That(queued.IsVisible).IsFalse();
+
+            await host.AppendLinesAndTickAsync(path, AgentFinishLine);
+            await Assert.That(banner.IsVisible).IsFalse();
             await host.CloseAsync();
         });
     }

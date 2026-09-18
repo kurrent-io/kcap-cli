@@ -191,4 +191,57 @@ public class ClaudeTranscriptEventsTests {
         await Assert.That(second).IsNotNull();
         await Assert.That(ReferenceEquals(first, second)).IsFalse();
     }
+
+    const string LaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
+
+    [Test]
+    public async Task A_single_result_lines_toolUseResult_object_rides_the_extension_unchanged() {
+        var e = E(LaunchLine);
+        await Assert.That(e).Count().IsEqualTo(1);
+        var slug = SchemaExtensions.Slug(e[0].Payload, "claude_code");
+        await Assert.That(slug).IsNotNull();
+        var result = slug!.Fields["tool_use_result"].StructValue;
+        await Assert.That(result.Fields["status"].StringValue).IsEqualTo("async_launched");
+        await Assert.That(result.Fields["agentId"].StringValue).IsEqualTo("a9f262478e032f427");
+        await Assert.That(result.Fields["isAsync"].BoolValue).IsTrue();
+        await Assert.That(result.Fields["description"].StringValue).IsEqualTo("Map desktop chat UI surfaces");
+        await Assert.That(result.Fields["prompt"].StringValue).IsEqualTo("go");
+        await Assert.That(result.Fields.Count).IsEqualTo(5);
+        await Assert.That(((ToolResultReceived)e[0].Payload).Result).IsEqualTo("Async agent launched successfully.");
+    }
+
+    [Test]
+    public async Task A_line_without_toolUseResult_or_with_a_non_object_one_adds_no_key() {
+        var none = E("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""");
+        await Assert.That(SchemaExtensions.Slug(none[0].Payload, "claude_code")).IsNull();
+
+        foreach (var value in new[] { "\"text\"", "42", "[1]", "null", "true" }) {
+            var e = E($$$"""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":{{{value}}}}""");
+            await Assert.That(SchemaExtensions.Slug(e[0].Payload, "claude_code")).IsNull().Because(value);
+        }
+
+        var error = E("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"x","is_error":true}]},"toolUseResult":"Error: x"}""");
+        var slug = SchemaExtensions.Slug(error[0].Payload, "claude_code");
+        await Assert.That(SchemaExtensions.Flag(slug, "is_error")).IsTrue();
+        await Assert.That(slug!.Fields.ContainsKey("tool_use_result")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_multi_result_line_puts_toolUseResult_on_no_result() {
+        var e = E("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"a"},{"type":"tool_result","tool_use_id":"t2","content":"b"}]},"toolUseResult":{"status":"async_launched","agentId":"x"}}""");
+        await Assert.That(e).Count().IsEqualTo(2);
+        await Assert.That(SchemaExtensions.Slug(e[0].Payload, "claude_code")).IsNull();
+        await Assert.That(SchemaExtensions.Slug(e[1].Payload, "claude_code")).IsNull();
+    }
+
+    /// The ids hash the record id and block index only, so the extension can never move one.
+    [Test]
+    public async Task The_tool_use_result_extension_leaves_event_ids_alone() {
+        var withUuid = E($$$"""{"type":"user","uuid":"{{{Uuid}}}","message":{"content":[{"type":"text","text":"x"},{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":{"status":"async_launched","agentId":"x"}}""");
+        await Assert.That(withUuid[0].EventId).IsEqualTo(Guid.Parse(Uuid));
+        await Assert.That(SchemaExtensions.Slug(withUuid[0].Payload, "claude_code")).IsNotNull();
+
+        const string fallback = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":{"status":"async_launched","agentId":"x"}}""";
+        await Assert.That(E(fallback, 9)[0].EventId).IsEqualTo(TranscriptIds.ClaudeFallback(9, fallback));
+    }
 }

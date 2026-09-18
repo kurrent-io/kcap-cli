@@ -4,6 +4,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
@@ -49,6 +50,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly Action<string>? _openWorkItem;
+    readonly SessionSubagents _subagents;
     readonly BehaviorSubject<bool> _canOpenWorkItem = new(false);
     readonly CompositeDisposable _disposables = new();
     readonly List<ReadLease> _outstanding = [];
@@ -75,6 +77,23 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string SessionIdText { get => _sessionIdText; private set => this.RaiseAndSetIfChanged(ref _sessionIdText, value); }
     string _sessionSummaryLine = "—";
     public string SessionSummaryLine { get => _sessionSummaryLine; private set => this.RaiseAndSetIfChanged(ref _sessionSummaryLine, value); }
+
+    /// The session's subagents, shared with the chat tab; a session-local fact like the ones
+    /// under SESSION, so it renders in every pane phase.
+    public IAvaloniaReadOnlyList<SubagentRow> Subagents => _subagents.Rows;
+    public bool HasSubagents => _subagents.Rows.Count > 0;
+    public string SubagentsHeader {
+        get {
+            var running = _subagents.RunningCount;
+            var total = _subagents.Rows.Count;
+            return running > 0 ? $"{running} running · {total} total" : $"{total} total";
+        }
+    }
+
+    void RefreshSubagents() {
+        this.RaisePropertyChanged(nameof(HasSubagents));
+        this.RaisePropertyChanged(nameof(SubagentsHeader));
+    }
 
     WorkContextPhase _phase = WorkContextPhase.WaitingForSession;
     public WorkContextPhase Phase {
@@ -142,11 +161,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
-            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, Action<string>? openWorkItem = null) {
+            SessionSubagents subagents, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
+            Action<string>? openWorkItem = null) {
         _source = source;
         _opener = opener;
         _time = time;
         _openWorkItem = openWorkItem;
+        _subagents = subagents;
+        _subagents.Changed += RefreshSubagents;
         InitializeProjections();
         _disposables.Add(_hasSessionChanges);
         _disposables.Add(_canOpenWorkItem);
@@ -299,6 +321,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public async Task TeardownAsync() {
         if (_tornDown) return;
         _tornDown = true;
+        _subagents.Changed -= RefreshSubagents;
         _timer?.Dispose();
         _timer = null;
         _disposables.Dispose();

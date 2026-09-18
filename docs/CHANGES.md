@@ -6,6 +6,32 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The desktop chat shows a session's subagents
+
+A Claude session's subagents are read off the transcript alone: an `Agent` or `Task` call starts a
+row, a result whose `toolUseResult.status` is `async_launched` marks it background and binds the
+agent id, a task-notification or a `TaskStop` result ends it. The evidence is the same on both
+lanes because the leaf writes the root `toolUseResult` of a single-result line into the
+`claude_code` extension as `tool_use_result` — the key and content kcap-server's normalizer already
+persists — so sessions the server ingested earlier list their subagents as well. On a line with
+several results the object names none of them and is written on none.
+
+The facts ride a third member of `ChatProjectionResult`, beside the rows, rather than on the wire
+envelope: `AcpEventEnvelope` is mirrored on the server with a per-field compat guard, and a display
+fact only the desktop reads has no business there. The side-band also keeps "which tool names spawn
+a subagent" in the vendor's rules, so Codex or Gemini can join without an app-side table. A
+task-notification is recognised by `origin_kind` or by its opening tag, because the server's events
+carry no `origin_kind`; the same predicate serves the row filter, the input echo and the signal.
+
+The tracker ends a row on transcript evidence only. Without a terminal result, a notification or a
+`TaskStop` result the row runs until the session ends — the web's 15-minute quiet reaper is not
+copied, since it would also end a quiet subagent that is still working. Session end is a view over
+the rows, not a transition: a running row presents as stopped with no duration while the lane says
+nothing more will arrive, a real finish in the final drain still settles it, and a remote row that
+comes back turns the presentation off again. A repeated notification for an earlier execution never
+ends a later launch of the same agent id: a known call id decides alone, and an agent-id-only finish
+dated before the row started belongs to an earlier execution.
+
 ## The pull request reader renders GitHub-flavoured markdown
 
 Review bots write their findings almost entirely in HTML, and the reader showed the markup as
