@@ -36,6 +36,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
                 <ResourceInclude Source="avares://Kurrent Capacitor/Controls/GlassLayer.axaml" />
+                <ResourceInclude Source="avares://Kurrent Capacitor/Controls/Surface.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
@@ -407,5 +408,6 @@
             </Style.Animations>
         </Style>
         <StyleInclude Source="avares://Kurrent Capacitor/Controls/GlassStyles.axaml" />
+        <StyleInclude Source="avares://Kurrent Capacitor/Controls/SurfaceStyles.axaml" />
     </Application.Styles>
 </Application>
