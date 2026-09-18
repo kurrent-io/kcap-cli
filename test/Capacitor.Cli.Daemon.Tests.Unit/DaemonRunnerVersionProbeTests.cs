@@ -102,20 +102,56 @@ public class DaemonRunnerVersionProbeTests {
         using var tmp = new TempDir();
         // Prints the version, then leaves a child holding the inherited stdout open after the CLI
         // itself exits — the shape that made ProbeCliVersionOnce block on a drain that never saw EOF.
+        // The stub records the descendant's pid so the test can reap it: once reparented it is no
+        // longer anyone's child, and left alone it outlives the test host into teardown. The sidecar
+        // path comes from the fixture so the shell writer and the reaper cannot drift apart.
+        var pidFile = tmp.PathTo("faketool.pid");
         var cli = tmp.CreateFile(
-            "faketool", "#!/bin/sh\necho 'faketool 9.9.9'\nsleep 20 &\nexit 0\n");
+            "faketool", $"#!/bin/sh\necho 'faketool 9.9.9'\nsleep 20 &\necho $! > '{pidFile}'\nexit 0\n");
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var version = await Task.Run(() => DaemonRunner.ProbeCliVersionForLaunch(cli));
-        sw.Stop();
+        string? version = null;
+        try {
+            version = await Task.Run(() => DaemonRunner.ProbeCliVersionForLaunch(cli));
+            sw.Stop();
 
-        // Bounded: a return well under the descendant's 20s lifetime proves the drain was not blocked
-        // to an EOF that never comes.
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(12));
-        // Recovered: the version printed ahead of the block survives, so registration advertises it
-        // rather than an unknown version that would reject a launch.
-        await Assert.That(version).IsEqualTo("9.9.9");
+            // Bounded: a return well under the descendant's 20s lifetime proves the drain was not
+            // blocked to an EOF that never comes.
+            await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(12));
+            // Recovered: the version printed ahead of the block survives, so registration advertises
+            // it rather than an unknown version that would reject a launch.
+            await Assert.That(version).IsEqualTo("9.9.9");
+        } finally {
+            // In a finally so a failing probe or assertion still reaps — otherwise the same leaked
+            // descendant turns a useful assertion failure into an exit-139 teardown failure.
+            await ReapDescendantAsync(pidFile);
+        }
+    }
+
+    /// <summary>Kills the reparented descendant the stub left behind, so it cannot linger past this
+    /// test and into the host's teardown. Best-effort: a missing or already-gone pid is fine.</summary>
+    static async Task ReapDescendantAsync(string pidFile) {
+        for (var i = 0; i < 50 && !File.Exists(pidFile); i++) await Task.Delay(20);
+        if (!File.Exists(pidFile)) return;
+        if (!int.TryParse((await File.ReadAllTextAsync(pidFile)).Trim(), out var pid)) return;
+
+        // Capture the incarnation. Capture throws both when the pid is gone AND when a live process's
+        // identity is unreadable, so a bare catch is not proof of absence: only return when the pid is
+        // actually absent, and otherwise surface so a live descendant is never silently skipped.
+        string identity;
+        try { identity = Capacitor.Tests.Helpers.PidIdentity.Capture(pid); }
+        catch {
+            try {
+                using var descendant = System.Diagnostics.Process.GetProcessById(pid);
+                if (descendant.HasExited) return;
+            } catch (ArgumentException) { return; } // genuinely gone
+            throw; // present but identity unreadable — do not assume it is gone
+        }
+
+        // Kill against the captured incarnation, so a pid recycled since is never signalled.
+        Capacitor.Cli.Daemon.Services.ProcessTree.Kill(pid, identity);
+        await Capacitor.Tests.Helpers.PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
     }
 }
