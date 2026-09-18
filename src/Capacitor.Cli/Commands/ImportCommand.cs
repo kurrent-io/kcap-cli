@@ -1677,6 +1677,10 @@ class ImportCommand(
                                 },
                                 OnSessionEnded = (slot, c, _, _) => {
                                     importedSessionIds.Add(c.SessionId);
+                                    // Partition accounting must happen on BOTH the TTY and non-TTY
+                                    // paths (the base handler records it too); it drives the
+                                    // foreground outcome and the background-spawn decision.
+                                    if (selectedIds?.Contains(c.SessionId) == true) partitionSucceeded.Add(c.SessionId);
                                     // Snap the slot bar to 100% and park the stripe; the description
                                     // stays on the just-finished session until the next
                                     // OnSessionStarted swaps it.
@@ -1688,6 +1692,7 @@ class ImportCommand(
                                     // session while it ran; errors render via scrollback below.
                                 },
                                 OnSessionErrored = (slot, sid, reason) => {
+                                    if (selectedIds?.Contains(sid) == true) partitionFailed.Add(sid);
                                     bar.Increment(1);
                                     IdleSlot(slot);
                                     // Errors print to scrollback above the live region —
