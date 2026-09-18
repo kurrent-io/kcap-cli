@@ -1978,7 +1978,7 @@ In `src/Capacitor.App/App.axaml.cs`:
 
 2. Add a last parameter to `BuildAndShowMainWindow`: `IObservable<MaterialState>? material = null`, and pass `material: material` as the last argument of the `new MainWindowViewModel(` call inside it.
 
-3. In the method that builds `_coordinator` (the `new MainWindowCoordinator(() => BuildAndShowMainWindow(` site), before that statement:
+3. In `async Task StartAsync(IClassicDesktopStyleApplicationLifetime desktop)`, directly before its `BuildDaemonGraph(desktop, lane, channel, gate, profiles, laneQuiesced);` call. `BuildDaemonGraph` itself is a synchronous `void` and is where the coordinator is built, so the load happens one step earlier, where it can be awaited:
 
 ```csharp
         _material ??= await MaterialService.LoadAsync(
@@ -1988,11 +1988,18 @@ In `src/Capacitor.App/App.axaml.cs`:
             action => Dispatcher.UIThread.Post(action));
 ```
 
-If that method is not `async`, end the call with `.GetAwaiter().GetResult()` instead of awaiting it: `AppStateStore.LoadAsync` does synchronous file IO behind `ConfigureAwait(false)` and completes without needing the UI thread.
+Never block on the load with `.GetAwaiter().GetResult()`: `StartAsync` runs on the UI thread. The `??=` keeps a second pass through `StartAsync` (the wizard hands over to a fresh graph) from building a second service or a second event subscription.
 
-4. Add `material: _material.States,` to the `BuildAndShowMainWindow(` argument list at that site.
+4. In `BuildDaemonGraph`, at the `_coordinator = new MainWindowCoordinator(() => BuildAndShowMainWindow(` site, add `material: _material?.States,` to the `BuildAndShowMainWindow(` argument list. A null source leaves the window opaque, which is also what every existing test gets.
 
-5. Dispose both where the app disposes its other services on shutdown.
+5. Dispose both as the first two statements of `DisposeLifecycleAndServiceAsync()`, the watch BEFORE the service:
+
+```csharp
+        _materialWatch?.Dispose();
+        _material?.Dispose();
+```
+
+The watch only unsubscribes; a failure report already posted to the UI thread could otherwise reach a disposed service. That method runs after the UI disposables, so no window is still subscribed to `States`.
 
 - [ ] **Step 8: Run the tests**
 
