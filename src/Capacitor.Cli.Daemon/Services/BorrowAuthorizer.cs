@@ -46,69 +46,13 @@ public class BorrowAuthorizer(DaemonConfig config) {
         return Task.FromResult(new BorrowAuthResult(allowed, canonicalCwd, canonicalGitRoot, allowed ? null : "not_allowed"));
     }
 
-    // A symlink cycle can't loop forever: cap total resolution steps and return the best-resolved
-    // path on hitting the cap. 40 mirrors the common OS-level MAXSYMLINKS limit.
-    const int MaxResolveSteps = 40;
-
     /// <summary>
     /// Resolves <paramref name="path"/> to its real, symlink-free, host-normalized form — a true
     /// <c>realpath</c> that resolves symlinks in EVERY path component, not just the leaf. This is a
     /// security boundary: an <i>ancestor</i> symlink must not let a directory that physically lives
     /// outside the operator's allowlisted tree textually match <see cref="DaemonConfig.IsRepoAllowed"/>
     /// (e.g. an allowlisted <c>/repos/*</c> containing a symlink <c>proj/linkdir</c> → <c>~/.ssh</c>).
-    /// Also called by <c>WorktreeInfo.Borrowed</c> (Task A5) so both sides of a borrow compare
-    /// canonical paths.
+    /// Also called by <c>WorktreeInfo.Borrowed</c> so both sides of a borrow compare canonical paths.
     /// </summary>
-    public static string Canonicalize(string path) => RealPath(Path.GetFullPath(path));
-
-    /// <summary>
-    /// Walks the path root-first, resolving each accumulated prefix a single hop at a time: when a
-    /// prefix is a symlink, its target replaces the prefix (an absolute target restarts from its own
-    /// root; a relative one resolves against the already-canonical parent) and resolution continues
-    /// against it, so symlink chains and ancestor symlinks are all followed. Bounded by
-    /// <see cref="MaxResolveSteps"/> so a symlink cycle terminates at the best-resolved path.
-    /// </summary>
-    static string RealPath(string fullPath) {
-        var root      = Path.GetPathRoot(fullPath) ?? "";
-        var segments  = SplitSegments(fullPath[root.Length..]);
-        var resolved  = root;
-        var steps     = 0;
-
-        while (segments.Count > 0) {
-            if (steps++ >= MaxResolveSteps) {
-                // Cycle guard: stitch the unresolved remainder back on and stop.
-                return Path.GetFullPath(Path.Combine([resolved, ..segments]));
-            }
-
-            var next   = Path.Combine(resolved, segments.Dequeue());
-            var target = new DirectoryInfo(next).ResolveLinkTarget(returnFinalTarget: false);
-
-            if (target is null) {
-                resolved = next; // real directory component
-                continue;
-            }
-
-            // One symlink hop. Resolve a relative target against the link's (canonical) parent.
-            var linkPath = target.FullName;
-
-            if (!Path.IsPathRooted(linkPath)) {
-                linkPath = Path.GetFullPath(Path.Combine(resolved, linkPath));
-            }
-
-            var linkRoot = Path.GetPathRoot(linkPath) ?? "";
-
-            // Re-queue the target's own segments (so ancestor symlinks inside it get resolved too)
-            // ahead of the segments we hadn't reached yet.
-            segments = new Queue<string>(SplitSegments(linkPath[linkRoot.Length..]).Concat(segments));
-            resolved = linkRoot;
-        }
-
-        return resolved;
-    }
-
-    static Queue<string> SplitSegments(string pathRemainder) => new(
-        pathRemainder
-            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Where(s => s.Length > 0)
-    );
+    public static string Canonicalize(string path) => CanonicalPath.Resolve(path);
 }
