@@ -426,6 +426,8 @@ public sealed class SetupCommand(
         BinaryProbe binaries) {
 
     public async Task<int> HandleAsync(string[] args) {
+        if (args.Contains("--discover")) return await RunDiscoverOnlyAsync(args);
+
         var serverUrlArg     = GetArg(args, "--server-url");
 
         // `kcap setup <tenant>`: a leading positional arg (bare slug or full URL) is treated as the
@@ -1030,7 +1032,15 @@ public sealed class SetupCommand(
         // live until it restarts — so tell them, but only when something was actually
         // installed (no point promising recording we never wired up).
         var restartTip = LiveRecordingRestartTip(installResult);
-        if (restartTip is not null) AnsiConsole.MarkupLine($"\n  {restartTip}");
+
+        if (restartTip is not null) {
+            AnsiConsole.MarkupLine($"\n  {restartTip}");
+
+            // The same reminder, left for the next session to deliver through the hooks this run
+            // installed. Armed on the same condition as the tip — with nothing wired up there is
+            // nothing to announce.
+            new FirstRunNoticeStore(config).Arm();
+        }
 
         // Setup itself is user-scope and works fine outside a repo, but sessions recorded
         // from non-repo directories have no owner/repo/branch/PR enrichment (see
@@ -1711,6 +1721,90 @@ public sealed class SetupCommand(
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
         return (new RequestedWorkspace(orgName!.Trim(), canonical), null);
+    }
+
+    static readonly string[] DiscoverFlags =
+        ["--discover", "--json", "--github", "--device", "--no-prompt", "--no-update-check"];
+
+    /// <summary>
+    /// Why these arguments cannot go with <c>--discover</c>, or null when they can. The accepted set
+    /// is closed rather than a list of what to refuse: a flag that takes a value would otherwise have
+    /// its value read as a workspace, and a flag that configures something would be dropped without
+    /// a word by a run that configures nothing.
+    /// </summary>
+    internal static string? DiscoverArgumentError(string[] args) {
+        var stray = args.Skip(1).FirstOrDefault(a => !DiscoverFlags.Contains(a));
+
+        if (stray is null) return null;
+
+        // Naming a workspace answers the question discovery exists to ask, so the pair is a mistake
+        // rather than a refinement. A bare token names one wherever it sits, not only straight
+        // after the verb where the tenant argument is normally read.
+        return stray is "--server-url" or "--org" or "--slug" || !stray.StartsWith('-')
+            ? "--discover reports the workspaces you belong to, so it cannot also be given one.\n"
+            + "  Drop the workspace argument to discover, or drop --discover to use it."
+            : $"--discover only reports, so {stray} has nothing to apply to.\n"
+            + "  It takes --json, --github, --device and --no-prompt.";
+    }
+
+    /// <summary>
+    /// <c>kcap setup --discover</c>: sign in, report the workspaces this account can reach, and change
+    /// nothing. Nothing is kept, the token included, so the run that follows signs in again.
+    /// </summary>
+    async Task<int> RunDiscoverOnlyAsync(string[] args) {
+        if (DiscoverArgumentError(args) is { } refusal) {
+            await Console.Error.WriteLineAsync(refusal);
+
+            return 1;
+        }
+
+        var json   = args.Contains("--json");
+        var chosen = OAuthLoginFlow.ChooseDiscoveryProvider(args);
+        var device = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
+
+        // The sign-in still has to show the user a URL and a code. Under --json that narration goes
+        // to stderr, so the document stays the only thing on stdout.
+        var narration = json ? ConsoleAuthProgress.OnStderr("  ") : null;
+
+        var report = await facades.Create(provisioner: null, picker: null, requested: null, narration)
+            .DiscoverOnlyAsync(chosen, device, CancellationToken.None);
+
+        if (report.Error is not null) {
+            await Console.Error.WriteLineAsync($"  {report.Error}");
+
+            return 1;
+        }
+
+        var payload = SetupDiscoverRender.Payload(report);
+
+        if (json) {
+            await Console.Out.WriteLineAsync(SetupDiscoverRender.Render(payload));
+
+            return 0;
+        }
+
+        if (payload.Workspaces.Count == 0) {
+            AnsiConsole.MarkupLine("  No Capacitor workspace found for this account.");
+            AnsiConsole.MarkupLine(payload.CanCreate
+                ? "  [dim]Create one with `kcap setup --org \"<name>\" --slug <slug>`.[/]"
+                : "  [dim]Ask an admin to install the Kurrent GitHub App on your org, or use `kcap setup --server-url <url>`.[/]");
+
+            return 0;
+        }
+
+        foreach (var workspace in payload.Workspaces)
+            AnsiConsole.MarkupLine(
+                $"  [cyan]{Markup.Escape(workspace.Slug ?? workspace.Url)}[/]  [dim]{Markup.Escape(workspace.Url)}[/]");
+
+        // A GitHub-App row is identified by origin and carries no slug, so the command it can be
+        // handed is the URL one.
+        var named = payload.Workspaces.FirstOrDefault(w => w.Slug is not null)?.Slug;
+
+        AnsiConsole.MarkupLine(named is not null
+            ? $"  [dim]Nothing was changed. Run `kcap setup {Markup.Escape(named)}` to use one.[/]"
+            : "  [dim]Nothing was changed. Run `kcap setup --server-url <address above>` to use one.[/]");
+
+        return 0;
     }
 
     internal async Task<(string ServerUrl, string Provider, bool LoginComplete)?> RunDiscoveryAsync(

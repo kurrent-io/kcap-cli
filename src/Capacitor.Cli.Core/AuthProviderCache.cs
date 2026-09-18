@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Core;
 /// caller falls back to the live fetch — the cache never changes the auth
 /// outcome, only whether the network call is skipped.</para>
 /// </summary>
-static class AuthProviderCache {
+public static class AuthProviderCache {
     static readonly TimeSpan Ttl = TimeSpan.FromHours(24);
 
     internal static string StorePath(ConfigRoot config) => config.Path("cache", "auth-providers.json");

@@ -97,6 +97,32 @@ public class HomeViewSmokeTests {
         await Assert.That(subtitleAfter).IsEqualTo("Kurrent-Capacitor-New-Machine");
     }
 
+    /// The launcher goal box is the same kcapEmbedded composer as chat: a local FontSize would
+    /// split the line box from the style that owns it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Goal_box_uses_the_embedded_composer_line_box() {
+        var (size, line, tracking) = await AvaloniaSession.DispatchAsync(() => {
+            var (_, vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var goal = Find<TextBox>(window, "GoalInput")!;
+            var seen = (goal.FontSize, goal.LineHeight, goal.LetterSpacing);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return seen;
+        });
+
+        await Assert.That(size).IsEqualTo(15);
+        await Assert.That(line).IsEqualTo(24);
+        await Assert.That(tracking).IsEqualTo(0.2);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_notice_and_sign_in_button_follow_the_server_connection() {

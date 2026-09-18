@@ -7,71 +7,40 @@
              x:Class="Capacitor.App.Views.WorkspaceView"
              x:DataType="vm:WorkspaceViewModel"
              Background="{StaticResource KcapCanvasBrush}">
-    <UserControl.Styles>
-        <Style Selector="Button.tab">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0,0,0,2" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="CornerRadius" Value="0" />
-            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="FontSize" Value="12.5" />
-            <Setter Property="Padding" Value="3,9" />
-            <Setter Property="Margin" Value="0,0,16,0" />
-        </Style>
-        <Style Selector="Button.tab.active">
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-        <!-- Fluent hover paints PART_ContentPresenter; keep tab chrome on our tokens. -->
-        <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.tab:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        </Style>
-        <Style Selector="Button.tab.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.tab.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        </Style>
-    </UserControl.Styles>
-
     <!-- Two columns: the workspace proper, and the work-context pane at its fixed width. The
          terminal keeps its own column, so the size it reports to the PTY is the real center width. -->
     <Grid ColumnDefinitions="*,320">
-    <Grid Grid.Column="0" RowDefinitions="56,42,*">
-        <!-- Header: title over checkout · spacer · actions.
+    <Grid Grid.Column="0" RowDefinitions="Auto,*">
+        <!-- Header: title over checkout · Chat/Terminal switch · actions.
              Harness/transport live in the work-context pane; leaving is the rail's job. -->
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="20,0,16,0"
-              Background="Transparent" PointerPressed="OnHeaderPointerPressed">
-            <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center" Margin="0,0,16,0">
-                <TextBlock x:Name="WorkspaceTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14.5"
-                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                <TextBlock x:Name="WorkspaceSubtitle" Text="{Binding RepoLabelText}" FontSize="11.5"
-                           Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
-            </StackPanel>
-
-            <Button Grid.Column="1" Content="Open in web" Command="{Binding OpenInWebCommand}"
-                    Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
-                    Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="12.5" Margin="0,0,4,0" />
-            <Button Grid.Column="2" Content="Stop" Command="{Binding StopCommand}"
-                    Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
-                    Foreground="{StaticResource KcapDangerBrush}" Padding="10,5" FontSize="12.5" />
-        </Grid>
-
-        <!-- Chat for every session; Terminal only when the daemon reports a PTY. -->
-        <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,1">
-            <Grid Margin="20,0">
-                <StackPanel Orientation="Horizontal" Spacing="6"
-                            HorizontalAlignment="Left" VerticalAlignment="Center">
-                    <Button x:Name="ChatTabButton" Content="Chat" Classes="tab" Classes.active="{Binding IsChatActive}"
-                            Command="{Binding ShowChatCommand}" />
-                    <Button x:Name="TerminalTabButton" Content="Terminal" Classes="tab" Classes.active="{Binding IsTerminalActive}"
-                            Command="{Binding ShowTerminalCommand}" IsVisible="{Binding ShowsTerminalTab}" />
-                    <Button x:Name="PullRequestTabButton" Content="Pull request" Classes="tab" Classes.active="{Binding IsPullRequestActive}"
-                            Command="{Binding ShowPullRequestCommand}" IsVisible="{Binding ShowsPullRequestTab}" />
+        <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
+                Padding="20,16,16,16" Background="Transparent" PointerPressed="OnHeaderPointerPressed">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <StackPanel Spacing="2" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <TextBlock x:Name="WorkspaceTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
+                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding Title}" />
+                    <TextBlock x:Name="WorkspaceSubtitle" Text="{Binding RepoLabelText}" FontSize="13"
+                               Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Border x:Name="SurfaceSwitch" Classes="kcapSegment" IsVisible="{Binding ShowsSurfaceSwitch}">
+                        <StackPanel Orientation="Horizontal" Spacing="2">
+                            <Button x:Name="ChatTabButton" Content="Chat" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsChatActive}" Command="{Binding ShowChatCommand}" />
+                            <Button x:Name="TerminalTabButton" Content="Terminal" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsTerminalActive}" Command="{Binding ShowTerminalCommand}"
+                                    IsVisible="{Binding ShowsTerminalTab}" />
+                            <Button x:Name="PullRequestTabButton" Content="Pull request" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsPullRequestActive}" Command="{Binding ShowPullRequestCommand}"
+                                    IsVisible="{Binding ShowsPullRequestTab}" />
+                        </StackPanel>
+                    </Border>
+                    <Button Content="Open in web" Command="{Binding OpenInWebCommand}"
+                            Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
+                            Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="13.5" />
+                    <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
+                            Padding="10,5" FontSize="13.5" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -79,7 +48,7 @@
         <!-- Content: the terminal control (real resize wiring lives inside TerminalControl itself,
              see WorkspaceView.axaml.cs header comment) plus one state banner at a time, layered
              over it. -->
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="1">
             <!-- FontFamily MUST be set: the control's default is "Cascadia Mono", which only
                  exists on Windows — elsewhere it silently falls back to ESTIMATED cell metrics
                  while drawing with a real typeface, smearing every styled run off its column. -->
@@ -167,7 +136,7 @@
                         <Ellipse Width="8" Height="8" Fill="{StaticResource KcapWarningBrush}" Classes="pulsing" VerticalAlignment="Center" />
                         <TextBlock x:Name="StartingText" Text="{Binding StartingText}" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
                     </StackPanel>
-                    <TextBlock Text="The agent appears in the rail as soon as it registers." FontSize="11.5"
+                    <TextBlock Text="The agent appears in the rail as soon as it registers." FontSize="13"
                                Foreground="{StaticResource KcapMutedBrush}" HorizontalAlignment="Center" />
                 </StackPanel>
             </kcap:Surface>

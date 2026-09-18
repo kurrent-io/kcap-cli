@@ -8,78 +8,51 @@
              x:Class="Capacitor.App.Views.RemoteSessionView"
              x:DataType="vm:RemoteSessionViewModel"
              Background="{StaticResource KcapCanvasBrush}">
-    <UserControl.Styles>
-        <Style Selector="Button.tab">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0,0,0,2" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="CornerRadius" Value="0" />
-            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="FontSize" Value="12.5" />
-            <Setter Property="Padding" Value="3,9" />
-            <Setter Property="Margin" Value="0,0,16,0" />
-        </Style>
-        <Style Selector="Button.tab.active">
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-        <!-- Fluent hover paints PART_ContentPresenter; keep tab chrome on our tokens. -->
-        <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.tab:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        </Style>
-        <Style Selector="Button.tab.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.tab.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        </Style>
-    </UserControl.Styles>
-
-    <!-- The session's process lives on another machine: the header, the tabs over the server's
+    <!-- The session's process lives on another machine: the header, the switch over the server's
          streams, and the two actions that reach across. -->
-    <Grid RowDefinitions="56,42,Auto,*">
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="20,0,16,0">
-            <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center" Margin="0,0,16,0">
-                <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14.5"
-                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                <StackPanel Orientation="Horizontal" Spacing="7">
-                    <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding StatusDot}" />
-                    <TextBlock x:Name="RemoteStatus" Text="{Binding StatusText}" FontSize="11.5"
-                               Foreground="{StaticResource KcapMutedBrush}" />
-                    <TextBlock x:Name="RemoteSubtitle" Text="{Binding RepoLabelText}" FontSize="11.5"
-                               Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+    <Grid RowDefinitions="Auto,Auto,*">
+        <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
+                Padding="20,16,16,16">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <StackPanel Spacing="2" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
+                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding Title}" />
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding StatusDot}" />
+                        <TextBlock x:Name="RemoteStatus" Text="{Binding StatusText}" FontSize="13"
+                                   Foreground="{StaticResource KcapMutedBrush}" />
+                        <TextBlock x:Name="RemoteSubtitle" Text="{Binding RepoLabelText}" FontSize="13"
+                                   Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
                 </StackPanel>
-            </StackPanel>
-
-            <Button Grid.Column="1" Content="Open in web" Command="{Binding OpenInWebCommand}"
-                    Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
-                    Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="12.5" Margin="0,0,4,0" />
-            <Button Grid.Column="2" Content="Stop" Command="{Binding StopCommand}"
-                    Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
-                    Foreground="{StaticResource KcapDangerBrush}" Padding="10,5" FontSize="12.5" />
-        </Grid>
-
-        <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,1">
-            <StackPanel Orientation="Horizontal" Spacing="6" Margin="20,0" HorizontalAlignment="Left" VerticalAlignment="Center">
-                <Button x:Name="ChatTabButton" Content="Chat" Classes="tab" Classes.active="{Binding IsChatActive}"
-                        Command="{Binding ShowChatCommand}" />
-                <Button x:Name="TerminalTabButton" Content="Terminal" Classes="tab" Classes.active="{Binding IsTerminalActive}"
-                        Command="{Binding ShowTerminalCommand}" IsVisible="{Binding ShowsTerminalTab}" />
-            </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Border x:Name="SurfaceSwitch" Classes="kcapSegment" IsVisible="{Binding ShowsSurfaceSwitch}">
+                        <StackPanel Orientation="Horizontal" Spacing="2">
+                            <Button x:Name="ChatTabButton" Content="Chat" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsChatActive}" Command="{Binding ShowChatCommand}" />
+                            <Button x:Name="TerminalTabButton" Content="Terminal" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsTerminalActive}" Command="{Binding ShowTerminalCommand}"
+                                    IsVisible="{Binding ShowsTerminalTab}" />
+                        </StackPanel>
+                    </Border>
+                    <Button Content="Open in web" Command="{Binding OpenInWebCommand}"
+                            Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
+                            Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="13.5" />
+                    <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
+                            Padding="10,5" FontSize="13.5" />
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <kcap:Surface x:Name="AccessBanner" Grid.Row="2" Margin="20,10,20,0"
+        <kcap:Surface x:Name="AccessBanner" Grid.Row="1" Margin="20,10,20,0"
                 CornerRadius="10" Padding="13,10"
                 IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
             <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
-                       FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" />
+                       FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" />
         </kcap:Surface>
 
-        <Grid Grid.Row="3">
+        <Grid Grid.Row="2">
             <!-- The active-tab flag lives on this VM, which is not the pane's DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsChatPane}" />

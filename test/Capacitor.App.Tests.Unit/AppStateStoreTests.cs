@@ -111,6 +111,23 @@ public class AppStateStoreTests {
     }
 
     [Test]
+    public async Task Window_placement_is_remembered() {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var store = new AppStateStore(path);
+
+        await store.UpdateAsync(s => s with {
+            WindowWidth = 1552, WindowHeight = 888, WindowX = 120, WindowY = 80, WindowMaximized = true,
+        });
+
+        var reloaded = await new AppStateStore(path).LoadAsync();
+        await Assert.That(reloaded.WindowWidth).IsEqualTo(1552);
+        await Assert.That(reloaded.WindowHeight).IsEqualTo(888);
+        await Assert.That(reloaded.WindowX).IsEqualTo(120);
+        await Assert.That(reloaded.WindowY).IsEqualTo(80);
+        await Assert.That(reloaded.WindowMaximized).IsTrue();
+    }
+
+    [Test]
     public async Task Material_round_trips() {
         using var tmp = TempDir.WithPathTo("app-state.json", out var path);
         await new AppStateStore(path).UpdateAsync(s => s with { Material = "soft_glass" });

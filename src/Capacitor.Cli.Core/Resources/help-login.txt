@@ -24,7 +24,8 @@ loopback port can't be bound.
 Options:
   --discover    Force tenant discovery even when a server is configured.
                 Discovery signs you in, lists the tenants you belong to, and
-                saves the chosen one as the active profile.
+                saves the chosen one as the active profile. To list them and
+                change nothing, use `kcap setup --discover` instead.
 
   --github      Sign in with GitHub instead of your organization's SSO.
 

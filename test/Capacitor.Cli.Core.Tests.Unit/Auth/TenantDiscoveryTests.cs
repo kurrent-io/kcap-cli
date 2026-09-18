@@ -241,4 +241,17 @@ public class TenantDiscoveryTests {
         await Assert.That(merged.ActiveProfile).IsEqualTo("eventuous");
         await Assert.That(merged.Profiles["eventuous"].ServerUrl).IsEqualTo("https://eventuous.kcap.ai");
     }
+
+    // A rejected token is the provider's rejection. Telling a WorkOS user that GitHub turned them
+    // away sends them to the wrong sign-in.
+    [Test]
+    public async Task Describe_names_the_provider_that_rejected_the_token() {
+        await Assert.That(TenantDiscovery.Describe(DiscoveryError.TokenRejected, AuthProvider.WorkOS))
+            .Contains("WorkOS");
+        await Assert.That(TenantDiscovery.Describe(DiscoveryError.TokenRejected, AuthProvider.GitHubApp))
+            .Contains("GitHub");
+        // The service being unreachable is neither provider's doing, so it names neither.
+        await Assert.That(TenantDiscovery.Describe(DiscoveryError.ProxyUnreachable, AuthProvider.WorkOS))
+            .DoesNotContain("GitHub");
+    }
 }

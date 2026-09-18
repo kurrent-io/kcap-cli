@@ -106,6 +106,26 @@ public class RailWorktreeViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Header_badge_only_shows_when_the_group_is_collapsed() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var cache = new SourceCache<AgentRow, string>(r => r.Key);
+            using var wt = Build(cache);
+            cache.AddOrUpdate(Row("a1", awaitingInput: true));
+            await Assert.That(wt.NeedsYou).IsTrue();
+            await Assert.That(wt.SessionsVisible).IsTrue();
+            await Assert.That(wt.ShowsHeaderBadge).IsFalse();
+
+            wt.ToggleCommand.Execute().Subscribe();
+            await Assert.That(wt.IsExpanded).IsFalse();
+            await Assert.That(wt.ShowsHeaderBadge).IsTrue();
+
+            wt.ToggleCommand.Execute().Subscribe();
+            await Assert.That(wt.ShowsHeaderBadge).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Every_worktree_defaults_expanded_main_checkout_included() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var cache = new SourceCache<AgentRow, string>(r => r.Key);
@@ -182,10 +202,13 @@ public class RailWorktreeViewModelTests {
             using var wt = Build(cache, collapse, pending: pending);
             cache.AddOrUpdate(Row("a1"));
             await Assert.That(wt.NeedsYou).IsFalse();
+            await Assert.That(wt.ShowsHeaderBadge).IsFalse();
             pending.OnNext(new HashSet<string> { "a1" });
             await Assert.That(wt.NeedsYou).IsTrue();
+            await Assert.That(wt.ShowsHeaderBadge).IsTrue();
             pending.OnNext(new HashSet<string> { "somebody-else" });
             await Assert.That(wt.NeedsYou).IsFalse();
+            await Assert.That(wt.ShowsHeaderBadge).IsFalse();
         });
     }
 }

@@ -48,6 +48,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// vendor's family decides, exactly as it does for a local dto without one.
     public RemoteTerminalViewModel? Terminal { get; }
     public bool ShowsTerminalTab => Terminal is not null;
+    public bool ShowsSurfaceSwitch => ShowsTerminalTab;
 
     string _title = "";
     public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
@@ -161,7 +162,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
-            opener, time, permissions, missingNote: MissingNote, sessionId: _sessionIds,
+            opener, time, permissions, new SessionSubagents(time), missingNote: MissingNote, sessionId: _sessionIds,
             serverQueue: _sessionIds
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
@@ -230,8 +231,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
-        StatusText = row.Status;
-        StatusDot = SessionStatusDots.For(row.Status);
+        StatusText = SessionStatusDots.Label(row);
+        StatusDot = SessionStatusDots.For(row);
         if (SessionStatusDots.IsTerminal(row.Status)) {
             SessionEnded = true;
             PublishSession(ended: true);

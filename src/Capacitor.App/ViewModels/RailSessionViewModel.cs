@@ -44,8 +44,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     /// A remote row greys out while the lane is stale; a local row is never stale.
     public bool IsStale => _isStale.Value;
 
-    readonly ObservableAsPropertyHelper<string> _statusBadge;
-    public string StatusBadge => _statusBadge.Value;
+    readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
+    /// The badge is a clock for a finished turn; a failure or a pending permission takes "!" instead.
+    public bool ShowsIdleBadge => _showsIdleBadge.Value;
 
     readonly CompositeDisposable _disposables = new();
 
@@ -68,7 +69,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         HasModel = Model is not null;
         IsStarting = row.Origin == AgentOrigin.Pending;
         Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age);
-        StatusDot = SessionStatusDots.For(row.Status);
+        StatusDot = SessionStatusDots.For(row);
         Tooltip = IsStarting
             ? Join(row.Id, "Starting", LaunchStages.Label(row.LaunchStage))
             : Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
@@ -84,9 +85,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
             .DisposeWith(_disposables);
-        _statusBadge = agentsWithPending.Select(set => row.Status == "Failed" || set.Contains(row.Id)
-                ? "!" : SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
-            .ToProperty(this, x => x.StatusBadge, initialValue: SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
+        _showsIdleBadge = agentsWithPending.Select(set =>
+                SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed" && !set.Contains(row.Id))
+            .ToProperty(this, x => x.ShowsIdleBadge, initialValue: SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed")
             .DisposeWith(_disposables);
 
         _isStale = (IsRemote ? remoteStale : Observable.Return(false))

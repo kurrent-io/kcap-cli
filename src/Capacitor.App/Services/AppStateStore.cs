@@ -15,6 +15,11 @@ public sealed record AppState(
     // not accept a repo-less launch. Absent key = never chosen here; the caller picks its own
     // default rather than inheriting another repository's choice.
     IReadOnlyDictionary<string, string>? HarnessByRepo = null,
+    double? WindowWidth = null,
+    double? WindowHeight = null,
+    int? WindowX = null,
+    int? WindowY = null,
+    bool WindowMaximized = false,
     // A SurfaceMaterials stored name. A string, not the enum: Read degrades any deserialization
     // failure to defaults, so an enum member this build does not know would reset the whole file.
     string? Material = null);

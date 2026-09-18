@@ -159,4 +159,141 @@ public class ClaudeChatRulesTests {
         var e = P("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"sed -n '1,20p' src/Program.cs"}}]}}""");
         await Assert.That(e[0].ToolKind).IsEqualTo(AcpToolKind.Execute);
     }
+
+    static ChatProjectionResult R(string line) {
+        var chat = TranscriptChat.For("claude")!;
+        return chat.ProjectWithInputs(line, 1, Received, chat.CreateContext("a1", null));
+    }
+
+    const string AgentCall = """{"type":"assistant","timestamp":"2026-09-17T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+    const string LaunchResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
+    const string NotificationText = "<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>";
+
+    static string Notification(bool originKind, string status = "completed", string flags = "") =>
+        $$$"""{"type":"user","timestamp":"2026-09-17T10:05:00Z",{{{(originKind ? "\"origin\":{\"kind\":\"task-notification\"}," : "")}}}{{{flags}}}"message":{"role":"user","content":"{{{NotificationText.Replace("\n", "\\n").Replace("\"", "\\\"").Replace("completed", status)}}}"}}""";
+
+    [Test]
+    public async Task Started_for_Agent_and_Task_calls_names_the_type_and_falls_back_to_agent() {
+        var agent = R(AgentCall);
+        await Assert.That(agent.Envelopes).Count().IsEqualTo(1);
+        var started = (SubagentSignal.Started)agent.Subagents.Single();
+        await Assert.That(started.CallId).IsEqualTo("toolu_A");
+        await Assert.That(started.Name).IsEqualTo("Explore");
+        await Assert.That(started.Description).IsEqualTo("Map desktop chat UI surfaces");
+        await Assert.That(started.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero));
+
+        var task = R("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_B","name":"Task","input":{"description":"Review","prompt":"go"}}]}}""");
+        var bare = (SubagentSignal.Started)task.Subagents.Single();
+        await Assert.That(bare.CallId).IsEqualTo("toolu_B");
+        await Assert.That(bare.Name).IsEqualTo("agent");
+        await Assert.That(bare.Description).IsEqualTo("Review");
+    }
+
+    [Test]
+    public async Task No_signal_for_a_sidechain_call_a_sidechain_notification_or_any_other_tool() {
+        await Assert.That(R(AgentCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,")).Subagents).IsEmpty();
+        await Assert.That(R(Notification(originKind: true, flags: "\"isSidechain\":true,")).Subagents).IsEmpty();
+        await Assert.That(R(LaunchResult.Replace("\"type\":\"user\",", "\"type\":\"user\",\"isSidechain\":true,")).Subagents).IsEmpty();
+        await Assert.That(R("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls","subagent_type":"Explore"}}]}}""").Subagents).IsEmpty();
+    }
+
+    [Test]
+    public async Task Detached_with_the_agent_id_only_for_an_async_launched_result() {
+        var launch = R(LaunchResult);
+        await Assert.That(launch.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.ToolResult);
+        var detached = (SubagentSignal.Detached)launch.Subagents.Single();
+        await Assert.That(detached.CallId).IsEqualTo("toolu_A");
+        await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
+
+        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Subagents).IsEmpty();
+        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"async_launched"}}""").Subagents).IsEmpty();
+        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]}}""").Subagents).IsEmpty();
+    }
+
+    /// Runs twice: identified by origin_kind as the local leaf writes it, and by text alone as the
+    /// server's events present it. Both yield the note row, the finish and no submitted input.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Finished_from_a_notification_keyed_by_both_ids_and_failed_unless_completed(bool originKind) {
+        var done = R(Notification(originKind));
+        await Assert.That(done.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(done.Envelopes.Single().Text).IsEqualTo("**Agent \"Map desktop chat UI surfaces\" finished**");
+        await Assert.That(done.SubmittedInputs).IsEmpty();
+        var finished = (SubagentSignal.Finished)done.Subagents.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
+        await Assert.That(finished.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 5, 0, TimeSpan.Zero));
+
+        var failed = (SubagentSignal.Finished)R(Notification(originKind, status: "killed")).Subagents.Single();
+        await Assert.That(failed.Outcome).IsEqualTo(SubagentOutcome.Failed);
+    }
+
+    [Test]
+    public async Task A_notification_marked_meta_yields_its_finish_but_neither_row_nor_input() {
+        var meta = R(Notification(originKind: true, flags: "\"isMeta\":true,"));
+        await Assert.That(meta.Envelopes).IsEmpty();
+        await Assert.That(meta.SubmittedInputs).IsEmpty();
+        await Assert.That(meta.Subagents.Single()).IsTypeOf<SubagentSignal.Finished>();
+    }
+
+    [Test]
+    public async Task A_notification_recognised_by_text_alone_is_not_a_user_turn() {
+        var byText = R(Notification(originKind: false));
+        await Assert.That(byText.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(byText.SubmittedInputs).IsEmpty();
+        var indented = R("""{"type":"user","message":{"content":"  \n<task-notification>\n<summary>done</summary>\n</task-notification>"}}""");
+        await Assert.That(indented.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(indented.Subagents).IsEmpty();
+        var mention = R("""{"type":"user","message":{"content":"what does <task-notification> mean?"}}""");
+        await Assert.That(mention.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(mention.SubmittedInputs).IsEquivalentTo(new[] { "what does <task-notification> mean?" });
+    }
+
+    [Test]
+    public async Task Stopped_from_a_TaskStop_success_result_and_nothing_from_a_TaskOutput_probe() {
+        var stop = R("""{"type":"user","timestamp":"2026-09-17T10:07:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: a9f262478e032f427"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"Successfully stopped task: a9f262478e032f427"}}""");
+        var stopped = (SubagentSignal.Finished)stop.Subagents.Single();
+        await Assert.That(stopped.CallId).IsNull();
+        await Assert.That(stopped.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(stopped.Outcome).IsEqualTo(SubagentOutcome.Stopped);
+        await Assert.That(stopped.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 7, 0, TimeSpan.Zero));
+
+        var probe = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_O","content":"…"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"Task output (last 10 lines)","retrieval_status":"partial"}}""");
+        await Assert.That(probe.Subagents).IsEmpty();
+        var shell = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: b1"}]},"toolUseResult":{"task_id":"b1","task_type":"local_bash","message":"Successfully stopped task: b1"}}""");
+        await Assert.That(shell.Subagents).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_launch_acknowledgement_spelled_agent_id_still_detaches() {
+        var launch = R(LaunchResult.Replace("\"agentId\":\"a9f262478e032f427\"", "\"agent_id\":\"a9f262478e032f427\""));
+        var detached = (SubagentSignal.Detached)launch.Subagents.Single();
+        await Assert.That(detached.CallId).IsEqualTo("toolu_A");
+        await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
+    public async Task A_notification_cut_off_before_its_closing_tag_still_finishes() {
+        var line = """{"type":"user","message":{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A"}}""";
+        var finished = (SubagentSignal.Finished)R(line).Subagents.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
+    public async Task A_notification_status_is_matched_without_regard_to_case() {
+        var finished = (SubagentSignal.Finished)R(Notification(originKind: true, status: "Completed")).Subagents.Single();
+        await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
+    }
+
+    [Test]
+    public async Task A_stop_message_is_matched_after_leading_whitespace_without_regard_to_case() {
+        var stop = R("""{"type":"user","timestamp":"2026-09-17T10:07:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"successfully stopped task: a9f262478e032f427"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"  successfully stopped task: a9f262478e032f427"}}""");
+        var stopped = (SubagentSignal.Finished)stop.Subagents.Single();
+        await Assert.That(stopped.CallId).IsNull();
+        await Assert.That(stopped.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(stopped.Outcome).IsEqualTo(SubagentOutcome.Stopped);
+    }
 }

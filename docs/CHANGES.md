@@ -6,6 +6,93 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## An idle PTY costs the thread pool nothing
+
+The Unix PTY read blocked in native `poll` on a pool worker, and an idle agent never gave it back.
+The pool creates workers freely up to its minimum — the core count — and past that injects one about
+every half second, so with more idle sessions than cores a keystroke's write queued behind the
+readers still waiting for a worker: 32 idle PTYs on a 24-core machine put 5.4 s on the first echo.
+The inflated pool then hides it until its one spare worker idles out, and the first keystroke after
+a pause pays an injection again — 500 ms after 30 s idle, measured on a pool parked the same way.
+
+Each PTY now has a reader thread of its own. Readiness through the runtime's socket engine would
+have needed no thread at all, but it was not tried: libuv reads some `/dev` files on macOS from a
+select thread because kqueue does not work for them, a PTY master is one of the candidates, and a
+parked thread per session is cheap at the scale a daemon hosts. Raising the worker minimum was the
+mitigation on offer and only moves the threshold. Writes still go through the pool: a write to a
+wedged child blocks, so it cannot run inline, and with the readers gone the pool has workers to give.
+
+The thread reads one chunk ahead and no further, so a stalled consumer still back-pressures the
+child through the PTY's own buffer instead of growing the daemon. Dispose waits for the thread
+before closing the master: the fd number is reusable the moment it closes, and a reader still
+holding it would drain the next agent's terminal. A reader that cannot start takes the spawn down
+with it — the child is killed with its group and reaped — because an agent nobody owns is one
+nothing can stop.
+
+The regression probe runs in a process of its own because the pool is process-global, and sizes
+itself from that process's worker minimum rather than a fixed count. It asserts the pool stayed
+smaller than the PTY count as well as the echo latency — once the pool has inflated, latency alone
+reads as healthy.
+
+## The restart setup asks for now carries its own message
+
+Hooks, skills and MCP servers are read when an agent session starts, so the session that runs setup
+has none of them: it is not recorded, and it cannot run the guided tour. Setup says so in the
+terminal, which works for someone watching it and is the weakest link the moment a tool did the
+install — one line at the end of a long transcript, which it has to remember to pass on.
+
+So the next session says it instead. Setup leaves a one-shot marker, and the next session to start
+with hooks in place carries a SessionStart fragment saying kcap is wired in, and offering the tour.
+That session is the one that can say it: the fragment is delivered by the hook whose presence is the
+thing being announced.
+
+It claims no more than that. Setup arms the marker on every run that installs hooks, a re-run on a
+machine recorded for months included, so the fragment says setup completed before this session
+started and never that this is the first wired session. Whether this particular session reaches the
+server is a separate question with its own notice — a rejected token already says so — and a
+fragment asserting "you are being recorded" would be the line contradicting it. The tour is offered
+only where the MCP servers it reads through are registered, the same call setup's own Next-steps box
+makes.
+
+Resolving takes the marker, so it is resolved only where the output is going to be delivered —
+OpenCode's older-plugin gate discards this stdout, and outside that gate the one notice would be
+spent on a session that never showed it. The marker is claimed under the config lock, so several
+agents started at once deliver it once between them rather than each — a bare delete races, and a
+rename only picks a single winner where the filesystem makes renaming atomic, which is not the same
+on every platform. The claim never waits for the lock: it runs on the SessionStart hook path, where
+the budget belongs to session capture. A session with no marker waiting returns on a file probe and
+never takes the lock, which is every session but one per setup; the probe is repeated under the
+lock, and that one decides. Opting out with `disable_first_run_notice` suppresses the fragment
+without consuming the marker, so turning the notice back on before the next session still delivers
+it. It is armed only when setup actually installed something — with nothing wired up there is
+nothing to announce.
+
+## The desktop chat shows a session's subagents
+
+A Claude session's subagents are read off the transcript alone: an `Agent` or `Task` call starts a
+row, a result whose `toolUseResult.status` is `async_launched` marks it background and binds the
+agent id, a task-notification or a `TaskStop` result ends it. The evidence is the same on both
+lanes because the leaf writes the root `toolUseResult` of a single-result line into the
+`claude_code` extension as `tool_use_result` — the key and content kcap-server's normalizer already
+persists — so sessions the server ingested earlier list their subagents as well. On a line with
+several results the object names none of them and is written on none.
+
+The facts ride a third member of `ChatProjectionResult`, beside the rows, rather than on the wire
+envelope: `AcpEventEnvelope` is mirrored on the server with a per-field compat guard, and a display
+fact only the desktop reads has no business there. The side-band also keeps "which tool names spawn
+a subagent" in the vendor's rules, so Codex or Gemini can join without an app-side table. A
+task-notification is recognised by `origin_kind` or by its opening tag, because the server's events
+carry no `origin_kind`; the same predicate serves the row filter, the input echo and the signal.
+
+The tracker ends a row on transcript evidence only. Without a terminal result, a notification or a
+`TaskStop` result the row runs until the session ends — the web's 15-minute quiet reaper is not
+copied, since it would also end a quiet subagent that is still working. Session end is a view over
+the rows, not a transition: a running row presents as stopped with no duration while the lane says
+nothing more will arrive, a real finish in the final drain still settles it, and a remote row that
+comes back turns the presentation off again. A repeated notification for an earlier execution never
+ends a later launch of the same agent id: a known call id decides alone, and an agent-id-only finish
+dated before the row started belongs to an earlier execution.
+
 ## The pull request reader renders GitHub-flavoured markdown
 
 Review bots write their findings almost entirely in HTML, and the reader showed the markup as
@@ -25,6 +112,93 @@ hit-testing — every Avalonia route from a point to text geometry is quadratic 
 Markdig's renderer throws past 128 nested containers after parsing has returned, so synthesized
 nesting is budgeted at 100 before anything mutates, and normalisation runs before anything
 measures a height.
+
+## Status answers the one question a tool driving setup is asking
+
+`kcap status --json` reports what the text lines report, and adds the question none of them answers
+outright: is this machine set up. `configured` is true when a server is set and this CLI can
+authenticate to it, and stays true when that server is unreachable -- reachability is a network fact,
+and a tool that read it as "not set up" would send someone through setup again over a dropped VPN.
+Whether the server still accepts those credentials is `kcap whoami`'s question, and it is left there
+rather than answered twice.
+
+`configured` is a claim rather than a description, and two credential states that read fine in prose
+cannot support it. A machine credential is diverted by EITHER environment variable, deliberately, so
+that a half-configured runner is diagnosed instead of being told to run a login it cannot -- but only
+both halves authenticate, so one half is its own state and is not configured. A token bound to
+another server is withheld before the request is sent, so it is reported as the wrong server rather
+than as valid; status asks the server-aware accessor the same way an outgoing request does. Whether
+the server still accepts a correctly bound token stays `whoami`'s question.
+
+The opposite mistake is a server that asks for no auth. The credential lane checks the announced
+provider before it looks for any credential, so such a server is fully usable with an empty token
+store; judged on credentials alone it would read as never set up, and a tool gating setup on
+`configured` would run it on every call. Status resolves auth in the lane's own order -- no auth, then
+the machine, then the token store -- and `not_required` is configured. The provider comes from the
+probe's own answer, which is the document that announces it, at no extra round trip. When the probe
+gets no answer the last successful discovery on disk stands in, so an outage does not unconfigure
+such a server -- and status records its own answers there, because on a freshly set-up machine it may
+be the only thing that has asked. Discovery's outage fallback is deliberately not used: it answers "None" for an
+unreachable server with an empty token store, which would call a machine nobody set up configured.
+
+The auth states are an enum with a wire spelling rather than strings shared between the resolver, the
+text line and `configured`. A switch that misses a named value is a build error here, so a new state
+cannot fall through to "not authenticated" unnoticed.
+
+The daemon sweep now validates the recorded start token, the way `daemon status` and `doctor` do, so
+a recycled PID cannot present a foreign process as a running daemon. A marker that is present but
+unparseable counts as stale rather than being skipped: it is the breadcrumb of a hard death, and the
+file still has to be cleaned up.
+
+Both outputs read from the same gatherers -- the server probe, the auth resolution, the daemon PID
+sweep -- so they cannot drift into disagreeing about the same machine. That was already the rule
+between the Hooks line and the unconfigured-harness lines below it, and between this command and
+`kcap daemon status`; the JSON payload joins it rather than opening a second source of truth.
+
+## Discovery can report without choosing
+
+The workspaces an account belongs to only exist on the far side of a sign-in, and `setup` learns them
+in the middle of a run it then carries through to completion. A tool that has to ask someone which
+workspace to use has nowhere to stand: the choice has to be made before the only command that could
+inform it.
+
+`kcap setup --discover` signs in, reports what it found, and stops. It reaches the rows through the
+proxy directly rather than through the normal discovery flow, because that flow cannot be talked out
+of choosing: a sole workspace is auto-selected before any picker is consulted, so a declining picker
+would configure the machine for exactly the case a report is most needed, and an account with no
+workspace would fail rather than answer. Publishing is a separate step this route never reaches, and
+no provisioner is passed, so nothing is written and nothing is created.
+
+`can_create` is the lane's answer rather than a count. Only the hosted lane provisions; a GitHub-App
+account gets a workspace by having the app installed on an org, so telling it that it may create one
+would be a dead end. It is not a promise either: a workspace this account already asked for and that
+is still being made is only learned by the create call itself, and a report must not make that call.
+
+What `--discover` takes beside itself is a closed set, not a list of what to refuse. A workspace
+argument answers the question discovery exists to ask, and any other option configures something in
+a run that configures nothing, so both are refused by name. A list of refusals would have to know
+every flag that takes a value, or read `--plugin-scope user` as a workspace called "user".
+
+`kcap login --discover` keeps its own meaning — force discovery, pick, and save — so the same word
+reports on one command and configures on the other. Each help text points at the other.
+
+Under `--json` the sign-in narrates itself on stderr. The user still has to see the URL and the code
+they are approving, and the document still has to be the only thing on stdout, so the progress sink
+takes the stream to write to rather than assuming stdout.
+
+## The harness list answers a machine as well as a person
+
+A tool setting kcap up for someone has to ask which coding agents to record, and the honest option
+list is the one this machine can actually produce. `kcap harness list` already knows it, so `--json`
+emits the same report as one document on stdout and nothing else, the contract `kcap import
+--discover --json` set.
+
+Every harness this build knows is listed, present or not, so a consumer can tell "unsupported" from
+"not installed here" without carrying its own vendor list and going stale the day a vendor is added.
+The two detection signals stay apart rather than being ORed the way the nudge inventory folds them:
+a caller offering someone a choice can then say which signal it saw, and one that only wants "is it
+here" ORs them itself. `--json` is refused on `dismiss` and `reset` rather than ignored, because
+ignoring it would hand a caller expecting JSON a line of prose on a subcommand that writes.
 
 ## A code block carries its own copy, and runs itself when it is a command
 

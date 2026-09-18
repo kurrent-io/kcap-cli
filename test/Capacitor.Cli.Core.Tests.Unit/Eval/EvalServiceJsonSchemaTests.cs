@@ -113,4 +113,46 @@ public class EvalServiceJsonSchemaTests {
 
         await Assert.That(maxItems).IsEqualTo(5);
     }
+
+    // ── VerdictJsonSchema (D13) ──────────────────────────────────────────────
+
+    static JsonElement VerdictSchemaRoot() =>
+        JsonDocument.Parse(EvalService.GetVerdictJsonSchema()).RootElement.Clone();
+
+    [Test]
+    public async Task VerdictJsonSchema_outcome_is_a_required_three_value_enum() {
+        var root = VerdictSchemaRoot();
+
+        var values = root.GetProperty("properties").GetProperty("outcome").GetProperty("enum")
+            .EnumerateArray().Select(e => e.GetString()!).ToList();
+        await Assert.That(values).IsEquivalentTo(["assessed", "insufficient_evidence", "not_applicable"]);
+
+        var required = root.GetProperty("required").EnumerateArray().Select(e => e.GetString()).ToList();
+        await Assert.That(required).Contains("outcome");
+    }
+
+    [Test]
+    public async Task VerdictJsonSchema_score_is_nullable_integer_with_bounds() {
+        var score = VerdictSchemaRoot().GetProperty("properties").GetProperty("score");
+
+        var types = score.GetProperty("type").EnumerateArray().Select(e => e.GetString()!).ToList();
+        await Assert.That(types).IsEquivalentTo(["integer", "null"]);
+        await Assert.That(score.GetProperty("minimum").GetInt32()).IsEqualTo(1);
+        await Assert.That(score.GetProperty("maximum").GetInt32()).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task VerdictJsonSchema_verdict_is_nullable_string() {
+        var verdict = VerdictSchemaRoot().GetProperty("properties").GetProperty("verdict");
+
+        var types = verdict.GetProperty("type").EnumerateArray().Select(e => e.GetString()!).ToList();
+        await Assert.That(types).IsEquivalentTo(["string", "null"]);
+    }
+
+    [Test]
+    public async Task VerdictJsonSchema_finding_has_min_length_one() {
+        var finding = VerdictSchemaRoot().GetProperty("properties").GetProperty("finding");
+
+        await Assert.That(finding.GetProperty("minLength").GetInt32()).IsEqualTo(1);
+    }
 }
