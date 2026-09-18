@@ -416,6 +416,14 @@ public class AntigravityRuntimeLifecycleTests {
 
         await rt.SendUserInputAsync("two").WaitAsync(HangGuard);
 
+        // Park the worker before touching the fake clock: an Advance still in flight when time jumps
+        // resets the very idle we are about to read. session_started is the barrier — the worker emits
+        // it after handling turn 1's init, and Write advances the clock BEFORE the envelope becomes
+        // visible, so consuming it proves that last Advance has landed. SettleClock then covers any
+        // residual emission and fails loudly if the worker never parks.
+        await DrainUntil(rt, AcpEventKind.SessionStarted);
+        await SettleClock(clock);
+
         // Non-zero idleness to lose: without this the "unchanged" assertion below would hold trivially
         // at 0 whether or not the clock advanced.
         time.Advance(TimeSpan.FromSeconds(7));
@@ -439,6 +447,35 @@ public class AntigravityRuntimeLifecycleTests {
 
         await Assert.That(clock.ActivitySeq).IsEqualTo(seqBefore);
         await Assert.That(clock.IdleForMs).IsEqualTo(idleBefore);
+    }
+
+    /// <summary>Waits for <see cref="AgentActivityClock.ActivitySeq"/> to hold still, so no
+    /// background <c>Advance</c> is pending when the caller next stamps the clock.</summary>
+    /// <summary>Consumes envelopes until one of <paramref name="kind"/> is seen — a deterministic
+    /// barrier on the worker having produced that emission.</summary>
+    static async Task DrainUntil(AntigravityHostedAgentRuntime rt, string kind) {
+        using var cts = new CancellationTokenSource(HangGuard);
+        while (true) {
+            var env = await rt.Envelopes.ReadAsync(cts.Token);
+            if (env.Kind == kind) return;
+        }
+    }
+
+    static async Task SettleClock(AgentActivityClock clock) {
+        const int required = 4;
+        var last = clock.ActivitySeq;
+        var stable = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < HangGuard && stable < required) {
+            await Task.Delay(25);
+            var now = clock.ActivitySeq;
+            if (now != last) { last = now; stable = 0; }
+            else stable++;
+        }
+        // Assert, not fall through: a starved worker that never settles must fail loudly here rather
+        // than let the test advance the clock into still-pending background activity.
+        await Assert.That(stable).IsGreaterThanOrEqualTo(required)
+            .Because("the turn worker must reach a parked state before the fake clock is advanced");
     }
 
     /// <summary>A turn child that emits its <c>init</c> and then holds the turn open until the test
