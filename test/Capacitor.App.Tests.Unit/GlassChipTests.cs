@@ -1,10 +1,12 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Controls;
 using Capacitor.App.Materials;
+using LiquidGlassAvaloniaUI;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -68,4 +70,60 @@ public class GlassChipTests {
             await Assert.That(chip.GetVisualDescendants().OfType<GlassLayer>().Any()).IsFalse();
         } finally { window.Close(); }
     });
+
+    [Test]
+    public Task A_liquid_glass_picker_takes_the_glass_template_too() => AvaloniaSession.RunOnUiAsync(async () => {
+        var chip = Picker();
+        var (window, _) = Show(chip, SurfaceMaterial.LiquidGlass);
+        try {
+            await Assert.That(chip.GetVisualDescendants().OfType<GlassLayer>().Single().Kind).IsEqualTo(GlassKind.Chip);
+            await Assert.That(chip.Padding).IsEqualTo(new Thickness(12, 7));
+            await Assert.That(chip.GetVisualDescendants().OfType<ContentPresenter>().Any(p => p.Name == "ChipContent")).IsTrue();
+            await Assert.That(Glass(chip).ChromaticAberration).IsTrue();
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Each_state_moves_the_glass_it_is_meant_to_move() => AvaloniaSession.RunOnUiAsync(async () => {
+        var chip = Picker();
+        var (window, _) = Show(chip, SurfaceMaterial.SoftGlass);
+        try {
+            var glass = Glass(chip);
+            var ring = chip.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "FocusRing");
+            var root = chip.GetVisualDescendants().OfType<Grid>().Single(g => g.Name == "ChipRoot");
+            var resting = (glass.TintColor, glass.SurfaceColor, glass.HighlightOpacity, glass.ShadowEnabled);
+            await Assert.That(resting.HighlightOpacity).IsEqualTo(0.45);
+            await Assert.That(resting.ShadowEnabled).IsTrue();
+            await Assert.That(ring.IsVisible).IsFalse();
+            await Assert.That(root.Opacity).IsEqualTo(1d);
+
+            Set(chip, ":pointerover", true);
+            await Assert.That(glass.TintColor).IsEqualTo(Color.Parse("#30DCEFFF"));
+            await Assert.That(glass.HighlightOpacity).IsEqualTo(0.85);
+            Set(chip, ":pointerover", false);
+
+            Set(chip, ":pressed", true);
+            await Assert.That(glass.SurfaceColor).IsEqualTo(Color.Parse("#80172533"));
+            await Assert.That(glass.HighlightOpacity).IsEqualTo(0.4);
+            await Assert.That(glass.ShadowEnabled).IsFalse();
+            Set(chip, ":pressed", false);
+
+            Set(chip, ":focus-visible", true);
+            await Assert.That(ring.IsVisible).IsTrue();
+            Set(chip, ":focus-visible", false);
+
+            Set(chip, ":disabled", true);
+            await Assert.That(root.Opacity).IsEqualTo(0.45);
+            Set(chip, ":disabled", false);
+
+            await Assert.That((glass.TintColor, glass.SurfaceColor, glass.HighlightOpacity, glass.ShadowEnabled)).IsEqualTo(resting);
+        } finally { window.Close(); }
+    });
+
+    static LiquidGlassSurface Glass(Button chip) => chip.GetVisualDescendants().OfType<LiquidGlassSurface>().Single();
+
+    static void Set(Button chip, string state, bool on) {
+        ((IPseudoClasses)chip.Classes).Set(state, on);
+        Dispatcher.UIThread.RunJobs();
+    }
 }
