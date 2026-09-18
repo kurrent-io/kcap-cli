@@ -1,42 +1,11 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:kcap="clr-namespace:Capacitor.App.Controls"
-        xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI">
+        xmlns:kcap="clr-namespace:Capacitor.App.Controls">
+    <!-- The panel is the content's own Surface under glass, so the presenter stands back. A glass
+         layer in the presenter's TEMPLATE tints but never paints the backdrop. -->
     <Style Selector="FlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=SoftGlass],
                      FlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=LiquidGlass]">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="Template">
-            <ControlTemplate>
-                <Panel glass:LiquidGlassBackdrop.IsExcludedFromCapture="True">
-                    <kcap:GlassLayer Kind="Panel" CornerRadius="{TemplateBinding CornerRadius}" />
-                    <Border CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}"
-                            ClipToBounds="True">
-                        <ContentPresenter Name="PART_ContentPresenter" Content="{TemplateBinding Content}"
-                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
-                    </Border>
-                </Panel>
-            </ControlTemplate>
-        </Setter>
-    </Style>
-
-    <Style Selector="MenuFlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=SoftGlass],
-                     MenuFlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=LiquidGlass]">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="Template">
-            <ControlTemplate>
-                <Panel glass:LiquidGlassBackdrop.IsExcludedFromCapture="True">
-                    <kcap:GlassLayer Kind="Panel" CornerRadius="{TemplateBinding CornerRadius}" />
-                    <Border CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}"
-                            ClipToBounds="True">
-                        <ScrollViewer>
-                            <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}"
-                                            KeyboardNavigation.TabNavigation="Continue" Grid.IsSharedSizeScope="True" />
-                        </ScrollViewer>
-                    </Border>
-                </Panel>
-            </ControlTemplate>
-        </Setter>
     </Style>
 </Styles>

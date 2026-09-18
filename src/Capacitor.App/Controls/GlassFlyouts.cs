@@ -10,4 +10,8 @@ public static class GlassFlyouts {
     /// to that window; under Opaque it stays a native popup.
     public static void FollowMaterial(PopupFlyoutBase flyout, Control owner) =>
         flyout.Opening += (_, _) => flyout.Popup.ShouldUseOverlayLayer = MaterialScope.GetMaterial(owner).IsGlass();
+
+    /// The flyout's content wrapped in the panel that draws the glass. A glass layer in the
+    /// presenter's own template tints but never paints the backdrop, so the layer belongs here.
+    public static Surface Panel(Control content) => new() { Classes = { "panel" }, Content = content };
 }
