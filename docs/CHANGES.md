@@ -42,7 +42,16 @@ no provisioner is passed, so nothing is written and nothing is created.
 
 `can_create` is the lane's answer rather than a count. Only the hosted lane provisions; a GitHub-App
 account gets a workspace by having the app installed on an org, so telling it that it may create one
-would be a dead end.
+would be a dead end. It is not a promise either: a workspace this account already asked for and that
+is still being made is only learned by the create call itself, and a report must not make that call.
+
+What `--discover` takes beside itself is a closed set, not a list of what to refuse. A workspace
+argument answers the question discovery exists to ask, and any other option configures something in
+a run that configures nothing, so both are refused by name. A list of refusals would have to know
+every flag that takes a value, or read `--plugin-scope user` as a workspace called "user".
+
+`kcap login --discover` keeps its own meaning — force discovery, pick, and save — so the same word
+reports on one command and configures on the other. Each help text points at the other.
 
 Under `--json` the sign-in narrates itself on stderr. The user still has to see the URL and the code
 they are approving, and the document still has to be the only thing on stdout, so the progress sink

@@ -3,39 +3,56 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// Pins the guard that keeps `--discover` from being handed the answer it exists to find. A named
-/// workspace is refused rather than ignored, wherever it sits.
+/// Pins what `--discover` accepts beside itself. A named workspace is refused rather than ignored,
+/// wherever it sits, and so is any flag a run that configures nothing would have to drop.
 /// </summary>
 public class SetupDiscoverGuardTests {
     [Test]
-    public async Task Plain_discovery_names_nothing() {
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover"])).IsFalse();
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "--json"])).IsFalse();
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "--device", "--github"])).IsFalse();
+    public async Task Discovery_and_the_flags_that_shape_it_are_accepted() {
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover"])).IsNull();
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "--json"])).IsNull();
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "--device", "--github"])).IsNull();
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "--json", "--no-prompt"])).IsNull();
     }
 
-    // A valued flag's value is not a workspace: "private" here is the visibility, not a slug.
+    // Read by the update notice for every command, so a caller that always passes it must not be refused.
     [Test]
-    public async Task A_valued_flags_value_is_not_a_workspace() {
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "--default-visibility", "private"]))
-            .IsFalse();
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "--daemon-name", "laptop"])).IsFalse();
-    }
+    public async Task The_process_wide_update_opt_out_is_accepted() =>
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "--no-update-check"])).IsNull();
 
     [Test]
-    public async Task A_positional_slug_is_caught_wherever_it_sits() {
-        // The tenant argument's usual position.
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "acme", "--discover"])).IsTrue();
-        // …and after the flag, which is where it slips past a check that only reads args[1].
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "acme"])).IsTrue();
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "--json", "acme"])).IsTrue();
-    }
+    [Arguments("setup acme --discover")]
+    [Arguments("setup --discover acme")]
+    [Arguments("setup --discover --json acme")]
+    public async Task A_positional_workspace_is_refused_wherever_it_sits(string commandLine) =>
+        await Assert.That(SetupCommand.DiscoverArgumentError(commandLine.Split(' ')))
+            .Contains("cannot also be given one");
 
     [Test]
-    public async Task Naming_a_server_or_a_workspace_to_create_counts_too() {
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "--server-url", "https://acme.kcap.ai"]))
-            .IsTrue();
-        await Assert.That(SetupCommand.NamesAWorkspace(["setup", "--discover", "--org", "Acme", "--slug", "acme"]))
-            .IsTrue();
+    public async Task Naming_a_server_or_a_workspace_to_create_is_refused_as_a_workspace() {
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "--server-url", "https://acme.kcap.ai"]))
+            .Contains("cannot also be given one");
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "--org", "Acme", "--slug", "acme"]))
+            .Contains("cannot also be given one");
     }
+
+    // The flag is what gets named, not its value: "user" read as a workspace would tell the reader to
+    // drop an argument they never gave.
+    [Test]
+    [Arguments("--plugin-scope", "user")]
+    [Arguments("--default-visibility", "private")]
+    [Arguments("--daemon-name", "laptop")]
+    [Arguments("--use-provider-api-key", "true")]
+    public async Task A_flag_that_configures_something_is_named_in_the_refusal(string flag, string value) {
+        var refusal = SetupCommand.DiscoverArgumentError(["setup", "--discover", flag, value]);
+
+        await Assert.That(refusal).Contains(flag);
+        await Assert.That(refusal).DoesNotContain("cannot also be given one");
+    }
+
+    // A value that repeats the workspace's name must not hide the workspace.
+    [Test]
+    public async Task A_workspace_is_still_caught_when_a_later_value_repeats_it() =>
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "acme", "--daemon-name", "acme"]))
+            .Contains("cannot also be given one");
 }

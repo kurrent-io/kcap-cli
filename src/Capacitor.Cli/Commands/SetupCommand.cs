@@ -1715,46 +1715,37 @@ public sealed class SetupCommand(
         return (new RequestedWorkspace(orgName!.Trim(), canonical), null);
     }
 
-    /// <summary>
-    /// <c>kcap setup --discover</c> — sign in, report the workspaces this account can reach, and
-    /// change nothing. What a tool needs before it can ask someone which workspace to use, since
-    /// that list only exists on the far side of a sign-in.
-    ///
-    /// <para>Nothing is published because the picker declines: a cancel is strictly pre-boundary, so
-    /// no profile is written, no workspace activated and no token stored. The cost is that the run
-    /// which follows signs in again — worth knowing before reaching for this, rather than asking the
-    /// user which workspace they want when they already know.</para>
-    ///
-    /// <para>No provisioner is supplied either, so this route cannot create a workspace even against
-    /// an account with none.</para>
-    /// </summary>
-    /// <summary>
-    /// Whether the arguments already name a workspace, by flag or as a bare token anywhere after the
-    /// verb. Position is not enough: <c>setup acme --discover</c> and <c>setup --discover acme</c>
-    /// both name one, and only the first puts it where the tenant argument is normally read.
-    /// </summary>
-    /// <remarks>A valued flag's value is not a bare token, so the values of the flags that take one
-    /// are excluded before the scan — otherwise <c>--default-visibility private</c> would read as a
-    /// workspace called "private".</remarks>
-    internal static bool NamesAWorkspace(string[] args) {
-        if (GetArg(args, "--server-url") is not null) return true;
-        if (GetArg(args, "--org") is not null) return true;
-        if (GetArg(args, "--slug") is not null) return true;
+    static readonly string[] DiscoverFlags =
+        ["--discover", "--json", "--github", "--device", "--no-prompt", "--no-update-check"];
 
-        string[] valued = ["--server-url", "--org", "--slug", "--default-visibility", "--daemon-name", "--profile"];
-        var values = valued.Select(flag => GetArg(args, flag)).Where(v => v is not null).ToHashSet();
+    /// <summary>
+    /// Why these arguments cannot go with <c>--discover</c>, or null when they can. The accepted set
+    /// is closed rather than a list of what to refuse: a flag that takes a value would otherwise have
+    /// its value read as a workspace, and a flag that configures something would be dropped without
+    /// a word by a run that configures nothing.
+    /// </summary>
+    internal static string? DiscoverArgumentError(string[] args) {
+        var stray = args.Skip(1).FirstOrDefault(a => !DiscoverFlags.Contains(a));
 
-        return args.Skip(1).Any(a => !a.StartsWith('-') && !values.Contains(a));
+        if (stray is null) return null;
+
+        // Naming a workspace answers the question discovery exists to ask, so the pair is a mistake
+        // rather than a refinement. A bare token names one wherever it sits, not only straight
+        // after the verb where the tenant argument is normally read.
+        return stray is "--server-url" or "--org" or "--slug" || !stray.StartsWith('-')
+            ? "--discover reports the workspaces you belong to, so it cannot also be given one.\n"
+            + "  Drop the workspace argument to discover, or drop --discover to use it."
+            : $"--discover only reports, so {stray} has nothing to apply to.\n"
+            + "  It takes --json, --github, --device and --no-prompt.";
     }
 
+    /// <summary>
+    /// <c>kcap setup --discover</c>: sign in, report the workspaces this account can reach, and change
+    /// nothing. Nothing is kept, the token included, so the run that follows signs in again.
+    /// </summary>
     async Task<int> RunDiscoverOnlyAsync(string[] args) {
-        // Naming a workspace answers the question discovery exists to ask, so the pair is a mistake
-        // rather than a refinement — and silently ignoring one of them would hide it.
-        if (NamesAWorkspace(args)) {
-            await Console.Error.WriteLineAsync(
-                "--discover reports the workspaces you belong to, so it cannot also be given one.");
-            await Console.Error.WriteLineAsync(
-                "  Drop the workspace argument to discover, or drop --discover to use it.");
+        if (DiscoverArgumentError(args) is { } refusal) {
+            await Console.Error.WriteLineAsync(refusal);
 
             return 1;
         }
