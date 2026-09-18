@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
@@ -9,6 +10,7 @@ using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.PrDetection;
+using Spectre.Console;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -28,19 +30,73 @@ public class SetupCommandTests {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    /// <summary>The command under test, with the import runner each test is pinning.</summary>
+    // Where a step-6 test's PathsWithEvalWatchFor stages a vendor's CLI, and what every Command(...)
+    // harness registry is built to search — so a test can make a vendor detected AND launchable just
+    // by staging its binary here, through the real per-vendor detection signal rather than a fake one.
+    [TempDir] public required TempDir Bin { get; init; }
+
+    /// <summary>The command under test, with the import runner each test is pinning. Step 6's
+    /// collaborators default to a fake that never spawns/launches anything real and a picker that
+    /// always answers Skip, so an ordinary test never has to know they exist.</summary>
     SetupCommand Command(ISetupImportRunner imports, string workdir) =>
+        Command(imports, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), workdir);
+
+    SetupCommand Command(
+            ISetupImportRunner imports, IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
+            string workdir, Func<IReadOnlyList<string>, string?>? pick = null) =>
         new(Config.Root, Resolutions.None(Config.Root),
-            AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
+            AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home,
+            TestHarnesses.Under(Home, TestBinaries.Searching(Bin)),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
-            NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
+            NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None);
+            TestBinaries.None) {
+            PickHandoffVendor = pick ?? (_ => "Skip")
+        };
 
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>
         new SetupFacadeFactory(Config.Root, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy,
             Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System);
+
+    /// <summary>A vendor's CLI name, matching <c>HandoffLaunchRecipe</c>'s own vendor list.</summary>
+    static string CliBinaryFor(HarnessId id) => id switch {
+        HarnessId.Claude      => "claude",
+        HarnessId.Codex       => "codex",
+        HarnessId.Cursor      => "cursor-agent",
+        HarnessId.Copilot     => "copilot",
+        HarnessId.Gemini      => "gemini",
+        HarnessId.Kiro        => "kiro-cli",
+        HarnessId.Pi          => "pi",
+        HarnessId.OpenCode    => "opencode",
+        HarnessId.Antigravity => "agy",
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, "No launch recipe for this vendor.")
+    };
+
+    /// <summary>Stages <paramref name="vendor"/>'s CLI on <see cref="Bin"/> (the search path every
+    /// <c>Command(...)</c> harness registry uses) and the eval-watch skill under the shared skills
+    /// tree, so the vendor comes out both detected and eligible through the real production
+    /// oracles — no fake registry, since <c>HandleAsync</c> elsewhere needs the real typed
+    /// harnesses.</summary>
+    CodingAgentsStep.Paths PathsWithEvalWatchFor(HarnessId vendor) {
+        TestBinaries.Searching(Bin, CliBinaryFor(vendor));
+
+        var skillsDir = Home.PathTo("agents-skills");
+        Home.CreateFile(["agents-skills", $"kcap-{HandoffVendorEligibility.SkillName}", "SKILL.md"], "skill");
+
+        return new CodingAgentsStep.Paths(
+            ClaudeSettingsPath:   Home.PathTo("claude-settings.json"),
+            ClaudeScopeLabel:     "user",
+            PluginDir:            null,
+            CodexHooksPath:       Home.PathTo("codex-hooks.json"),
+            CursorHooksPath:      Home.PathTo("cursor-hooks.json"),
+            CopilotHooksPath:     Home.PathTo("copilot-hooks.json"),
+            GeminiSettingsPath:   Home.PathTo("gemini-settings.json"),
+            AgentsSkillsDir:      skillsDir,
+            LegacyCodexSkillsDir: Home.PathTo("legacy-codex-skills"),
+            KiroSkillsDir:        Home.PathTo("kiro-skills"),
+            AntigravitySkillsDir: Home.PathTo("antigravity-skills"));
+    }
 
     // --- The browser leg's one outcome line ---
 
@@ -868,115 +924,187 @@ public class SetupCommandTests {
             PiMcpExtensionPath:   Path.Combine(root, "pi-mcp.ts"),
             PiAgentsMdPath:       Path.Combine(root, "pi-AGENTS.md"));
 
-    // --- Step 6 (RunImportStepAsync) wiring ---
+    // --- Step 6 (RunImportStepAsync): discovery, prompt, foreground, background, handoff, picker ---
+
+    SetupCommand.ImportStepInputs Inputs(
+            bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
+            bool auth = true, bool skip = false, string visibility = "org_public") => new(
+        AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
+        Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
+        DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
+        Paths: PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false);
+
+    /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
+    /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
+    /// repository at all.</summary>
+    static ImportCommand.ImportDiscoveryResult Discovered(int repos, int attributed, int unmatched) {
+        var sessions      = new List<(string SessionId, DateTimeOffset? StartedAt)>();
+        var repoBySession = new Dictionary<string, (string Owner, string Name)?>();
+        var now           = DateTimeOffset.UtcNow;
+
+        for (var i = 0; i < attributed; i++) {
+            var id = $"attributed-{i}";
+            sessions.Add((id, now.AddDays(-i)));
+            if (repos > 0) repoBySession[id] = ($"owner{i % repos}", $"repo{i % repos}");
+        }
+
+        for (var i = 0; i < unmatched; i++) sessions.Add(($"unmatched-{i}", now.AddDays(-i)));
+
+        var summary = ImportDiscoverySummary.Build(sessions, repoBySession, []);
+
+        return new ImportCommand.ImportDiscoveryResult(summary, [.. HarnessRegistry.Identities.Select(i => i.Id)]);
+    }
 
     [Test]
-    public async Task RunImportStepAsync_RunDecision_InvokesRunnerWithPinnedArgs() {
+    public async Task Interactive_accept_runs_a_capped_machine_wide_import_and_offers_the_handoff() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var spawner  = FakeBackgroundImportSpawner.Running();
+        var launcher = FakeHandoffAgentLauncher.Ran();
+
+        var result = await Command(runner, spawner, launcher, Config.Directory).RunImportStepAsync(Inputs());
+
+        var inv = runner.Captured!;
+        await Assert.That(inv.Scope).IsEqualTo(new ImportScope.All());
+        await Assert.That(inv.MaxSessions).IsEqualTo(5);
+        await Assert.That(inv.SkipTitle).IsFalse();
+        await Assert.That(inv.DefaultVisibility).IsEqualTo("org_public");
+        await Assert.That(spawner.Spawns).IsEqualTo(1);
+        await Assert.That(spawner.Seen!.ProfileName).IsEqualTo("work");
+        await Assert.That(spawner.Seen.DefaultVisibility).IsEqualTo("org_public");
+        await Assert.That(result.Handoff!.Offered).IsTrue();
+        var file = Directory.GetFiles(Config.Directory, "import-handoff-*.json").Single();
+        await Assert.That(await File.ReadAllTextAsync(file)).Contains("\"handoff_offered\": true");
+    }
+
+    [Test]
+    public async Task No_prompt_imports_everything_uncapped_with_no_child_no_file_no_handoff() {
         var runner = FakeImportRunner.Succeeding();
-        var passed = Resolutions.At("https://example.test", Config.Root);
+        var spawner = FakeBackgroundImportSpawner.Running();
 
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt under --no-prompt"),
-            profiles:          passed,
-            defaultVisibility: "org_public");
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(noPrompt: true, prompt: () => throw new InvalidOperationException("must not prompt")));
 
-        var captured = runner.Captured;
-
-        await Assert.That(captured).IsNotNull();
-        await Assert.That(captured!.Profiles.Resolution.ServerUrl).IsEqualTo("https://example.test");
-        await Assert.That(captured.CurrentRepo).IsEqualTo(("acme", "widgets"));
-        await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
-        await Assert.That(captured.AutoSkipExclusions).IsTrue();
-        await Assert.That(captured.ForcePrivate).IsFalse();
-        await Assert.That(captured.Profiles).IsSameReferenceAs(passed);
+        await Assert.That(runner.DiscoverCalls).IsEqualTo(0);
+        await Assert.That(runner.Captured!.MaxSessions).IsNull();
+        await Assert.That(spawner.Spawns).IsEqualTo(0);
+        await Assert.That(result.Handoff).IsNull();
+        await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
     }
 
     [Test]
-    public async Task RunImportStepAsync_InteractiveAccept_InvokesRunner() {
-        var runner = FakeImportRunner.Succeeding();
+    public async Task Declined_prompt_and_skip_flag_run_nothing_and_write_nothing() {
+        var runner = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
 
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          false,
-            promptYesNo:       () => true,
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
-
-        await Assert.That(runner.Calls).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task RunImportStepAsync_RunnerReturnsNonZero_DoesNotThrowAndCompletes() {
-        var runner = FakeImportRunner.Returning(1);
-
-        // Completing without an unhandled exception is the assertion: a non-zero exit
-        // code must be swallowed (warned about, not propagated) so setup still finishes.
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
-
-        await Assert.That(runner.Calls).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task RunImportStepAsync_RunnerThrows_DoesNotPropagateAndCompletes() {
-        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("boom"));
-
-        // Completing without the InvalidOperationException escaping is the assertion —
-        // import is best-effort and must never fail setup.
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
-
-        await Assert.That(runner.Calls).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task RunImportStepAsync_NoCurrentRepo_SkipsWithoutInvokingRunnerOrPrompting() {
-        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
-
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       null,
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          false,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => false));
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(skip: true));
 
         await Assert.That(runner.Calls).IsEqualTo(0);
+        await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
+    }
+
+    /// <summary>Captures what a step writes through Spectre. <c>AnsiConsole</c> caches its writer at
+    /// first use, so redirecting <c>Console.Out</c> (as <c>ConsoleOutput</c> does) never reaches it —
+    /// the singleton itself has to be swapped, as <c>SetupFacadeParityTests.SpectreCapture</c> does.</summary>
+    sealed class SpectreCapture : IDisposable {
+        readonly IAnsiConsole  _original = AnsiConsole.Console;
+        readonly StringBuilder _text     = new();
+
+        public SpectreCapture() {
+            AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings {
+                Ansi        = AnsiSupport.No,
+                ColorSystem = ColorSystemSupport.NoColors,
+                Out         = new AnsiConsoleOutput(new StringWriter(_text)),
+            });
+        }
+
+        public string Text => _text.ToString();
+
+        public void Dispose() => AnsiConsole.Console = _original;
+    }
+
+    [Test, NotInParallel]
+    public async Task Discovery_fault_prints_the_hint_and_asks_nothing() {
+        var runner = FakeImportRunner.Succeeding().DiscoveryFaulting(new IOException("corrupt db"));
+        using var console = new SpectreCapture();
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => throw new InvalidOperationException("must not prompt")));
+
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Calls).IsEqualTo(0);
+        await Assert.That(console.Text).Contains("corrupt db").And.Contains("kcap import --all");
     }
 
     [Test]
-    public async Task RunImportStepAsync_SkipImportFlag_SkipsWithoutInvokingRunner() {
-        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
+    public async Task Browser_answered_import_is_reported_and_nothing_else_runs() {
+        var runner = FakeImportRunner.Succeeding();
+        var answer = new FirstRunImportAnswer([], FirstRunImportWindows.Everything, FirstRunImportTitles.Server, null, DateTimeOffset.UtcNow, 0);
 
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        true,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: answer));
 
-        await Assert.That(runner.Calls).IsEqualTo(0);
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Calls + runner.DiscoverCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Failed_run_with_nothing_landed_spawns_the_child_but_suppresses_the_handoff_as_import_failed() {
+        var runner  = FakeImportRunner.Faulting(new InvalidOperationException("boom")).Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(Inputs());
+
+        await Assert.That(spawner.Spawns).IsEqualTo(1);
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.ImportFailed);
+        await Assert.That(await File.ReadAllTextAsync(Directory.GetFiles(Config.Directory, "import-handoff-*.json").Single()))
+            .Contains("\"cohort\": \"unknown\"");
+    }
+
+    [Test]
+    public async Task Vanished_corpus_is_complete_no_new_sessions_and_spawns_nothing() {
+        var runner = FakeImportRunner.Of(_ => new SetupImportRun(
+                0, ImportRunSelection.Empty,
+                new ImportCommand.ImportRunOutcome(FakeImportRunner.ZeroCounts, 0, ImportRunPartition.Empty), null))
+            .Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(Inputs());
+
+        await Assert.That(spawner.Spawns).IsEqualTo(0);
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.NoNewSessions);
+    }
+
+    [Test]
+    public async Task Launch_failure_falls_back_to_the_paste_block_with_the_run_id() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
+        var launcher = FakeHandoffAgentLauncher.Failing();
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), launcher, Config.Directory, pick: labels => labels[0])
+            .RunImportStepAsync(Inputs());
+
+        await Assert.That(launcher.Launches).IsEqualTo(1);
+        await Assert.That(result.PasteBlock).StartsWith(SetupCommand.EvalWatchPrompt + "\n(run: ");
+        await Assert.That(result.PasteBlock).Contains(result.RunId!);
+    }
+
+    [Test]
+    public async Task Pinned_prompts() {
+        await Assert.That(SetupCommand.ImportPrompt).IsEqualTo("Import past sessions from this machine?");
+        await Assert.That(SetupCommand.EvalWatchPrompt).IsEqualTo("Follow my kcap import");
+        await Assert.That(SetupCommand.HandoffPromptText("abc")).IsEqualTo("Follow my kcap import\n(run: abc)");
+    }
+
+    [Test]
+    public async Task NextStepItems_puts_the_handoff_item_above_the_tour_and_omits_it_when_null() {
+        var with    = SetupCommand.NextStepItems(offerGuidedTour: true, handoffPaste: "Follow my kcap import\n(run: x)");
+        var without = SetupCommand.NextStepItems(offerGuidedTour: true, handoffPaste: null);
+
+        await Assert.That(with.Count).IsEqualTo(3);
+        await Assert.That(with[1].Answer).Contains("Follow my kcap import");
+        await Assert.That(with[2].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
+        await Assert.That(without.Count).IsEqualTo(2);
     }
 
     // HandleAsync-level acceptance coverage for the import wiring: the whole wizard — flag parsing,
