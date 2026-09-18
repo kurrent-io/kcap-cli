@@ -307,9 +307,12 @@ public static partial class SecretRedactor {
 
     static readonly Regex JsonKeySecretRegex = JsonKeySecretRx();
 
-    // Env var: SECRET_NAME=value (uppercase key containing secret keyword, value until whitespace
-    // or a quote — a quote ends the value in every shell and JSON-ish dump it can appear in).
-    [GeneratedRegex(@"([A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*=)([^\s""\\]+)", RegexOptions.IgnoreCase)]
+    // Env var: SECRET_NAME=value (value runs until whitespace or a quote). The leading lookbehind
+    // anchors the match to a name boundary so the unanchored `[A-Z_]*` prefix scans a long
+    // delimiter-free run once, not once per character (O(n^2)) — the same matches, since the greedy
+    // prefix from the run start already reaches any keyword in the run. The cost only surfaces on the
+    // multi-megabyte values that reuse this vocabulary through RedactValue, outside RedactLine's 64K cap.
+    [GeneratedRegex(@"(?<![A-Za-z0-9_])([A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*=)([^\s""\\]+)", RegexOptions.IgnoreCase)]
     private static partial Regex EnvVarSecretRx();
 
     static readonly Regex EnvVarSecretRegex = EnvVarSecretRx();
