@@ -6,15 +6,6 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
-## Work-context section headers avoid repeating the eyebrow
-
-The PARTS, SUBAGENTS and WHO'S ON IT rows pair an eyebrow with a right-aligned meta line. Repeating
-the section noun there ("1 of 3 parts", "2 total") adds noise without new meaning. PARTS keeps
-settled-over-total only ("1 of 3"). SUBAGENTS names running state: every row still running is
-"N running", a mix is "N of M running", and when none are running the meta is a bare count beside
-SUBAGENTS. WHO'S ON IT lists every contributor in the body when there are at most four, so the meta
-names sessions alone; past that cap it adds a people count again because the list is truncated.
-
 ## The desktop chat shows a session's subagents
 
 A Claude session's subagents are read off the transcript alone: an `Agent` or `Task` call starts a
