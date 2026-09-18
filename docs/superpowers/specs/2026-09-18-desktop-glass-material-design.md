@@ -10,14 +10,14 @@ Liquid glass. It lives in an Appearance card in the Settings window, applies liv
 persists. On macOS the default is Soft glass; everywhere else, and for anyone with
 macOS "Reduce transparency" switched on, the default is Opaque.
 
-Glass covers the navigation and control layer: the session rail, the launcher's
-composer card and chips, and the panel flyouts. Reading surfaces (chat, remote
+Glass covers the navigation and control layer: the session rail, the launcher's goal
+card (`GoalCard`) and chips, and the panel flyouts. Reading surfaces (chat, remote
 sessions, the pull request reader) and the Settings, Onboarding and Feedback windows
 stay opaque.
 
 The user chose:
 
-- **flyouts in scope** over rail, composer and chips alone, subject to a render probe;
+- **flyouts in scope** over rail, goal card and chips alone, subject to a render probe;
 - **vendored source** over the vendored `.nupkg` or waiting for NuGet.org;
 - **a `Surface` control with an inherited material property** over a custom
   `ThemeVariant` or productionising the prototype's attach code;
@@ -43,6 +43,13 @@ owning window, at the cost of clipping it to the window bounds.
 `TopLevel.Renderer` with `BindingFlags.NonPublic`. If an Avalonia upgrade renames it,
 the lookup returns null and the backdrop stops refreshing with no error.
 
+**The snapshot is the whole window minus excluded visuals.** The capture renderer
+walks the top-level's visual tree and skips two things with their subtrees: every
+visible `LiquidGlassSurface` in that window, and any visual with
+`LiquidGlassBackdrop.IsExcludedFromCapture` set. Anything else drawn in front of a
+glass surface is captured, so foreground content that is a sibling of the glass
+would be blurred and refracted underneath itself.
+
 **The package is not on NuGet.org.** `LiquidGlassAvaloniaUI` 0.2.0 exists only as a
 GitHub release asset. Upstream is MIT, tag `v0.2.0`, commit
 `0c65bf0aadc32d50eb0d83215c48f4222f9af84b`.
@@ -66,12 +73,15 @@ Upstream's `LiquidGlassAvaloniaUI/` library directory is copied unmodified to
 `src/ThirdParty/LiquidGlassAvaloniaUI/`: 13 C# files, 6 `.sksl` shaders and `LICENSE`.
 The demo, browser and test projects are not copied.
 
-- Its own `.csproj` targets `net10.0` and takes Avalonia, Avalonia.Skia and SkiaSharp
-  from `Directory.Packages.props`. It joins `Capacitor.slnx` and is referenced only by
-  `Capacitor.App`.
-- A `Directory.Build.props` in `src/ThirdParty/` switches off warnings-as-errors,
-  code-style enforcement and the banned-API analyzer for that subtree, so the files
-  stay byte-identical to upstream and an upstream diff stays trivial.
+- Its own `.csproj` targets `net10.0`. Central package management still applies to
+  it, so `Directory.Packages.props` gains `Avalonia.Skia` (12.1.2, with the other
+  Avalonia pins) and `SkiaSharp` at the version Avalonia.Skia 12.1.2 resolves. It
+  joins `Capacitor.slnx` and is referenced only by `Capacitor.App`.
+- A `Directory.Build.props` in `src/ThirdParty/` does not import the root one, which
+  takes that subtree out of warnings-as-errors, code-style enforcement and the
+  banned-API analyzer. The files stay byte-identical to upstream and an upstream diff
+  stays trivial. The vendored `.csproj` states the properties it needs (nullable,
+  language version) itself, as upstream's does.
 - `src/ThirdParty/LiquidGlassAvaloniaUI/VENDORED.md` records the source URL, tag,
   commit and every local patch with its reason. One patch is planned: the
   pipeline-failure event described under Capability and failure.
@@ -98,16 +108,33 @@ pattern as `AppKitDock`, in a new `AppKitAccessibility`; off macOS it is false. 
 read at startup only. Views and controls never read the platform themselves, so tests
 behave the same on every OS.
 
+**State.** Everything a consumer needs is one immutable snapshot:
+
+```csharp
+public enum MaterialAvailability { Available, NotCapable, PipelineFailed }
+
+public sealed record MaterialState(
+    SurfaceMaterial Effective,
+    SurfaceMaterial? Requested,
+    MaterialAvailability Availability,
+    string? FailureReason,
+    bool ReduceTransparency);
+```
+
+`Effective` resolves in this order: `NotCapable` → `Opaque`; `PipelineFailed` →
+`Opaque`; explicit choice → that choice; `ReduceTransparency` → `Opaque`; otherwise
+`SoftGlass`. `FailureReason` is set exactly when `Availability` is `PipelineFailed`.
+
 **Service.** `IMaterialService`:
 
-- `Requested` — the explicit choice, or null.
-- `Effective` — resolved in this order: not capable → `Opaque`; pipeline failed this
-  session → `Opaque`; explicit choice → that choice; `ReduceTransparency` → `Opaque`;
-  otherwise `SoftGlass`.
-- `Changes` — `IObservable<SurfaceMaterial>` of `Effective`, replaying the current value.
+- `Current` — the latest `MaterialState`.
+- `States` — `IObservable<MaterialState>`, replaying `Current` to a new subscriber and
+  publishing on every change of any field, including a failure that leaves
+  `Effective` where it was.
 - `SetAsync(SurfaceMaterial)` — persists through `IAppStateStore.UpdateAsync`, then
   publishes. A failed write still applies for the run, as the store's contract says.
-- `ReportPipelineFailure(string reason)` — see Capability and failure.
+- `ReportPipelineFailure(string reason)` — latches `PipelineFailed` for the session;
+  later reports are ignored. See Capability and failure.
 
 An explicit choice of a glass material wins over `ReduceTransparency`: the flag moves
 the default, it does not overrule the user.
@@ -116,7 +143,7 @@ the default, it does not overrule the user.
 `SurfaceMaterial`, default `Opaque`.
 
 - `MainWindow` binds it on `SessionsSurface` to `MainWindowViewModel.Material`, which
-  follows the service.
+  follows `States` and takes `Effective`.
 - `WorkspaceHost` sets `MaterialScope.Material="Opaque"` and an explicit
   `KcapCanvasBrush` background, so an open session covers the backdrop.
 - No other window sets it, so Settings, Onboarding and Feedback resolve `Opaque`.
@@ -136,20 +163,44 @@ Class variants:
 | `card` | `KcapSurfaceBrush`, 1 px `KcapBorderBrush`, radius 12 | yes |
 | `raised` | `KcapSurfaceRaisedBrush`, same border | same template as `card` |
 | `rail` | today's rail background and border | yes |
-| `panel` | today's `kcapPanel` look | yes |
+
+Flyout panels are not `Surface`s: the flyout presenters host their own content and
+take the glass through `GlassLayer.panel` (see Flyouts).
 
 `CornerRadius` and `Padding` are set per site, as the inline `Border`s set them today.
+`BorderBrush` is never set at a site: the resting brush comes from the theme and the
+drag-over brush from a style, and a local value would outrank both.
 
-- **Opaque template:** one `Border` with a `ContentPresenter`. It contains no glass
-  element, so the opaque look never touches the shader pipeline and a pipeline failure
-  cannot reach it.
-- **Glass template:** a `Panel` holding a non-hit-testable `LiquidGlassSurface`, a
-  non-hit-testable 1 px rim `Border`, and a transparent padded `Border` with the
-  `ContentPresenter`. The glass is a background sibling, never a wrapper, so content
-  is not reparented and `LiquidGlassSurface.Padding` (which does not inset content) is
-  not relied on.
+- **Opaque template:** one `Border` with a `ContentPresenter`, drawing `Background`,
+  `BorderBrush` and `BorderThickness`. It contains no glass element, so the opaque look
+  never touches the shader pipeline and a pipeline failure cannot reach it.
+- **Glass template:** a root `Panel` holding a `GlassLayer` and a transparent padded
+  `Border` with the `ContentPresenter`. The glass is a background sibling, never a
+  wrapper, so content is not reparented and `LiquidGlassSurface.Padding` (which does
+  not inset content) is not relied on.
+- **Capture boundary:** the glass template's root `Panel` sets
+  `LiquidGlassBackdrop.IsExcludedFromCapture="True"`. The whole surface — glass, rim
+  and foreground content — is then outside every snapshot of that window, so content
+  is never blurred underneath itself. A glass chip inside the goal card samples the
+  window backdrop, not the card under it, exactly as in the prototype, where the chips
+  sat inside the card's excluded `LiquidGlassSurface`. Every glass template in this
+  design (surface, chip, both flyout presenters) sets the flag on its root.
 - A material switch re-applies the template around the same `Content` instance.
 - Glass colours are named resources (`KcapGlass*`) beside the styles, not inline hex.
+
+### Glass layer
+
+`GlassLayer : TemplatedControl` in `Controls/` is the one place glass is drawn and
+parameterised. Its template is a `Panel` with the `LiquidGlassSurface` and a 1 px rim
+`Border`; the control is not hit-testable. It has the class variants `card`, `rail`,
+`panel` and `chip`, and its styles, keyed on class and `MaterialScope.Material`, own
+every glass parameter below. Host templates only place it and pass `CornerRadius` and
+the rim brush (`BorderBrush`) through.
+
+Four hosts use it: the `Surface` glass template, the chip template, and the two
+flyout presenter templates. They share the layer, never a whole template, because
+they present different things: `Surface` and `FlyoutPresenter` a `ContentPresenter`,
+`MenuFlyoutPresenter` an `ItemsPresenter`, the chip its own content grid.
 
 Glass parameters, from the prototype:
 
@@ -182,12 +233,40 @@ attachment strip, Home, rail and launcher views. The plan's first migration task
 produces the exact inventory. An `x:Name` moves onto the `Surface`. Every migrated
 site outside `SessionsSurface` resolves `Opaque` and must render as it does today.
 
+**Attachment drop targets.** `GoalCard` in the launcher and `ComposerCard` in
+`ChatTabView` carry `attachTarget`, and `AttachmentDropPaste` toggles `dragOver` on
+them. The `Border.attachTarget` selectors in `App.axaml` stop matching a `Surface`,
+so they are replaced:
+
+- The resting brush needs no style any more: an opaque `Surface` takes
+  `KcapBorderBrush` from its theme, and a glass `card` has no rim, so its resting
+  `BorderBrush` is transparent.
+- `kcap|Surface.attachTarget.dragOver` sets `BorderBrush` to `KcapPrimaryBrush`. It is
+  declared after the `Surface.axaml` include, so it wins over the material styles in
+  both materials.
+- Both templates draw that brush: the opaque `Border` directly, the glass template
+  through the `GlassLayer` rim. Drag-over is therefore visible under glass as a 1 px
+  primary rim on a card that otherwise has none.
+
+`HomeViewSmokeTests` and `ChatTabViewSmokeTests` look these cards up as `Border`s;
+the lookups change to `Surface` and the behavioural assertions stay.
+
 ## Chips
 
-`Button.kcapChip` keeps its setter-based opaque style. Under a glass scope it takes
-the prototype's `ControlTemplate`, moved to `Controls/GlassChipStyles.axaml`: glass
-layer, content, focus ring, `FocusAdorner` nulled, radius 12, padding 12,7.
+Under a glass scope `Button.kcapChip` takes the prototype's `ControlTemplate`, moved
+to `Controls/GlassChipStyles.axaml`: a `GlassLayer.chip`, the content, a focus ring,
+`FocusAdorner` nulled, radius 12. Swapping the template is not enough on its own:
 
+- **Opaque fills.** The template keeps the name `PART_ContentPresenter`, which
+  `ContentControl` needs to register the presenter, so the four existing
+  `Button.kcapChip … /template/ ContentPresenter#PART_ContentPresenter` styles in
+  `App.axaml` would still paint opaque fills in the normal, hover, pressed and
+  disabled states. Each of them gains `[(kcap|MaterialScope.Material)=Opaque]`. The
+  property's default is `Opaque`, so a chip outside any scope still matches.
+- **Local values.** The five launcher chips set `Padding="11,5"` and
+  `CornerRadius="999"` locally, which outranks any style. Those two attributes move
+  into a `Button.kcapChip.picker` style: `11,5` and `999` under `Opaque`, `12,7` under
+  glass, where the template's radius 12 applies.
 - The dropdown chevron shows only on chips with the new `picker` class. The five
   launcher chips get it.
 - Soft: blur 8, refraction 6 (height 8), tint `#16DCEFFF`, surface `#302C3F52`,
@@ -229,16 +308,37 @@ surface. With `l` the rail width, `w` the remaining width and `h` the height:
 
 ## Flyouts
 
-A probe runs first and is recorded under
-`docs/probes/2026-09-18-glass-overlay-flyout/`: a Skia-backed headless render of a
-window holding the backdrop and an overlay-layer popup with a glass `Surface.panel`.
-It passes when (a) the presenter resolves the inherited material through the popup's
-logical parent and (b) the popup region's pixels change when the backdrop is toggled.
+Two presenter templates, sharing only the `GlassLayer.panel`:
 
-- **Pass:** `FlyoutPresenter.kcapPanel` and `MenuFlyoutPresenter.kcapPanel` take the
-  glass panel template under a glass scope. One helper sets
-  `Popup.ShouldUseOverlayLayer` for the seven `kcapPanel` flyouts while the scope is
-  glass; no call site restates the rule. Under `Opaque` they stay native popups.
+- `FlyoutPresenter.kcapPanel` — the layer behind a `ContentPresenter`.
+- `MenuFlyoutPresenter.kcapPanel` — the layer behind the `ItemsPresenter` in its
+  `ScrollViewer`, as Fluent's own template has it, so item presentation and keyboard
+  navigation are untouched. The rail's help menu (`RailHelpButton`) is the one real
+  `MenuFlyout`; `MainWindowSmokeTests` already drives its three items.
+
+`PopupFlyoutBase.Popup` is public, so one helper sets `Popup.ShouldUseOverlayLayer` on
+the seven `kcapPanel` flyouts while their scope is glass; no call site restates the
+rule. Under `Opaque` they stay native popups.
+
+**Probe first.** It is its own executable under
+`docs/probes/2026-09-18-glass-overlay-flyout/`, a separate process with the Skia
+renderer and headless drawing enabled. It cannot live in the unit suite, whose one
+per-assembly application is non-rendering and cannot be reconfigured. The window
+holds a hard-edged striped backdrop, so blur is measurable, and opens an overlay-layer
+`Flyout` and an overlay-layer `MenuFlyout`, both under a glass scope. It passes when,
+for both presenter types:
+
+1. the presenter resolves the inherited material through the popup's logical parent;
+2. `PipelineUnavailable` was not raised and `LiquidGlassDiagnostics` reports published
+   captures;
+3. the popup region differs from the same frame rendered with a fully transparent
+   presenter, and the stripe edges inside it are measurably softer than outside — a
+   draw operation that returned without drawing fails this, because the stripes would
+   pass through unchanged;
+4. changing the popup's foreground text leaves pixels outside the glyph bounds
+   unchanged, which proves the capture boundary keeps content out of its own backdrop.
+
+- **Pass:** both presenters ship with the glass templates.
 - **Fail:** flyouts stay opaque in this change and the finding is kept.
 
 ## Settings
@@ -250,10 +350,17 @@ than of the window.
 - Three `RadioButton.kcapChoice`: Opaque, Soft glass, Liquid glass. The selection
   shows `Effective`.
 - A choice calls `SetAsync` at once. There is no Save button and no glow toggle.
-- Not capable: the choices are disabled and a hint says glass needs macOS.
-- Pipeline failed: the choices are disabled for the session and a hint gives the
-  reason. The stored choice is untouched, so the next launch tries it again.
-- `SettingsViewModel` takes `IMaterialService`. The window stays opaque.
+- `SettingsViewModel` takes `IMaterialService` and renders from `States`, so a window
+  opened after a failure shows it. The window itself stays opaque.
+
+| `MaterialState` | Choices | Hint |
+|---|---|---|
+| `NotCapable` | disabled | glass needs macOS |
+| `PipelineFailed` | disabled for the session | glass is off until the next launch, with `FailureReason` |
+| `Available`, no explicit choice, `ReduceTransparency` | enabled | Opaque because Reduce transparency is on; picking a glass material overrides it |
+| `Available`, otherwise | enabled | none |
+
+A pipeline failure never touches the stored choice, so the next launch tries it again.
 
 ## Capability and failure
 
@@ -287,17 +394,30 @@ lands.
 
 In the existing headless suite, with `MaterialEnvironment` always passed explicitly:
 
+These are structural: the suite's application does not render, so nothing here
+asserts pixels. Shader output is the probe's job.
+
 - **Scope:** a `Surface` under a glass scope has a `LiquidGlassSurface` descendant; one
   under a pinned `Opaque` subtree does not; the opaque template never does.
-- **Switch:** the same content instance and the composer text survive a material change.
+- **Capture boundary:** the root of every glass template (surface, chip, both flyout
+  presenters) carries `IsExcludedFromCapture`.
+- **Switch:** the same content instance and the goal text survive a material change.
+- **Chips:** under `Opaque`, in a scope and outside any, the presenter keeps its opaque
+  fill in all four states and the launcher chips keep padding `11,5` and radius 999;
+  under glass the presenter has no fill and the padding is `12,7`.
+- **Drop targets:** `dragOver` sets the primary brush on `GoalCard` under both
+  materials and on the chat `ComposerCard`.
+- **Menu flyout:** under glass the help menu still presents its three items.
 - **`AppState`:** round trip; missing → no explicit choice; an unknown string → no
   explicit choice with every other field intact.
 - **`MaterialService`:** each arm of the `Effective` order, including an explicit glass
-  choice beating `ReduceTransparency`; `SetAsync` persists; a failure report drops to
-  `Opaque` and keeps `Requested`; the app-side adapter turns a raised
+  choice beating `ReduceTransparency`; `SetAsync` persists; a failure report latches
+  `PipelineFailed` with its reason, drops `Effective` to `Opaque`, keeps `Requested`
+  and publishes even when `Effective` did not move; a second report is ignored; a late
+  subscriber to `States` gets `Current`; the app-side adapter turns a raised
   `PipelineUnavailable` into exactly one report.
-- **Settings view model:** selection persists and publishes; disabled when not capable;
-  the failure hint appears.
+- **Settings view model:** a selection persists and publishes; each row of the Settings
+  table, including a view model created after the failure.
 - **`MainWindow`:** `WorkspaceHost` resolves `Opaque`; the backdrop is visible only under
   glass; rail width, margin and strip height follow the material.
 - **Reflection guard:** `typeof(TopLevel)` still exposes the `Renderer` property the
