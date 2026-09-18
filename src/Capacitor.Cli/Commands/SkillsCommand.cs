@@ -1,6 +1,9 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.PrDetection;
@@ -26,19 +29,19 @@ class SkillsCommand(
     /// unknown-excludes keeps vendor-restricted docs out of it — those reach their harness through a
     /// vendored tree instead.</summary>
     internal static IReadOnlyList<SkillsTarget> Targets() => [
-        new("agents", Path.Combine(".agents", "skills"), null,
+        new("agents", AgentsPaths.RepoSkillsRelativePath, null,
             [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
              HarnessId.Antigravity],
             [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
              HarnessId.Antigravity]),
-        new("claude", Path.Combine(".claude", "skills"), "claude",
+        new("claude", ClaudePaths.RepoSkillsRelativePath, "claude",
             [HarnessId.Claude],
             [HarnessId.Claude, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode]),
-        new("kiro", Path.Combine(".kiro", "skills"), "kiro",
+        new("kiro", KiroPaths.RepoSkillsRelativePath, "kiro",
             [HarnessId.Kiro], [HarnessId.Kiro]),
         // No session has confirmed a repository-local .gemini/skills; the tree is kept on the
         // vendor's documentation, which is why it has a consumer and no reader.
-        new("gemini", Path.Combine(".gemini", "skills"), null,
+        new("gemini", GeminiPaths.RepoSkillsRelativePath, null,
             [HarnessId.Gemini, HarnessId.Antigravity], []),
     ];
 

@@ -55,8 +55,8 @@ public sealed class KiroPaths {
     /// </summary>
     public string SkillsDir => Path.Combine(ConfigRoot, "skills");
 
-    /// <summary>The repository-local skills tree, resolved against the session's anchor.</summary>
-    public static string RepoSkillsDir(string anchor) => Path.Combine(anchor, ".kiro", "skills");
+    /// <summary>The repository-local skills tree, relative to a session's anchor.</summary>
+    public static string RepoSkillsRelativePath { get; } = Path.Combine(".kiro", "skills");
 
     /// <summary>
     /// kcap's owned agent-hooks file. Mirrors the Copilot model: kcap owns its own
