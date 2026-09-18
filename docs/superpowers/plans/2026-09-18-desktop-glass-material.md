@@ -22,6 +22,7 @@
 - Run one test class: `dotnet run --project test/Capacitor.App.Tests.Unit/Capacitor.App.Tests.Unit.csproj -- --treenode-filter "/*/*/<ClassName>/*"`. `--filter` matches nothing.
 - Git runs as `/usr/bin/git -C <worktree> …`, one plain command at a time. Commit subjects are one imperative clause of at most 80 characters with no issue reference (none exists yet), and every message ends with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - XAML namespaces used throughout: `xmlns:kcap="clr-namespace:Capacitor.App.Controls"`, `xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI"`.
+- The glass style files are included at the END of `Application.Styles` in `App.axaml`, after every inline style, in this order: `GlassStyles`, `SurfaceStyles`, `GlassChipStyles`, `GlassRailStyles`, `GlassFlyoutStyles`. Later-declared styles win at equal priority, and they must beat `App.axaml`'s own `kcapChip` and `kcapPanel` styles.
 - "Any glass" is written `:not([(kcap|MaterialScope.Material)=Opaque])`. If the XAML compiler rejects that form, write the selector twice, comma-separated, once with `=SoftGlass` and once with `=LiquidGlass`; the behaviour is identical.
 
 ## Proven before planning
@@ -1110,7 +1111,7 @@ In `Application.Resources`, inside the existing `ResourceDictionary.MergedDictio
                 <ResourceInclude Source="avares://Kurrent Capacitor/Controls/GlassLayer.axaml" />
 ```
 
-In `Application.Styles`, after the `PullRequestStyles.axaml` include:
+As the LAST child of `Application.Styles`, after every inline style. Among styles of equal priority the later one wins, and the glass styles have to come after `App.axaml`'s own `Button.kcapChip`, `FlyoutPresenter.kcapPanel` and `MenuFlyoutPresenter.kcapPanel` styles. Every later task appends its include after this one, so the final order at the end of `Application.Styles` is `GlassStyles`, `SurfaceStyles`, `GlassChipStyles`, `GlassRailStyles`, `GlassFlyoutStyles`:
 
 ```xml
         <StyleInclude Source="avares://Kurrent Capacitor/Controls/GlassStyles.axaml" />
@@ -2077,7 +2078,11 @@ Do not include the styles from `App.axaml` yet: the probe decides that.
         <TargetFramework>net10.0</TargetFramework>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <IsPackable>false</IsPackable>
+        <!-- A probe, not shipped and not in the solution: top-level types and console output
+             are the point, so the repo's analyzers and doc-file rule are off here. -->
         <GenerateDocumentationFile>false</GenerateDocumentationFile>
+        <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+        <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\..\src\Capacitor.App\Capacitor.App.csproj" />
