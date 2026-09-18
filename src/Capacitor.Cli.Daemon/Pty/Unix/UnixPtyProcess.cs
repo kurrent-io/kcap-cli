@@ -165,10 +165,31 @@ public sealed class UnixPtyProcess : IPtyProcess {
                     $"pty_spawn failed: step {result.FailedStep}, errno {result.ErrNo}");
             }
 
-            return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
+            try {
+                return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
+            } catch {
+                Abandon(result.MasterFd, result.Pid);
+
+                throw;
+            }
         } finally {
             UnixPtyInterop.pty_plan_free(ref plan); // the plan is spent whether spawn succeeded or failed
         }
+    }
+
+    /// <summary>Takes down a spawned child that no <see cref="UnixPtyProcess"/> came to own: with
+    /// nobody holding its pid, nothing could ever stop or reap it. The child is still unreaped here,
+    /// which pins its pid and pgid, so the group signal cannot land on a recycled id.</summary>
+    internal static void Abandon(int masterFd, int pid) {
+        if (pid > 0) { // kill(0) signals the caller's own group and kill(-1) broadcasts
+            if (UnixPtyInterop.kill(-pid, UnixPtyInterop.SIGKILL) != 0) UnixPtyInterop.kill(pid, UnixPtyInterop.SIGKILL);
+
+            // SIGKILL cannot be refused, so this only waits out the kernel's teardown — bounded,
+            // because a launch must not hang on a child stuck in an uninterruptible sleep.
+            for (var i = 0; i < 100 && UnixPtyInterop.waitpid(pid, out _, UnixPtyInterop.WNOHANG) == 0; i++) Thread.Sleep(10);
+        }
+
+        UnixPtyInterop.close(masterFd);
     }
 
     public async IAsyncEnumerable<byte[]> ReadOutputAsync(

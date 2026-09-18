@@ -2,7 +2,6 @@ using System.Diagnostics;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
 
-/// <summary>Starts the NativeTestHost sibling project in one of its modes, stdout redirected.</summary>
 static class NativeTestHostProcess {
     public static Process Start(string mode) {
         var dll = ResolveDll();

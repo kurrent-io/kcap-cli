@@ -25,7 +25,9 @@ wedged child blocks, so it cannot run inline, and with the readers gone the pool
 The thread reads one chunk ahead and no further, so a stalled consumer still back-pressures the
 child through the PTY's own buffer instead of growing the daemon. Dispose waits for the thread
 before closing the master: the fd number is reusable the moment it closes, and a reader still
-holding it would drain the next agent's terminal.
+holding it would drain the next agent's terminal. A reader that cannot start takes the spawn down
+with it — the child is killed with its group and reaped — because an agent nobody owns is one
+nothing can stop.
 
 The regression probe runs in a process of its own because the pool is process-global, and sizes
 itself from that process's worker minimum rather than a fixed count. It asserts the pool stayed

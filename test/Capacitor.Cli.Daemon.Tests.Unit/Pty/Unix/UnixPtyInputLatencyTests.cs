@@ -1,4 +1,5 @@
 using System.Globalization;
+using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
 
@@ -44,7 +45,7 @@ public class UnixPtyInputLatencyTests {
             output = await host.StandardOutput.ReadToEndAsync(timeout.Token);
             await host.WaitForExitAsync(timeout.Token);
         } catch (OperationCanceledException) {
-            host.Kill();
+            ProcessTree.Kill(host);
 
             throw new TimeoutException($"pty-input-latency probe did not finish within {ProbeTimeout}");
         }
