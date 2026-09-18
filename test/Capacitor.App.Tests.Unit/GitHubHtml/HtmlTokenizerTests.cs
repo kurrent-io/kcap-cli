@@ -56,6 +56,18 @@ public class HtmlTokenizerTests {
         await Assert.That(result.Malformed).IsTrue();
     }
 
+    /// A declaration keeps its characters but marks the result: the block rule then leaves the
+    /// whole block as source instead of rebuilding it as a paragraph.
+    [Test]
+    [Arguments("<!DOCTYPE html>")]
+    [Arguments("<?xml version=\"1.0\"?>")]
+    [Arguments("<![CDATA[x]]>")]
+    public async Task A_declaration_is_text_and_malformed(string html) {
+        var result = HtmlTokenizer.Tokenize(html);
+        await Assert.That(Shape(result)).IsEqualTo($"text({html})");
+        await Assert.That(result.Malformed).IsTrue();
+    }
+
     [Test]
     public async Task A_bare_angle_bracket_at_the_end_is_plain_text() {
         var result = HtmlTokenizer.Tokenize("x <");

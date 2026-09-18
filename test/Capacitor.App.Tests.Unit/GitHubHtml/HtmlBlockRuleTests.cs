@@ -102,6 +102,9 @@ public class HtmlBlockRuleTests {
     public async Task Comments_stay_where_the_block_is_rejected() {
         await Untouched("<div><!-- m --></div>");
         await Untouched("<!-- never closed\ntext");
+        await Untouched("<!DOCTYPE html>");
+        await Untouched("<?xml version=\"1.0\"?>");
+        await Untouched("<![CDATA[x]]>");
     }
 
     /// Pins the block's own fallback at the depth limit: the whole block stays source, where a

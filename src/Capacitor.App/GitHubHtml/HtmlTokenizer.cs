@@ -4,7 +4,8 @@ using System.Net;
 namespace Capacitor.App.GitHubHtml;
 
 /// Splits an HTML fragment into tags, text and comments in one forward scan. It never throws:
-/// whatever does not finish as a tag or a comment is text, and marks the result malformed.
+/// whatever does not finish as a tag or a comment is text, and marks the result malformed, as
+/// does a declaration, processing instruction or CDATA section.
 public static class HtmlTokenizer {
     public static HtmlTokenization Tokenize(string html) => new Scanner(html).Run();
 
@@ -29,6 +30,9 @@ public static class HtmlTokenizer {
                 }
 
                 var next = i + 1 < html.Length ? html[i + 1] : '\0';
+                // A declaration, processing instruction or CDATA section is text the reader never
+                // converts around: marking it malformed keeps its whole block as source.
+                if (next is '!' or '?') { _malformed = true; i++; continue; }
                 if (!char.IsAsciiLetter(next) && next != '/') { i++; continue; }
 
                 if (i < _lastClose && TryReadTag(i, out var tag, out var after)) {

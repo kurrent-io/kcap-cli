@@ -13,6 +13,6 @@ public sealed class GitHubHtmlExtension : IMarkdownExtension {
     /// window down: whatever it had not converted renders as source.
     static void Process(MarkdownDocument document) {
         try { GitHubHtmlPass.Run(document); }
-        catch (Exception ex) { Console.Error.WriteLine($"kcap: html pass failed: {ex.Message}"); }
+        catch (Exception ex) { Console.Error.WriteLine($"kcap: html pass failed: {ex}"); }
     }
 }
