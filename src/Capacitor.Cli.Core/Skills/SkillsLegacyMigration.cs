@@ -2,20 +2,33 @@ using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Skills;
 
+/// <summary>What migration may do to one repository's legacy ledger. <paramref name="Unreadable"/>
+/// means the ledger is there but will not parse: it names paths nothing else can, so an empty
+/// <paramref name="Delete"/> beside an empty <paramref name="Keep"/> is not "owns nothing".</summary>
 public sealed record LegacyMigrationPlan(
-    string ManifestPath, IReadOnlyList<string> Delete, IReadOnlyList<string> Keep);
+    string ManifestPath, IReadOnlyList<string> Delete, IReadOnlyList<string> Keep, bool Unreadable = false);
 
 /// <summary>Retires the user-global copies one repository owns. A global path carries no repository
 /// identity, so two repositories can own the same directory — a project-homed skill does exactly
 /// that — and deleting one repository's copy would take the other's with it.</summary>
 public static class SkillsLegacyMigration {
+    /// <summary>The user-global ledger for one (repo, target). Built here for every caller, because
+    /// the sibling scan below excludes a repository from its own candidate list by comparing this
+    /// path as an ordinal string: a second construction that differed by a separator would make a
+    /// repository read itself as another owner of everything it owns, and migration would stop with
+    /// nothing failing.</summary>
+    public static string ManifestPathFor(string configRoot, string repoHash, string targetKey) =>
+        Path.Combine(configRoot, "skills", repoHash, targetKey, "manifest.json");
+
     public static LegacyMigrationPlan Plan(
             string configRoot, string repoHash, string targetKey, SkillsIdentity current) {
-        var mine         = Path.Combine(configRoot, "skills", repoHash, targetKey, "manifest.json");
+        var mine         = ManifestPathFor(configRoot, repoHash, targetKey);
         var mineManifest = Load(mine);
-        var owned        = mineManifest?.Skills?.Select(e => e.Path).ToList() ?? [];
-        var retired      = mineManifest?.Identity;
-        var candidates   = Candidates(configRoot, mine);
+        if (mineManifest is null && File.Exists(mine))
+            return new LegacyMigrationPlan(mine, [], [], Unreadable: true);
+        var owned      = mineManifest?.Skills?.Select(e => e.Path).ToList() ?? [];
+        var retired    = mineManifest?.Identity;
+        var candidates = Candidates(configRoot, mine);
 
         // A sibling that exists but will not parse could be hiding the only other owner of any
         // owned path; nothing can be proven safe to delete until it is readable or gone.

@@ -58,6 +58,25 @@ public class SkillsLegacyMigrationTests {
         await Assert.That(plan.Keep).IsEquivalentTo([shared]);
     }
 
+    /// <summary>The ledger is the only record of the directories it owns, so a copy of it that will
+    /// not parse must not read as one owning nothing — which is what a caller would delete.</summary>
+    [Test]
+    public async Task A_ledger_of_its_own_that_will_not_parse_is_not_an_empty_one() {
+        var dir = Tmp.CreateDir("config/skills/aaaa/agents");
+        File.WriteAllText(Path.Combine(dir, "manifest.json"), "{ truncated");
+
+        var plan = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "aaaa", "agents", Id("acct-1"));
+
+        await Assert.That(plan.Unreadable).IsTrue();
+        await Assert.That(plan.Delete).IsEmpty();
+        await Assert.That(plan.Keep).IsEmpty();
+
+        // A ledger that was never written owns nothing, which is a different answer.
+        var absent = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "zzzz", "agents", Id("acct-1"));
+
+        await Assert.That(absent.Unreadable).IsFalse();
+    }
+
     [Test]
     public async Task A_path_is_kept_when_a_sibling_manifest_fails_to_parse() {
         var shared = Tmp.PathTo("global/kcap-shared");
