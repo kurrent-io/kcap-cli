@@ -35,7 +35,7 @@ public class PiMcpExtensionInstallerTests {
         await Assert.That(content).Contains("export default async function");
         // Bridges every kcap server Pi ships, including analytics (the guided tour's menu
         // query needs query_analytics) and workitems (registered on every harness).
-        await Assert.That(content).Contains("[\"review\", \"sessions\", \"flows\", \"memory\", \"analytics\", \"workitems\", \"plans\"]");
+        await Assert.That(content).Contains("[\"review\", \"sessions\", \"flows\", \"memory\", \"analytics\", \"workitems\", \"plans\", \"artefacts\"]");
         // MCP handshake incl. the mandatory notifications/initialized.
         await Assert.That(content).Contains("initialize");
         await Assert.That(content).Contains("notifications/initialized");
