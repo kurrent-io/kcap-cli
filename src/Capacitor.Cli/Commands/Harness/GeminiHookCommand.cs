@@ -356,7 +356,8 @@ sealed class GeminiHookCommand(
         var workItemsNudge = HarnessNudgeEmitter.Combine(
             WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config));
         result.Write(RenderSessionStartPayload(fragment, workItemsNudge));
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;

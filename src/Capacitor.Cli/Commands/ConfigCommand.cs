@@ -172,6 +172,8 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
             "disable_memory_index" => throw new ArgumentException($"Invalid value for disable_memory_index: '{value}'. Must be true or false."),
             "disable_coordination_notices" when bool.TryParse(value, out var b) => profile with { DisableCoordinationNotices = b },
             "disable_coordination_notices" => throw new ArgumentException($"Invalid value for disable_coordination_notices: '{value}'. Must be true or false."),
+            "disable_first_run_notice" when bool.TryParse(value, out var b) => profile with { DisableFirstRunNotice = b },
+            "disable_first_run_notice" => throw new ArgumentException($"Invalid value for disable_first_run_notice: '{value}'. Must be true or false."),
             "disable_workitems_nudge" when bool.TryParse(value, out var b) => profile with { DisableWorkItemsNudge = b },
             "disable_workitems_nudge" => throw new ArgumentException($"Invalid value for disable_workitems_nudge: '{value}'. Must be true or false."),
             "disable_plans_nudge" when bool.TryParse(value, out var b) => profile with { DisablePlansNudge = b },
@@ -218,6 +220,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
         Console.Error.WriteLine("  default_visibility          Default session visibility (private, project, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_workitems_nudge     Skip injecting the work-items nudge at SessionStart (true/false)");
+        Console.Error.WriteLine("  disable_first_run_notice    Skip the one-shot notice in the first session after setup (true/false)");
         Console.Error.WriteLine("  disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_harness_nudge       Skip new-harness setup nudges (in-session + CLI stderr) (true/false)");
         Console.Error.WriteLine("  use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)");

@@ -6,6 +6,24 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The restart setup asks for now carries its own message
+
+Hooks, skills and MCP servers are read when an agent session starts, so the session that runs setup
+has none of them: it is not recorded, and it cannot run the guided tour. Setup says so in the
+terminal, which works for someone watching it and is the weakest link the moment a tool did the
+install -- one line at the end of a long transcript, which it has to remember to pass on.
+
+So the next session says it instead. Setup leaves a one-shot marker, and the first session to start
+with hooks in place carries a SessionStart fragment saying recording is on and offering the tour.
+That session is the one that can say it truthfully: the fragment is delivered by the hook whose
+existence is the thing being announced.
+
+The marker is claimed by an atomic rename, so several agents started at once deliver it once between
+them rather than each. Opting out with `disable_first_run_notice` suppresses the fragment without
+consuming the marker, so turning the notice back on before the first session still delivers it. It
+is armed only when setup actually installed something -- with nothing wired up there is nothing to
+announce.
+
 ## The pull request reader renders GitHub-flavoured markdown
 
 Review bots write their findings almost entirely in HTML, and the reader showed the markup as

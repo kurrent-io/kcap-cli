@@ -182,7 +182,8 @@ sealed class OpenCodeHookCommand(
         // The harness nudge is independent of the once-per-session memory lease — it has its own
         // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.
         var combinedNudge = HarnessNudgeEmitter.Combine(
-            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
+            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config));
         await WriteMemoryFragment(stdout, fragment, combinedNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;

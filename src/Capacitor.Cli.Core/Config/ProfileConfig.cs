@@ -90,6 +90,13 @@ public record Profile {
     [JsonPropertyName("disable_workitems_nudge")]
     public bool? DisableWorkItemsNudge { get; init; }
 
+    /// <summary>when true, kcap skips the one-shot notice the first session after setup carries (that
+    /// recording is now on, and the guided tour is available). Independent of the other SessionStart
+    /// opt-outs, and it fires once per setup rather than per session, so turning it off silences a
+    /// single message.</summary>
+    [JsonPropertyName("disable_first_run_notice")]
+    public bool? DisableFirstRunNotice { get; init; }
+
     /// <summary>when true, kcap skips injecting the SessionStart plans nudge (the guidance to declare
     /// the plan document and task list through the kcap-plans MCP tools). Independent of the other
     /// SessionStart opt-outs.</summary>

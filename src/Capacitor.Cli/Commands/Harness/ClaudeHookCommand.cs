@@ -803,9 +803,11 @@ public sealed class ClaudeHookCommand(
                     var plansNudge = PlansNudgeEmitter.Resolve(
                         HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
+                    var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge);
+                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge,
+                        firstRunNotice);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }
