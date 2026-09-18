@@ -8,8 +8,10 @@ compacted session trace embedded in the prompt (supplied by the server's
 eval-context endpoint); some questions — and any session whose trace is too
 large to embed — instead investigate the session on demand via a read-only,
 session-scoped MCP tool surface (summary, search, transcript, errors, recap,
-tool results). Results are aggregated into per-category + overall scores and
-persisted back to the session's stream as a SessionEvalCompleted event.
+tool results). Each question resolves to assessed (scored 1-5), insufficient_evidence,
+or not_applicable; results are aggregated into per-category + overall scores
+from assessed questions only and persisted back to the session's stream as a
+SessionEvalCompleted event.
 
 Options:
   --model <name>      Judge model (default: sonnet). haiku/sonnet/opus.

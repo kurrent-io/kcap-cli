@@ -109,6 +109,7 @@ Help → Report a Bug… / Send Feedback… (or the help button in the session r
 kcap setup                      # discovers your tenant — no URL needed
 kcap setup <tenant>             # shorthand for a known tenant slug → https://<tenant>.kcap.ai
 kcap setup --server-url <url>   # explicit server (self-hosted, or a full URL)
+kcap setup --discover           # list the workspaces you belong to, and change nothing
 ```
 
 The setup wizard walks you through:
@@ -338,10 +339,22 @@ At a glance — each links to its section below:
 kcap setup                                   # interactive wizard (discovers your tenant)
 kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.ai
 kcap setup --server-url <url> --no-prompt    # CI / scripted
+kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 ```
 
-With no server argument, setup (and `kcap login`) runs **tenant discovery**: it signs you in with your organization's single sign-on, then lets you pick from the tenants you belong to. Pass `--github` to sign in with GitHub instead; `--discover` forces discovery even when a server is configured.
+With no server argument, setup (and `kcap login`) runs **tenant discovery**: it signs you in with your organization's single sign-on, then lets you pick from the tenants you belong to. Pass `--github` to sign in with GitHub instead.
+
+`kcap setup --discover` stops after the sign-in and reports the workspaces it found, configuring nothing — no profile, no token, so the run that follows signs in again. It is for a tool that has to ask someone which workspace to use before it can name one. It takes only `--json`, `--github`, `--device` and `--no-prompt`: a workspace argument would answer the question it exists to ask, and any other option has nothing to apply to, so both are refused. With `--json` the report is the only thing on stdout (the sign-in narrates on stderr):
+
+```json
+{"workspaces": [{"slug": "acme", "url": "https://acme.kcap.ai", "name": "Acme Corp"}],
+ "can_create": false, "provider": "workos"}
+```
+
+`provider` is `workos` for org SSO and `GitHubApp` for `--github`. `slug` and `name` are null when the provider gives none — a GitHub sign-in identifies a workspace by `url` alone. `can_create` means no workspace was found and this sign-in is the one that can create one (`kcap setup --org … --slug …`); it is never true for `--github`, and it is not a promise — a workspace already being created for the account is only reported by the create itself.
+
+On `kcap login` the same flag means something else: `kcap login --discover` forces discovery even when a server is configured, and saves the workspace you pick.
 
 When org SSO finds you in **more than one** workspace, that pick happens in your browser rather than in the terminal: kcap opens a page listing the workspaces you belong to, each with its address, and waits. The link is printed as well as opened, and **pressing any key goes back to choosing in the terminal** — so a machine whose browser never appears is never stuck. The pick also stays in the terminal when you signed in with a device code (there is no browser to open), when you signed in with `--github`, and against a server whose auth service does not offer the page. One workspace still selects itself and no workspace still offers to create one, so this only appears when there is a genuine choice to make.
 
@@ -502,11 +515,13 @@ kcap eval --skip efficiency <sessionId>    # run everything except efficiency
 kcap eval --list-questions                 # print the question taxonomy
 ```
 
-Output is a per-category + overall score (1-5, with `pass`/`warn`/`fail` verdicts), with a specific finding and supporting evidence per question. The aggregate is also persisted back to the session's stream as a `SessionEvalCompleted` event, so past evaluations can be queried from the dashboard or used to track quality trends across sessions.
+Each question resolves to one of three outcomes: `assessed` (scored 1-5, with a `pass`/`warn`/`fail` verdict, marked `✓`/`!`/`✗`), `insufficient_evidence` (the judge lacked what it needed to answer — marked `?`, no score), or `not_applicable` (nothing the question asks about could have occurred in this session — marked `–`, no score). Category and overall scores are computed from assessed questions only; a category or run with no assessed question prints `Overall: not scored` rather than a fabricated number. Each row shows its finding and evidence, plus — when the judge's retrieval was measurably incomplete — an indented `coverage:` line naming what was truncated, unavailable, or cut short, and a `cites:` line for any evidence reference the judge grounded its finding in.
+
+The aggregate is persisted back to the session's stream as a `SessionEvalCompleted` event, so past evaluations can be queried from the dashboard or used to track quality trends across sessions.
 
 Expect ~1-3 minutes total depending on the model and session size — judges run sequentially.
 
-> **Server requirement:** `kcap eval` fetches its question catalog from the server (`GET /api/eval/catalog`) and posts results to `POST /api/sessions/{id}/evals/v3`. It fails fast with a clear error against a server that doesn't expose the catalog endpoint, so the server must be running a build that includes the eval catalog (Capacitor AI-9). Upgrade the server if `kcap eval` reports the catalog endpoint is unavailable.
+> **Server requirement:** `kcap eval` fetches its question catalog from the server (`GET /api/eval/catalog`) and posts results to `POST /api/sessions/{id}/evals/v4`. It fails fast with a clear error against a server that doesn't expose the catalog or v4 endpoint, so the server must be running a build that includes them. Upgrade the server if `kcap eval` reports the endpoint is unavailable. An older `kcap` build (predating outcomes and coverage) posts to `/evals/v3` instead — every question scored, no outcome or coverage — and the server accepts both.
 
 ### PR review with full context
 

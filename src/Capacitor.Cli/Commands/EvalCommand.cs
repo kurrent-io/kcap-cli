@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval;
+using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
 
@@ -81,7 +82,7 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
         return csv?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    static void Render(SessionEvalCompletedPayloadV3 agg, string sessionId) {
+    internal static void Render(SessionEvalCompletedPayloadV4 agg, string sessionId) {
         var output = Console.Out;
         output.WriteLine();
         output.WriteLine($"Eval results for session {sessionId}");
@@ -90,24 +91,45 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
 
         foreach (var cat in agg.Categories) {
             output.WriteLine();
-            output.WriteLine($"  {cat.Name,-16}  {cat.Score}/5  [{cat.Verdict}]");
+            var categoryScore = cat.Score is { } cs ? $"{cs}/5" : "–/5";
+            output.WriteLine($"  {cat.Name,-16}  {categoryScore}  [{cat.Verdict ?? "unscored"}]");
 
             foreach (var q in cat.Questions) {
-                var marker = q.Verdict switch {
-                    "pass" => "✓",
-                    "warn" => "!",
-                    _      => "✗"
+                var marker = q.Outcome switch {
+                    EvalOutcomes.InsufficientEvidence => "?",
+                    EvalOutcomes.NotApplicable        => "–",
+                    _ => q.Verdict switch { "pass" => "✓", "warn" => "!", _ => "✗" }
                 };
-                output.WriteLine($"    {marker} {q.QuestionId,-26} {q.Score}  {q.Finding}");
+
+                if (q.Outcome == EvalOutcomes.Assessed) {
+                    output.WriteLine($"    {marker} {q.QuestionId,-26} {q.Score}  {q.Finding}");
+                } else {
+                    output.WriteLine($"    {marker} {q.QuestionId,-26} {q.Outcome}: {q.Finding}");
+                }
+
                 if (!string.IsNullOrEmpty(q.Evidence)) {
                     output.WriteLine($"        evidence: {q.Evidence}");
+                }
+
+                if (q.EvidenceCoverage is { } coverage && !coverage.IsComplete) {
+                    var parts = new List<string>();
+                    if (coverage.StopReason is not null) parts.Add(coverage.StopReason);
+                    parts.AddRange(coverage.Omissions.Select(o => $"{o.Kind}×{o.Count}"));
+                    if (coverage.SourcesUnavailable.Count > 0) parts.Add($"{coverage.SourcesUnavailable.Count} sources unavailable");
+                    output.WriteLine($"        coverage: {string.Join("; ", parts)}");
+                }
+
+                if (q.EvidenceCoverage is { Citations.Count: > 0 } cited) {
+                    output.WriteLine($"        cites: {string.Join(", ", cited.Citations.Select(c => c.Ref))}");
                 }
             }
         }
 
         output.WriteLine();
         output.WriteLine(new string('─', 72));
-        output.WriteLine($"  Overall: {agg.OverallScore}/5  [{EvalService.VerdictForScore(agg.OverallScore)}]");
+        output.WriteLine(agg.OverallScore is { } overall
+            ? $"  Overall: {overall}/5  [{EvalService.VerdictForScore(overall)}]"
+            : $"  Overall: not scored ({agg.AssessedQuestions}/{agg.JudgedQuestions} assessed)");
         output.WriteLine($"  {agg.Summary}");
         output.WriteLine();
     }
@@ -129,8 +151,8 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
         public void OnQuestionStarted(int index, int total, string category, string questionId) =>
             Log($"[{index}/{total}] {category}/{questionId}...");
 
-        public void OnQuestionCompleted(int index, int total, EvalQuestionVerdict verdict, long inputTokens, long outputTokens) =>
-            Log($"  {verdict.QuestionId} done (input={inputTokens}, output={outputTokens})");
+        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, long inputTokens, long outputTokens) =>
+            Log($"  {assessment.QuestionId} done (input={inputTokens}, output={outputTokens})");
 
         public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) =>
             Log($"  {questionId} failed: {reason}");
@@ -147,7 +169,7 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
         public void OnRetrospectiveFailed(string reason) =>
             Log($"  Retrospective failed: {reason}");
 
-        public void OnFinished(SessionEvalCompletedPayloadV3 aggregate) =>
+        public void OnFinished(SessionEvalCompletedPayloadV4 aggregate) =>
             Log("Eval result persisted.");
 
         public void OnFailed(string reason) =>

@@ -126,6 +126,37 @@ sweep -- so they cannot drift into disagreeing about the same machine. That was 
 between the Hooks line and the unconfigured-harness lines below it, and between this command and
 `kcap daemon status`; the JSON payload joins it rather than opening a second source of truth.
 
+## Discovery can report without choosing
+
+The workspaces an account belongs to only exist on the far side of a sign-in, and `setup` learns them
+in the middle of a run it then carries through to completion. A tool that has to ask someone which
+workspace to use has nowhere to stand: the choice has to be made before the only command that could
+inform it.
+
+`kcap setup --discover` signs in, reports what it found, and stops. It reaches the rows through the
+proxy directly rather than through the normal discovery flow, because that flow cannot be talked out
+of choosing: a sole workspace is auto-selected before any picker is consulted, so a declining picker
+would configure the machine for exactly the case a report is most needed, and an account with no
+workspace would fail rather than answer. Publishing is a separate step this route never reaches, and
+no provisioner is passed, so nothing is written and nothing is created.
+
+`can_create` is the lane's answer rather than a count. Only the hosted lane provisions; a GitHub-App
+account gets a workspace by having the app installed on an org, so telling it that it may create one
+would be a dead end. It is not a promise either: a workspace this account already asked for and that
+is still being made is only learned by the create call itself, and a report must not make that call.
+
+What `--discover` takes beside itself is a closed set, not a list of what to refuse. A workspace
+argument answers the question discovery exists to ask, and any other option configures something in
+a run that configures nothing, so both are refused by name. A list of refusals would have to know
+every flag that takes a value, or read `--plugin-scope user` as a workspace called "user".
+
+`kcap login --discover` keeps its own meaning — force discovery, pick, and save — so the same word
+reports on one command and configures on the other. Each help text points at the other.
+
+Under `--json` the sign-in narrates itself on stderr. The user still has to see the URL and the code
+they are approving, and the document still has to be the only thing on stdout, so the progress sink
+takes the stream to write to rather than assuming stdout.
+
 ## The harness list answers a machine as well as a person
 
 A tool setting kcap up for someone has to ask which coding agents to record, and the honest option

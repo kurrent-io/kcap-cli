@@ -16,6 +16,20 @@ record ClaudeCliResult(
         int     NumTurns
     );
 
+/// <summary>Outcome of <see cref="ClaudeCliRunner.RunDetailedAsync"/>: exactly one of
+/// <see cref="Result"/> and <see cref="Failure"/> is set.</summary>
+readonly record struct ClaudeCliOutcome(ClaudeCliResult? Result, ClaudeCliFailure? Failure);
+
+enum ClaudeCliFailure {
+    /// <summary>The internal per-call timeout elapsed; the subprocess was killed.</summary>
+    Timeout,
+    /// <summary>The process failed to launch, or exited non-zero with no result recoverable from
+    /// stdout or the session transcript.</summary>
+    ProcessFailure,
+    /// <summary>The process exited zero but produced no parseable result.</summary>
+    OutputUnparseable
+}
+
 static class ClaudeCliRunner {
     /// <summary>
     /// Runs <c>claude -p &lt;prompt&gt; --output-format json --max-turns &lt;N&gt; --model &lt;model&gt;</c>
@@ -106,7 +120,30 @@ static class ClaudeCliRunner {
     /// CLI keeps its default behaviour (e.g. the eval judges).
     /// </para>
     /// </summary>
+    /// <summary>Adapts <see cref="RunDetailedAsync"/> to the legacy null-on-any-failure contract
+    /// used by title generation, <c>whats-done</c> summaries and the retrospective judge, none of
+    /// which distinguish failure kinds.</summary>
     public static async Task<ClaudeCliResult?> RunAsync(
+            string            prompt,
+            TimeSpan          timeout,
+            TimeProvider      time,
+            Action<string>    log,
+            Profile?          profile,
+            HarnessRegistry   harnesses,
+            string            model          = "haiku",
+            int               maxTurns       = 1,
+            bool              promptViaStdin = false,
+            string?           jsonSchema     = null,
+            string?           mcpConfigJson  = null,
+            string[]?         allowedTools   = null,
+            double?           maxBudgetUsd   = null,
+            string?           systemPrompt   = null,
+            CancellationToken ct             = default
+        ) =>
+        (await RunDetailedAsync(prompt, timeout, time, log, profile, harnesses, model, maxTurns, promptViaStdin,
+            jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct)).Result;
+
+    public static async Task<ClaudeCliOutcome> RunDetailedAsync(
             string            prompt,
             TimeSpan          timeout,
             TimeProvider      time,
@@ -173,7 +210,7 @@ static class ClaudeCliRunner {
         }
     }
 
-    static async Task<ClaudeCliResult?> RunCoreAsync(
+    static async Task<ClaudeCliOutcome> RunCoreAsync(
             string            prompt,
             TimeSpan          timeout,
             TimeProvider      time,
@@ -198,7 +235,7 @@ static class ClaudeCliRunner {
         if (exePath is null) {
             log("claude not found on PATH");
 
-            return null;
+            return new(null, ClaudeCliFailure.ProcessFailure);
         }
 
         var psi = new ProcessStartInfo {
@@ -233,7 +270,7 @@ static class ClaudeCliRunner {
         if (process is null) {
             log("Failed to start claude process");
 
-            return null;
+            return new(null, ClaudeCliFailure.ProcessFailure);
         }
 
         using var timeoutCts = new CancellationTokenSource(timeout, time);
@@ -256,6 +293,16 @@ static class ClaudeCliRunner {
                 }
 
                 throw;
+            } catch (OperationCanceledException) {
+                // The internal per-call deadline elapsed while still writing stdin — a timeout,
+                // not a stdin I/O failure, so it must not fall into the generic catch below.
+                log($"Claude process timed out ({timeout.TotalSeconds:0}s) while streaming stdin, killing");
+
+                try { process.Kill(entireProcessTree: true); } catch {
+                    /* ignore */
+                }
+
+                return new(null, ClaudeCliFailure.Timeout);
             } catch (Exception ex) {
                 log($"Failed to stream prompt to claude stdin: {ex.Message}");
 
@@ -263,7 +310,7 @@ static class ClaudeCliRunner {
                     /* ignore */
                 }
 
-                return null;
+                return new(null, ClaudeCliFailure.ProcessFailure);
             }
         }
 
@@ -275,7 +322,9 @@ static class ClaudeCliRunner {
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
 
-            if (process.ExitCode != 0) {
+            var nonZeroExit = process.ExitCode != 0;
+
+            if (nonZeroExit) {
                 var stderrPreview = stderr.Length > 200 ? stderr[..200] : stderr;
                 var stdoutPreview = stdout.Length > 200 ? stdout[..200] : stdout;
                 log($"Claude exited with code {process.ExitCode}, stderr: {stderrPreview}");
@@ -291,13 +340,13 @@ static class ClaudeCliRunner {
                 if (errorResult is not null) {
                     log("Recovered result from stdout despite non-zero exit code");
 
-                    return errorResult;
+                    return new(errorResult, null);
                 }
             } else {
                 var result = ParseResponse(stdout);
 
                 if (result is not null) {
-                    return result;
+                    return new(result, null);
                 }
             }
 
@@ -316,13 +365,13 @@ static class ClaudeCliRunner {
                 if (fallback is not null) {
                     log("Recovered result from session transcript (fallback)");
 
-                    return fallback;
+                    return new(fallback, null);
                 }
             } else {
                 log("Skipping transcript fallback: --json-schema was required and not satisfied");
             }
 
-            return null;
+            return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // External cancellation wins over the internal timeout: kill the
             // subprocess (otherwise the await unblocks but claude keeps
@@ -343,7 +392,7 @@ static class ClaudeCliRunner {
                 /* ignore */
             }
 
-            return null;
+            return new(null, ClaudeCliFailure.Timeout);
         }
     }
 

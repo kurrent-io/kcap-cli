@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Eval;
+using Capacitor.Cli.Core.Eval.Contracts;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -64,13 +65,13 @@ public class EvalRunnerV3PostTests : IDisposable {
         public void OnStarted(string r, string j, int t) { }
         public void OnContextFetched(int a, int b, int c, int d, long e) { }
         public void OnQuestionStarted(int i, int t, string c, string q) { }
-        public void OnQuestionCompleted(int i, int t, EvalQuestionVerdict v, long it, long ot) { }
+        public void OnQuestionCompleted(int i, int t, EvalQuestionAssessment v, long it, long ot) { }
         public void OnQuestionFailed(int i, int t, string c, string q, string r) { }
         public void OnFactRetained(string c, string f) { }
         public void OnRetrospectiveStarted() { }
         public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r) { }
         public void OnRetrospectiveFailed(string r) { }
-        public void OnFinished(SessionEvalCompletedPayloadV3 a) { }   // V3 after Task 5
+        public void OnFinished(SessionEvalCompletedPayloadV4 a) { }
         public void OnFailed(string r) { }
     }
 }
