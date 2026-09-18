@@ -505,5 +505,6 @@
         <StyleInclude Source="avares://Kurrent Capacitor/Controls/GlassStyles.axaml" />
         <StyleInclude Source="avares://Kurrent Capacitor/Controls/SurfaceStyles.axaml" />
         <StyleInclude Source="avares://Kurrent Capacitor/Controls/GlassChipStyles.axaml" />
+        <StyleInclude Source="avares://Kurrent Capacitor/Controls/GlassRailStyles.axaml" />
     </Application.Styles>
 </Application>

@@ -11,6 +11,7 @@ using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Capacitor.App.Materials;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
@@ -28,6 +29,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Setup;
+using LiquidGlassAvaloniaUI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.App;
@@ -56,6 +58,9 @@ public partial class App : Application {
     readonly MachineAuth      _machineEnv = MachineAuth.FromEnvironment();
     readonly AuthEndpoints    _endpoints  = AuthEndpoints.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
+
+    MaterialService? _material;
+    MaterialPipelineWatch? _materialWatch;
 
     // The app's one clock, named here because App is the composition root. A field initializer
     // cannot read another instance field, so the fields below name it again rather than take it.
@@ -280,6 +285,16 @@ public partial class App : Application {
                 if (_shutdown.IsCancellationRequested) return; // quit during onboarding — nothing left to build
                 (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _time, _shutdown.Token);
             }
+
+            // BuildDaemonGraph is synchronous, so the load happens one step earlier, where it can
+            // be awaited: StartAsync runs on the UI thread and blocking it would deadlock. The
+            // ??= keeps a second pass (the wizard hands over to a fresh graph) from building a
+            // second service or a second event subscription.
+            _material ??= await MaterialService.LoadAsync(
+                new AppStateStore(_config.Path("app-state.json")), MaterialEnvironment.Detect());
+            _materialWatch ??= new MaterialPipelineWatch(
+                _material, h => LiquidGlassPipeline.Unavailable += h, h => LiquidGlassPipeline.Unavailable -= h,
+                action => Dispatcher.UIThread.Post(action));
 
             BuildDaemonGraph(desktop, lane, channel, gate, profiles, laneQuiesced);
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
@@ -662,7 +677,7 @@ public partial class App : Application {
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback),
+                openFeedback: openFeedback, material: _material?.States),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -1171,7 +1186,7 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
-            Action<FeedbackCategory>? openFeedback = null) {
+            Action<FeedbackCategory>? openFeedback = null, IObservable<MaterialState>? material = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1219,7 +1234,8 @@ public partial class App : Application {
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
-            openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn);
+            openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
+            material: material);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
@@ -1756,6 +1772,10 @@ public partial class App : Application {
     // never skips _service's disposal); the lane goes LAST — its substrate must outlive any caller
     // still awaiting RunAsync.
     async ValueTask DisposeLifecycleAndServiceAsync() {
+        // The watch only unsubscribes, and it goes first: a failure report already posted to the
+        // UI thread would otherwise reach a disposed service.
+        _materialWatch?.Dispose();
+        _material?.Dispose();
         await DisposeServerClientsAsync().ConfigureAwait(false);
         if (_lifecycle is not null) {
             try {
