@@ -168,6 +168,10 @@ Flyout panels are not `Surface`s: the flyout presenters host their own content a
 take the glass through `GlassLayer.panel` (see Flyouts).
 
 `CornerRadius` and `Padding` are set per site, as the inline `Border`s set them today.
+A site's `CornerRadius` governs the opaque template only. Under glass the radius is a
+material parameter: `Surface` has a second property, `GlassCornerRadius`, set by its
+class styles (`card` and `raised` 18, `rail` 22) and never at a site. `GoalCard` keeps
+its local `CornerRadius="12"` and is 12 opaque, 18 under glass.
 `BorderBrush` is never set at a site: the resting brush comes from the theme and the
 drag-over brush from a style, and a local value would outrank both.
 
@@ -194,8 +198,15 @@ drag-over brush from a style, and a local value would outrank both.
 parameterised. Its template is a `Panel` with the `LiquidGlassSurface` and a 1 px rim
 `Border`; the control is not hit-testable. It has the class variants `card`, `rail`,
 `panel` and `chip`, and its styles, keyed on class and `MaterialScope.Material`, own
-every glass parameter below. Host templates only place it and pass `CornerRadius` and
-the rim brush (`BorderBrush`) through.
+every glass parameter below except the radius. The host always passes the radius and
+the rim brush (`BorderBrush`) in, and the layer applies that one radius to both the
+shader and the rim, so the two cannot disagree:
+
+| Host | Radius passed to the layer |
+|---|---|
+| `Surface` glass template | `GlassCornerRadius`, also used by its content `Border` |
+| `FlyoutPresenter`, `MenuFlyoutPresenter` | their own `CornerRadius` (12 from `kcapPanel`) |
+| chip template | 12 |
 
 Four hosts use it: the `Surface` glass template, the chip template, and the two
 flyout presenter templates. They share the layer, never a whole template, because
@@ -206,7 +217,6 @@ Glass parameters, from the prototype:
 
 | | `card` Soft | `card` Liquid | `rail` Soft | `rail` Liquid |
 |---|---|---|---|---|
-| CornerRadius | 18 | 18 | 22 | 22 |
 | BlurRadius | 14 | 5 | 24 | 18 |
 | RefractionHeight | 12 | 22 | 18 | 18 |
 | RefractionAmount | 5 | 32 | 5 | 14 |
@@ -219,8 +229,8 @@ Glass parameters, from the prototype:
 | Shadow | `#60000000`, r 28, (0,12) | same | `#65000000`, r 20, (4,8) | same |
 | Rim | none | none | `#2EFFFFFF` | `#2EFFFFFF` |
 
-`rail` also sets `HighlightFalloff` 0.65. `panel` starts from the `card` column at
-radius 12 and is tuned during the visual check.
+`rail` also sets `HighlightFalloff` 0.65. `panel` starts from the `card` column and is
+tuned during the visual check.
 
 ### Card migration
 
@@ -257,12 +267,13 @@ Under a glass scope `Button.kcapChip` takes the prototype's `ControlTemplate`, m
 to `Controls/GlassChipStyles.axaml`: a `GlassLayer.chip`, the content, a focus ring,
 `FocusAdorner` nulled, radius 12. Swapping the template is not enough on its own:
 
-- **Opaque fills.** The template keeps the name `PART_ContentPresenter`, which
-  `ContentControl` needs to register the presenter, so the four existing
-  `Button.kcapChip … /template/ ContentPresenter#PART_ContentPresenter` styles in
-  `App.axaml` would still paint opaque fills in the normal, hover, pressed and
-  disabled states. Each of them gains `[(kcap|MaterialScope.Material)=Opaque]`. The
-  property's default is `Opaque`, so a chip outside any scope still matches.
+- **Opaque fills.** Two sets of styles paint a fill on a presenter named
+  `PART_ContentPresenter`: Fluent's per-state `Button` theme styles, which stay active
+  when only `Template` is replaced, and the four `Button.kcapChip … /template/
+  ContentPresenter#PART_ContentPresenter` styles in `App.axaml`. The glass template
+  therefore names its presenter `ChipContent`, the way `RadioButton.kcapChoice` already
+  does for the same reason. Neither set matches it, and the four existing styles stay
+  as they are.
 - **Local values.** The five launcher chips set `Padding="11,5"` and
   `CornerRadius="999"` locally, which outranks any style. Those two attributes move
   into a `Button.kcapChip.picker` style: `11,5` and `999` under `Opaque`, `12,7` under
@@ -321,9 +332,11 @@ the seven `kcapPanel` flyouts while their scope is glass; no call site restates 
 rule. Under `Opaque` they stay native popups.
 
 **Probe first.** It is its own executable under
-`docs/probes/2026-09-18-glass-overlay-flyout/`, a separate process with the Skia
-renderer and headless drawing enabled. It cannot live in the unit suite, whose one
-per-assembly application is non-rendering and cannot be reconfigured. The window
+`docs/probes/2026-09-18-glass-overlay-flyout/`, a separate process built with
+`UseSkia()` and `UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing
+= false })`. `UseHeadlessDrawing` selects the dummy drawing backend, so it must be off
+for Skia to draw at all. The probe cannot live in the unit suite, whose one
+per-assembly application keeps the default (dummy) backend and cannot be reconfigured. The window
 holds a hard-edged striped backdrop, so blur is measurable, and opens an overlay-layer
 `Flyout` and an overlay-layer `MenuFlyout`, both under a glass scope. It passes when,
 for both presenter types:
@@ -401,10 +414,13 @@ asserts pixels. Shader output is the probe's job.
   under a pinned `Opaque` subtree does not; the opaque template never does.
 - **Capture boundary:** the root of every glass template (surface, chip, both flyout
   presenters) carries `IsExcludedFromCapture`.
+- **Radius:** `GoalCard` is 12 under `Opaque` and 18 under glass, and the layer's shader
+  and rim carry the same value as the content `Border`.
 - **Switch:** the same content instance and the goal text survive a material change.
 - **Chips:** under `Opaque`, in a scope and outside any, the presenter keeps its opaque
-  fill in all four states and the launcher chips keep padding `11,5` and radius 999;
-  under glass the presenter has no fill and the padding is `12,7`.
+  fill and the launcher chips keep padding `11,5` and radius 999; under glass the
+  presenter has no background or border brush in the normal, hover, pressed and
+  disabled states, and the padding is `12,7`.
 - **Drop targets:** `dragOver` sets the primary brush on `GoalCard` under both
   materials and on the chat `ComposerCard`.
 - **Menu flyout:** under glass the help menu still presents its three items.
