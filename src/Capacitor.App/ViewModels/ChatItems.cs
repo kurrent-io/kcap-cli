@@ -164,10 +164,12 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         _calls.Add(call);
         RefreshLoneChrome();
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
-        NotifyVisible();
         if (call.IsSettled) { Recompute(); return; }
         _live.Add(call);
         call.PropertyChanged += OnCallChanged;
+        // After the add: a folded group's VisibleCalls is _live, and HasVisibleCalls read before
+        // the add would publish false for the call's whole run.
+        NotifyVisible();
     }
 
     void RefreshLoneChrome() {

@@ -82,6 +82,35 @@ public class ToolGroupItemTests {
         });
     }
 
+    /// The view's IsVisible binds HasVisibleCalls, so the value at the moment it is raised is what
+    /// the view keeps: a folded, all-settled group taking a new live call must raise it true.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_live_call_added_to_a_folded_group_is_published_visible() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var a = Call("Bash", ToolCategory.Command);
+            var b = Call("Read", ToolCategory.Read);
+            group.Add(a);
+            group.Add(b);
+            a.Outcome = ToolOutcome.Done;
+            b.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HasVisibleCalls).IsFalse();
+
+            var published = new List<bool>();
+            group.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(ToolGroupItem.HasVisibleCalls)) published.Add(group.HasVisibleCalls); };
+            var live = Call("Grep", ToolCategory.Search);
+            group.Add(live);
+
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { live });
+            await Assert.That(published).IsEquivalentTo(new[] { true });
+
+            live.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HasVisibleCalls).IsFalse();
+            await Assert.That(published[^1]).IsFalse();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Toggle_swaps_the_visible_list_between_live_and_every_call() {
