@@ -10,11 +10,11 @@ public sealed class MaterialBackdrop : Control {
     public static readonly StyledProperty<double> RailWidthProperty =
         AvaloniaProperty.Register<MaterialBackdrop, double>(nameof(RailWidth), 334);
 
-    static readonly Color RailTeal = Color.Parse("#553D7581");
-    static readonly Color RailViolet = Color.Parse("#344D4878");
-    static readonly Color PaneGreen = Color.Parse("#8023806C");
-    static readonly Color PaneViolet = Color.Parse("#6851528F");
-    static readonly Color PaneBlue = Color.Parse("#45226B85");
+    static readonly IBrush RailTeal = GlowBrush(Color.Parse("#553D7581"));
+    static readonly IBrush RailViolet = GlowBrush(Color.Parse("#344D4878"));
+    static readonly IBrush PaneGreen = GlowBrush(Color.Parse("#8023806C"));
+    static readonly IBrush PaneViolet = GlowBrush(Color.Parse("#6851528F"));
+    static readonly IBrush PaneBlue = GlowBrush(Color.Parse("#45226B85"));
 
     static MaterialBackdrop() {
         AffectsRender<MaterialBackdrop>(RailWidthProperty);
@@ -39,10 +39,10 @@ public sealed class MaterialBackdrop : Control {
         Glow(context, PaneBlue, new Point(l + w * 0.55, h * 0.35), w * 0.36, h * 0.33);
     }
 
-    static void Glow(DrawingContext context, Color tint, Point center, double rx, double ry) {
-        var brush = new RadialGradientBrush {
-            GradientStops = { new GradientStop(tint, 0), new GradientStop(Color.FromArgb(0, tint.R, tint.G, tint.B), 1) },
-        };
+    static void Glow(DrawingContext context, IBrush brush, Point center, double rx, double ry) =>
         context.DrawEllipse(brush, null, center, rx, ry);
-    }
+
+    static IBrush GlowBrush(Color tint) => new RadialGradientBrush {
+        GradientStops = { new GradientStop(tint, 0), new GradientStop(Color.FromArgb(0, tint.R, tint.G, tint.B), 1) },
+    }.ToImmutable();
 }
