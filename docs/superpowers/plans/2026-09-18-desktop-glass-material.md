@@ -23,7 +23,7 @@
 - Git runs as `/usr/bin/git -C <worktree> …`, one plain command at a time. Commit subjects are one imperative clause of at most 80 characters with no issue reference (none exists yet), and every message ends with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - XAML namespaces used throughout: `xmlns:kcap="clr-namespace:Capacitor.App.Controls"`, `xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI"`.
 - The glass style files are included at the END of `Application.Styles` in `App.axaml`, after every inline style, in this order: `GlassStyles`, `SurfaceStyles`, `GlassChipStyles`, `GlassRailStyles`, `GlassFlyoutStyles`. Later-declared styles win at equal priority, and they must beat `App.axaml`'s own `kcapChip` and `kcapPanel` styles.
-- "Any glass" is written `:not([(kcap|MaterialScope.Material)=Opaque])`. If the XAML compiler rejects that form, write the selector twice, comma-separated, once with `=SoftGlass` and once with `=LiquidGlass`; the behaviour is identical.
+- "Any glass" is always two comma-separated selector arms, one with `[(kcap|MaterialScope.Material)=SoftGlass]` and one with `[(kcap|MaterialScope.Material)=LiquidGlass]`. Avalonia 12.1.2's XAML selector grammar rejects a `:not(…)` wrapped around a property match (AVLN2201, "Expected an identifier, got '['"). Every any-glass style must carry BOTH arms: a missed arm silently leaves Liquid glass on the opaque look.
 
 ## Proven before planning
 
@@ -31,7 +31,7 @@ A scratch spike against unmodified v0.2.0 source settled these, so no task re-li
 
 - the source compiles on `net10.0`, Avalonia 12.1.2 and SkiaSharp 3.119.4 with `LangVersion` 9 and no warnings;
 - a `LiquidGlassSurface` attaches and renders ten ticks under the dummy headless backend without throwing;
-- a style selecting on an inherited attached property matches descendants, re-evaluates on change, and works inside `:not(...)`;
+- a style selecting on an inherited attached property matches descendants and re-evaluates on change (the spike built its selectors in code, where `Not(…)` works; the XAML grammar does not accept that form, see Global Constraints);
 - the inherited value reaches `FlyoutPresenter`, `MenuFlyoutPresenter` and flyout content, and `Popup.ShouldUseOverlayLayer = true` yields `IsUsingOverlayLayer == true`;
 - glass in an overlay-layer `Popup` blurs the window behind it (stripe-edge contrast 10.8 → 0.4);
 - foreground drawn as a sibling of the glass is ghosted under itself (1360 px) unless an ancestor sets `LiquidGlassBackdrop.IsExcludedFromCapture` (0 px).
@@ -1252,7 +1252,7 @@ public class SurfaceTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(ReferenceEquals(surface.Content, box)).IsTrue();
             await Assert.That(box.Text).IsEqualTo("ship it");
-            await Assert.That(box.GetVisualRoot()).IsNotNull();
+            await Assert.That(box.IsAttachedToVisualTree()).IsTrue();
         } finally { window.Close(); }
     });
 
@@ -1354,7 +1354,8 @@ public sealed class Surface : ContentControl {
 
     <!-- The root excludes the whole surface from the window snapshot: content drawn beside the
          glass would otherwise be blurred underneath itself. -->
-    <Style Selector="kcap|Surface:not([(kcap|MaterialScope.Material)=Opaque])">
+    <Style Selector="kcap|Surface[(kcap|MaterialScope.Material)=SoftGlass],
+                     kcap|Surface[(kcap|MaterialScope.Material)=LiquidGlass]">
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Template">
             <ControlTemplate>
@@ -1373,7 +1374,8 @@ public sealed class Surface : ContentControl {
             </ControlTemplate>
         </Setter>
     </Style>
-    <Style Selector="kcap|Surface.rail:not([(kcap|MaterialScope.Material)=Opaque])">
+    <Style Selector="kcap|Surface.rail[(kcap|MaterialScope.Material)=SoftGlass],
+                     kcap|Surface.rail[(kcap|MaterialScope.Material)=LiquidGlass]">
         <Setter Property="BorderBrush" Value="{StaticResource KcapGlassRimBrush}" />
     </Style>
 
@@ -1615,7 +1617,8 @@ Expected: FAIL. The opaque test sees padding `14,8`, and the glass test finds no
         <Setter Property="CornerRadius" Value="999" />
     </Style>
 
-    <Style Selector="Button.kcapChip.picker:not([(kcap|MaterialScope.Material)=Opaque])">
+    <Style Selector="Button.kcapChip.picker[(kcap|MaterialScope.Material)=SoftGlass],
+                     Button.kcapChip.picker[(kcap|MaterialScope.Material)=LiquidGlass]">
         <Setter Property="Padding" Value="12,7" />
         <Setter Property="FocusAdorner" Value="{x:Null}" />
         <Setter Property="Template">
@@ -1919,32 +1922,42 @@ and close it with `</kcap:Surface>`. The chrome's `Height="44"` is gone from the
     </Style>
 
     <!-- The panel starts below the macOS window controls. -->
-    <Style Selector="views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque])">
+    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass],
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass]">
         <Setter Property="Margin" Value="12,40,12,12" />
     </Style>
-    <Style Selector="views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Grid.railChrome">
+    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Grid.railChrome,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Grid.railChrome">
         <Setter Property="Height" Value="16" />
     </Style>
 
-    <Style Selector="views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button#RailNewSessionButton /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button#RailNewSessionButton /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button#RailNewSessionButton /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource KcapGlassRailButtonBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource KcapGlassRailButtonBorderBrush}" />
         <Setter Property="CornerRadius" Value="10" />
     </Style>
-    <Style Selector="views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button#RailNewSessionButton:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                     views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button#RailNewSessionButton:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button#RailNewSessionButton:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button#RailNewSessionButton:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button#RailNewSessionButton:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button#RailNewSessionButton:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource KcapGlassRailButtonHoverBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource KcapGlassRailButtonBorderHoverBrush}" />
     </Style>
-    <Style Selector="views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button.railRow">
+    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow">
         <Setter Property="CornerRadius" Value="9" />
     </Style>
-    <Style Selector="views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button.selected,
-                     views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button.holdsSelected">
+    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.selected,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.selected,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.holdsSelected,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.holdsSelected">
         <Setter Property="Background" Value="{StaticResource KcapGlassRailRowBrush}" />
     </Style>
-    <Style Selector="views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                     views|SessionRailView:not([(kcap|MaterialScope.Material)=Opaque]) Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource KcapGlassRailRowBrush}" />
     </Style>
 </Styles>
@@ -2016,7 +2029,8 @@ Run the `MaterialWindowTests`, `MainWindowSmokeTests` and `MainWindowViewModelTe
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:kcap="clr-namespace:Capacitor.App.Controls"
         xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI">
-    <Style Selector="FlyoutPresenter.kcapPanel:not([(kcap|MaterialScope.Material)=Opaque])">
+    <Style Selector="FlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=SoftGlass],
+                     FlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=LiquidGlass]">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Template">
@@ -2033,7 +2047,8 @@ Run the `MaterialWindowTests`, `MainWindowSmokeTests` and `MainWindowViewModelTe
         </Setter>
     </Style>
 
-    <Style Selector="MenuFlyoutPresenter.kcapPanel:not([(kcap|MaterialScope.Material)=Opaque])">
+    <Style Selector="MenuFlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=SoftGlass],
+                     MenuFlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=LiquidGlass]">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Template">
