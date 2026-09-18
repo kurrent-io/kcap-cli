@@ -3,6 +3,7 @@
              xmlns:auth="clr-namespace:Capacitor.Cli.Core.Auth;assembly=Capacitor.Cli.Core"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
              xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.Onboarding.SignInStepView"
              x:DataType="vm:SignInStepViewModel">
     <!-- Shared between the onboarding wizard's Sign-in step and the steady-state re-auth dialog
@@ -44,9 +45,7 @@
         </StackPanel>
 
         <!-- Browser fallback lives at the foot: open + selectable URL, not buried in the log. -->
-        <Border DockPanel.Dock="Bottom" Margin="0,16,0,0"
-                Background="{StaticResource KcapSurfaceBrush}"
-                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+        <kcap:Surface DockPanel.Dock="Bottom" Margin="0,16,0,0"
                 CornerRadius="12" Padding="16,14"
                 IsVisible="{Binding BrowserUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
             <StackPanel Spacing="10">
@@ -78,7 +77,7 @@
                             CornerRadius="8" Padding="14,8" FontSize="13" />
                 </StackPanel>
             </StackPanel>
-        </Border>
+        </kcap:Surface>
 
         <!-- Progress log: quiet trailing detail above the browser card. Hidden when empty so a
              failure does not leave a second copy of the same error under the actions. -->
@@ -99,9 +98,7 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Spacing="16">
                 <StackPanel Spacing="10">
-                    <Border Background="{StaticResource KcapSurfaceBrush}"
-                            BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
-                            CornerRadius="12" Padding="16,14"
+                    <kcap:Surface CornerRadius="12" Padding="16,14"
                             IsVisible="{Binding DeviceCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                         <StackPanel Spacing="10">
                             <TextBlock Text="Enter this code to finish signing in"
@@ -118,7 +115,7 @@
                                     CornerRadius="8" Padding="12,7" HorizontalAlignment="Left"
                                     FontSize="12" />
                         </StackPanel>
-                    </Border>
+                    </kcap:Surface>
 
                     <TextBlock x:Name="ProvisioningText" Text="{Binding ProvisioningProgress}"
                                TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5"

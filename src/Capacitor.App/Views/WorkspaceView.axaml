@@ -3,6 +3,7 @@
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              xmlns:terminal="clr-namespace:SvcSystems.UI.Terminal;assembly=SvcSystems.UI.Terminal"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.WorkspaceView"
              x:DataType="vm:WorkspaceViewModel"
              Background="{StaticResource KcapCanvasBrush}">
@@ -98,11 +99,10 @@
                  composer's hint instead, so this layer never overlaps the live ChatHost. -->
             <Panel x:Name="TerminalBanners" IsVisible="{Binding ShowsTerminalBanners}">
 
-                <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Connecting}"
-                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Connecting}"
                         CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
                     <TextBlock Text="Connecting…" Foreground="{StaticResource KcapMutedBrush}" />
-                </Border>
+                </kcap:Surface>
 
                 <!-- The attach banner overlays the terminal, so a read-write session shows none.
                      Read-only keeps it: it is the only explanation for dead keystrokes, and
@@ -118,8 +118,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalDetachedOrFailedVisibleConverter.Instance}}"
-                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalDetachedOrFailedVisibleConverter.Instance}}"
                         CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <StackPanel Spacing="10" HorizontalAlignment="Center">
                         <TextBlock Text="{Binding Terminal.State, Converter={x:Static views:TerminalDetachedOrFailedMessageConverter.Instance}}"
@@ -128,29 +127,26 @@
                                 HorizontalAlignment="Center" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
                                 FontWeight="SemiBold" Padding="16,5" />
                     </StackPanel>
-                </Border>
+                </kcap:Surface>
 
-                <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Exited}"
-                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Exited}"
                         CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <TextBlock Text="{Binding Terminal.State.ExitCode, StringFormat='Session exited (code {0})'}"
                                Foreground="{StaticResource KcapTextBrush}" />
-                </Border>
+                </kcap:Surface>
 
-                <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=NotFound}"
-                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=NotFound}"
                         CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <StackPanel Spacing="10" HorizontalAlignment="Center">
                         <TextBlock Text="{Binding Terminal.State.Detail}" Foreground="{StaticResource KcapTextBrush}" />
                         <Button Content="Retry" Command="{Binding Terminal.RetryResolveCommand}" HorizontalAlignment="Center" Padding="14,4" />
                     </StackPanel>
-                </Border>
+                </kcap:Surface>
 
-                <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=SessionEnded}"
-                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=SessionEnded}"
                         CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <TextBlock x:Name="SessionEndedNote" Text="This session has ended." Foreground="{StaticResource KcapMutedBrush}" />
-                </Border>
+                </kcap:Surface>
             </Panel>
 
             <!-- The automation peer reports offscreen from the control's OWN IsVisible, so hiding
@@ -164,8 +160,7 @@
             <!-- Over the (still empty) chat host while the daemon is starting the runtime: the
                  stage line is the only sign the launch is alive during a handshake that can run
                  for many seconds. -->
-            <Border x:Name="StartingPanel" IsVisible="{Binding IsStarting}"
-                    Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+            <kcap:Surface x:Name="StartingPanel" IsVisible="{Binding IsStarting}"
                     CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                 <StackPanel Spacing="6" HorizontalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
@@ -175,7 +170,7 @@
                     <TextBlock Text="The agent appears in the rail as soon as it registers." FontSize="11.5"
                                Foreground="{StaticResource KcapMutedBrush}" HorizontalAlignment="Center" />
                 </StackPanel>
-            </Border>
+            </kcap:Surface>
         </Grid>
     </Grid>
     <views:WorkContextView x:Name="WorkContextHost" Grid.Column="1" DataContext="{Binding WorkContext}" />

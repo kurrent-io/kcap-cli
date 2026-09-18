@@ -1,11 +1,11 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:vm="clr-namespace:Capacitor.App.ViewModels">
+                    xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+                    xmlns:kcap="clr-namespace:Capacitor.App.Controls">
     <!-- The three NEEDS YOU card kinds. Every pane that answers a prompt renders them from here,
          so a card looks and behaves the same whether the agent runs on this machine or another. -->
     <DataTemplate x:Key="PermissionCardTemplate" x:DataType="vm:PermissionCardViewModel">
-        <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="10" Padding="13,10" Margin="0,0,0,6">
+        <kcap:Surface Classes="raised" CornerRadius="10" Padding="13,10" Margin="0,0,0,6">
             <StackPanel Spacing="6">
                 <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" />
                 <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
@@ -30,13 +30,11 @@
                             Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
                 </StackPanel>
             </StackPanel>
-        </Border>
+        </kcap:Surface>
     </DataTemplate>
     <DataTemplate x:Key="QuestionCardTemplate" x:DataType="vm:QuestionCardViewModel">
-        <Border x:Name="QuestionCard"
-                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
-            <Border.Styles>
+        <kcap:Surface x:Name="QuestionCard" Classes="raised" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
+            <kcap:Surface.Styles>
                 <Style Selector="TextBlock.prompt">
                     <Setter Property="FontWeight" Value="SemiBold" />
                     <Setter Property="FontSize" Value="15" />
@@ -114,7 +112,7 @@
                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                     <Setter Property="Cursor" Value="Hand" />
                 </Style>
-            </Border.Styles>
+            </kcap:Surface.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
                 <ItemsControl ItemsSource="{Binding Steps}" IsVisible="{Binding ShowsSteps}">
                     <ItemsControl.ItemsPanel>
@@ -223,13 +221,11 @@
                     <TextBlock Text="{Binding StepLabel}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                 </DockPanel>
             </StackPanel>
-        </Border>
+        </kcap:Surface>
     </DataTemplate>
     <DataTemplate x:Key="AcpQuestionCardTemplate" x:DataType="vm:AcpQuestionCardViewModel">
-        <Border x:Name="AcpQuestionCard"
-                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
-            <Border.Styles>
+        <kcap:Surface x:Name="AcpQuestionCard" Classes="raised" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
+            <kcap:Surface.Styles>
                 <Style Selector="Button.acpOption, ToggleButton.acpOption">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -244,7 +240,7 @@
                     <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
                 </Style>
-            </Border.Styles>
+            </kcap:Surface.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
                 <TextBlock Text="{Binding Prompt}" FontWeight="SemiBold" FontSize="15" LineHeight="21" TextWrapping="Wrap"
                            Foreground="{StaticResource KcapTextBrush}" />
@@ -276,6 +272,6 @@
                             Classes="kcapPrimary" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
                 </StackPanel>
             </StackPanel>
-        </Border>
+        </kcap:Surface>
     </DataTemplate>
 </ResourceDictionary>

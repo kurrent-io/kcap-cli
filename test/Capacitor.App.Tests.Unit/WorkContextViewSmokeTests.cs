@@ -6,6 +6,7 @@ using Avalonia.Headless;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Capacitor.App.Controls;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
@@ -115,7 +116,7 @@ public class WorkContextViewSmokeTests {
             await host.ShowAsync(KeyOnlyRead("WK-2199"));
 
             var button = host.Find<ContentControl>("IssueCard").GetVisualDescendants().OfType<Button>().First();
-            var card = button.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("card"));
+            var card = button.GetVisualDescendants().OfType<Surface>().First(b => b.Classes.Contains("card"));
             var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
             host.Window.MouseMove(centre);
             Dispatcher.UIThread.RunJobs();

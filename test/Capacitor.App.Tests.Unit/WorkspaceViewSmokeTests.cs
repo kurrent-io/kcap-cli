@@ -105,8 +105,10 @@ public class WorkspaceViewSmokeTests {
                 "TerminalTabButton", "TerminalHost", "TerminalBanners",
                 "DetachButton", "ReattachButton", "SessionEndedNote", "ChatHost", "WorkContextHost",
             };
+            // Name scope, not a visual-tree walk: a Surface's content joins the visual tree only
+            // once its template is applied on measure, which the collapsed banner layer never does.
             foreach (var name in names)
-                await Assert.That(Find<Control>(window, name)).IsNotNull().Because($"{name} should resolve");
+                await Assert.That(view.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
 
             var chatHost = Find<ChatTabView>(window, "ChatHost")!;
             foreach (var name in new[] { "ChatItems", "ChatPhaseNote", "ComposerInput", "SendButton" })
@@ -196,9 +198,9 @@ public class WorkspaceViewSmokeTests {
 
     /// Run-and-observe: drives the fake attach client's Result straight to AttachOutcome.Detached
     /// (TerminalTabViewModelTests' own idiom) and checks the view actually renders the combined
-    /// Detached/Failed banner -- ReattachButton sits inside a Border whose OWN IsVisible is bound
-    /// to the phase, so IsEffectivelyVisible (not IsVisible) is required to see the ancestor's
-    /// collapse, same as MainWindowSmokeTests' shell-vs-workspace check.
+    /// Detached/Failed banner. ReattachButton sits inside a Surface whose own IsVisible is bound to
+    /// the phase; while it stays hidden the Surface never measures, so it never joins the visual
+    /// tree at all -- absence is the pin before Detached, IsEffectivelyVisible once it does attach.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Detached_state_shows_the_reattach_banner() {
@@ -208,7 +210,6 @@ public class WorkspaceViewSmokeTests {
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var reattachButton = Find<Control>(window, "ReattachButton")!;
             var detachButton = Find<Control>(window, "DetachButton")!;
 
             daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true));
@@ -216,7 +217,7 @@ public class WorkspaceViewSmokeTests {
             await vm.ShowTerminalCommand.Execute();
             Dispatcher.UIThread.RunJobs();
 
-            await Assert.That(reattachButton.IsEffectivelyVisible).IsFalse();
+            await Assert.That(Find<Control>(window, "ReattachButton")).IsNull();
 
             var client = attach.Created[^1];
             client.Result.SetResult(new AttachOutcome.Detached());
@@ -224,7 +225,7 @@ public class WorkspaceViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             await Assert.That(vm.Terminal.State.Phase).IsEqualTo(TerminalSessionPhase.Detached);
-            await Assert.That(reattachButton.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<Control>(window, "ReattachButton")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(detachButton.IsEffectivelyVisible).IsFalse();
 
             window.Close();
@@ -369,7 +370,9 @@ public class WorkspaceViewSmokeTests {
 
             await Assert.That(vm.Terminal.State.Phase).IsEqualTo(TerminalSessionPhase.SessionEnded);
             await Assert.That(Find<Control>(window, "TerminalBanners")!.IsEffectivelyVisible).IsFalse();
-            await Assert.That(Find<Control>(window, "SessionEndedNote")!.IsEffectivelyVisible).IsFalse();
+            // The banner layer never measures on the Chat tab, so its Surface content never joins
+            // the visual tree at all -- absence, not a hidden-but-present control, is the pin here.
+            await Assert.That(Find<Control>(window, "SessionEndedNote")).IsNull();
             await Assert.That(chatHost.IsEffectivelyVisible).IsTrue();
             await Assert.That(vm.Chat!.ComposerHint).IsEqualTo("This session has ended");
 

@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.LauncherPaneView"
              x:DataType="vm:HomeViewModel">
     <!-- The Sessions surface's empty state: launching IS the pane — a fixed question over an
@@ -28,8 +29,7 @@
                            IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
 
-            <Border x:Name="GoalCard" Classes="attachTarget" Background="{StaticResource KcapSurfaceBrush}"
-                    BorderThickness="1" CornerRadius="12" Padding="14">
+            <kcap:Surface x:Name="GoalCard" Classes="attachTarget" CornerRadius="12" Padding="14">
                 <StackPanel Spacing="12">
                     <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
                                                IsVisible="{Binding Tray.HasAttachments}" />
@@ -138,7 +138,7 @@
                                TextWrapping="Wrap"
                                IsVisible="{Binding StartError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
-            </Border>
+            </kcap:Surface>
         </StackPanel>
 
         <Border x:Name="ConnectionBanner" VerticalAlignment="Top" HorizontalAlignment="Stretch" MaxWidth="680"

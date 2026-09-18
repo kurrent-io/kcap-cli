@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.HomeView"
              x:DataType="vm:HomeViewModel"
              Background="{StaticResource KcapCanvasBrush}">
@@ -47,8 +48,7 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:SessionCardViewModel">
                         <Button Classes="sessionCard" Click="OnSessionCardClick" ToolTip.Tip="Open this session">
-                            <Border Width="260" Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                    BorderThickness="1" CornerRadius="10" Padding="14">
+                            <kcap:Surface Width="260" CornerRadius="10" Padding="14">
                                 <StackPanel Spacing="8">
                                     <StackPanel Orientation="Horizontal" Spacing="7">
                                         <Ellipse Width="8" Height="8" Fill="{Binding StatusDot}" VerticalAlignment="Center" />
@@ -62,7 +62,7 @@
                                         <TextBlock Grid.Column="1" Text="{Binding Age}" FontSize="10" Foreground="{StaticResource KcapMutedBrush}" />
                                     </Grid>
                                 </StackPanel>
-                            </Border>
+                            </kcap:Surface>
                         </Button>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>

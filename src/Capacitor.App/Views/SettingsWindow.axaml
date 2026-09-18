@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+        xmlns:kcap="clr-namespace:Capacitor.App.Controls"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="Kurrent Capacitor — Settings"
@@ -34,8 +35,7 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
             <StackPanel Spacing="16">
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="20">
+                <kcap:Surface CornerRadius="12" Padding="20">
                     <StackPanel Spacing="12">
                         <StackPanel Spacing="6">
                             <TextBlock Classes="kcapLabel" Text="Name" />
@@ -52,10 +52,9 @@
                                 ToolTip.Tip="{Binding RenameHint}"
                                 ToolTip.ShowOnDisabled="True" />
                     </StackPanel>
-                </Border>
+                </kcap:Surface>
 
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="20">
+                <kcap:Surface CornerRadius="12" Padding="20">
                     <StackPanel Spacing="12">
                         <StackPanel Spacing="6">
                             <TextBlock Classes="kcapLabel" Text="Capacity" />
@@ -72,7 +71,7 @@
                         <Button x:Name="SaveButton" Classes="kcapPrimary" Content="Save" Command="{Binding SaveCommand}"
                                 HorizontalAlignment="Left" />
                     </StackPanel>
-                </Border>
+                </kcap:Surface>
             </StackPanel>
         </ScrollViewer>
 

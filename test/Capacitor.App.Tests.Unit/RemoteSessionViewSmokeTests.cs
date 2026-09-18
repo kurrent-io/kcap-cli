@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Capacitor.App.Controls;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
@@ -84,7 +85,7 @@ public class RemoteSessionViewSmokeTests {
             host.Permissions.Add(card);
             await host.SettleUntilAsync(() => host.Vm.Cards.HasPendingCards, "the card");
 
-            await Assert.That(chat.GetVisualDescendants().OfType<Border>().Any(b => b.Name == "AcpQuestionCard")).IsTrue();
+            await Assert.That(chat.GetVisualDescendants().OfType<Surface>().Any(b => b.Name == "AcpQuestionCard")).IsTrue();
             var labels = chat.GetVisualDescendants().OfType<Button>()
                 .Where(b => b is not ToggleButton && b.Classes.Contains("acpOption"))
                 .Select(b => b.Content as string ?? "")
@@ -103,7 +104,7 @@ public class RemoteSessionViewSmokeTests {
             using var host = new Host();
             await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
 
-            var banner = host.View.FindControl<Border>("AccessBanner")!;
+            var banner = host.View.FindControl<Surface>("AccessBanner")!;
             var chat = host.View.FindControl<ChatTabView>("ChatHost")!;
             await Assert.That(banner.IsVisible).IsFalse();
             await Assert.That(chat.IsVisible).IsTrue();

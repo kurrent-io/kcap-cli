@@ -12,6 +12,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Capacitor.App.Controls;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
@@ -1094,7 +1095,7 @@ public class ChatTabViewSmokeTests {
             await Assert.That(ring.BorderBrush).IsNotSameReferenceAs(status);
             await Assert.That(ring.BorderThickness).IsEqualTo(new Thickness(1));
 
-            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "QuestionCard");
+            var card = host.View.GetVisualDescendants().OfType<Surface>().Single(b => b.Name == "QuestionCard");
             await Assert.That(card.BorderBrush).IsSameReferenceAs(field);
             await Assert.That(card.BorderBrush).IsNotSameReferenceAs(status);
             await host.CloseAsync();
