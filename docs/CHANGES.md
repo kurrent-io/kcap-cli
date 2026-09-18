@@ -6,6 +6,23 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Discovery can report without choosing
+
+The workspaces an account belongs to only exist on the far side of a sign-in, and `setup` learns them
+in the middle of a run it then carries through to completion. A tool that has to ask someone which
+workspace to use has nowhere to stand: the choice has to be made before the only command that could
+inform it.
+
+`kcap setup --discover` signs in, reports what it found, and stops. It changes nothing, and that is
+load-bearing rather than incidental: the picker declines, a decline is strictly pre-boundary, and
+the boundary is where profiles, tenant activation and tokens are all published together. No
+provisioner is supplied either, so the route cannot create a workspace even for an account with none.
+
+The cost of publishing nothing is that the token is not published either, so the run that follows
+signs in again. That is the trade for a report that cannot leave a machine half-configured, and it
+argues for asking someone which workspace they want when they already know, rather than reaching for
+discovery first.
+
 ## A code block carries its own copy, and runs itself when it is a command
 
 An agent that wants a command run asks for it in a fenced block, and a reader who cannot lift the

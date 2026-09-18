@@ -107,6 +107,7 @@ Help → Report a Bug… / Send Feedback… (or the help button in the session r
 kcap setup                      # discovers your tenant — no URL needed
 kcap setup <tenant>             # shorthand for a known tenant slug → https://<tenant>.kcap.ai
 kcap setup --server-url <url>   # explicit server (self-hosted, or a full URL)
+kcap setup --discover           # list the workspaces you belong to, and change nothing
 ```
 
 The setup wizard walks you through:
@@ -335,6 +336,7 @@ At a glance — each links to its section below:
 kcap setup                                   # interactive wizard (discovers your tenant)
 kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.ai
 kcap setup --server-url <url> --no-prompt    # CI / scripted
+kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 ```
 

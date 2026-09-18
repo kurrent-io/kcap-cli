@@ -426,6 +426,8 @@ public sealed class SetupCommand(
         BinaryProbe binaries) {
 
     public async Task<int> HandleAsync(string[] args) {
+        if (args.Contains("--discover")) return await RunDiscoverOnlyAsync(args);
+
         var serverUrlArg     = GetArg(args, "--server-url");
 
         // `kcap setup <tenant>`: a leading positional arg (bare slug or full URL) is treated as the
@@ -1711,6 +1713,70 @@ public sealed class SetupCommand(
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
         return (new RequestedWorkspace(orgName!.Trim(), canonical), null);
+    }
+
+    /// <summary>
+    /// <c>kcap setup --discover</c> — sign in, report the workspaces this account can reach, and
+    /// change nothing. What a tool needs before it can ask someone which workspace to use, since
+    /// that list only exists on the far side of a sign-in.
+    ///
+    /// <para>Nothing is published because the picker declines: a cancel is strictly pre-boundary, so
+    /// no profile is written, no workspace activated and no token stored. The cost is that the run
+    /// which follows signs in again — worth knowing before reaching for this, rather than asking the
+    /// user which workspace they want when they already know.</para>
+    ///
+    /// <para>No provisioner is supplied either, so this route cannot create a workspace even against
+    /// an account with none.</para>
+    /// </summary>
+    async Task<int> RunDiscoverOnlyAsync(string[] args) {
+        // Naming a server answers the question discovery exists to ask, so the pair is a mistake
+        // rather than a refinement — and silently ignoring one of them would hide it.
+        if (GetArg(args, "--server-url") is not null || (args.Length > 1 && !args[1].StartsWith('-'))) {
+            await Console.Error.WriteLineAsync("--discover finds the workspaces you belong to; drop the server argument to use it.");
+
+            return 1;
+        }
+
+        var json     = args.Contains("--json");
+        var chosen   = OAuthLoginFlow.ChooseDiscoveryProvider(args);
+        var picker   = new ReportingTenantPicker();
+        var device   = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
+
+        // Progress narrates the sign-in on stderr, so a --json run still shows the user the URL and
+        // code they have to approve without putting a word on stdout.
+        var result = await facades.Create(provisioner: null, picker, requested: null)
+            .DiscoverAsync(chosen, device, CancellationToken.None);
+
+        // Cancelled is the expected answer: the picker declined on purpose. Anything else means the
+        // sign-in itself did not get far enough to produce a list.
+        if (result is not (AuthResult.Cancelled or AuthResult.Committed)) {
+            StepProgress.ReportFailure(result);
+
+            return 1;
+        }
+
+        var payload = SetupDiscoverRender.Payload(picker.Offered, chosen);
+
+        if (json) {
+            await Console.Out.WriteLineAsync(SetupDiscoverRender.Render(payload));
+
+            return 0;
+        }
+
+        if (payload.Workspaces.Count == 0) {
+            AnsiConsole.MarkupLine("  No Capacitor workspace found for this account.");
+            AnsiConsole.MarkupLine("  [dim]Create one with `kcap setup --org \"<name>\" --slug <slug>`.[/]");
+
+            return 0;
+        }
+
+        foreach (var workspace in payload.Workspaces)
+            AnsiConsole.MarkupLine(
+                $"  [cyan]{Markup.Escape(workspace.Slug ?? workspace.Url)}[/]  [dim]{Markup.Escape(workspace.Url)}[/]");
+
+        AnsiConsole.MarkupLine("  [dim]Nothing was changed. Run `kcap setup <slug>` to use one.[/]");
+
+        return 0;
     }
 
     internal async Task<(string ServerUrl, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
