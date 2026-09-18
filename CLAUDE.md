@@ -80,6 +80,17 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **Skills materialization takes its three locks in one order — migration, then repository, then
+  manifest — and holds no shared lock across a network request.** The only nesting is migration
+  outside the per-worktree manifest lock; the repository lock is taken alone, before any target
+  starts, and released before either. Acquiring a pair the other way round deadlocks two checkouts
+  of one repository against each other, and holding migration or repository across a snapshot fetch
+  serializes unrelated repositories on someone else's network.
+- **A skills identity retirement deletes before it fetches.** When the account or server a manifest
+  records is not the current one, every local path and every global copy that identity owned is
+  deleted first and unconditionally, and the ledger is saved owning nothing and carrying no refresh
+  stamp. Fetching first and deleting on success leaves a revoked account's skills loadable exactly
+  when the credential that would have replaced them has stopped working.
 
 ## Tech stack
 

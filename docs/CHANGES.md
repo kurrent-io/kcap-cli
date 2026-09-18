@@ -6,6 +6,54 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Skills materialize into the repository they were approved for
+
+`kcap skills sync` wrote into the user-global harness trees, so every repository on a machine was
+offered every repository's skills, and two worktrees of one repository shared one set of files and
+one ledger. The destination is now the checkout or linked worktree the sync runs in. The planner,
+the drift rule and the conditional fetch were already right; what the move cost was identity, crash
+recovery, containment and the serialization of what stays shared.
+
+The ledger moved with the files, into the worktree's own git directory (`<git-dir>/kcap/skills/`).
+That makes it per worktree by construction — a linked worktree has a git directory of its own — and
+Git deletes it with the worktree, where a copy under the config root would outlive the checkout it
+described and go on claiming paths that no longer exist.
+
+Identity is the account a snapshot was fetched under, together with the server URL. The profile
+name is not identity: signing in again replaces the credentials inside one profile. When the
+recorded identity is not the current one, the previous catalogue is deleted *before* the
+replacement is requested, locally and in the global trees alike, and the ledger is saved owning
+nothing. A replacement fetch that then fails leaves nothing of the previous account loadable, which
+is the whole point of retiring it; requesting first and deleting on success would leave a revoked
+account's skills in place exactly when the credential that revoked them stopped working.
+
+Pruning walks the ledger, never a skills root, so a directory is deletable only while something
+owns it. Ownership is therefore recorded before the write and cleared only after the writes and
+prunes succeed, and a deletion still owed is recorded as a pair — the path, and the skills root that
+authorises deleting it. The root travels with the path because containment is defined against an
+anchor: after a move from one anchor to another the new anchor's root cannot authorise the old
+anchor's paths, and a ledger with one row per document could not hold a rename's old path and new
+path at once.
+
+Three locks — migration, then repository, then manifest — and no shared lock is held across a
+network request. The migration lock is one key for the whole machine rather than one per
+repository, because legacy global ownership crosses repositories: a project-homed skill puts the
+same global directory in two repositories' ledgers, and two keys would let each observe the other
+as the remaining owner, each skip the deletion, and each then delete its own ledger, leaving the
+directory with nothing able to prune it.
+
+The Git exclusion block is written before the first file rather than after the last, because it is
+idempotent and depends on nothing a fetch returns. Written afterwards, a run interrupted between
+the ledger's refresh stamp and the block left the directories visible to Git with the six-hour
+throttle suppressing the retry.
+
+Placement cannot enforce a vendor restriction. `.claude/skills` is read by Claude, Copilot, Cursor
+and OpenCode, so a Claude-only skill lands in one tree and four harnesses can read it; the ledger
+records the measured readers of the tree a document landed in, for a later consumer to surface. The
+restrictions this shape cannot deliver at all — every harness whose only tree is fetched without a
+vendor — are documented rather than observed, because the request excludes those documents
+server-side and the client never sees one.
+
 ## The pull request reader renders GitHub-flavoured markdown
 
 Review bots write their findings almost entirely in HTML, and the reader showed the markup as

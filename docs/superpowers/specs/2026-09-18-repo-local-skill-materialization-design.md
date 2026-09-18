@@ -229,8 +229,10 @@ unconditional for copies this repository alone owns, conditional for a copy anot
 still serving.
 
 **Lock lifetime.** No shared lock is ever held across a network request. The per-worktree manifest
-lock keeps today's lifetime, spanning the fetch for one target, and the manifest is re-read under it
-after the fetch, as it is today. The migration lock covers only the legacy critical section, which is
+lock keeps today's lifetime: taken before the manifest is read and released once the ledger is
+saved, so it spans the fetch for one target and nothing has to re-read the manifest afterwards —
+holding it across the fetch is what makes the read still current. The migration lock covers only the
+legacy critical section, which is
 local filesystem work, and the repository lock only the exclusion block's rewrite. Holding either
 across a snapshot request would serialize unrelated repositories on someone else's network.
 
@@ -351,8 +353,9 @@ consumer-based adoption.
 - [ ] Two worktrees of one repository have independent, correct materializations and independent
       manifests, and two concurrent migrations do not race.
 - [ ] A vendor-restricted skill that this design can fetch is delivered, and its manifest records
-      every harness that can read the tree it landed in. A restriction to a vendor with no vendored
-      tree is recorded as undeliverable rather than silently dropped.
+      every harness that can read the tree it landed in. The set of restrictions it cannot deliver —
+      every harness whose only tree is fetched without a vendor — is fixed and documented, since the
+      client never observes such a document: the request excludes it server-side.
 - [ ] New, changed, renamed, revoked, missing and hand-edited managed files reconcile without
       touching authored skills, including a file orphaned by a crash before the manifest was saved.
 - [ ] Generated files are untracked, and discovery plus full-body loading still pass for a harness at
