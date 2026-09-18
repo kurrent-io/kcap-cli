@@ -12,8 +12,23 @@ public sealed record SkillSnapshotItem {
     [JsonPropertyName("description")]  public string?         Description { get; init; }
     [JsonPropertyName("body")]         public required string Body        { get; init; }
     [JsonPropertyName("version")]      public required int    Version     { get; init; }
-    [JsonPropertyName("content_hash")] public required string ContentHash { get; init; }
+    [JsonPropertyName("content_hash")]  public required string ContentHash   { get; init; }
+    [JsonPropertyName("home")]          public string?         Home          { get; init; }
+    [JsonPropertyName("applicability")] public string?         Applicability { get; init; }
 }
+
+/// <summary>The credential the snapshot was fetched under. A profile name is not identity: signing
+/// in again replaces the credentials inside one profile and server.</summary>
+public sealed record SkillsIdentity(
+    [property: JsonPropertyName("account")] string Account,
+    [property: JsonPropertyName("server")]  string Server);
+
+/// <summary>A directory awaiting deletion and the skills root that authorises deleting it. The root
+/// travels with the path because containment is defined against an anchor, and a path left over
+/// from a previous anchor cannot be authorised by the current one.</summary>
+public sealed record PendingPrune(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("root")] string Root);
 
 public sealed record SkillsSnapshotResponse {
     [JsonPropertyName("etag")]   public string?              Etag   { get; init; }
@@ -23,9 +38,14 @@ public sealed record SkillsSnapshotResponse {
 /// <summary>The sync ledger for one (repo, harness): which harness paths kcap owns. Pruning walks
 /// THIS, never the skills root — user-authored skills and other plugins are untouchable.</summary>
 public sealed record SkillsManifest {
-    [JsonPropertyName("etag")]      public string?                Etag     { get; init; }
-    [JsonPropertyName("synced_at")] public DateTimeOffset?        SyncedAt { get; init; }
-    [JsonPropertyName("skills")]    public SkillsManifestEntry[]? Skills   { get; init; }
+    [JsonPropertyName("etag")]           public string?                Etag          { get; init; }
+    [JsonPropertyName("synced_at")]      public DateTimeOffset?        SyncedAt      { get; init; }
+    [JsonPropertyName("skills")]         public SkillsManifestEntry[]? Skills        { get; init; }
+    [JsonPropertyName("anchor")]         public string?                Anchor        { get; init; }
+    [JsonPropertyName("identity")]       public SkillsIdentity?        Identity      { get; init; }
+    [JsonPropertyName("exposure")]       public string[]?              Exposure      { get; init; }
+    [JsonPropertyName("pending")]        public bool                   Pending       { get; init; }
+    [JsonPropertyName("pending_prunes")] public PendingPrune[]?        PendingPrunes { get; init; }
 }
 
 public sealed record SkillsManifestEntry {
@@ -36,7 +56,10 @@ public sealed record SkillsManifestEntry {
     [JsonPropertyName("path")]         public required string Path        { get; init; }
     // Hash of the rendered file as written, so a later sync can tell an edited or deleted
     // materialization from a served one. Null (an older manifest) reads as drifted.
-    [JsonPropertyName("file_hash")]    public string?         FileHash    { get; init; }
+    [JsonPropertyName("file_hash")]     public string? FileHash     { get; init; }
+    // Server-provided provenance; derived from the request when an older server omits it.
+    [JsonPropertyName("home")]          public string? Home          { get; init; }
+    [JsonPropertyName("applicability")] public string? Applicability { get; init; }
 }
 
 /// <summary>One harness tree skills materialize into, relative to a session's anchor. A null
