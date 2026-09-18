@@ -210,15 +210,24 @@
                        VerticalAlignment="Center" />
         </StackPanel>
 
-        <!-- One line however many run; the names are the sidebar's. -->
-        <Border x:Name="SubagentsBanner" Grid.Row="2" Margin="22,4,22,0" Padding="13,10"
+        <!-- Runs that outlive the turn; the activity note never shares the screen with it. Purple:
+             in flight, not attention. -->
+        <Border x:Name="SubagentsBanner" Grid.Row="2" Margin="22,10,22,0" Padding="13,10"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningSubagents}">
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <Border Classes="toolRunning toolStatus" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
-                        Background="{StaticResource KcapWarningBrush}" />
+                <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
+                        Background="{StaticResource KcapPurpleBrush}" RenderTransform="translateY(-1.5px)" />
+                <StackPanel x:Name="RunningSubagentText" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                            IsVisible="{Binding RunningSubagent, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding RunningSubagent.Name}" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding RunningSubagent.StateText}" FontSize="12"
+                               Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                </StackPanel>
                 <TextBlock x:Name="SubagentSummaryText" Text="{Binding SubagentSummary}" FontSize="12" FontWeight="SemiBold"
-                           Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                           Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center"
+                           IsVisible="{Binding RunningSubagent, Converter={x:Static ObjectConverters.IsNull}}" />
             </StackPanel>
         </Border>
 

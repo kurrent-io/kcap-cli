@@ -104,12 +104,29 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         this.RaisePropertyChanged(nameof(QueueSummary));
     }
 
-    public bool HasRunningSubagents => _subagents.RunningCount > 0;
-    public string SubagentSummary =>
-        _subagents.RunningCount == 1 ? "1 subagent running" : $"{_subagents.RunningCount} subagents running";
+    /// The note is the headline while a turn is live, and a foreground launch is already a Task
+    /// row in the transcript; the strip speaks only for runs that outlive the turn.
+    public bool HasRunningSubagents => _subagents.RunningCount > 0 && ActivityNote.Length == 0;
+
+    /// The one live row when there is exactly one: the view reads its name and state line, which
+    /// the row itself keeps current; a detach or a tick changes neither count, so nothing here
+    /// would hear of it.
+    public SubagentRow? RunningSubagent =>
+        _subagents.RunningCount == 1 ? _subagents.Rows.FirstOrDefault(r => r.IsRunning) : null;
+
+    public string SubagentSummary {
+        get {
+            var running = _subagents.Rows.Where(r => r.IsRunning).ToList();
+            if (running.Count < 2) return "";
+            return running.All(r => r.IsBackground)
+                ? $"{running.Count} subagents running in background"
+                : $"{running.Count} subagents running";
+        }
+    }
 
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasRunningSubagents));
+        this.RaisePropertyChanged(nameof(RunningSubagent));
         this.RaisePropertyChanged(nameof(SubagentSummary));
     }
 
@@ -237,7 +254,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     string _activityNote = "";
     /// Live elapsed time throughout a busy turn, including while output is streaming.
-    public string ActivityNote { get => _activityNote; private set => this.RaiseAndSetIfChanged(ref _activityNote, value); }
+    public string ActivityNote {
+        get => _activityNote;
+        private set {
+            if (_activityNote == value) return;
+            this.RaiseAndSetIfChanged(ref _activityNote, value);
+            this.RaisePropertyChanged(nameof(HasRunningSubagents));
+        }
+    }
 
     string _status = "";
     bool? _awaitingInput;

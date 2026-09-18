@@ -319,7 +319,7 @@
                                             <DataTemplate x:DataType="vm:WorkContextPartViewModel">
                                                 <StackPanel Orientation="Horizontal" Spacing="9">
                                                     <!-- Settled is green (outcome). This session is purple like IN FLIGHT — location, not done. -->
-                                                    <Panel Width="12" Height="16" VerticalAlignment="Center" RenderTransform="translateY(-2px)">
+                                                    <Panel Width="12" Height="16" VerticalAlignment="Center" RenderTransform="translateY(-1.5px)">
                                                         <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
                                                                  HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !IsSettled}" />
                                                         <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
@@ -474,7 +474,7 @@
                                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                                         <!-- The PARTS marks: purple is in flight, green and danger are outcomes, a hollow ring is
                                              a run the session ended for it. -->
-                                        <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-2px)">
+                                        <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
                                             <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
                                                      HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsRunning}" />
                                             <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"

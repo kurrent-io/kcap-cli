@@ -1459,11 +1459,11 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// The strip sits in its own row between the activity note and the queue banner, shows one
-    /// line with the pulsing dot while anything runs, and leaves with the last finish.
+    /// The banner sits in its own row between the activity note and the queue banner, names the
+    /// one run with its pulsing dot while it lasts, and leaves with the finish.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_subagents_banner_is_hidden_at_zero_and_shows_the_summary_above_the_queue_banner() {
+    public async Task The_subagents_banner_is_hidden_at_zero_and_names_the_run_above_the_queue_banner() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             var banner = host.View.FindControl<Border>("SubagentsBanner")!;
@@ -1477,7 +1477,9 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("sub.jsonl", [AgentCallLine, AgentLaunchLine]);
             await host.LoadAsync(path);
             await Assert.That(banner.IsVisible).IsTrue();
-            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "1 subagent running" && t.IsEffectivelyVisible)).IsTrue();
+            var shown = banner.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            await Assert.That(shown).Contains("Explore");
+            await Assert.That(shown.Any(t => t!.StartsWith("running in background · ", StringComparison.Ordinal))).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<Border>().Any(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsTrue();
             await Assert.That(queued.IsVisible).IsFalse();
 
