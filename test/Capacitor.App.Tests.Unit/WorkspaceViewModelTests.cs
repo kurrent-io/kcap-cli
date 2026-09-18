@@ -465,7 +465,6 @@ public class WorkspaceViewModelTests {
 
     const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
 
-    /// One tracker per workspace: what the chat reads off the transcript is what the pane lists.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_chat_and_the_pane_share_one_subagent_tracker() {
