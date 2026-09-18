@@ -479,7 +479,7 @@ public class WorkspaceViewModelTests {
 
             await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
             await Assert.That(vm.WorkContext.HasSubagents).IsTrue();
-            await Assert.That(vm.WorkContext.SubagentsHeader).IsEqualTo("1 running · 1 total");
+            await Assert.That(vm.WorkContext.SubagentsHeader).IsEqualTo("1 running");
             await Assert.That(vm.WorkContext.Subagents.Single().Name).IsEqualTo("Explore");
             await vm.TeardownAsync();
         });

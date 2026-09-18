@@ -268,6 +268,7 @@ public class ChatTabViewModelTests {
             await Assert.That(group.LiveCalls).IsEmpty();
             await Assert.That(group.Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(group.HasFailure).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
             await h.TeardownAsync();
         });
     }
@@ -310,24 +311,53 @@ public class ChatTabViewModelTests {
             var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
             await h.PushAsync(Dto(path));
             await Assert.That(h.Chat.HasRunningSubagents).IsTrue();
-            await Assert.That(h.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await Assert.That(h.Chat.RunningSubagent!.Name).IsEqualTo("Explore");
+            await Assert.That(h.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
+            await Assert.That(h.Chat.SubagentSummary).IsEmpty();
             await Assert.That(h.Subagents.Rows.Single().IsBackground).IsTrue();
             await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningSubagents));
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.RunningSubagent));
             await Assert.That(raised).Contains(nameof(ChatTabViewModel.SubagentSummary));
 
             File.AppendAllText(path, AgentCallLine.Replace("toolu_A", "toolu_B") + "\n");
             await h.TickAsync();
+            await Assert.That(h.Chat.RunningSubagent).IsNull();
             await Assert.That(h.Chat.SubagentSummary).IsEqualTo("2 subagents running");
 
             File.AppendAllText(path, AgentFinishLine + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await Assert.That(h.Chat.RunningSubagent!.StateText).StartsWith("running · ");
+            await Assert.That(h.Chat.SubagentSummary).IsEmpty();
             await Assert.That(h.Chat.Items.OfType<SystemNoteItem>().Count()).IsEqualTo(1);
 
             File.AppendAllText(path, ToolResultLine.Replace("t1", "toolu_B") + "\n");
             await h.TickAsync();
             await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
             await Assert.That(h.Subagents.Rows.Select(r => r.State)).IsEquivalentTo(new[] { SubagentState.Done, SubagentState.Done }, CollectionOrdering.Matching);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A live turn owns the footer: the activity note is showing, and a foreground launch is
+    /// already a Task row. The note returns once the turn is over and the run is still going.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_yields_to_the_activity_note_while_a_turn_is_live() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var raised = new List<string?>();
+            h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await h.TickAsync();
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
+
+            raised.Clear();
+            await h.PushAsync(Dto(path) with { AwaitingInput = true });
+            await Assert.That(h.Chat.ActivityNote).IsEmpty();
+            await Assert.That(h.Chat.HasRunningSubagents).IsTrue();
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningSubagents));
             await h.TeardownAsync();
         });
     }

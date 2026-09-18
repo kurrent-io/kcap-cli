@@ -9,6 +9,8 @@ namespace Capacitor.App.ViewModels;
 public sealed record ChatSessionInfo(
         string Status, string StatusLabel, string Vendor, string? Model, string? Root, bool? AwaitingInput, bool Ended,
         string ReadOnlyNotice, string? FeedKey) {
+    public bool WaitsOnUser => StatusLabel == "Waiting for input";
+
     /// The daemon dropped the agent before this pane ever saw it.
     public static readonly ChatSessionInfo Gone = new("Completed", "Completed", "", null, null, null, true, "", null);
 
@@ -21,6 +23,6 @@ public sealed record ChatSessionInfo(
         ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath);
 
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended) => new(
-        row.Status, SessionStatusDots.WaitsOnUser(row) ? "Waiting for input" : row.Status, row.Vendor, row.Model,
+        row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,
         row.RepoPath, row.AwaitingInput, ended || SessionStatusDots.IsTerminal(row.Status), "", row.SessionId);
 }

@@ -48,6 +48,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// vendor's family decides, exactly as it does for a local dto without one.
     public RemoteTerminalViewModel? Terminal { get; }
     public bool ShowsTerminalTab => Terminal is not null;
+    public bool ShowsSurfaceSwitch => ShowsTerminalTab;
 
     string _title = "";
     public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
@@ -230,8 +231,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
-        StatusText = row.Status;
-        StatusDot = SessionStatusDots.For(row.Status);
+        StatusText = SessionStatusDots.Label(row);
+        StatusDot = SessionStatusDots.For(row);
         if (SessionStatusDots.IsTerminal(row.Status)) {
             SessionEnded = true;
             PublishSession(ended: true);

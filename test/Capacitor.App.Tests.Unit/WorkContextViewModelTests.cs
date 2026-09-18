@@ -6,6 +6,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
@@ -75,6 +76,8 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
             await Assert.That(h.Vm.PhaseNote).IsEqualTo(WorkContextViewModel.WaitingNote);
             await Assert.That(h.Vm.SessionIdText).IsEqualTo("resolving…");
+            await Assert.That(h.Vm.SessionIdDisplay).IsEqualTo("resolving…");
+            await Assert.That(h.Vm.CanCopySessionId).IsFalse();
 
             await h.PushAsync(Dto(sessionId: null));
 
@@ -135,6 +138,8 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Source.Requested).IsEquivalentTo(new[] { SessionA });
             await Assert.That(h.Vm.HasSession).IsTrue();
             await Assert.That(h.Vm.SessionIdText).IsEqualTo(SessionA);
+            await Assert.That(h.Vm.SessionIdDisplay).IsEqualTo("aaaaaaaa…aaaaaaaa");
+            await Assert.That(h.Vm.CanCopySessionId).IsTrue();
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NoWorkItem);
             await h.Vm.TeardownAsync();
         });
@@ -554,7 +559,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Parts[1].Mark).IsEqualTo(WorkContextPartMark.Unknown);
             await Assert.That(h.Vm.Parts[2].Mark).IsEqualTo(WorkContextPartMark.Settled);
             await Assert.That(h.Vm.Parts[2].IsSettled).IsTrue();
-            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 3 parts");
+            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 3");
             await Assert.That(h.Vm.BlockedBy[0]).IsEqualTo("Pin the helper");
             await Assert.That(h.Vm.HasBlockers).IsTrue();
             await Assert.That(h.Vm.CycleNote).IsEqualTo("Dependencies could not be fully resolved");
@@ -573,7 +578,7 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
 
             await Assert.That(h.Vm.Parts[0].Mark).IsEqualTo(WorkContextPartMark.Settled);
-            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 1 part");
+            await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 1");
             await h.Vm.TeardownAsync();
         });
     }
@@ -590,7 +595,7 @@ public class WorkContextViewModelTests {
 
             await Assert.That(h.Vm.Key).IsNull();
             await Assert.That(h.Vm.Title).IsEqualTo("Daemon tests flake");
-            await Assert.That(h.Vm.PartsHeader).IsEqualTo("0 parts");
+            await Assert.That(h.Vm.PartsHeader).IsEqualTo("0");
             await Assert.That(h.Vm.HasParts).IsFalse();
             await Assert.That(h.Vm.HasBlockers).IsFalse();
             await Assert.That(h.Vm.CycleNote).IsEqualTo("Dependencies form a cycle");
@@ -882,9 +887,216 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// The section lists people, so its count names people first; the session count stays beside
-    /// it because one person can hold several sessions. Without a listed contributor the requester
-    /// row stands in and the session count alone is shown.
+    /// Session-admitted PRs and the work item's own links are different facts. Refreshing the
+    /// session list cannot invent a row that only exists on the item.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_work_item_pull_request_link_shows_when_the_session_has_none() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("issue", "WK-1"),
+                    Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar"),
+                    Link("pull_request", "#764", "https://github.com/kurrent-io/kcap-cli/pull/764", "Also"),
+                ],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Links.Select(l => (l.Eyebrow, l.Key, l.Title, l.Url))).IsEquivalentTo(
+                    new (string, string, string, string?)[] {
+                        ("PULL REQUEST", "#763", "Sidebar", "https://github.com/kurrent-io/kcap-cli/pull/763"),
+                        ("PULL REQUEST", "#764", "Also", "https://github.com/kurrent-io/kcap-cli/pull/764"),
+                    }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
+                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("#763");
+                await Assert.That(h.Vm.PullRequestTitleText).IsEqualTo("Sidebar");
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// An empty session list still offers the work-item PR so the in-app reader can open: reads
+    /// route to the local `gh` reader, which needs no session admission.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_empty_session_list_offers_the_work_item_pull_request() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var opened = 0;
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => opened++);
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar")],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await WaitUntilAsync(() => source.Lists == 1 && !pullRequests.IsReading, what: "empty session PR list");
+                await Assert.That(pullRequests.HasListed).IsTrue();
+                await Assert.That(pullRequests.HasPullRequest).IsTrue();
+                await Assert.That(pullRequests.Notice).IsEqualTo("");
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await Assert.That(h.Vm.Links[0].Key).IsEqualTo("#763");
+                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("#763");
+                await h.Vm.OpenPullRequestCommand.Execute();
+                await Assert.That(opened).IsEqualTo(1);
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// Without a local reader the read falls to the server, which refuses a PR the session was not
+    /// credited with; the notice must then say what happened and point at the GitHub button.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_work_item_pull_request_the_server_refuses_names_the_reason() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+                PullRequestReadKind.SubjectUnavailable, Subject: subject, Reason: "subject_unavailable", AccessFailure: "invalid")));
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar")],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await WaitUntilAsync(() => source.Overviews == 1 && !pullRequests.IsReading, what: "server refused the unlisted PR");
+                await Assert.That(pullRequests.Selected!.IsListed).IsFalse();
+                await Assert.That(pullRequests.Notice).IsEqualTo(PullRequestContextViewModel.UnlistedNotice);
+                await Assert.That(pullRequests.CanOpenSource).IsTrue();
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// A legacy server lists PRs but cannot serve a native read; the section opens the selected
+    /// PR on its host, as the PR card's disabled View PR already implies.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_legacy_reader_sends_the_pull_request_section_to_the_host() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var opened = 0;
+            var source = new FakePullRequestSource(h.Time) { Capability = PullRequestCapabilityKind.Legacy };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => opened++);
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item()));
+            try {
+                await h.PushAsync(Dto());
+                await WaitUntilAsync(() => pullRequests.HasListed && pullRequests.HasChoice, what: "legacy list applied");
+                await Assert.That(pullRequests.IsLegacy).IsTrue();
+                await Assert.That(pullRequests.CanOpenReader).IsFalse();
+                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await h.Vm.OpenPullRequestCommand.Execute();
+                await Assert.That(opened).IsEqualTo(0);
+                await Assert.That(h.Opener.Opened).Count().IsEqualTo(1);
+                await Assert.That(h.Opener.Opened[0]).Contains($"/pull/{pullRequests.Selected!.Link.Number}");
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// A `reference` is an ambient mention; only a `link`-class PR is the work item's.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_referenced_pull_request_is_not_shown_as_linked() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Mentioned", linkClass: "reference"),
+                    Link("pr", "!764", "https://github.com/kurrent-io/kcap-cli/pull/764", "Linked"),
+                ],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Links.Select(l => l.Key)).IsEquivalentTo(new[] { "#764" });
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// PR numbers are repository-local: #42 in two repositories is two pull requests.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_same_number_in_two_repositories_is_two_pull_requests() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-cli/pull/42", "CLI"),
+                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-server/pull/42", "Server"),
+                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-server/pull/42", "Server again"),
+                ],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Links.Select(l => l.Url!)).IsEquivalentTo(new[] {
+                    "https://github.com/kurrent-io/kcap-cli/pull/42",
+                    "https://github.com/kurrent-io/kcap-server/pull/42",
+                });
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// Empty copy waits until both the session list and the work-item read have settled.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Empty_pull_request_copy_waits_until_the_session_list_and_work_item_have_settled() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            var gate = h.Source.Gate();
+            try {
+                h.Push(Dto());
+                await WaitUntilAsync(() => source.Lists == 1 && pullRequests.HasListed, what: "session PR list settled empty");
+                await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+                await Assert.That(pullRequests.Notice).IsEqualTo("");
+
+                gate.SetResult(ReadyWith(Row("w1", "t"), Item()));
+                await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
+                await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Ready);
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+                await Assert.That(h.Vm.CanOpenPullRequest).IsFalse();
+                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("");
+                await Assert.That(h.Vm.PullRequestTitleText).IsEqualTo("");
+            } finally {
+                if (!gate.Task.IsCompleted) gate.TrySetCanceled();
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// With every contributor visible the header names sessions only; past the cap it adds a people
+    /// count. Without listed contributors the requester row stands in and the session count alone
+    /// is shown.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_who_count_names_people_before_sessions_and_the_requester_row_is_the_fallback() {
@@ -906,19 +1118,51 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { "Ada Lovelace", "github:7", "👩 Grace" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.Initial)).IsEquivalentTo(new[] { "A", "G", "👩" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.LastActivityText)).IsEquivalentTo(new[] { "2h ago", "3d ago", "" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.WhoCountText).IsEqualTo("3 people · 4 sessions");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("4 sessions");
+            await Assert.That(h.Vm.PeopleOverflows).IsFalse();
+            await Assert.That(h.Vm.VisibleContributors.Count()).IsEqualTo(3);
+            await h.Vm.TogglePeopleCommand.Execute();
+            await Assert.That(h.Vm.PeopleExpanded).IsFalse();
 
             await h.TickAsync();
-            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 person · 2 sessions");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("2 sessions");
 
             await h.TickAsync();
-            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 person · 1 session");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 session");
 
             await h.TickAsync();
             await Assert.That(h.Vm.HasContributors).IsFalse();
             await Assert.That(h.Vm.Contributors).IsEmpty();
             await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 session");
             await Assert.That(h.Vm.Requester).IsEqualTo("You");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The agent dto paints the requester email immediately. The work-item contributor for the
+    /// same person often arrives with a WorkOS user_id and no display_name (an owner with no
+    /// user row). That id is not a name — keep the email, never paint user_01….
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_workos_contributor_id_keeps_the_session_requester_display() {
+        await RunOnUiAsync(async () => {
+            const string userId = "user_01KYZ590AKWBCFFNKM1KZ1HZ2B";
+            const string email = "norton@example.com";
+            var h = new Harness();
+            h.Source.Enqueue(
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person(userId, null)] }),
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person(userId, userId)] }),
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person("user_01AAAAAAAAAAAAAAAAAAAAAAAA", null)] }));
+            await h.PushAsync(Dto() with { Requester = userId, RequesterDisplay = email });
+
+            await Assert.That(h.Vm.Requester).IsEqualTo(email);
+            await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { email }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { email }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { "Someone" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await h.Vm.TeardownAsync();
         });
     }
@@ -1160,7 +1404,7 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Sections_default_open_parts_and_collapsed_people_and_session_and_toggle() {
+    public async Task Sections_default_open_parts_and_collapsed_session_and_toggle() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             await Assert.That(h.Vm.PartsExpanded).IsTrue();
@@ -1168,11 +1412,9 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.SessionExpanded).IsFalse();
 
             await h.Vm.TogglePartsCommand.Execute();
-            await h.Vm.TogglePeopleCommand.Execute();
             await h.Vm.ToggleSessionCommand.Execute();
 
             await Assert.That(h.Vm.PartsExpanded).IsFalse();
-            await Assert.That(h.Vm.PeopleExpanded).IsTrue();
             await Assert.That(h.Vm.SessionExpanded).IsTrue();
             await h.Vm.TeardownAsync();
         });
@@ -1192,14 +1434,14 @@ public class WorkContextViewModelTests {
             h.Subagents.Apply(Spawn("c2", now));
             await Assert.That(h.Vm.HasSubagents).IsTrue();
             await Assert.That(h.Vm.Subagents).Count().IsEqualTo(2);
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 running · 2 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 running");
             await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasSubagents));
             await Assert.That(raised).Contains(nameof(WorkContextViewModel.SubagentsHeader));
 
             h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running · 2 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 of 2 running");
             h.Subagents.Apply(Finish("c2", now.AddSeconds(6)));
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2");
             await Assert.That(h.Vm.HasSubagents).IsTrue();
             await h.Vm.TeardownAsync();
         });
@@ -1217,7 +1459,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
             h.Subagents.Apply(Spawn("c1", h.Time.GetUtcNow()));
             await Assert.That(h.Vm.HasSubagents).IsTrue();
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running · 1 total");
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running");
 
             gate.SetResult(WorkContextRead.Of(WorkContextReadKind.Unreachable, "no response"));
             await h.Vm.PendingReadForTesting!;
@@ -1243,6 +1485,35 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
             await h.Vm.ToggleSubagentsCommand.Execute();
             await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_long_session_id_truncates_in_the_middle() {
+        await Assert.That(WorkContextViewModel.MiddleTruncate("short")).IsEqualTo("short");
+        await Assert.That(WorkContextViewModel.MiddleTruncate("c03b8e371db44dd697732a1cf1fc3532"))
+            .IsEqualTo("c03b8e37…f1fc3532");
+        await Assert.That(new WorkContextPersonViewModel("nortonandreev-very-long-github-handle", null, null, DateTimeOffset.UnixEpoch)
+            .NameDisplay).IsEqualTo("nortonandr…b-handle");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_lists_names_and_the_chevron_only_reveals_people_past_the_cap() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var people = Enumerable.Range(1, 5).Select(i => Person($"u{i}", $"P{i}")).ToList();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with { Contributors = people, SessionCount = 5 }));
+            await h.PushAsync(Dto());
+
+            await Assert.That(h.Vm.PeopleOverflows).IsTrue();
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("5 people · 5 sessions");
+            await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await h.Vm.TogglePeopleCommand.Execute();
+            await Assert.That(h.Vm.PeopleExpanded).IsTrue();
+            await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4", "P5" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
             await h.Vm.TeardownAsync();
         });
     }

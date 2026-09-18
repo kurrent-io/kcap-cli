@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -23,7 +24,20 @@ public enum WorkContextPhase { WaitingForSession, Loading, Ready, NoWorkItem, Si
 /// read; a result applies only for the current lease, every lease is kept until its read settles
 /// so teardown can await them all, and every lease transition happens on the UI thread.
 public sealed partial class WorkContextViewModel : ReactiveObject {
-    public PullRequestContextViewModel? PullRequests { get; internal set; }
+    PullRequestContextViewModel? _pullRequests;
+    public PullRequestContextViewModel? PullRequests {
+        get => _pullRequests;
+        internal set {
+            _pullRequests = value;
+            if (value is not null) {
+                value.PropertyChanged += OnPullRequestChanged;
+                _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
+                OfferFallbacks();
+            }
+            this.RaisePropertyChanged(nameof(HasPullRequestContext));
+            RaiseRelated();
+        }
+    }
     public bool HasPullRequestContext => PullRequests is not null;
     public bool ShowsLegacyLinks => PullRequests is null;
     public PullRequestRepository? PrimaryRepository { get; private set; }
@@ -74,7 +88,17 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     string _transport = "—";
     public string Transport { get => _transport; private set => this.RaiseAndSetIfChanged(ref _transport, value); }
     string _sessionIdText = "resolving…";
-    public string SessionIdText { get => _sessionIdText; private set => this.RaiseAndSetIfChanged(ref _sessionIdText, value); }
+    public string SessionIdText {
+        get => _sessionIdText;
+        private set {
+            this.RaiseAndSetIfChanged(ref _sessionIdText, value);
+            this.RaisePropertyChanged(nameof(SessionIdDisplay));
+            this.RaisePropertyChanged(nameof(CanCopySessionId));
+        }
+    }
+    /// Head and tail of a long id, so a 32-hex session id stays one line in the 320px pane.
+    public string SessionIdDisplay => MiddleTruncate(_sessionIdText);
+    public bool CanCopySessionId => _sessionIdText.Length > 0 && _sessionIdText != "resolving…";
     string _sessionSummaryLine = "—";
     public string SessionSummaryLine { get => _sessionSummaryLine; private set => this.RaiseAndSetIfChanged(ref _sessionSummaryLine, value); }
 
@@ -86,13 +110,22 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         get {
             var running = _subagents.RunningCount;
             var total = _subagents.Rows.Count;
-            return running > 0 ? $"{running} running · {total} total" : $"{total} total";
+            return running switch {
+                0                     => $"{total}",
+                var r when r == total => $"{r} running",
+                var r                 => $"{r} of {total} running",
+            };
         }
     }
 
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasSubagents));
         this.RaisePropertyChanged(nameof(SubagentsHeader));
+    }
+
+    internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {
+        if (value.Length <= head + tail + 1) return value;
+        return string.Concat(value.AsSpan(0, head), "…", value.AsSpan(value.Length - tail));
     }
 
     WorkContextPhase _phase = WorkContextPhase.WaitingForSession;
@@ -105,6 +138,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             this.RaisePropertyChanged(nameof(IsReady));
             this.RaisePropertyChanged(nameof(ShowsSignIn));
             this.RaisePropertyChanged(nameof(ShowsRetry));
+            RaiseRelated();
         }
     }
 
@@ -121,6 +155,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public bool IsReady     => Phase == WorkContextPhase.Ready;
     public bool ShowsSignIn => Phase == WorkContextPhase.SignedOut;
     public bool ShowsRetry  => Phase == WorkContextPhase.Unreachable;
+
+    void OnPullRequestChanged(object? sender, PropertyChangedEventArgs e) {
+        if (e.PropertyName is nameof(PullRequestContextViewModel.Title)
+            or nameof(PullRequestContextViewModel.NumberLabel)
+            or nameof(PullRequestContextViewModel.HasPullRequest)
+            or nameof(PullRequestContextViewModel.HasListed))
+            RaiseRelated();
+    }
 
     bool _isStale;
     public bool IsStale { get => _isStale; private set => this.RaiseAndSetIfChanged(ref _isStale, value); }

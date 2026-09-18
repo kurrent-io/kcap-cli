@@ -56,10 +56,12 @@ public sealed class SubagentRow : ReactiveObject {
         var stoppedBySession = sessionOver && !IsEnded;
         State = stoppedBySession ? SubagentState.Stopped : Outcome;
         // Nothing dates an end the session imposed, so that row shows no duration.
-        StateText = stoppedBySession ? "stopped" : Text(State, (EndedAt ?? now) - StartedAt);
+        StateText = stoppedBySession ? "stopped" : Text(State, IsBackground, (EndedAt ?? now) - StartedAt);
     }
 
-    static string Text(SubagentState state, TimeSpan elapsed) => state switch {
+    // Background only matters while the run is live: it says the chat is not waiting on it.
+    static string Text(SubagentState state, bool background, TimeSpan elapsed) => state switch {
+        SubagentState.Running when background => $"running in background · {Duration(elapsed)}",
         SubagentState.Running => $"running · {Duration(elapsed)}",
         SubagentState.Failed  => $"failed · {Duration(elapsed)}",
         SubagentState.Stopped => $"stopped · {Duration(elapsed)}",
@@ -68,6 +70,10 @@ public sealed class SubagentRow : ReactiveObject {
 
     internal static string Duration(TimeSpan elapsed) {
         var seconds = Math.Max(0, (long)elapsed.TotalSeconds);
-        return seconds < 60 ? $"{seconds}s" : $"{seconds / 60}m {seconds % 60:00}s";
+        return seconds switch {
+            < 60   => $"{seconds}s",
+            < 3600 => $"{seconds / 60}m {seconds % 60:00}s",
+            _      => $"{seconds / 3600}h {seconds % 3600 / 60:00}m",
+        };
     }
 }

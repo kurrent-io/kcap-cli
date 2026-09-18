@@ -6,6 +6,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -373,7 +374,6 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("tools.jsonl",
                 [ToolCallLine, ToolResultLine, ToolCallLine.Replace("t1", "t2"), ToolErrorLine.Replace("t1", "t2")]));
-            OnlyGroup(host).Toggle();
             host.Settle();
 
             await Assert.That(OnlyGroup(host).Calls.Select(i => i.Outcome))
@@ -603,6 +603,27 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// Typed composer copy shares the chat body's line box (15 / 24) plus a hair of tracking,
+    /// not Fluent's tight default metrics. The presenter is what paints the glyphs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Composer_text_uses_the_chat_body_line_box() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Type("hello");
+            host.Window.UpdateLayout();
+            var presenter = host.Composer.GetVisualDescendants().OfType<TextPresenter>().Single();
+            await Assert.That(host.Composer.FontSize).IsEqualTo(15);
+            await Assert.That(host.Composer.LineHeight).IsEqualTo(24);
+            await Assert.That(host.Composer.LetterSpacing).IsEqualTo(0.2);
+            await Assert.That(host.Composer.MinHeight).IsEqualTo(44);
+            await Assert.That(presenter.FontSize).IsEqualTo(15);
+            await Assert.That(presenter.LineHeight).IsEqualTo(24);
+            await Assert.That(presenter.LetterSpacing).IsEqualTo(0.2);
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins that focusing the composer draws no ring of its own: the card is the input's
     /// boundary, so the theme's focused border and fill stay off.
     [Test]
@@ -661,6 +682,31 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_bubbles_carry_a_kind_chip() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("chips.jsonl", [
+                """{"type":"user","message":{"role":"user","content":"hello"}}""",
+                """{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}""",
+                """{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<summary>Agent finished</summary>\n<result>\nAll good.\n</result>\n</task-notification>"}}""",
+            ]));
+            host.Settle();
+            var chips = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible)
+                .Select(t => t.Text)
+                .ToList();
+            await Assert.That(chips).Contains("You");
+            await Assert.That(chips).Contains(host.Chat.AssistantTitle);
+            await Assert.That(chips).Contains("Note");
+            var you = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "You");
+            await Assert.That(you.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins the fold: settled calls become one summary line, live calls stay as rows, and a click
     /// on the summary reveals every call and hides them again.
     [Test]
@@ -678,11 +724,16 @@ public class ChatTabViewSmokeTests {
                 .Contains("Searched files, read a file · ls -la");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Running);
+            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
+            await Assert.That(card.Classes.Contains("folded")).IsTrue();
+            await Assert.That(card.Margin.Bottom).IsEqualTo(10);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsTrue();
             await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(3);
+            await Assert.That(card.Classes.Contains("folded")).IsFalse();
+            await Assert.That(card.Margin.Bottom).IsEqualTo(22);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsFalse();
@@ -725,19 +776,28 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A failed group opens so the row error pills are in view; the summary header has none.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_failed_call_inside_a_multi_call_group_marks_the_summary() {
+    public async Task A_failed_call_inside_a_multi_call_group_opens_the_group() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("fail.jsonl", [
                 ToolCallLine, ToolErrorLine, ReadCallLine, ReadResultLine,
             ]));
+            var group = OnlyGroup(host);
+            await Assert.That(group.HasFailure).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
             var summary = Summary(host.View);
             await Assert.That(summary.IsVisible).IsTrue();
-            var failPill = summary.GetVisualDescendants().OfType<Border>()
-                .Single(b => b.Classes.Contains("toolStatus") && b.IsVisible);
-            await Assert.That(failPill.Background).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapDangerBrush"));
+            await Assert.That(summary.GetVisualDescendants().OfType<Border>()
+                .Count(b => b.Classes.Contains("toolStatus") && b.IsVisible)).IsEqualTo(0);
+            var pills = ToolRows(host.View)
+                .Select(row => row.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolStatus") && b.IsVisible))
+                .ToList();
+            await Assert.That(pills).Count().IsEqualTo(2);
+            await Assert.That(pills[0].Background).IsSameReferenceAs(Brush(isError: true));
+            await Assert.That(pills[1].Background).IsSameReferenceAs(Brush(isError: false));
             await host.CloseAsync();
         });
     }
@@ -811,9 +871,9 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// Expanding keeps the viewport: the click is the reader's gesture and it lands above the
-    /// bottom, so following stops until the reader returns to the bottom, when the next append
-    /// follows again.
+    /// Expanding keeps the clicked header in place: the click is the reader's gesture and it
+    /// lands above the bottom, so following stops until the reader returns to the bottom, when
+    /// the next append follows again.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Expanding_the_trailing_group_keeps_the_offset_and_returning_to_the_bottom_resumes_following() {
@@ -824,13 +884,15 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("expand.jsonl", lines.ToArray());
             await host.LoadAsync(path);
             await Assert.That(host.AtBottom()).IsTrue();
-            var before = host.Scroll.Offset.Y;
+            var summary = Summary(host.View);
+            var beforeY = SummaryViewportY(host, summary);
 
-            Click(host, Summary(host.View));
+            Click(host, summary);
             host.Window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             await Assert.That(((ToolGroupItem)host.Chat.Items[^1]).IsExpanded).IsTrue();
-            await Assert.That(host.Scroll.Offset.Y).IsEqualTo(before);
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - beforeY)).IsLessThan(2);
             await Assert.That(host.AtBottom()).IsFalse();
 
             host.Scroll.ScrollToEnd();
@@ -840,6 +902,54 @@ public class ChatTabViewSmokeTests {
             host.Window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             await Assert.That(host.AtBottom()).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
+    static double SummaryViewportY(Host host, Button summary) =>
+        summary.TranslatePoint(new Point(0, 0), host.Scroll)?.Y
+        ?? throw new InvalidOperationException("the summary is not in the scroll viewer");
+
+    /// A row that changes height makes the virtualizing panel drop its anchor and re-place every
+    /// row from the average size, which jumps the reader off the bubble they just toggled.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Expanding_and_collapsing_a_group_keeps_its_header_where_it_was() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var lines = new List<string>(Enumerable.Repeat(UserLine, 40));
+            for (var i = 1; i <= 30; i++) { lines.Add(CallLine(i)); lines.Add(ResultLine(i)); }
+            lines.AddRange(Enumerable.Repeat(UserLine, 40));
+            await host.LoadAsync(Tmp.CreateFile("mid.jsonl", lines.ToArray()));
+
+            WheelUp(host);
+            host.Settle();
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var group = host.Chat.Items.OfType<ToolGroupItem>().Single();
+            items.ScrollIntoView(group);
+            host.Settle();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var summary = Summary(host.View);
+            var before = SummaryViewportY(host, summary);
+            await Assert.That(before).IsGreaterThan(0);
+            await Assert.That(before).IsLessThan(host.Scroll.Viewport.Height);
+
+            Click(host, summary);
+            host.Window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(group.IsExpanded).IsTrue();
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - before)).IsLessThan(2);
+
+            Click(host, summary);
+            host.Window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(group.IsExpanded).IsFalse();
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - before)).IsLessThan(2);
             await host.CloseAsync();
         });
     }
@@ -857,9 +967,10 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("race.jsonl", lines.ToArray());
             await host.LoadAsync(path);
             await Assert.That(host.AtBottom()).IsTrue();
-            var before = host.Scroll.Offset.Y;
+            var summary = Summary(host.View);
+            var beforeY = SummaryViewportY(host, summary);
 
-            var origin = PresentAndLocate(host, Summary(host.View));
+            var origin = PresentAndLocate(host, summary);
             host.Window.MouseDown(origin, MouseButton.Left);
             host.Window.MouseUp(origin, MouseButton.Left);
             File.AppendAllLines(path, Enumerable.Repeat(UserLine, 5));
@@ -871,7 +982,8 @@ public class ChatTabViewSmokeTests {
 
             await Assert.That(((ToolGroupItem)host.Chat.Items[^6]).IsExpanded).IsTrue();
             await Assert.That(host.Chat.Items).Count().IsEqualTo(66);
-            await Assert.That(host.Scroll.Offset.Y).IsEqualTo(before);
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - beforeY)).IsLessThan(2);
 
             host.Scroll.ScrollToEnd();
             host.Window.UpdateLayout();
@@ -1347,11 +1459,11 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// The strip sits in its own row between the activity note and the queue banner, shows one
-    /// line with the pulsing dot while anything runs, and leaves with the last finish.
+    /// The banner sits in its own row between the activity note and the queue banner, names the
+    /// one run with its pulsing dot while it lasts, and leaves with the finish.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_subagents_banner_is_hidden_at_zero_and_shows_the_summary_above_the_queue_banner() {
+    public async Task The_subagents_banner_is_hidden_at_zero_and_names_the_run_above_the_queue_banner() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             var banner = host.View.FindControl<Border>("SubagentsBanner")!;
@@ -1365,7 +1477,9 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("sub.jsonl", [AgentCallLine, AgentLaunchLine]);
             await host.LoadAsync(path);
             await Assert.That(banner.IsVisible).IsTrue();
-            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "1 subagent running" && t.IsEffectivelyVisible)).IsTrue();
+            var shown = banner.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            await Assert.That(shown).Contains("Explore");
+            await Assert.That(shown.Any(t => t!.StartsWith("running in background · ", StringComparison.Ordinal))).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<Border>().Any(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsTrue();
             await Assert.That(queued.IsVisible).IsFalse();
 

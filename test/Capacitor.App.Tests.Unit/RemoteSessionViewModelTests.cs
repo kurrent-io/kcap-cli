@@ -447,7 +447,7 @@ public class RemoteSessionViewModelTests {
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
             await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the strip");
-            await Assert.That(vm.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await Assert.That(vm.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
             await Assert.That(vm.Chat.Items.OfType<ToolGroupItem>().Single().Calls.Single().Outcome).IsEqualTo(ToolOutcome.Done);
 
             h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, AgentNotification));
@@ -493,7 +493,7 @@ public class RemoteSessionViewModelTests {
             await h.UntilAsync(vm, () => vm.Chat.Items.OfType<AssistantTextItem>().Any(i => i.Text == "__sync__"), "the sync marker");
 
             await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
-            await Assert.That(vm.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await Assert.That(vm.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
             await vm.TeardownAsync();
         });
     }
@@ -536,7 +536,7 @@ public class RemoteSessionViewModelTests {
             h.Directory.Rows.AddOrUpdate(Harness.Row(vendor: "claude"));
             await Assert.That(vm.SessionEnded).IsFalse();
             await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
-            await Assert.That(vm.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await Assert.That(vm.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
             await vm.TeardownAsync();
         });
     }
