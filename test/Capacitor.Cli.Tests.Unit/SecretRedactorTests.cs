@@ -5,6 +5,19 @@ namespace Capacitor.Cli.Tests.Unit;
 
 public class SecretRedactorTests {
     [Test]
+    public async Task IsSecretKey_recognises_a_secret_key_and_passes_an_innocuous_one() {
+        await Assert.That(SecretRedactor.IsSecretKey("api_key")).IsTrue();
+        await Assert.That(SecretRedactor.IsSecretKey("note")).IsFalse();
+    }
+
+    [Test]
+    public async Task RedactValue_redacts_under_a_secret_key_and_a_matching_pattern_only() {
+        await Assert.That(SecretRedactor.RedactValue("hello", keyIsSecret: true)).IsNotNull();
+        await Assert.That(SecretRedactor.RedactValue("hello", keyIsSecret: false)).IsNull();
+        await Assert.That(SecretRedactor.RedactValue("ghp_ABCDEFghijklmnop1234567890abcdef12345678", keyIsSecret: false)).IsNotNull();
+    }
+
+    [Test]
     public async Task RedactsLine_TruncatedPemPrivateKey_DoesNotHangOnBacktracking() {
         // Regression: a tool result containing `-----BEGIN RSA PRIVATE KEY-----` followed by many
         // `\n`-escaped key body lines, then truncated WITHOUT a matching `-----END` marker, used

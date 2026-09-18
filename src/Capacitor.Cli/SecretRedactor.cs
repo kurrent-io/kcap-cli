@@ -7,7 +7,7 @@ using DotNext.Buffers;
 
 namespace Capacitor.Cli;
 
-static partial class SecretRedactor {
+public static partial class SecretRedactor {
     // Lines above this are swapped for a placeholder rather than scanned: they are almost always
     // truncated dumps, and an unterminated `-----BEGIN RSA PRIVATE KEY-----` blob drives the regex
     // alternation into catastrophic backtracking that wedges the watcher loop at 100% CPU. UTF-16
@@ -40,6 +40,12 @@ static partial class SecretRedactor {
             return UnparsableOutputPlaceholder;
         }
     }
+
+    // Public so an out-of-process redactor reuses the exact production vocabulary rather than
+    // re-deriving it; RedactLine and its 64K rule stay the in-process path and are unchanged.
+    public static bool IsSecretKey(ReadOnlySpan<char> propertyName) => SecretKeyNameRegex.IsMatch(propertyName);
+
+    public static string? RedactValue(ReadOnlySpan<char> value, bool keyIsSecret) => Redact(value, keyIsSecret);
 
     // Each value is scanned decoded, never as it sits in the line: a pattern run over the line
     // matches past the value it found into the surrounding structure. Null means nothing changed,
