@@ -1,0 +1,7 @@
+<Project>
+    <!-- Deliberately does not import the repo-root file: vendored source stays byte-identical to
+         upstream, so it cannot meet warnings-as-errors, enforced code style or the banned-API list. -->
+    <PropertyGroup>
+        <Deterministic>true</Deterministic>
+    </PropertyGroup>
+</Project>
