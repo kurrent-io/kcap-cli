@@ -463,9 +463,10 @@ matches decides; `--no-prompt` never reaches this table.
 
 The import's own outcome outranks the plan gate, so a denied plan never masks a failed import and the
 skill's retry advice is only ever given when a retry is warranted. Rows 1–4 print nothing beyond what
-the step already said; rows 5–7 print one line naming the reason; row 8 proceeds to the picker. Rows
-1–7 add no eval-watch item to the Next-steps panel, which keeps exactly the items it has today — the
-server-setup item, and the guided-tour item when eligible.
+the step already said; row 5 prints one line naming the reason; rows 6–7 name the reason and also
+print the results link (`{ServerUrl}/sessions`), since nothing is following the run for the user; row
+8 proceeds to the picker. Rows 1–7 add no eval-watch item to the Next-steps panel, which keeps exactly
+the items it has today — the server-setup item, and the guided-tour item when eligible.
 
 **Plan gate (row 5).** The eval-watch skill reads analytics, which the server denies to Free tenants
 (`analytics_not_in_plan`). Setup consults the cached entitlement the CLI already keeps from the
@@ -479,9 +480,10 @@ same on-disk oracle `ShouldOfferGuidedTour` (`SetupCommand.cs:1111`) applies to 
 skill, evaluated per vendor: Claude through the registered plugin marketplace path, Kiro and
 Antigravity through their own skills directories, every other vendor through the shared
 `~/.agents/skills` tree. A vendor without the skill would receive a prompt nothing answers, so when
-the user declined step 4 or its install failed there is no paste block either: row 6 prints one line
-naming `kcap plugin install` (with the vendor flag) as the way to get the skill, and setup ends as
-today.
+the user declined step 4 or its install failed there is no paste block either: rows 6 and 7 print the
+results link (`{ServerUrl}/sessions`) so the import and its evals stay visible in the Capacitor UI
+with no agent following along; row 6 additionally names `kcap plugin install` (with the vendor flag)
+as the way to get the skill so a later run can follow automatically. Setup ends as today.
 
 **The picker.** A `SelectionPrompt` over the eligible vendors plus an always-present **Skip**. Skip
 and cancelling the prompt behave identically: print the paste block, continue to the summary.
@@ -877,7 +879,8 @@ import **and** cached denial → `import_failed`; empty cohort **and** cached de
 `--no-prompt` → no handoff, unbounded import, no spawn, no file; a cached analytics denial over a
 successful pass → no picker, no paste block, one line, and a Next-steps panel identical to today's; no
 eligible vendor with one detected (step 4 declined or failed) → no picker, no paste block, the
-`kcap plugin install` line;
+results link plus the `kcap plugin install` line; no vendor detected at all → no picker, no paste
+block, the results link alone;
 eligibility per vendor (detected, skill present, executable resolves vs not); IDE-only Kiro and
 Antigravity with the skill installed print the paste block; every
 recipe's argv pinned per vendor with the two-line prompt as a single element; Skip and cancel print

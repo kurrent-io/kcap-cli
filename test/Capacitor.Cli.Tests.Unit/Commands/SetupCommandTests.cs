@@ -98,6 +98,31 @@ public class SetupCommandTests {
             AntigravitySkillsDir: Home.PathTo("antigravity-skills"));
     }
 
+    /// <summary>Stages <paramref name="vendor"/>'s CLI, same as <see cref="PathsWithEvalWatchFor"/>,
+    /// but never writes the skill file — so the vendor comes out detected and ineligible, the
+    /// <c>skill_not_installed</c> row.</summary>
+    CodingAgentsStep.Paths PathsWithoutEvalWatchFor(HarnessId vendor) {
+        TestBinaries.Searching(Bin, CliBinaryFor(vendor));
+
+        return NoVendorPaths();
+    }
+
+    /// <summary>No CLI staged and no skill anywhere — every vendor comes out undetected, the
+    /// <c>no_agent_detected</c> row.</summary>
+    CodingAgentsStep.Paths NoVendorPaths() =>
+        new(
+            ClaudeSettingsPath:   Home.PathTo("claude-settings.json"),
+            ClaudeScopeLabel:     "user",
+            PluginDir:            null,
+            CodexHooksPath:       Home.PathTo("codex-hooks.json"),
+            CursorHooksPath:      Home.PathTo("cursor-hooks.json"),
+            CopilotHooksPath:     Home.PathTo("copilot-hooks.json"),
+            GeminiSettingsPath:   Home.PathTo("gemini-settings.json"),
+            AgentsSkillsDir:      Home.PathTo("agents-skills"),
+            LegacyCodexSkillsDir: Home.PathTo("legacy-codex-skills"),
+            KiroSkillsDir:        Home.PathTo("kiro-skills"),
+            AntigravitySkillsDir: Home.PathTo("antigravity-skills"));
+
     // --- The browser leg's one outcome line ---
 
     [Test]
@@ -936,11 +961,12 @@ public class SetupCommandTests {
 
     SetupCommand.ImportStepInputs Inputs(
             bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
-            bool auth = true, bool skip = false, string visibility = "org_public") => new(
+            bool auth = true, bool skip = false, string visibility = "org_public",
+            CodingAgentsStep.Paths? paths = null) => new(
         AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
         Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
         DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
-        Paths: PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false);
+        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false);
 
     /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
     /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
@@ -1104,6 +1130,33 @@ public class SetupCommandTests {
 
         await Assert.That(spawner.Spawns).IsEqualTo(0);
         await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.NoNewSessions);
+    }
+
+    [Test, NotInParallel]
+    public async Task Skill_not_installed_points_at_the_web_ui_alongside_the_plugin_install_hint() {
+        var runner  = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+        using var console = new SpectreCapture();
+
+        var inputs = Inputs(paths: PathsWithoutEvalWatchFor(HarnessId.Codex));
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(inputs);
+
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.SkillNotInstalled);
+        await Assert.That(console.Text).Contains("https://example.test/sessions");
+        await Assert.That(console.Text).Contains("kcap plugin install");
+    }
+
+    [Test, NotInParallel]
+    public async Task No_agent_detected_points_at_the_web_ui() {
+        var runner  = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+        using var console = new SpectreCapture();
+
+        var inputs = Inputs(paths: NoVendorPaths());
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(inputs);
+
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.NoAgentDetected);
+        await Assert.That(console.Text).Contains("https://example.test/sessions");
     }
 
     [Test]

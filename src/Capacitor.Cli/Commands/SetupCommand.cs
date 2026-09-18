@@ -1379,7 +1379,7 @@ sealed class SetupCommand(
         }
 
         if (!handoff.Offered) {
-            PrintSuppressed(handoff.Reason!.Value);
+            PrintSuppressed(handoff.Reason!.Value, inputs.ServerUrl);
 
             return new ImportStepResult(true, runId, handoff, null);
         }
@@ -1419,19 +1419,30 @@ sealed class SetupCommand(
 
     /// <summary>A suppression tied to the import's own outcome (nothing new, nothing landed, or it
     /// failed) prints nothing beyond what the step already said; one tied to eligibility (plan, skill,
-    /// detection) names the reason.</summary>
-    static void PrintSuppressed(HandoffSuppressedReason reason) {
+    /// detection) names the reason. With no agent able to follow along, the two detection-tied
+    /// reasons also point at the web UI, so the run is still watchable.</summary>
+    static void PrintSuppressed(HandoffSuppressedReason reason, string serverUrl) {
         var line = reason switch {
             HandoffSuppressedReason.AnalyticsNotInPlan =>
                 "  Insights isn't in this workspace's plan, so the eval-watch handoff is skipped.",
             HandoffSuppressedReason.SkillNotInstalled =>
-                $"  No detected agent has the kcap {EvalWatchSkillName} skill — run [cyan]kcap plugin install[/] (with the agent's flag) to add it.",
+                $"  No detected agent has the kcap {EvalWatchSkillName} skill.",
             HandoffSuppressedReason.NoAgentDetected =>
                 "  No coding agent detected to hand off to.",
             _ => null
         };
 
         if (line is not null) AnsiConsole.MarkupLine(line);
+
+        if (reason is HandoffSuppressedReason.SkillNotInstalled or HandoffSuppressedReason.NoAgentDetected) {
+            var sessionsUrl = Markup.Escape($"{serverUrl.TrimEnd('/')}/sessions");
+            AnsiConsole.MarkupLine($"  Watch the import and its evals in the Capacitor UI: [cyan]{sessionsUrl}[/]");
+
+            if (reason == HandoffSuppressedReason.SkillNotInstalled) {
+                AnsiConsole.MarkupLine(
+                    "  Or run [cyan]kcap plugin install[/] (with the agent's flag) so a future run can follow automatically.");
+            }
+        }
     }
 
     const string SkipHandoffVendor = "Skip";
