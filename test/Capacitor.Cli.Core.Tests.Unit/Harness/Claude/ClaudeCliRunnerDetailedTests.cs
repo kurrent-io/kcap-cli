@@ -31,6 +31,23 @@ public class ClaudeCliRunnerDetailedTests {
     }
 
     [Test]
+    public async Task RunDetailedAsync_returns_timeout_when_the_deadline_elapses_mid_stdin_write() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+
+        // Never reads stdin, so a prompt well past any OS pipe buffer size blocks WriteAsync until
+        // the internal deadline cancels it — the stdin-write path, not the process-exit path.
+        using var fake = new FakeClaudeOnPath("#!/bin/sh\nsleep 5\n");
+        var bigPrompt = new string('x', 4 * 1024 * 1024);
+
+        var outcome = await ClaudeCliRunner.RunDetailedAsync(
+            bigPrompt, TimeSpan.FromMilliseconds(300), TimeProvider.System, _ => { }, null,
+            TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()), promptViaStdin: true);
+
+        await Assert.That(outcome.Result).IsNull();
+        await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.Timeout);
+    }
+
+    [Test]
     public async Task RunDetailedAsync_returns_process_failure_on_non_zero_exit_with_no_recoverable_result() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
 

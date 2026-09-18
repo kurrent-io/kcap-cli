@@ -1618,33 +1618,33 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
 
-    public Task EvalStartedAsync(string evalRunId, string sessionId, string judgeModel, int totalQuestions)
+    public virtual Task EvalStartedAsync(string evalRunId, string sessionId, string judgeModel, int totalQuestions)
         => _hub.SendAsync("EvalStarted", new EvalStarted(evalRunId, sessionId, judgeModel, totalQuestions), cancellationToken: _ct);
 
-    public Task EvalQuestionStartedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId)
+    public virtual Task EvalQuestionStartedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId)
         => _hub.SendAsync("EvalQuestionStarted", new EvalQuestionStarted(evalRunId, sessionId, index, total, category, questionId), cancellationToken: _ct);
 
-    public Task EvalQuestionCompletedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string outcome, int? score, string? verdict)
+    public virtual Task EvalQuestionCompletedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string outcome, int? score, string? verdict)
         => _hub.SendAsync("EvalQuestionCompleted", new EvalQuestionCompleted(evalRunId, sessionId, index, total, category, questionId, score, verdict, outcome), cancellationToken: _ct);
 
-    public Task EvalQuestionFailedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string reason)
+    public virtual Task EvalQuestionFailedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string reason)
         => _hub.SendAsync("EvalQuestionFailed", new EvalQuestionFailed(evalRunId, sessionId, index, total, category, questionId, reason), cancellationToken: _ct);
 
-    public Task EvalFinishedAsync(string evalRunId, string sessionId, int? overallScore, string summary)
+    public virtual Task EvalFinishedAsync(string evalRunId, string sessionId, int? overallScore, string summary)
         => _hub.SendAsync("EvalFinished", new EvalFinished(evalRunId, sessionId, overallScore, summary), cancellationToken: _ct);
 
-    public Task EvalFailedAsync(string evalRunId, string sessionId, string reason)
+    public virtual Task EvalFailedAsync(string evalRunId, string sessionId, string reason)
         => _hub.SendAsync("EvalFailed", new EvalFailed(evalRunId, sessionId, reason), cancellationToken: _ct);
 
     // ── Retrospective progress events (DEV-1470) ───────────────────────────
 
-    public Task EvalRetrospectiveStartedAsync(string sessionId, string evalRunId)
+    public virtual Task EvalRetrospectiveStartedAsync(string sessionId, string evalRunId)
         => _hub.SendAsync("EvalRetrospectiveStarted", new EvalRetrospectiveStarted(sessionId, evalRunId), cancellationToken: _ct);
 
-    public Task EvalRetrospectiveCompletedAsync(string sessionId, string evalRunId)
+    public virtual Task EvalRetrospectiveCompletedAsync(string sessionId, string evalRunId)
         => _hub.SendAsync("EvalRetrospectiveCompleted", new EvalRetrospectiveCompleted(sessionId, evalRunId), cancellationToken: _ct);
 
-    public Task EvalRetrospectiveFailedAsync(string sessionId, string evalRunId, string reason)
+    public virtual Task EvalRetrospectiveFailedAsync(string sessionId, string evalRunId, string reason)
         => _hub.SendAsync("EvalRetrospectiveFailed", new EvalRetrospectiveFailed(sessionId, evalRunId, reason), cancellationToken: _ct);
 
     public virtual Task AppendAgentRunEventAsync(string agentId, object evt) {

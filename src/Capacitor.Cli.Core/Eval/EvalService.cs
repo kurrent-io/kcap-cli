@@ -1093,9 +1093,7 @@ public static class EvalService {
         bool outcomeExplicitlyNull;
         try {
             using var doc = JsonDocument.Parse(json);
-            outcomeExplicitlyNull = doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("outcome", out var outcomeElement)
-                && outcomeElement.ValueKind == JsonValueKind.Null;
+            outcomeExplicitlyNull = doc.RootElement.Prop("outcome") is { IsNull: true };
 
             parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionAssessment);
         } catch (JsonException) {

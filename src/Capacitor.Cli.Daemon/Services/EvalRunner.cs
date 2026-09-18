@@ -337,8 +337,17 @@ sealed class DaemonEvalObserver(
             assessment.Score,
             assessment.Verdict
         );
-        if (!silentPerQuestion)
-            Relay(() => connection.EvalQuestionCompletedAsync(evalRunId, sessionId, index, total, assessment.Category, assessment.QuestionId, assessment.Outcome ?? EvalOutcomes.Assessed, assessment.Score, assessment.Verdict), "EvalQuestionCompleted");
+        if (silentPerQuestion) return;
+
+        // The legacy push has no outcome, so an unassessed question relays as a failure instead
+        // of a null-score completion — the protocol-1 RunQuestion RPC already reports it as one
+        // (the legacy wire has no representation for "assessed but no score"), and sending both
+        // would tell an older server the same question both completed and failed.
+        if (assessment.Outcome == EvalOutcomes.Assessed) {
+            Relay(() => connection.EvalQuestionCompletedAsync(evalRunId, sessionId, index, total, assessment.Category, assessment.QuestionId, assessment.Outcome, assessment.Score, assessment.Verdict), "EvalQuestionCompleted");
+        } else {
+            Relay(() => connection.EvalQuestionFailedAsync(evalRunId, sessionId, index, total, assessment.Category, assessment.QuestionId, $"question not assessed: {assessment.Outcome}"), "EvalQuestionFailed");
+        }
     }
 
     public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) {

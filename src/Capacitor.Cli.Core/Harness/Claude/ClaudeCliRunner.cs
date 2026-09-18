@@ -293,6 +293,16 @@ static class ClaudeCliRunner {
                 }
 
                 throw;
+            } catch (OperationCanceledException) {
+                // The internal per-call deadline elapsed while still writing stdin — a timeout,
+                // not a stdin I/O failure, so it must not fall into the generic catch below.
+                log($"Claude process timed out ({timeout.TotalSeconds:0}s) while streaming stdin, killing");
+
+                try { process.Kill(entireProcessTree: true); } catch {
+                    /* ignore */
+                }
+
+                return new(null, ClaudeCliFailure.Timeout);
             } catch (Exception ex) {
                 log($"Failed to stream prompt to claude stdin: {ex.Message}");
 
