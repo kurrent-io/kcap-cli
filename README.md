@@ -93,6 +93,8 @@ npm automatically selects the right native binary for your [platform](#requireme
 
 Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/mac (Apple silicon, macOS 15 or later), open it and drag **Kurrent Capacitor** to **Applications**. The app bundles its own `kcap` CLI and daemon: you do not need the npm install as well, and the first run offers to link `kcap` onto your terminal PATH and to install the daemon as a background service. Sessions running on your other machines' daemons open in the app too — their chat, their prompts, and for a terminal harness a read-only view of the terminal — over the server, without a local daemon.
 
+When a Claude Code session spawns subagents, the chat shows a strip above the composer while any of them run ("2 subagents running"), and the work-context pane lists them under **SUBAGENTS** — the agent type, a *background* tag for one launched in the background, and its state: running with its elapsed time, done, failed or stopped. Both are read from the transcript; a session on another machine's daemon shows the strip alone, since the work-context pane is not part of the remote session view. Rows are not links.
+
 The app must run from the Applications folder — launched from the disk image or from Downloads it offers to move itself there first, because the terminal link and the background service point at its location.
 
 Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. Set it to **0** for no limit. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself. Rename waits for startup to finish and requires a CLI that supports retiring the old service. If `KCAP_DAEMON_NAME` sets the name, remove that override and restart the app before renaming.
@@ -2167,10 +2169,26 @@ Manage the nudges with `kcap harness`:
 
 ```bash
 kcap harness list                     # detected / kcap-wired / dismissed, per agent
+kcap harness list --json              # the same report, machine-readable
 kcap harness dismiss antigravity      # stop asking about one agent
 kcap harness dismiss --all            # stop asking about every currently-detected agent
 kcap harness reset antigravity        # ask again (undo a dismissal)
 ```
+
+`list --json` emits one JSON document on stdout and nothing else, so it can be piped — the same
+contract as [`kcap import --discover --json`](#loading-historical-sessions). Every harness this build
+knows is listed, present or not, so a consumer can tell "unsupported" from "not on this machine"
+without carrying its own vendor list:
+
+```json
+{"harnesses":[{"vendor":"claude","label":"Claude Code","binary_on_path":true,
+               "config_found":false,"wired":false,"dismissed":false}]}
+```
+
+`vendor` is the stable key — the id `dismiss` and `reset` take. The two detection signals stay
+apart: `binary_on_path` is the vendor's CLI on your search path, `config_found` its own user-level
+data on disk, and either one means installed. A tool choosing which agents to set up wants both,
+since it can then say which signal it saw; one that only needs "is it here" ORs them.
 
 To turn off the nudges entirely (both the in-session and command-line surfaces), set
 `kcap config set disable_harness_nudge true`. Dismissing is per-agent; a brand-new agent installed

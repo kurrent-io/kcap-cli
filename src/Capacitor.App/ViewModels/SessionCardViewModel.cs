@@ -29,7 +29,7 @@ public sealed class SessionCardViewModel {
         Title = dto.Title ?? $"{RepoLabel.Leaf(dto.RepoPath)} · {dto.Vendor}";
         Sub = dto.Title is null ? RepoFull : $"{RepoFull} · {dto.Vendor}";
         StatusText = SessionStatusDots.Label(dto);
-        StatusDot = SessionStatusDots.For(dto.Status);
+        StatusDot = SessionStatusDots.For(dto);
         CreatedAt = dto.CreatedAt;
 
         var createdAtUtc = DateTime.SpecifyKind(dto.CreatedAt, DateTimeKind.Utc);

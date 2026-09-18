@@ -7,6 +7,7 @@
         <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,10" Margin="0,0,0,6">
             <StackPanel Spacing="6">
+                <TextBlock Classes="toolKindChip" Text="Permission" />
                 <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" />
                 <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Text="{Binding ErrorText}" FontSize="11" Foreground="{StaticResource KcapDangerBrush}"
@@ -246,6 +247,7 @@
                 </Style>
             </Border.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
+                <TextBlock Classes="toolKindChip" Text="Question" />
                 <TextBlock Text="{Binding Prompt}" FontWeight="SemiBold" FontSize="15" LineHeight="21" TextWrapping="Wrap"
                            Foreground="{StaticResource KcapTextBrush}" />
                 <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding IsMultiSelect}">

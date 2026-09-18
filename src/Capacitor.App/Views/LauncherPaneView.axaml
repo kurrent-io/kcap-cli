@@ -37,7 +37,7 @@
                     <TextBox x:Name="GoalInput" Classes="kcapEmbedded" Text="{Binding Goal}"
                              PlaceholderText="What should we build? Type a goal or paste an issue, PR, or work-item URL…"
                              Background="Transparent" Foreground="{StaticResource KcapTextBrush}"
-                             BorderThickness="0" MinHeight="72" MaxHeight="220" TextWrapping="Wrap" FontSize="14"
+                             BorderThickness="0" MinHeight="72" MaxHeight="220" TextWrapping="Wrap"
                              VerticalContentAlignment="Top" AcceptsReturn="True" />
 
                     <!-- Repo on its own row (capped width + ellipsis); settings + Start below so a

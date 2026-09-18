@@ -5,7 +5,7 @@ namespace Capacitor.App.Views;
 /// Brand marks for the harness picker and agent chip: Simple Icons path data (CC0, 24x24
 /// viewBox), one filled path per vendor. Vendors without an entry fall back to the monogram
 /// tile. Parsed per call, never cached statically -- Geometry is an AvaloniaObject with
-/// thread affinity, the same trap MainWindowViewModel.DotBrush documents for brushes.
+/// thread affinity, the same trap MainWindowViewModel.Paint documents for brushes.
 public static class VendorIcons {
     static readonly Dictionary<string, string> PathData = new(StringComparer.OrdinalIgnoreCase) {
         ["claude"] =

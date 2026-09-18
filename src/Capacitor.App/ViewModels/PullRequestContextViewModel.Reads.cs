@@ -54,31 +54,10 @@ public sealed partial class PullRequestContextViewModel {
                 }
                 _retryAt = null;
                 _pollAfter = Math.Max(15, links.PollAfterSeconds);
-                var incoming = links.Data.Items.Select(link => new PullRequestChoice(link)).ToList();
-                var previous = _selected?.Subject;
-                var selected = _explicitSelection ? incoming.FirstOrDefault(choice => choice.Subject == previous) : null;
-                if (_explicitSelection && selected is null && _selected is not null) {
-                    selected = _selected with { IsAvailable = false };
-                    incoming.Insert(0, selected);
-                }
-                if (selected is null) {
-                    var primary = _primaryRepo?.Invoke()?.RepoHash;
-                    var matching = primary is null ? [] : incoming.Where(choice => choice.Link.RepoHash == primary && choice.Link.HeadRef == _branch && _branch is not null).ToArray();
-                    selected = matching.Length == 1 ? matching[0] : incoming.FirstOrDefault();
-                }
-                _updatingChoices = true;
-                try {
-                    if (!_choices.SequenceEqual(incoming)) { _choices.Clear(); _choices.AddRange(incoming); }
-                } finally { _updatingChoices = false; }
-                if (previous != selected?.Subject) Select(selected);
-                else { _selected = selected; this.RaisePropertyChanged(nameof(Selected)); }
-                if (selected is { IsAvailable: false }) {
-                    CancelReads(); ClearProtected(); SetNotice("This pull request is no longer linked or visible. Select another PR or retry.");
-                }
-                else if (_legacy) { ClearProtected(); SetNotice("Open on GitHub. Native PR reading requires a compatible server and app."); }
-                else if (selected is null) { ClearProtected(); SetNotice("No pull requests linked to this session."); }
-                else RequestOverview();
-                Notify();
+                _sessionItems.Clear();
+                _sessionItems.AddRange(links.Data.Items);
+                _hasListed = true;
+                ApplyChoices(listed: true);
             };
         }, () => _refreshing = false);
     }
@@ -187,8 +166,48 @@ public sealed partial class PullRequestContextViewModel {
         else if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
             || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") EnterGrace();
         else ClearProtected();
-        SetNotice(Reason(read));
+        SetNotice(read.Kind == PullRequestReadKind.SubjectUnavailable && _selected is { IsListed: false } ? UnlistedNotice : Reason(read));
     }
-    void ForgetChoices() { CancelReads(); _choices.Clear(); _selected = null; }
+    /// The server reader's refusal of a work-item PR the session was not credited with, which is
+    /// what a read falls to without a local reader; the header's GitHub button still opens it.
+    public const string UnlistedNotice = "This pull request is linked to the work item, not this session. Open it on GitHub.";
+    void ApplyChoices(bool listed) {
+        var incoming = _sessionItems.Select(link => new PullRequestChoice(link)).ToList();
+        foreach (var fallback in _fallbackItems) {
+            if (incoming.TrueForAll(existing => !SamePullRequest(existing.Link, fallback)))
+                incoming.Add(new PullRequestChoice(fallback, IsListed: false));
+        }
+        var previous = _selected?.Subject;
+        var selected = _explicitSelection ? incoming.FirstOrDefault(choice => choice.Subject == previous) : null;
+        if (_explicitSelection && selected is null && _selected is not null) {
+            selected = _selected with { IsAvailable = false };
+            incoming.Insert(0, selected);
+        }
+        if (selected is null) {
+            var primary = _primaryRepo?.Invoke()?.RepoHash;
+            var matching = primary is null ? [] : incoming.Where(choice => choice.Link.RepoHash == primary && choice.Link.HeadRef == _branch && _branch is not null).ToArray();
+            selected = matching.Length == 1 ? matching[0] : incoming.FirstOrDefault();
+        }
+        _updatingChoices = true;
+        try {
+            if (!_choices.SequenceEqual(incoming)) { _choices.Clear(); _choices.AddRange(incoming); }
+        } finally { _updatingChoices = false; }
+        if (previous != selected?.Subject) Select(selected);
+        else { _selected = selected; this.RaisePropertyChanged(nameof(Selected)); }
+        if (listed) {
+            if (selected is { IsAvailable: false }) {
+                CancelReads(); ClearProtected(); SetNotice("This pull request is no longer linked or visible. Select another PR or retry.");
+            }
+            else if (_legacy) { ClearProtected(); SetNotice("Open on GitHub. Native PR reading requires a compatible server and app."); }
+            else if (selected is null) { ClearProtected(); SetNotice(""); }
+            else RequestOverview();
+        }
+        Notify();
+    }
+    static bool SamePullRequest(PullRequestLinkDto left, PullRequestLinkDto right) =>
+        left.Number == right.Number
+        && string.Equals(left.Owner, right.Owner, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(left.RepoName, right.RepoName, StringComparison.OrdinalIgnoreCase);
+    void ForgetChoices() { CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null; }
     void FailProtocol() { ClearProtected(); SetNotice("The server returned an inconsistent PR response. Retry after updating the server and app."); }
 }

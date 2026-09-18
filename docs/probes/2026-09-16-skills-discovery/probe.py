@@ -1,0 +1,816 @@
+#!/usr/bin/env python3
+"""Skills discovery probes: does a repo-local skill written at startup reach the first model request?
+
+Usage:
+  probe.py [--harness ENTRY ...] [--mode print|daemon|tui] [--scenario S0..S10 ...] [--turn]
+           [--runs N] [--outdir DIR] [--keep] [--rerun] [--emit] [--matrix FILE] [--base DIR]
+
+Without --turn only the free phase runs (binary, version, auth in an isolated root): zero model
+requests. Each turn arm costs one model request per run.
+
+An arm whose output directory already holds its runs is not run again: a sweep interrupted
+halfway resumes where it stopped instead of re-spending the turns it already paid for. An arm
+with fewer runs than asked for is topped up, and one carrying an `untested` row is measured
+again, so a missing binary or a broken control never latches. --rerun deletes an arm's
+directory before running it, which is how a settled arm is re-measured.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import sys
+import time
+from pathlib import Path
+from typing import Callable
+
+KIT = Path(__file__).resolve().parent
+sys.path.insert(0, str(KIT))
+
+from harness import ENTRIES  # noqa: E402
+from harness.base import Adapter, AskResult, Session  # noqa: E402
+from lib.git_exclusion import apply as apply_exclusion, assert_untracked_state  # noqa: E402
+from lib.hook_script import read_stamp, stamp_path, write_hook_script  # noqa: E402
+from lib.isolation import Sandbox, add_worktree, new_sandbox  # noqa: E402
+from lib.probe_skill import (  # noqa: E402
+    ProbeSkill, multi_prompt, parse_reply, single_prompt, tui_prompt, write_skill,
+)
+from lib.recorder import (  # noqa: E402
+    RunRecord, emit_matrix, load_runs, next_run_path, os_label, run_dir, write_run,
+)
+from lib.verdict import (  # noqa: E402
+    PromptDesignFailure, judge_control, judge_delete, judge_root, judge_single, judge_update,
+    needs_third_run, combine,
+)
+
+ALL_ROOTS: dict[str, str] = {
+    "claude": ".claude/skills", "agents": ".agents/skills", "codex": ".codex/skills",
+    "cursor": ".cursor/skills", "github": ".github/skills", "gemini": ".gemini/skills",
+    "kiro": ".kiro/skills", "pi": ".pi/skills", "opencode": ".opencode/skills", "agent": ".agent/skills",
+}
+SCENARIOS = ("S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10")
+S2_ARMS = ("hook-creates-root", "hook-adds-skill", "registration")
+S3_ARMS = ("gitignore", "info-exclude")
+S5_ARMS = ("add", "update", "delete")
+S5_TUI_ARMS = ("add", "reload")
+S6_ARMS = ("update", "delete")
+S7_ARMS = ("add", "update")
+S8_ARMS = ("ancestor", "local")
+S9_ARMS = ("linked-own", "linked-other")
+# Discovery does not depend on the launch mode, so the discovery-only scenarios run once, in the
+# cheapest mode; the lifecycle scenarios run where a second turn exists.
+MODE_SCENARIOS: dict[str, tuple[str, ...]] = {
+    "print": ("S0", "S1", "S2", "S3", "S4", "S6", "S7", "S8", "S9"),
+    "daemon": ("S0", "S1", "S2", "S3", "S4", "S5", "S6", "S10"),
+    "tui": ("S0", "S1", "S2", "S5"),
+}
+
+
+# The arms of a scenario, per mode: a sweep and the blocked rows it stands in for read the same
+# table, so a mode cannot record a row for an arm it never runs.
+SCENARIO_ARMS: dict[str, tuple[str, ...]] = {
+    "S0": ("none",), "S1": ("native",), "S2": S2_ARMS, "S3": S3_ARMS, "S5": S5_ARMS, "S6": S6_ARMS,
+    "S7": S7_ARMS, "S8": S8_ARMS, "S9": S9_ARMS, "S10": ("hook-from-peer",),
+}
+TUI_SCENARIO_ARMS: dict[str, tuple[str, ...]] = {"S2": ("hook-adds-skill",), "S5": S5_TUI_ARMS}
+
+
+def arms_of(mode: str, scenario: str) -> tuple[str, ...]:
+    if mode == "tui" and scenario in TUI_SCENARIO_ARMS:
+        return TUI_SCENARIO_ARMS[scenario]
+    return SCENARIO_ARMS[scenario]
+
+
+def arms_for(mode: str) -> list[tuple[str, str, bool, str]]:
+    """Every arm a full sweep runs in this mode, so an entry that cannot run gets a row per arm."""
+    wanted = MODE_SCENARIOS[mode]
+    out: list[tuple[str, str, bool, str]] = [("S0", "S0/none", False, "none"), ("S1", "S1/native", True, "none")]
+    out += [("S2", f"S2/{a}", True, "none") for a in arms_of(mode, "S2")]
+    if "S3" in wanted:
+        out += [("S3", f"S3/{e}", True, e) for e in S3_ARMS]
+    if "S4" in wanted:
+        out.append(("S4", "S4/all-roots", False, "none"))
+    if "S5" in wanted:
+        out += [("S5", f"S5/{a}", True, "none") for a in arms_of(mode, "S5")]
+    if "S6" in wanted:
+        out += [("S6", f"S6/{a}", True, "none") for a in S6_ARMS]
+    if "S7" in wanted:
+        out += [("S7", f"S7/{a}", True, "none") for a in S7_ARMS]
+    if "S8" in wanted:
+        out += [("S8", f"S8/{a}", True, "none") for a in S8_ARMS]
+    if "S9" in wanted:
+        out += [("S9", f"S9/{a}", True, "info-exclude") for a in S9_ARMS]
+    if "S10" in wanted:
+        out.append(("S10", "S10/hook-from-peer", True, "none"))
+    return out
+
+
+def _verdicts_by_root(recs: list[RunRecord]) -> dict[str | None, str]:
+    return {r.root: r.verdict for r in recs}
+
+
+class Runner:
+    def __init__(self, adapter: Adapter, outdir: Path, runs: int = 2, keep: bool = False,
+                 base: Path | None = None, version: str | None = None, rerun: bool = False) -> None:
+        self.adapter = adapter
+        self.outdir = outdir
+        self.runs = runs
+        self.keep = keep
+        self.base = base
+        self.rerun = rerun
+        self._cleared: set[Path] = set()
+        self._sb: Sandbox | None = None
+        self.s1_ok: dict[str, bool] = {}
+        self._version = version if version is not None else adapter.version()
+        self._binary = adapter.binary_path() or adapter.binary
+        self._os = os_label()
+
+    # -- sandbox plumbing ---------------------------------------------------------------------
+
+    def sandbox(self) -> Sandbox:
+        """The arm's sandbox; the guard that ran the arm tears it down, so a throwing arm still
+        gets its stderr copied before the directory goes."""
+        a = self.adapter
+        sb = new_sandbox(a.lever, a.real_root(), list(a.credential_files), list(a.passthrough_env),
+                         dict(a.extra_env), keep=self.keep, base=self.base)
+        try:
+            a.prepare(sb)
+        except Exception:
+            sb.cleanup()
+            raise
+        self._sb = sb
+        return sb
+
+    def _teardown(self) -> None:
+        if self._sb is not None:
+            self._sb.cleanup()
+            self._sb = None
+
+    def _s4_roots(self) -> dict[str, str]:
+        a = self.adapter
+        roots = dict(ALL_ROOTS)
+        if a.native_root not in roots.values():
+            roots[f"native_{a.entry}"] = a.native_root
+        return roots
+
+    def record(self, mode: str, scenario: str, arm: str, root: str | None, exclusion: str,
+               res: AskResult | None, verdict: str, expected: dict[str, str], hook: dict | None = None,
+               sb: Sandbox | None = None, notes: str = "", started: float | None = None,
+               auth_ok: bool | None = None, name: str | None = None,
+               prior: AskResult | None = None) -> RunRecord:
+        reply = parse_reply(res.reply_text, self._raw_for(mode, res), name) if res else None
+        rec = RunRecord(
+            entry=self.adapter.entry, harness=self.adapter.harness, binary=self._binary,
+            version=self._version, os=self._os, mode=mode, argv=res.argv if res else [],
+            isolation_lever=self.adapter.lever, credential_files=list(self.adapter.credential_files),
+            auth_ok=auth_ok, scenario=scenario, arm=arm, root=root, exclusion=exclusion, hook=hook,
+            first_request_at=res.first_request_at if res else None, reply=res.reply_text if res else "",
+            tokens_found=sorted(reply.tokens) if reply else [], skill_named=reply.skill_named if reply else False,
+            stderr_path=res.stderr_path if res else None, verdict=verdict,
+            duration_ms=int((time.time() - (started or time.time())) * 1000),
+            expected_tokens=expected, notes=(notes + ("" if not res or not res.notes else f" {res.notes}")).strip(),
+        )
+        run_path = next_run_path(self.outdir, rec)
+        if sb is not None:
+            rec.stderr_path = self._keep_stderr(sb, run_path, rec.stderr_path)
+        if res is not None and res.raw:
+            # The vendor's full event stream is what a doubtful verdict is re-read against.
+            run_path.parent.mkdir(parents=True, exist_ok=True)
+            (run_path.parent / f"{run_path.stem}.raw.txt").write_text(res.raw)
+        if prior is not None and prior.raw:
+            run_path.parent.mkdir(parents=True, exist_ok=True)
+            (run_path.parent / f"{run_path.stem}.prior.raw.txt").write_text(prior.raw)
+        write_run(self.outdir, rec)
+        return rec
+
+    def _keep_stderr(self, sb: Sandbox, run_path: Path, stderr_path: str | None) -> str | None:
+        """Copy the sandbox's stderr logs beside the run file: the sandbox is about to be removed."""
+        wanted = {str(p) for p in sb.root.rglob("*.stderr.log")} | {str(p) for p in sb.root.rglob("*-tui.log")}
+        if stderr_path and Path(stderr_path).is_file() and Path(stderr_path).is_relative_to(sb.root):
+            wanted.add(stderr_path)
+        for src in sorted(wanted):
+            if src not in sb.copied_logs:
+                dst = run_path.parent / f"{run_path.stem}.{Path(src).name}"
+                shutil.copy2(src, dst)
+                sb.copied_logs[src] = str(dst)
+        if stderr_path in sb.copied_logs:
+            return sb.copied_logs[stderr_path]
+        if stderr_path is None and len(sb.copied_logs) == 1:
+            return next(iter(sb.copied_logs.values()))
+        return stderr_path
+
+    def _load(self, mode: str, scenario: str, arm: str) -> tuple[Path, list[RunRecord]]:
+        d = run_dir(self.outdir, self.adapter.entry, mode, scenario, arm)
+        if self.rerun and d not in self._cleared:
+            self._cleared.add(d)
+            shutil.rmtree(d, ignore_errors=True)
+        recs = load_runs(d) if (d / "run1.json").exists() else []
+        recs.sort(key=lambda r: int(r._path.stem[3:]))  # type: ignore[attr-defined]
+        return d, recs
+
+    def _existing(self, mode: str, scenario: str, arm: str, per_pass: int = 1) -> list[RunRecord]:
+        """The arm's settled runs, or [] after clearing rows nothing can resume from: an untested
+        row is a failure to measure, not a measurement, and a pass cut short must be redone."""
+        d, recs = self._load(mode, scenario, arm)
+        if not recs:
+            return []
+        if any(r.verdict == "untested" for r in recs) or len(recs) % per_pass:
+            shutil.rmtree(d, ignore_errors=True)
+            return []
+        return recs
+
+    def _guarded(self, fn: Callable[[], RunRecord | list[RunRecord]], mode: str, scenario: str,
+                 arm: str, root: str | None, exclusion: str) -> list[RunRecord]:
+        try:
+            out = fn()
+        except PromptDesignFailure:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            return [self.record(mode, scenario, arm, root, exclusion, None, "untested", {}, sb=self._sb,
+                                notes=f"exception={ex!r}")]
+        finally:
+            self._teardown()
+        return out if isinstance(out, list) else [out]
+
+    def run_arm(self, fn: Callable[[], RunRecord], mode: str, scenario: str, arm: str,
+                root: str | None, exclusion: str) -> list[RunRecord]:
+        recs = list(self._existing(mode, scenario, arm))
+        for _ in range(max(0, self.runs - len(recs))):
+            recs += self._guarded(fn, mode, scenario, arm, root, exclusion)
+        if needs_third_run([r.verdict for r in recs]):
+            recs += self._guarded(fn, mode, scenario, arm, root, exclusion)
+        return recs
+
+    def run_once(self, fn: Callable[[], RunRecord], mode: str, scenario: str, arm: str,
+                 root: str | None, exclusion: str) -> list[RunRecord]:
+        return self._existing(mode, scenario, arm) or self._guarded(fn, mode, scenario, arm, root, exclusion)
+
+    def _blocked(self, mode: str, scenario: str, arm: str, root: str | None, exclusion: str,
+                 notes: str = "S1 failed") -> list[RunRecord]:
+        """One untested row per arm carrying the current reason: measured rows are kept, a stale
+        blocked row is replaced, and a repeated sweep never stacks blocked rows."""
+        d, existing = self._load(mode, scenario, arm)
+        if existing and any(r.verdict != "untested" for r in existing):
+            return existing
+        if existing and all(r.notes == notes for r in existing):
+            return existing
+        shutil.rmtree(d, ignore_errors=True)
+        return [self.record(mode, scenario, arm, root, exclusion, None, "untested", {}, notes=notes)]
+
+    def record_blocked(self, mode: str, notes: str) -> list[RunRecord]:
+        native = self.adapter.native_root
+        out: list[RunRecord] = []
+        for scenario, arm, uses_root, exclusion in arms_for(mode):
+            out += self._blocked(mode, scenario, arm, native if uses_root else None, exclusion, notes=notes)
+        return out
+
+    def _ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
+        if mode == "tui":
+            session = self._open(sb, "tui")
+            try:
+                res = self._ask_session(session, mode, prompt)
+            finally:
+                session.close()
+        else:
+            res = self.adapter.ask(sb, mode, prompt)
+        return self._checked(res, mode)
+
+    def _prompt(self, mode: str, skill: ProbeSkill, again: bool = False) -> str:
+        # The screen echoes whatever is typed, so the interactive form asks for a marked line.
+        return tui_prompt(skill, again) if mode == "tui" else single_prompt(skill, again)
+
+    def _ask_session(self, session: Session, mode: str, prompt: str) -> AskResult:
+        return self._checked(session.ask(prompt), mode)
+
+    def _checked(self, res: AskResult, mode: str) -> AskResult:
+        """A run that produced no answer is a failure to measure, not a skill that was not there:
+        a refusal, a crash and an unparseable stream all leave nothing to judge."""
+        if res.reply_text.strip() and not any(m in res.notes for m in ("extract failed:", "timeout")):
+            return res
+        where = "screen" if mode == "tui" else "output"
+        reason = ""
+        if res.stderr_path and Path(res.stderr_path).is_file():
+            text = Path(res.stderr_path).read_text(errors="replace")
+            errors = [line.strip() for line in text.splitlines() if "Error" in line or "error" in line]
+            reason = (errors[0] if errors else text[-300:].replace("\n", " | "))[:300]
+        raise RuntimeError(f"no reply read from the {where}; exit {res.exit_code}; {res.notes}; stderr: {reason}")
+
+    def _open(self, sb: Sandbox, mode: str) -> Session:
+        session = self.adapter.open_session(sb, mode)
+        if session is None:
+            raise RuntimeError(f"no {mode} session for this entry")
+        return session
+
+    def _judge_turn(self, mode: str, res: AskResult, skill: ProbeSkill) -> str:
+        return judge_single(skill.token, parse_reply(res.reply_text, self._raw_for(mode, res), skill.name))
+
+    def _remove_skill(self, sb: Sandbox, root: str, skill: ProbeSkill) -> None:
+        a = self.adapter
+        if a.flat_skill_layout:
+            a.skill_file(sb, root, skill.name).unlink()
+        else:
+            shutil.rmtree(a.skill_dir(sb, root, skill.name))
+
+    @staticmethod
+    def _raw_for(mode: str, res: AskResult) -> str:
+        # A screen carries the echoed prompt and any tool panel, so it never stands in for a reply.
+        return "" if mode == "tui" else res.raw
+
+    def _hook_dict(self, sb: Sandbox, mechanism: str, config_path: str) -> dict:
+        stamp = read_stamp(stamp_path(sb.config_root)) or {}
+        return {"mechanism": mechanism, "config_path": config_path,
+                "fired_at": stamp.get("fired_at"), "fired_at_mtime": stamp.get("fired_at_mtime")}
+
+    # -- arms (each runs inside _guarded, which owns the sandbox's teardown) ------------------
+
+    def arm_s0(self, mode: str) -> RunRecord:
+        started = time.time()
+        sb = self.sandbox()
+        skill = ProbeSkill.fresh()
+        res = self._ask(sb, mode, self._prompt(mode, skill))
+        try:
+            verdict = judge_control(parse_reply(res.reply_text, res.raw, skill.name))
+        except PromptDesignFailure as ex:
+            # The reply that broke the control is the evidence for it: record before unwinding.
+            self.record(mode, "S0", "S0/none", None, "none", res, "untested", {}, sb=sb,
+                        started=started, notes=f"prompt design failure: {ex}", name=skill.name)
+            raise
+        return self.record(mode, "S0", "S0/none", None, "none", res, verdict, {}, sb=sb, started=started,
+                           name=skill.name)
+
+    def arm_s1(self, mode: str, exclusion: str = "none", scenario: str = "S1",
+               root: str | None = None) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = root or a.native_root
+        sb = self.sandbox()
+        skill = ProbeSkill.fresh()
+        write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
+        rel = str(a.skill_dir(sb, root, skill.name).relative_to(sb.repo))
+        apply_exclusion(sb.repo, exclusion, rel)
+        arm = "S1/native" if scenario == "S1" else f"S3/{exclusion}"
+        try:
+            assert_untracked_state(sb.repo, rel, exclusion)
+        except AssertionError as ex:
+            # The arm cannot say anything about this exclusion, so it does not spend a turn.
+            return self.record(mode, scenario, arm, root, exclusion, None, "untested",
+                               {"native": skill.token}, sb=sb, started=started,
+                               notes=f"git state: {ex}")
+        res = self._ask(sb, mode, self._prompt(mode, skill))
+        verdict = judge_single(skill.token, parse_reply(res.reply_text, self._raw_for(mode, res), skill.name))
+        return self.record(mode, scenario, arm, root, exclusion, res, verdict,
+                           {"native": skill.token}, sb=sb, started=started, name=skill.name)
+
+    def arm_s2(self, mode: str, arm: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = a.native_root
+        sb = self.sandbox()
+        skill = ProbeSkill.fresh()
+        target = a.skill_file(sb, root, skill.name)
+        if arm == "hook-adds-skill":
+            write_skill(sb.repo / root, ProbeSkill.fresh(), flat=a.flat_skill_layout)
+        if arm == "registration":
+            info = a.install_registration(sb, target, skill.render())
+            if info is None:
+                return self.record(mode, "S2", "S2/registration", root, "none", None, "untested", {},
+                                   sb=sb, notes="no registration mechanism for this entry", started=started)
+            reload_used = True
+        else:
+            script = write_hook_script(sb.config_root, target, skill.render(), stamp_path(sb.config_root))
+            info = a.install_startup_hook(sb, script)
+            if info is None:
+                return self.record(mode, "S2", f"S2/{arm}", root, "none", None, "untested", {},
+                                   sb=sb, notes="no startup hook mechanism for this entry", started=started)
+            reload_used = False
+        res = self._ask(sb, mode, self._prompt(mode, skill))
+        verdict = judge_single(skill.token, parse_reply(res.reply_text, self._raw_for(mode, res), skill.name),
+                               reload_used=reload_used)
+        hook = self._hook_dict(sb, info.mechanism, info.config_path)
+        notes = "" if hook["fired_at"] is not None or arm == "registration" else "hook never fired"
+        target = info.target or target
+        if not target.exists():
+            notes = (notes + " skill file absent after the turn").strip()
+            verdict = "untested"
+        return self.record(mode, "S2", f"S2/{arm}", root, "none", res, verdict, {"native": skill.token},
+                           hook=hook, sb=sb, started=started, notes=notes, name=skill.name)
+
+    def arm_s3(self, mode: str, exclusion: str) -> RunRecord:
+        return self.arm_s1(mode, exclusion=exclusion, scenario="S3")
+
+    def arm_s4_all(self, mode: str) -> list[RunRecord]:
+        started = time.time()
+        a = self.adapter
+        sb = self.sandbox()
+        roots = self._s4_roots()
+        skills = {key: ProbeSkill.fresh() for key in roots}
+        for key, skill in skills.items():
+            write_skill(sb.repo / roots[key], skill, flat=a.flat_skill_layout and roots[key] == a.native_root)
+        res = self._ask(sb, mode, multi_prompt())
+        reply = parse_reply(res.reply_text, res.raw)
+        found = sorted(key for key, s in skills.items() if s.token in reply.tokens)
+        leaked = sorted(key for key in found if roots[key] not in a.documented_roots)
+        notes = f"found={found} leaked={leaked}"
+        # One turn, one row per root: a single verdict for eleven roots cannot say which leaked.
+        return [self.record(mode, "S4", "S4/all-roots", root, "none", res,
+                            judge_root(skills[key].token, root in a.documented_roots, reply),
+                            {key: skills[key].token}, sb=sb, started=started, notes=notes,
+                            name=skills[key].name)
+                for key, root in roots.items()]
+
+    def arm_s4_confirm(self, mode: str, root_key: str, root: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        sb = self.sandbox()
+        skill = ProbeSkill.fresh()
+        write_skill(sb.repo / root, skill, flat=a.flat_skill_layout and root == a.native_root)
+        res = self._ask(sb, mode, self._prompt(mode, skill))
+        verdict = judge_root(skill.token, root in a.documented_roots,
+                             parse_reply(res.reply_text, res.raw, skill.name))
+        return self.record(mode, "S4", f"S4/confirm-{root_key}", root, "none", res, verdict,
+                           {root_key: skill.token}, sb=sb, started=started, name=skill.name)
+
+    def arm_s5(self, mode: str, arm: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = a.native_root
+        sb = self.sandbox()
+        skill = ProbeSkill.fresh()
+        old: str | None = None
+        used: str | None = None
+        if arm in ("update", "delete"):
+            write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
+        session = self._open(sb, mode)
+        try:
+            first = self._ask_session(session, mode, self._prompt(mode, skill))
+            turn1 = self._judge_turn(mode, first, skill)
+            if arm in ("update", "delete") and turn1 != "visible_first_turn":
+                return self.record(mode, "S5", f"S5/{arm}", root, "none", first, "untested", {"native": skill.token},
+                                   sb=sb, started=started, notes=f"turn1={turn1}: no baseline to test against",
+                                   name=skill.name)
+            if arm == "add":
+                write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
+            elif arm == "reload":
+                write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
+                used = session.reload()
+                if used is None:
+                    return self.record(mode, "S5", "S5/reload", root, "none", first, "untested", {"native": skill.token},
+                                       sb=sb, started=started, notes=f"turn1={turn1}; no reload command for this entry",
+                                       name=skill.name)
+            elif arm == "update":
+                old = skill.token
+                skill = skill.variant()
+                write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
+            else:
+                old = skill.token
+                self._remove_skill(sb, root, skill)
+            second = self._ask_session(session, mode, self._prompt(mode, skill, again=True))
+        finally:
+            session.close()
+        reply = parse_reply(second.reply_text, self._raw_for(mode, second), skill.name)
+        if arm == "delete":
+            verdict = judge_delete(old, reply)
+        elif arm == "reload":
+            verdict = judge_single(skill.token, reply, reload_used=True)
+        else:
+            verdict = judge_update(skill.token, old, reply, live=True)
+        hook = {"mechanism": used, "config_path": "", "fired_at": None, "fired_at_mtime": None} if used else None
+        expected = {"old": old} if arm == "delete" else {"native": skill.token}
+        return self.record(mode, "S5", f"S5/{arm}", root, "none", second, verdict, expected, hook=hook, sb=sb,
+                           started=started, notes=f"turn1={turn1}", name=skill.name, prior=first)
+
+    def arm_s6(self, mode: str, arm: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = a.native_root
+        sb = self.sandbox()
+        old_skill = ProbeSkill.fresh()
+        write_skill(sb.repo / root, old_skill, flat=a.flat_skill_layout)
+        target = a.skill_file(sb, root, old_skill.name)
+        skill = old_skill.variant() if arm == "update" else old_skill
+        if arm == "update":
+            script = write_hook_script(sb.config_root, target, skill.render(), stamp_path(sb.config_root))
+        else:
+            gone = a.skill_file(sb, root, old_skill.name) if a.flat_skill_layout \
+                else a.skill_dir(sb, root, old_skill.name)
+            script = write_hook_script(sb.config_root, target, "", stamp_path(sb.config_root), delete=True,
+                                       delete_path=gone)
+        info = a.install_startup_hook(sb, script)
+        if info is None:
+            return self.record(mode, "S6", f"S6/{arm}", root, "none", None, "untested", {}, sb=sb, started=started,
+                               notes="no startup hook mechanism for this entry")
+        res = self._ask(sb, mode, self._prompt(mode, skill))
+        reply = parse_reply(res.reply_text, self._raw_for(mode, res), skill.name)
+        if arm == "update":
+            verdict = judge_update(skill.token, old_skill.token, reply, live=False)
+        else:
+            verdict = judge_delete(old_skill.token, reply)
+        hook = self._hook_dict(sb, info.mechanism, info.config_path)
+        notes = ""
+        if hook["fired_at"] is None:
+            notes, verdict = "hook never fired", "untested"
+        elif arm == "update" and (not target.exists() or skill.body_token not in target.read_text()):
+            notes, verdict = "skill file not rewritten after the turn", "untested"
+        elif arm == "delete" and target.exists():
+            notes, verdict = "skill file still present after the turn", "untested"
+        expected = {"native": skill.token, "old": old_skill.token} if arm == "update" else {"old": old_skill.token}
+        return self.record(mode, "S6", f"S6/{arm}", root, "none", res, verdict, expected, hook=hook, sb=sb,
+                           started=started, notes=notes, name=skill.name)
+
+    def arm_s7(self, mode: str, arm: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = a.native_root
+        sb = self.sandbox()
+        skill = ProbeSkill.fresh()
+        if not a.can_resume:
+            return self.record(mode, "S7", f"S7/{arm}", root, "none", None, "untested", {}, sb=sb, started=started,
+                               notes="no resume launch for this entry")
+        old: str | None = None
+        if arm == "update":
+            write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
+        first = self._ask(sb, mode, self._prompt(mode, skill))
+        turn1 = self._judge_turn(mode, first, skill)
+        sid = a.session_id(first)
+        if sid is None:
+            return self.record(mode, "S7", f"S7/{arm}", root, "none", first, "untested", {"native": skill.token},
+                               sb=sb, started=started, notes=f"turn1={turn1}; no session id in the first run's output",
+                               name=skill.name)
+        if arm == "update":
+            if turn1 != "visible_first_turn":
+                return self.record(mode, "S7", f"S7/{arm}", root, "none", first, "untested", {"native": skill.token},
+                                   sb=sb, started=started, notes=f"turn1={turn1}: no baseline to test against",
+                                   name=skill.name)
+            old = skill.token
+            skill = skill.variant()
+        write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
+        res = a.resume(sb, sid, self._prompt(mode, skill, again=True))
+        if res is None:
+            return self.record(mode, "S7", f"S7/{arm}", root, "none", first, "untested", {"native": skill.token},
+                               sb=sb, started=started, notes=f"turn1={turn1}; no resume launch for this entry",
+                               name=skill.name)
+        self._checked(res, mode)
+        verdict = judge_update(skill.token, old, parse_reply(res.reply_text, res.raw, skill.name), live=False)
+        return self.record(mode, "S7", f"S7/{arm}", root, "none", res, verdict, {"native": skill.token}, sb=sb,
+                           started=started, notes=f"turn1={turn1} session={sid}", name=skill.name, prior=first)
+
+    def arm_s8(self, mode: str, arm: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = a.native_root
+        sb = self.sandbox()
+        sb.cwd = sb.repo / "sub" / "dir"
+        sb.cwd.mkdir(parents=True)
+        (sb.cwd / "README.md").write_text("nested\n")
+        skill = ProbeSkill.fresh()
+        tree = sb.repo if arm == "ancestor" else sb.cwd
+        write_skill(tree / root, skill, flat=a.flat_skill_layout)
+        res = self._ask(sb, mode, self._prompt(mode, skill))
+        verdict = self._judge_turn(mode, res, skill)
+        return self.record(mode, "S8", f"S8/{arm}", root, "none", res, verdict, {"native": skill.token}, sb=sb,
+                           started=started, notes="cwd=sub/dir", name=skill.name)
+
+    def arm_s9(self, mode: str, arm: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = a.native_root
+        sb = self.sandbox()
+        wt = add_worktree(sb)
+        sb.cwd = wt
+        skill = ProbeSkill.fresh()
+        tree = wt if arm == "linked-own" else sb.repo
+        write_skill(tree / root, skill, flat=a.flat_skill_layout)
+        rel = str(a.skill_dir(sb, root, skill.name).relative_to(sb.repo))
+        apply_exclusion(tree, "info-exclude", rel)
+        try:
+            assert_untracked_state(tree, rel, "info-exclude")
+        except AssertionError as ex:
+            return self.record(mode, "S9", f"S9/{arm}", root, "info-exclude", None, "untested",
+                               {"native": skill.token}, sb=sb, started=started, notes=f"git state: {ex}")
+        res = self._ask(sb, mode, self._prompt(mode, skill))
+        verdict = self._judge_turn(mode, res, skill)
+        where = "linked" if tree == wt else "main"
+        return self.record(mode, "S9", f"S9/{arm}", root, "info-exclude", res, verdict, {"native": skill.token},
+                           sb=sb, started=started, notes=f"cwd={wt.name} skill_in={where}", name=skill.name)
+
+    def arm_s10(self, mode: str) -> RunRecord:
+        started = time.time()
+        a = self.adapter
+        root = a.native_root
+        sb = self.sandbox()
+        skill = ProbeSkill.fresh()
+        target = a.skill_file(sb, root, skill.name)
+        session = self._open(sb, "daemon")
+        try:
+            first = self._ask_session(session, mode, self._prompt(mode, skill))
+            turn1 = self._judge_turn("daemon", first, skill)
+            script = write_hook_script(sb.config_root, target, skill.render(), stamp_path(sb.config_root))
+            info = a.install_startup_hook(sb, script)
+            if info is None:
+                return self.record(mode, "S10", "S10/hook-from-peer", root, "none", first, "untested", {}, sb=sb,
+                                   started=started, notes="no startup hook mechanism for this entry", name=skill.name)
+            peer = self._ask(sb, "print", self._prompt("print", skill))
+            peer_verdict = self._judge_turn("print", peer, skill)
+            second = self._ask_session(session, mode, self._prompt(mode, skill, again=True))
+        finally:
+            session.close()
+        hook = self._hook_dict(sb, info.mechanism, info.config_path)
+        reply = parse_reply(second.reply_text, second.raw, skill.name)
+        verdict = judge_update(skill.token, None, reply, live=True)
+        notes = f"turn1={turn1} peer={peer_verdict}"
+        if hook["fired_at"] is None:
+            notes, verdict = notes + " hook never fired", "untested"
+        return self.record(mode, "S10", "S10/hook-from-peer", root, "none", second, verdict, {"native": skill.token},
+                           hook=hook, sb=sb, started=started, notes=notes, name=skill.name, prior=peer)
+
+    # -- scenarios ----------------------------------------------------------------------------
+
+    def run_scenario(self, mode: str, scenario: str, arms: list[str] | None = None) -> list[RunRecord]:
+        if scenario not in SCENARIOS:
+            raise ValueError(scenario)
+        if scenario not in MODE_SCENARIOS[mode]:
+            return []
+        gated = scenario not in ("S0", "S1") and not self._s1_ok(mode)
+        native = self.adapter.native_root
+        out: list[RunRecord] = []
+        if scenario == "S0":
+            out += self.run_arm(lambda: self.arm_s0(mode), mode, "S0", "S0/none", None, "none")
+        elif scenario == "S1":
+            recs = self.run_arm(lambda: self.arm_s1(mode), mode, "S1", "S1/native", native, "none")
+            self.s1_ok[mode] = combine([r.verdict for r in recs])[0] == "visible_first_turn"
+            out += recs
+        elif scenario == "S2":
+            for arm in arms or arms_of(mode, "S2"):
+                if gated:
+                    out += self._blocked(mode, "S2", f"S2/{arm}", native, "none")
+                elif arm == "registration":
+                    out += self._registration(mode)
+                else:
+                    out += self.run_arm(lambda a=arm: self.arm_s2(mode, a), mode, "S2", f"S2/{arm}",
+                                        native, "none")
+        elif scenario == "S3":
+            for exclusion in arms or arms_of(mode, "S3"):
+                if gated:
+                    out += self._blocked(mode, "S3", f"S3/{exclusion}", native, exclusion)
+                else:
+                    out += self.run_arm(lambda e=exclusion: self.arm_s3(mode, e), mode, "S3",
+                                        f"S3/{exclusion}", native, exclusion)
+        elif scenario == "S4":
+            if gated:
+                out += self._blocked(mode, "S4", "S4/all-roots", None, "none")
+                return out
+            recs = self._s4_passes(mode)
+            out += recs
+            for key, root in self._s4_roots().items():
+                rows = [r for r in recs if r.root == root and key in r.expected_tokens]
+                if rows and all(r.expected_tokens[key] in r.tokens_found for r in rows):
+                    continue
+                # One confirmation turn per missed root: the multi prompt is what may have
+                # stopped enumerating, and a second miss adds no evidence.
+                out += self.run_once(lambda k=key, r=root: self.arm_s4_confirm(mode, k, r), mode, "S4",
+                                     f"S4/confirm-{key}", root, "none")
+        elif scenario in ("S5", "S6", "S7", "S8", "S9"):
+            fn = {"S5": self.arm_s5, "S6": self.arm_s6, "S7": self.arm_s7, "S8": self.arm_s8, "S9": self.arm_s9}[scenario]
+            exclusion = "info-exclude" if scenario == "S9" else "none"
+            for arm in arms or arms_of(mode, scenario):
+                if gated:
+                    out += self._blocked(mode, scenario, f"{scenario}/{arm}", native, exclusion)
+                elif arm == "reload" and self.adapter.tui_reload is None:
+                    # Declared, not discovered: asking the first turn would spend a turn to learn
+                    # what the adapter already knows.
+                    out += self._blocked(mode, scenario, f"{scenario}/{arm}", native, exclusion,
+                                         notes="no reload command for this entry")
+                else:
+                    out += self.run_arm(lambda a_=arm: fn(mode, a_), mode, scenario, f"{scenario}/{arm}", native, exclusion)
+        elif scenario == "S10":
+            if gated:
+                out += self._blocked(mode, "S10", "S10/hook-from-peer", native, "none")
+            elif "print" not in self.adapter.modes:
+                out += self._blocked(mode, "S10", "S10/hook-from-peer", native, "none", notes="no print mode for the peer")
+            else:
+                out += self.run_arm(lambda: self.arm_s10(mode), mode, "S10", "S10/hook-from-peer", native, "none")
+        else:
+            raise ValueError(scenario)
+        return out
+
+    def _s1_ok(self, mode: str) -> bool:
+        """The gate holds even when a sweep asks for one later scenario: the recorded control
+        decides, so a harness whose S1 failed never spends turns on the rest."""
+        if mode not in self.s1_ok:
+            d = run_dir(self.outdir, self.adapter.entry, mode, "S1", "S1/native")
+            recs = load_runs(d) if (d / "run1.json").exists() else []
+            if recs:
+                self.s1_ok[mode] = combine([r.verdict for r in recs])[0] == "visible_first_turn"
+        return self.s1_ok.get(mode, True)
+
+    def _s4_passes(self, mode: str) -> list[RunRecord]:
+        per_pass = len(self._s4_roots())
+        existing = self._existing(mode, "S4", "S4/all-roots", per_pass=per_pass)
+        passes = [existing[i:i + per_pass] for i in range(0, len(existing), per_pass)]
+        identity = (mode, "S4", "S4/all-roots", None, "none")
+        while len(passes) < max(1, self.runs):
+            passes.append(self._guarded(lambda: self.arm_s4_all(mode), *identity))
+        if len(passes) == 2 and _verdicts_by_root(passes[0]) != _verdicts_by_root(passes[1]):
+            passes.append(self._guarded(lambda: self.arm_s4_all(mode), *identity))
+        return [r for p in passes for r in p]
+
+    def _registration(self, mode: str) -> list[RunRecord]:
+        identity = (mode, "S2", "S2/registration", self.adapter.native_root, "none")
+
+        def run() -> RunRecord:
+            return self.arm_s2(mode, "registration")
+
+        recs = list(self._existing(mode, "S2", "S2/registration"))
+        # An entry without a registration mechanism says so on the first run; nothing to repeat.
+        while len(recs) < self.runs and not (recs and recs[-1].verdict == "untested"):
+            recs += self._guarded(run, *identity)
+        if needs_third_run([r.verdict for r in recs]):
+            recs += self._guarded(run, *identity)
+        return recs
+
+
+def free_phase(adapter: Adapter, outdir: Path, mode: str, base: Path | None) -> dict:
+    sb = new_sandbox(adapter.lever, adapter.real_root(), list(adapter.credential_files),
+                     list(adapter.passthrough_env), dict(adapter.extra_env), base=base)
+    try:
+        adapter.prepare(sb)
+        info = {
+            "entry": adapter.entry, "binary": adapter.binary_path(), "version": adapter.version(sb.env),
+            "os": os_label(), "mode": mode, "isolation_lever": adapter.lever,
+            "credential_files": [c for c in adapter.credential_files if (sb.config_root / c).exists()],
+            "auth_ok": adapter.check_auth(sb) if adapter.binary_path() else None,
+            "catalogue": adapter.list_catalogue(sb) if adapter.binary_path() else None,
+        }
+    finally:
+        sb.cleanup()
+    d = run_dir(outdir, adapter.entry, mode, "free", "free")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "free.json").write_text(json.dumps(info, indent=2) + "\n")
+    return info
+
+
+def blocked_reason(info: dict) -> str | None:
+    if info["binary"] is None:
+        return "binary not installed"
+    # auth_ok None is "not measurable for this entry", which is not a reason to skip the turns.
+    return "auth_ok false in isolated root" if info["auth_ok"] is False else None
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--harness", action="append", choices=sorted(ENTRIES))
+    p.add_argument("--mode", default="print", choices=("print", "daemon", "tui"))
+    p.add_argument("--scenario", action="append", choices=SCENARIOS)
+    p.add_argument("--turn", action="store_true")
+    p.add_argument("--runs", type=int, default=2)
+    p.add_argument("--outdir", type=Path, default=KIT / "out")
+    p.add_argument("--matrix", type=Path, default=KIT / "matrix.json")
+    p.add_argument("--keep", action="store_true")
+    p.add_argument("--rerun", action="store_true")
+    p.add_argument("--emit", action="store_true")
+    p.add_argument("--base", type=Path, default=None)
+    args = p.parse_args(argv)
+
+    if args.emit:
+        rows = emit_matrix(args.outdir, args.matrix)
+        print(f"wrote {len(rows)} rows to {args.matrix}")
+        return 0
+
+    entries = args.harness or [e for e in ENTRIES if e != "fake"]
+    completed = aborted = 0
+    for name in entries:
+        adapter = ENTRIES[name]()
+        if args.mode not in adapter.modes:
+            print(f"{name}: mode {args.mode} unsupported, skipping")
+            continue
+        try:
+            info = free_phase(adapter, args.outdir, args.mode, args.base)
+            print(f"{name}: {info['version']} auth_ok={info['auth_ok']}")
+            if args.turn:
+                runner = Runner(adapter, args.outdir, runs=args.runs, keep=args.keep, base=args.base,
+                                version=info["version"], rerun=args.rerun)
+                blocker = blocked_reason(info)
+                if blocker:
+                    print(f"{name}: {blocker}, turn arms recorded as untested")
+                    for r in runner.record_blocked(args.mode, blocker):
+                        print(f"{name} {args.mode} {r.arm} -> {r.verdict} {r.notes}")
+                else:
+                    for scenario in args.scenario or MODE_SCENARIOS[args.mode]:
+                        if scenario not in MODE_SCENARIOS[args.mode]:
+                            print(f"{name}: {scenario} n/a in {args.mode} mode")
+                            continue
+                        for r in runner.run_scenario(args.mode, scenario):
+                            print(f"{name} {args.mode} {r.arm} root={r.root} excl={r.exclusion} "
+                                  f"-> {r.verdict} {r.notes}")
+            completed += 1
+        except PromptDesignFailure as ex:
+            aborted += 1
+            print(f"{name}: prompt design failure: {ex}")
+        except Exception as ex:  # noqa: BLE001
+            aborted += 1
+            print(f"{name}: aborted: {ex!r}")
+    return 1 if aborted else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

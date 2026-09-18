@@ -1,8 +1,11 @@
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -12,15 +15,13 @@ using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Headless rendering acceptance for the deliverable's identity block (spec §8): boot a real
-/// MainWindow against a fake service pre-fed (Connected, snapshot), Show() it, and assert the
-/// rendered text actually contains the daemon name/version/server URL/agent count — not just
-/// that the VM's properties hold the right values (MainWindowViewModelTests already covers
-/// that in isolation).
+/// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
+/// connection and tenant on one line, then the daemon's name, version and agent count.
 public class MainWindowSmokeTests {
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
@@ -43,9 +44,25 @@ public class MainWindowSmokeTests {
             () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
             new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
 
+    // A tip's bindings only resolve once it is parented to its adorner. String tips need no
+    // open; two-line panels do. Always open so callers can treat both the same.
+    static string[] VisibleTipLines(Control control) {
+        ToolTip.SetIsOpen(control, true);
+        Dispatcher.UIThread.RunJobs();
+        var tip = ToolTip.GetTip(control);
+        var lines = tip as string is { } text
+            ? new[] { text }
+            : (tip as StackPanel)!.Children.OfType<TextBlock>()
+                .Where(t => t.IsVisible)
+                .Select(t => t.Text ?? "")
+                .ToArray();
+        ToolTip.SetIsOpen(control, false);
+        return lines;
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task MainWindow_renders_the_connection_word_and_tenant_not_the_identity_block() {
+    public async Task MainWindow_renders_compact_footer_with_server_daemon_and_version() {
         // Rendered text, so no immediate scheduler: an OAPH delivered immediately notifies
         // before its value is readable, and a binding that reads on the notification keeps the
         // stale one. The dispatcher scheduler sets the value first, as it does in the app.
@@ -69,7 +86,9 @@ public class MainWindowSmokeTests {
 
             var texts = string.Join('\n', window.GetVisualDescendants()
                 .OfType<TextBlock>()
-                .Select(t => t.Text ?? ""));
+                .Select(t => t.Text is { Length: > 0 } text
+                    ? text
+                    : string.Concat((t.Inlines ?? []).OfType<Run>().Select(r => r.Text ?? ""))));
 
             window.Close();
             Dispatcher.UIThread.RunJobs(); // flush the deferred Unloaded post so the VM's WhenActivated-scoped subscriptions actually get disposed before the next test runs
@@ -77,13 +96,12 @@ public class MainWindowSmokeTests {
             return texts;
         });
 
-        // The rail footer is the one daemon indicator: word + tenant on screen, the identity
-        // block (name/version/URL) demoted to its hover tooltip — rendered text must NOT
-        // carry it.
         await Assert.That(rendered).Contains("Connected");
-        await Assert.That(rendered).Contains("kurrent");
-        await Assert.That(rendered).DoesNotContain("daemon-a");
+        await Assert.That(rendered).Contains("1 of 5 agents");
         await Assert.That(rendered).DoesNotContain("http://localhost:9999");
+        await Assert.That(rendered).Contains("kurrent");
+        await Assert.That(rendered).Contains("daemon-a");
+        await Assert.That(rendered).Contains("1.2.3");
     }
 
     /// Regression coverage for a Critical bug found in review: canStart/canRetry were built
@@ -505,13 +523,14 @@ public class MainWindowSmokeTests {
 
     /// A shown MainWindow on the Sessions surface whose rail holds two rows, "Fix the flaky test"
     /// and "Leave this one alone", under one worktree named feature-x.
-    static (MainWindowViewModel Vm, MainWindow Window) RailWindow() {
+    static (MainWindowViewModel Vm, MainWindow Window) RailWindow(bool awaitingInput = false) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-            null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test"));
+            null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test",
+            AwaitingInput: awaitingInput ? true : null));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
             null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
@@ -581,7 +600,8 @@ public class MainWindowSmokeTests {
     }
 
     /// A selected row must read as selected next to a hovered one: hover paints the raised surface
-    /// brush, so the selection needs its own background, an accent edge and a heavier title.
+    /// brush, so the selection needs its own background and a heavier title, not a leading edge
+    /// that would inset that row past its siblings.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Selected_row_is_distinct_from_a_hovered_row() {
@@ -601,17 +621,78 @@ public class MainWindowSmokeTests {
                     SelectedEdge: selected.BorderThickness.Left,
                     SiblingEdge: sibling.BorderThickness.Left,
                     SelectedWeight: Title(selected).FontWeight,
-                    SiblingWeight: Title(sibling).FontWeight);
+                    SiblingWeight: Title(sibling).FontWeight,
+                    TitleTip: ToolTip.GetTip(Title(selected)));
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
             await Assert.That(seen.SelectedBackground).IsNotNull();
             await Assert.That(seen.SelectedBackground).IsNotEqualTo(seen.Hover);
-            await Assert.That(seen.SelectedEdge).IsGreaterThanOrEqualTo(3);
+            await Assert.That(seen.SelectedEdge).IsEqualTo(0);
             await Assert.That(seen.SiblingEdge).IsEqualTo(0);
             await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
             await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
+            await Assert.That(seen.TitleTip).IsEqualTo("Fix the flaky test");
+        });
+    }
+
+    /// The worktree header is as tall as its attention badge while expanded, so collapsing onto
+    /// the badge does not grow the row.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Collapsing_a_waiting_worktree_does_not_grow_the_header() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(awaitingInput: true);
+                var header = RailRow(window, "feature-x");
+                var expanded = header.Bounds.Height;
+                header.Command!.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                var collapsed = header.Bounds.Height;
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return (expanded, collapsed);
+            });
+            await Assert.That(seen.expanded).IsGreaterThanOrEqualTo(32);
+            await Assert.That(seen.collapsed).IsEqualTo(seen.expanded);
+        });
+    }
+
+    /// WrapPanel Center matches the chip and meta boxes, not the glyph baselines — a padded
+    /// 11px vendor chip then sits the vendor word high of a larger running-time. One line box
+    /// and Bottom keep them on the same baseline.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Vendor_chip_and_running_time_share_a_baseline() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow();
+                var row = RailRow(window, "Fix the flaky test");
+                var chip = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("railChip"));
+                var label = chip.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railChipLabel"));
+                var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var result = (
+                    ChipAlign: chip.VerticalAlignment,
+                    MetaAlign: meta.VerticalAlignment,
+                    LabelSize: label.FontSize,
+                    MetaSize: meta.FontSize,
+                    LabelLine: label.LineHeight,
+                    MetaLine: meta.LineHeight,
+                    ChipPadTop: chip.Padding.Top,
+                    ChipPadBottom: chip.Padding.Bottom,
+                    MetaPadTop: meta.Padding.Top,
+                    MetaPadBottom: meta.Padding.Bottom);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.ChipAlign).IsEqualTo(VerticalAlignment.Bottom);
+            await Assert.That(seen.MetaAlign).IsEqualTo(VerticalAlignment.Bottom);
+            await Assert.That(seen.LabelSize).IsEqualTo(seen.MetaSize);
+            await Assert.That(seen.LabelLine).IsEqualTo(seen.MetaLine);
+            await Assert.That(seen.ChipPadTop).IsEqualTo(seen.MetaPadTop);
+            await Assert.That(seen.ChipPadBottom).IsEqualTo(seen.MetaPadBottom);
         });
     }
 
@@ -698,29 +779,30 @@ public class MainWindowSmokeTests {
 
             var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
             await Assert.That(help.IsEnabled).IsTrue();
-            // It leads the right-docked footer stack; the hosted-count text follows it.
-            await Assert.That(((StackPanel)help.Parent!).Children[0]).IsSameReferenceAs(help);
+            await Assert.That(DockPanel.GetDock(help)).IsEqualTo(Dock.Right);
             await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
             await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
 
-            // Opened, because a MenuFlyout's items only join a tree — and so only bind — once its
-            // presenter exists; unopened they all read disabled, which Documentation below catches.
-            var flyout = (MenuFlyout)help.Flyout!;
+            // Opened, because Flyout content only joins a tree — and so only binds — once its
+            // presenter exists; unopened the report rows would all read enabled from unset CanExecute.
+            var flyout = (Flyout)help.Flyout!;
             flyout.ShowAt(help);
             Dispatcher.UIThread.RunJobs();
-            var items = flyout.Items.OfType<MenuItem>().ToList();
-            await Assert.That(items.Select(i => (string)i.Header!)).IsEquivalentTo(["Documentation", "Report a bug…", "Send feedback…"]);
-            // A command's CanExecute reaches a MenuItem through IsEffectivelyEnabled; IsEnabled
-            // stays at its unset true, so reading it here would assert nothing.
-            await Assert.That(items[0].IsEffectivelyEnabled).IsTrue();
-            await Assert.That(items[1].IsEffectivelyEnabled).IsFalse();
-            await Assert.That(items[2].IsEffectivelyEnabled).IsFalse();
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var docs = rail.FindControl<Button>("RailHelpDocsButton")!;
+            var bug = rail.FindControl<Button>("RailHelpBugButton")!;
+            var feedback = rail.FindControl<Button>("RailHelpFeedbackButton")!;
+            await Assert.That(docs.Content).IsEqualTo("Documentation");
+            await Assert.That(bug.Content).IsEqualTo("Report a bug…");
+            await Assert.That(feedback.Content).IsEqualTo("Send feedback…");
+            await Assert.That(docs.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(bug.IsEffectivelyEnabled).IsFalse();
+            await Assert.That(feedback.IsEffectivelyEnabled).IsFalse();
 
-            // The class reaching the presenter is only the positive control — it lands there
-            // whether or not a style matches it. The corner radius is what pins the kit chrome.
-            var presenter = items[0].FindAncestorOfType<MenuFlyoutPresenter>()!;
+            var presenter = docs.FindAncestorOfType<FlyoutPresenter>()!;
             await Assert.That(presenter.Classes.Contains("kcapPanel")).IsTrue();
             await Assert.That(presenter.CornerRadius).IsEqualTo(new CornerRadius(12));
+            await Assert.That(docs.Classes.Contains("kcapGhost")).IsTrue();
 
             flyout.Hide();
             Dispatcher.UIThread.RunJobs();
@@ -730,15 +812,211 @@ public class MainWindowSmokeTests {
         }
     });
 
+    /// Hover copy names what each footer fragment is. Extra info the compact row dropped (URL,
+    /// lane diagnostic, pending-update copy) sits on the lighter line; the fragment's name is
+    /// the darker caption under it, or the whole tip when there is nothing extra. Visible
+    /// strings (org slug, daemon name, semver) do not repeat. Same dispatcher scheduler as the
+    /// compact-footer render test: an immediate OAPH notifies before its value is readable and
+    /// a binding keeps the stale one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_footer_tooltips_identify_org_daemon_version_and_server() {
+        var tips = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "daemon-a", version: "1.2.3+abc", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 1, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent", laneStatus: lane.Status);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var connection = rail.FindControl<StackPanel>("RailConnectionStatus")!;
+            var tenant = rail.FindControl<TextBlock>("RailTenantText")!;
+            var daemon = rail.FindControl<TextBlock>("RailDaemonNameText")!;
+            var version = rail.FindControl<TextBlock>("RailVersionText")!;
+            var agents = rail.FindControl<TextBlock>("RailAgentCountText")!;
+            var connectionLines = VisibleTipLines(connection);
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
+            Dispatcher.UIThread.RunJobs();
+            var connectionDetailLines = VisibleTipLines(connection);
+            var result = (
+                ConnectionLines: connectionLines,
+                ConnectionDetailLines: connectionDetailLines,
+                TenantLines: VisibleTipLines(tenant),
+                TenantText: tenant.Text,
+                DaemonLines: VisibleTipLines(daemon),
+                DaemonText: daemon.Text,
+                VersionText: version.Text,
+                VersionLines: VisibleTipLines(version),
+                AgentLines: VisibleTipLines(agents));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return result;
+        });
+
+        await Assert.That(tips.ConnectionLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.ConnectionDetailLines).IsEquivalentTo(
+            new[] { "diagnostic-marker", MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.TenantLines).IsEquivalentTo(
+            new[] { "http://localhost:9999", MainWindowViewModel.ServerUrlTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.TenantText).IsEqualTo("kurrent");
+        await Assert.That(tips.DaemonLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.DaemonNameTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.DaemonText).IsEqualTo("daemon-a");
+        await Assert.That(tips.VersionText).IsEqualTo("1.2.3");
+        await Assert.That(tips.VersionLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.VersionIdentityTip }, CollectionOrdering.Matching);
+        await Assert.That(string.Join('\n', tips.VersionLines)).DoesNotContain("1.2.3+abc");
+        await Assert.That(tips.AgentLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.AgentCountTip }, CollectionOrdering.Matching);
+    }
+
+    /// A dot belongs BETWEEN two fragments, never dangling: the count drops out the moment the
+    /// attach does (the service keeps its snapshot, so name and version stay), and its separator
+    /// has to leave with it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
+        var (connected, detached) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "daemon-a", version: "1.2.3", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 1, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent");
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var row = window.FindDescendantOfType<SessionRailView>()!.FindControl<Panel>("RailDaemonRow")!;
+            string[] Fragments() => row.Children.OfType<TextBlock>()
+                .Where(t => t.IsVisible).Select(t => t.Text ?? "").ToArray();
+
+            var whileConnected = Fragments();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            Dispatcher.UIThread.RunJobs();
+            var whileDetached = Fragments();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (whileConnected, whileDetached);
+        });
+
+        await Assert.That(connected).IsEquivalentTo(
+            new[] { "daemon-a", "\u00b7", "1.2.3", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
+        await Assert.That(detached).IsEquivalentTo(
+            new[] { "daemon-a", "\u00b7", "1.2.3" }, CollectionOrdering.Matching);
+    }
+
+    /// A queued daemon update is the version's own status: warning paint on the semver, the
+    /// pending copy on its hover, and no extra fragment that would collide with the help chip.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_version_warns_when_an_update_is_pending() {
+        var shown = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var restartPending = new BehaviorSubject<bool>(true);
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "nortonandreev", version: "1.1.0", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 2, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent", restartPending: restartPending);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var version = rail.FindControl<TextBlock>("RailVersionText")!;
+            var tipLines = VisibleTipLines(version);
+            var helpOrigin = help.TranslatePoint(new Point(0, 0), rail)!.Value;
+            var versionOrigin = version.TranslatePoint(new Point(0, 0), rail)!.Value;
+            var result = (
+                PendingLabel: rail.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "update pending" && t.IsVisible),
+                VersionText: version.Text,
+                Warning: ReferenceEquals(version.Foreground, window.FindResource("KcapWarningBrush")),
+                TipLines: tipLines,
+                OverlapsHelp: new Rect(helpOrigin, help.Bounds.Size)
+                    .Intersects(new Rect(versionOrigin, version.Bounds.Size)));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return result;
+        });
+
+        await Assert.That(shown.PendingLabel).IsFalse();
+        await Assert.That(shown.VersionText).IsEqualTo("1.1.0");
+        await Assert.That(shown.Warning).IsTrue();
+        await Assert.That(shown.TipLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.RestartPendingMessage, MainWindowViewModel.VersionIdentityTip },
+            CollectionOrdering.Matching);
+        await Assert.That(shown.OverlapsHelp).IsFalse();
+    }
+
+    /// Signed-out is a rail diagnosis; the launcher's Sign in is on the other pane and hidden
+    /// once a workspace is open, so the footer has to offer the same action beside the word.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_footer_offers_sign_in_when_signed_out() {
+        var (visibleWhileOut, clicks, visibleWhileIn) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var clicks = 0;
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "nortonandreev", version: "1.1.0", connection: "connected", active: 2, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent", laneStatus: lane.Status, requestSignIn: () => clicks++);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var signIn = rail.FindControl<Button>("RailSignInButton")!;
+            var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled;
+            vm.SignInCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var whileIn = signIn.IsVisible;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (whileOut, clicks, whileIn);
+        });
+
+        await Assert.That(visibleWhileOut).IsTrue();
+        await Assert.That(clicks).IsEqualTo(1);
+        await Assert.That(visibleWhileIn).IsFalse();
+    }
+
     /// 310 of rail plus 400 of pane must never squeeze the center column to nothing.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task MainWindow_pins_its_minimum_width_to_the_default_width() {
+    public async Task MainWindow_keeps_a_layout_floor_and_a_wider_default() {
         await AvaloniaSession.RunOnUiAsync(async () => {
             var window = new MainWindow { DataContext = new MainWindowViewModel(new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System) };
 
-            await Assert.That(window.MinWidth).IsEqualTo(1200);
-            await Assert.That(window.Width).IsEqualTo(1200);
+            await Assert.That(window.MinWidth).IsEqualTo(WindowSizeMemory.MinWidth);
+            await Assert.That(window.Width).IsEqualTo(WindowSizeMemory.DefaultWidth);
+            await Assert.That(window.MinHeight).IsEqualTo(WindowSizeMemory.MinHeight);
+            await Assert.That(window.Height).IsEqualTo(WindowSizeMemory.DefaultHeight);
         });
     }
 }

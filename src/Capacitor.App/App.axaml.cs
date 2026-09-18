@@ -1193,8 +1193,9 @@ public partial class App : Application {
             GitRepository.ResolveMainRepoRoot, localMachineId, appServerUrl: null, time);
 
         MainWindowViewModel? vm = null;
+        var appState = new AppStateStore(config.Path("app-state.json"));
         var home = new HomeViewModel(
-            service, new AppStateStore(config.Path("app-state.json")),
+            service, appState,
             launch, new RepoPathStore(config, time).GetSortedPathsAsync, time, shutdownToken,
             openSession: agentId => vm?.OpenSession(agentId),
             navigationGeneration: () => vm?.NavigationGeneration ?? 0,
@@ -1218,11 +1219,13 @@ public partial class App : Application {
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
-            openFeedback: openFeedback, opener: new ShellUrlOpener());
+            openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
         };
+        WindowSizeMemory.Restore(window, appState);
+        WindowSizeMemory.Attach(window, appState);
         window.Show();
         return window;
     }
