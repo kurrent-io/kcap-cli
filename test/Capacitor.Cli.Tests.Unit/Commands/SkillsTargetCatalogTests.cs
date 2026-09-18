@@ -42,12 +42,11 @@ public class SkillsTargetCatalogTests {
         await Assert.That(SkillsCommand.Adopted(gemini, byKey["gemini"], false, false)).IsTrue();
         await Assert.That(SkillsCommand.Adopted(antigravity, byKey["agents"], false, false)).IsTrue();
         await Assert.That(SkillsCommand.Adopted(antigravity, byKey["claude"], false, false)).IsFalse();
+        // The tree Antigravity was measured reading is the shared one, so it adopts no vendored
+        // tree with no reader.
+        await Assert.That(SkillsCommand.Adopted(antigravity, byKey["gemini"], false, false)).IsFalse();
         // A target kcap already owns keeps reconciling so a revocation still reaches it.
         await Assert.That(SkillsCommand.Adopted(antigravity, byKey["claude"], true, false)).IsTrue();
         await Assert.That(SkillsCommand.Adopted(antigravity, byKey["claude"], false, true)).IsTrue();
     }
-}
-
-sealed class HarnessRegistryStub(params HarnessId[] present) : IHarnessDetection {
-    public bool Detected(HarnessId id) => present.Contains(id);
 }

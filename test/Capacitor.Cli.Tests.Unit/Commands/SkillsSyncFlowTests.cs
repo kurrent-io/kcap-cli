@@ -125,6 +125,51 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.ReadManifest().Skills!).IsEmpty();
     }
 
+    /// <summary>A served slug can name a directory the repository already has — impossible while the
+    /// destination lived outside the checkout. Writing it would record ownership of a directory the
+    /// repository may track, and a later prune deletes an owned directory whole.</summary>
+    [Test]
+    public async Task A_destination_the_ledger_does_not_own_is_refused() {
+        using var repo   = Checkout("repo");
+        var       alpha  = SkillsSyncFixture.Skill("alpha");
+        var       beta   = SkillsSyncFixture.Skill("beta");
+        var       fx     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha, beta));
+        var       theirs = repo.CreateFile([".claude", "skills", "kcap-alpha", "notes.md"], "committed");
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(File.ReadAllText(theirs)).IsEqualTo("committed");
+        await Assert.That(File.Exists(fx.SkillFile("alpha"))).IsFalse();
+        await Assert.That(File.ReadAllText(fx.SkillFile("beta"))).IsEqualTo(Rendered(beta));
+
+        var manifest = fx.ReadManifest();
+
+        // Neither claimed nor cached: a 304 answered to a recorded etag would report the
+        // repository's own directory as a materialized skill.
+        await Assert.That(manifest.Skills!.Select(e => e.Slug)).IsEquivalentTo(["beta"]);
+        await Assert.That(manifest.Etag).IsNull();
+        await Assert.That(manifest.SyncedAt).IsNull();
+    }
+
+    /// <summary>A global ledger that will not parse names directories nothing else can. Deleting it
+    /// would leave them with nothing able to prune them.</summary>
+    [Test]
+    public async Task A_global_ledger_that_will_not_parse_survives_the_sync() {
+        using var repo   = Checkout("repo");
+        var       alpha  = SkillsSyncFixture.Skill("alpha");
+        var       fx     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha));
+        var       global = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        Directory.CreateDirectory(Path.GetDirectoryName(fx.LegacyManifestPath)!);
+        File.WriteAllText(fx.LegacyManifestPath, "{ truncated");
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        await Assert.That(File.Exists(fx.LegacyManifestPath)).IsTrue();
+        await Assert.That(Directory.Exists(global)).IsTrue();
+    }
+
     /// <summary>The orphan a rename left behind is deleted on the retry, whatever the snapshot has
     /// since done with the document. The seed is what a crash between the write loop and settlement
     /// leaves: the flag set, the planned entry at its published path with a file hash that matches
@@ -219,8 +264,9 @@ public class SkillsSyncFlowTests {
         await Assert.That(manifest.SyncedAt).IsNull();
         await Assert.That(manifest.PendingPrunes!).IsEmpty();
         await Assert.That(fx.Api.Requests.Single().Etag).IsNull();
-        // Nothing settled, so the shared tail never ran.
-        await Assert.That(Exclude(fx)).DoesNotContain("kcap skills");
+        // The block goes in before anything is written, so even a run that never settled leaves
+        // kcap's directories excluded rather than visible to Git.
+        await Assert.That(Exclude(fx)).Contains("/.claude/skills/kcap-*/");
     }
 
     [Test]
@@ -327,6 +373,117 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.Api.Requests).IsEmpty();
         await Assert.That(fx.HasSkill("alpha")).IsTrue();
         await Assert.That(fx.ReadManifest().Identity!.Account).IsEqualTo("previous-user");
+    }
+
+    /// <summary>A retirement runs before the fetch and deletes both catalogues, so a preview that
+    /// listed only what it would write would show none of the destruction.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task A_dry_run_names_the_catalogue_a_retirement_would_delete() {
+        using var repo    = Checkout("repo");
+        var       alpha   = SkillsSyncFixture.Skill("alpha");
+        var       fx      = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", alpha));
+        var       retired = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl);
+        var       owned   = fx.Materialize(alpha);
+        var       global  = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        fx.WriteManifest(Owning(fx, owned) with { Etag = "etag-1", Identity = retired });
+        fx.WriteLegacyManifest(new SkillsManifest {
+            Identity = retired, Skills = [owned with { Path = global }],
+        });
+
+        string preview;
+        using (var console = ConsoleOutput.StartCapture("\n")) {
+            await Assert.That(await fx.Command.HandleSync(dryRun: true)).IsEqualTo(0);
+            preview = console.GetCapturedOutput();
+        }
+
+        await Assert.That(preview).Contains($"would retire {owned.Path}");
+        await Assert.That(preview).Contains($"would retire {global}");
+        await Assert.That(preview).Contains($"would write  {fx.SkillDir("alpha")}");
+        await Assert.That(fx.HasSkill("alpha")).IsTrue();
+        await Assert.That(Directory.Exists(global)).IsTrue();
+        await Assert.That(File.Exists(fx.LegacyManifestPath)).IsTrue();
+    }
+
+    /// <summary>A peer can legitimately hold the machine-wide migration lock across its own local
+    /// work. A retirement that cannot take it reports incomplete, so the next start retries it
+    /// instead of reading the holder's work as its own — and until then it fetches nothing and
+    /// deletes nothing.
+    ///
+    /// <para>The lease is real and cross-process, but its name hashes the fixture's own config root,
+    /// so it can contend with nothing outside this test; the wait the sync then makes is bounded by
+    /// the lock's own timeout, so a failure cannot hang the suite.</para></summary>
+    [Test]
+    public async Task A_migration_lock_held_elsewhere_leaves_the_retirement_for_the_next_run() {
+        using var repo    = Checkout("repo");
+        var       alpha   = SkillsSyncFixture.Skill("alpha");
+        var       fx      = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("never asked"));
+        var       retired = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl);
+        var       owned   = fx.Materialize(alpha);
+        var       global  = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        fx.WriteManifest(Owning(fx, owned) with { Etag = "etag-1", Identity = retired });
+        fx.WriteLegacyManifest(new SkillsManifest {
+            Identity = retired, Skills = [owned with { Path = global }],
+        });
+
+        // 2 is the command's "incomplete", distinct from a failure so the next start retries.
+        using (fx.Config.AcquireLock(SkillsLocks.Migration))
+            await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(2);
+
+        await Assert.That(fx.Api.Requests).IsEmpty();
+        await Assert.That(fx.HasSkill("alpha")).IsTrue();
+        await Assert.That(Directory.Exists(global)).IsTrue();
+        await Assert.That(fx.ReadManifest().Identity).IsEqualTo(retired);
+    }
+
+    /// <summary>Two repositories retiring at once own one global directory between them. The single
+    /// migration key serializes them, so the shared copy is deleted once, each private copy by its
+    /// own owner, and no ledger outlives a directory it named — a directory no ledger names is one
+    /// nothing can ever prune.</summary>
+    [Test]
+    public async Task Two_repositories_retiring_one_shared_copy_leave_nothing_unowned() {
+        using var first    = Checkout("first");
+        using var second   = Checkout("second");
+        var       alpha    = SkillsSyncFixture.Skill("alpha");
+        var       retired  = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl);
+        var       firstFx  = new SkillsSyncFixture(Tmp, first.Path, StubSkillsApi.Serving("etag-a"),
+                                                   repoName: "first");
+        var       secondFx = new SkillsSyncFixture(Tmp, second.Path, StubSkillsApi.Serving("etag-b"),
+                                                   repoName: "second");
+        var       globals  = Tmp.CreateDir("home", ".claude", "skills");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-shared", "SKILL.md"], "owned twice");
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-first", "SKILL.md"], "owned once");
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-second", "SKILL.md"], "owned once");
+        Tmp.CreateFile(["home", ".claude", "skills", "authored", "SKILL.md"], "not kcap's");
+
+        Retiring(firstFx, alpha, retired, globals.PathTo("kcap-shared"), globals.PathTo("kcap-first"));
+        Retiring(secondFx, alpha, retired, globals.PathTo("kcap-shared"), globals.PathTo("kcap-second"));
+
+        var runs = await Task.WhenAll(firstFx.Command.HandleSync(dryRun: false),
+                                      secondFx.Command.HandleSync(dryRun: false));
+
+        // A second deletion of the same directory is the intent satisfied, not a failure.
+        await Assert.That(runs).IsEquivalentTo([0, 0]);
+        await Assert.That(Directory.GetDirectories(globals)).IsEquivalentTo([globals.PathTo("authored")]);
+        await Assert.That(File.Exists(firstFx.LegacyManifestPath)).IsFalse();
+        await Assert.That(File.Exists(secondFx.LegacyManifestPath)).IsFalse();
+    }
+
+    /// <summary>A checkout whose recorded account is no longer the current one, owning one local
+    /// copy and the given global ones.</summary>
+    static void Retiring(SkillsSyncFixture fx, SkillSnapshotItem item, SkillsIdentity retired,
+                         params string[] globals) {
+        var owned = fx.Materialize(item);
+
+        fx.WriteManifest(Owning(fx, owned) with { Etag = "etag-0", Identity = retired });
+        fx.WriteLegacyManifest(new SkillsManifest {
+            Identity = retired, Skills = [.. globals.Select(g => owned with { Path = g })],
+        });
     }
 
     /// <summary>A checkout with one commit, so a linked worktree can be added to it.</summary>

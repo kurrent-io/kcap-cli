@@ -57,9 +57,11 @@ class SkillsCommand(
         new("kiro", KiroPaths.RepoSkillsRelativePath, "kiro",
             [HarnessId.Kiro], [HarnessId.Kiro]),
         // No session has confirmed a repository-local .gemini/skills; the tree is kept on the
-        // vendor's documentation, which is why it has a consumer and no reader.
+        // vendor's documentation, which is why it has a consumer and no reader. Antigravity is not
+        // that consumer: it was measured reading the shared tree above, so listing it here would
+        // send an Antigravity-only machine to a directory nothing reads.
         new("gemini", GeminiPaths.RepoSkillsRelativePath, null,
-            [HarnessId.Gemini, HarnessId.Antigravity], []),
+            [HarnessId.Gemini], []),
     ];
 
     /// <summary>The checkout or linked worktree the session is in. Every write below is relative to
@@ -101,19 +103,49 @@ class SkillsCommand(
         var hash     = RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName);
         var repoHome = $"repo:{repo.Owner}/{repo.RepoName}";
 
+        var adopted = Targets()
+            .Where(t => Adopted(harnesses, t, File.Exists(ManifestPath(gitDir, t.Key)),
+                                File.Exists(LegacyManifestPath(hash, t.Key))))
+            .ToList();
+        if (adopted.Count == 0) return 0;
+
+        // Ahead of the first file and of every lock the targets take: the block names kcap's
+        // directories for every target and depends on nothing a fetch returns, while a run whose
+        // tail never reached it would leave those directories visible to Git under a fresh refresh
+        // stamp that suppresses the retry. A run that cannot write it writes no files either.
+        if (!dryRun) {
+            var excluded = await ExcludeAsync(anchor, gitDir, hash, auto);
+            if (excluded != 0) return excluded;
+        }
+
         var exitCode = 0;
-        foreach (var target in Targets()) {
-            var hasManifest       = File.Exists(ManifestPath(gitDir, target.Key));
-            var hasLegacyManifest = File.Exists(LegacyManifestPath(hash, target.Key));
-            if (!Adopted(harnesses, target, hasManifest, hasLegacyManifest)) continue;
+        foreach (var target in adopted)
             exitCode = Math.Max(exitCode, await SyncTargetAsync(
                 target, anchor, gitDir, hash, repoHome, identity, dryRun, auto));
-        }
         return exitCode;
     }
 
+    /// <summary>Rewrites the shared exclusion block under the repository lock, which is taken alone:
+    /// it is the one lock this command never nests with another.</summary>
+    async Task<int> ExcludeAsync(string anchor, string gitDir, string hash, bool auto) {
+        var repository = TryAcquire(SkillsLocks.Repository(hash));
+        if (repository is null) return await ContendedAsync("this repository's exclusion block", null, auto);
+
+        using (repository) {
+            try {
+                SkillsExclusion.Apply(CommonGitDir(anchor, gitDir), RepoRoot(anchor),
+                                      [.. Targets().Select(t => t.Root(anchor))]);
+                return 0;
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync(
+                    $"Cannot keep kcap's skills directories out of Git under {anchor}: {ex.Message}");
+                return Failed;
+            }
+        }
+    }
+
     /// <summary>One target's sync. The attempt owns the per-worktree manifest lock for its whole life
-    /// and has released it by the time it returns, because the two locks the tail needs are shared and
+    /// and has released it by the time it returns, because the lock the tail needs is shared and
     /// ordered outside it. <c>Settled</c> is false for an outcome that never reached a saved manifest,
     /// which is the one case the tail must not run on.
     ///
@@ -136,7 +168,7 @@ class SkillsCommand(
                 target, anchor, gitDir, hash, repoHome, identity, dryRun, auto, takeMigration: true);
 
         return attempt.Settled
-            ? Math.Max(attempt.Code, await FinishTargetAsync(hash, target, anchor, gitDir, identity, auto))
+            ? Math.Max(attempt.Code, await FinishTargetAsync(hash, target, anchor, identity, auto))
             : attempt.Code;
     }
 
@@ -165,15 +197,24 @@ class SkillsCommand(
         // What an auto run may skip: a periodic refresh is exactly what a lock holder is already
         // doing, while recovery, a retired credential and a moved anchor are work only this run
         // owes. Classified from a read taken without the lock, so it is a hint about how long to
-        // wait and never a decision to write.
-        var owed = auto && Owed(LoadQuietly(manifestPath), identity, anchor);
+        // wait and never a decision to write. It canonicalizes an anchor, so it reads the
+        // filesystem: a refusal there ends this target rather than escaping a run whose streams
+        // nobody reads.
+        bool owed;
+        try {
+            owed = auto && Owed(LoadQuietly(manifestPath), identity, anchor);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
+            return (Failed, false, false);
+        }
 
-        // Lock order is migration, then repository, then the per-worktree manifest, and no path takes
-        // them the other way round. Migration is released before the fetch: a shared lock must never
-        // span a network request.
+        // The only nesting: migration outside the per-worktree manifest lock, never the other way
+        // round, and never with the repository lock, which the run took and released on its own
+        // before any target started. Migration is released before the fetch: a shared lock must
+        // never span a network request.
         var migrationLock = takeMigration ? TryAcquire(SkillsLocks.Migration) : null;
         if (takeMigration && migrationLock is null)
-            return (await ContendedAsync("retiring global skills", target, auto), false, false);
+            return (await ContendedAsync("retiring global skills", target.Key, auto), false, false);
 
         // One sync per (worktree, target) at a time, machine-wide: a burst of session starts must
         // collapse to ONE refresh — the throttle alone cannot do that, since every child of the
@@ -237,6 +278,15 @@ class SkillsCommand(
                                  BuildManifest(null, [], anchor, identity, target, repoHome,
                                                syncedAt: null, pending: false, journal));
                 } else {
+                    // The deletion is the most destructive thing this command does and it happens
+                    // before the fetch, so a preview that listed only the writes would show none
+                    // of it.
+                    Info($"[{target.Key}] the recorded account ({manifest.Identity!.Account}) is no "
+                       + $"longer {identity.Account}; its catalogue goes before a replacement is fetched:");
+                    foreach (var entry in manifest.Skills ?? []) Info($"{"would retire",-12} {entry.Path}");
+                    foreach (var outstanding in journal) Info($"{"would retire",-12} {outstanding.Path}");
+                    foreach (var copy in PlanLegacy(hash, target, identity)?.Delete ?? [])
+                        Info($"{"would retire",-12} {copy}");
                     journal.Clear();
                 }
                 manifest   = null;
@@ -320,10 +370,18 @@ class SkillsCommand(
 
         // Reconciled against every destination the snapshot occupies, not only the rewritten ones:
         // acting on an intent whose path is live again deletes a served skill and then saves a
-        // manifest claiming it exists.
-        var owedPrunes = SkillsJournal.Reconcile(
-            SkillsJournal.Merge(journal, plan.Prunes.Select(e => new PendingPrune(e.Path, root))),
-            snapshot.Select(s => SkillsMaterializer.SkillDirFor(root, s.Slug)));
+        // manifest claiming it exists. Both halves canonicalize paths, so both touch the
+        // filesystem.
+        PendingPrune[] merged;
+        PendingPrune[] owedPrunes;
+        try {
+            merged     = SkillsJournal.Merge(journal, plan.Prunes.Select(e => new PendingPrune(e.Path, root)));
+            owedPrunes = SkillsJournal.Reconcile(
+                merged, snapshot.Select(s => SkillsMaterializer.SkillDirFor(root, s.Slug)));
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
+            return (Failed, false, false);
+        }
 
         foreach (var w in writes)
             Info($"{(dryRun ? "would write" : "write"),-12} {SkillsMaterializer.SkillDirFor(root, w.Slug)} (v{w.Version})");
@@ -332,18 +390,37 @@ class SkillsCommand(
         if (dryRun) return (0, false, false);
 
         List<SkillSnapshotItem> refused = [];
+        List<SkillSnapshotItem> unowned = [];
         PendingPrune[]          stuck;
         SkillSnapshotItem[]     published;
         try {
+            // A destination that already exists and no ledger row names is the repository's own,
+            // and may be tracked. Recording it would make a later prune delete it whole, so it is
+            // refused before ownership is recorded — the journal counts as a ledger row, since a
+            // path awaiting deletion is one kcap wrote and a rename can come back to it.
+            var ledger = (manifest?.Skills ?? []).Select(e => e.Path).Concat(merged.Select(p => p.Path))
+                .Select(CanonicalPath.Resolve).ToHashSet(StringComparer.Ordinal);
+            foreach (var w in writes) {
+                var dir = SkillsMaterializer.SkillDirFor(root, w.Slug);
+                if (!Directory.Exists(dir) || ledger.Contains(CanonicalPath.Resolve(dir))) continue;
+                unowned.Add(w);
+                await Console.Error.WriteLineAsync(
+                    $"Refused to write {dir}: the directory already exists and kcap does not own it.");
+            }
+            var unownedIds = unowned.Select(w => w.DocId).ToHashSet();
+            var claimable  = unownedIds.Count == 0
+                ? snapshot
+                : snapshot.Where(s => !unownedIds.Contains(s.DocId)).ToArray();
+
             // Ownership before the write, in both directions: a crash between here and the final
             // save leaves every planned path and every owed deletion recorded, so a later sync can
             // finish whichever half was interrupted.
             if (writes.Count > 0 || owedPrunes.Length > 0)
-                SaveManifest(manifestPath, BuildManifest(dto.Etag, snapshot, anchor, identity, target,
+                SaveManifest(manifestPath, BuildManifest(dto.Etag, claimable, anchor, identity, target,
                                                          repoHome, lastSynced, pending: true, owedPrunes));
 
             foreach (var w in writes)
-                if (!SkillsMaterializer.Write(root, anchor, w)) refused.Add(w);
+                if (!unownedIds.Contains(w.DocId) && !SkillsMaterializer.Write(root, anchor, w)) refused.Add(w);
             foreach (var w in refused)
                 await Console.Error.WriteLineAsync(
                     $"Refused to write {SkillsMaterializer.SkillDirFor(root, w.Slug)}: it does not resolve inside {anchor}.");
@@ -351,7 +428,7 @@ class SkillsCommand(
             // A path that was not published is not owned, and the etag goes with it: a 304 answered
             // to a recorded etag would report "up to date" over a document that never landed. A run
             // that published only part of the snapshot earns no refresh stamp either.
-            var refusedIds = refused.Select(w => w.DocId).ToHashSet();
+            var refusedIds = refused.Select(w => w.DocId).Concat(unownedIds).ToHashSet();
             published = refusedIds.Count == 0
                 ? snapshot
                 : snapshot.Where(s => !refusedIds.Contains(s.DocId)).ToArray();
@@ -369,47 +446,29 @@ class SkillsCommand(
 
         Info(writes.Count == 0 && owedPrunes.Length == 0
             ? $"[{target.Key}] skills up to date ({published.Length} materialized)."
-            : $"[{target.Key}] synced {writes.Count - refused.Count} skill(s), "
+            : $"[{target.Key}] synced {writes.Count - refused.Count - unowned.Count} skill(s), "
             + $"pruned {owedPrunes.Length - stuck.Length}; {published.Length} materialized.");
 
-        return (failed || refused.Count + stuck.Length > 0 ? Failed : 0, true, false);
+        return (failed || refused.Count + unowned.Count + stuck.Length > 0 ? Failed : 0, true, false);
     }
 
     /// <summary>The work that has to outlive the manifest lock: retiring the global copies under the
-    /// machine-wide migration lock, then rewriting the shared exclusion block under the repository
-    /// lock. Both are shared, so neither is ever taken while the manifest lock is held — which is
-    /// also why they run after the local manifest has been saved, the order migration requires.
-    /// </summary>
-    async Task<int> FinishTargetAsync(string hash, SkillsTarget target, string anchor, string gitDir,
+    /// machine-wide migration lock, which is shared and so is never taken while the manifest lock is
+    /// held — which is also why it runs after the local manifest has been saved, the order migration
+    /// requires.</summary>
+    async Task<int> FinishTargetAsync(string hash, SkillsTarget target, string anchor,
                                       SkillsIdentity identity, bool auto) {
-        var result = 0;
-
         var migration = TryAcquire(SkillsLocks.Migration);
-        if (migration is null) {
-            result = await ContendedAsync("retiring global skills", target, auto);
-        } else {
-            using (migration) {
-                try {
-                    foreach (var copy in RetireLegacy(hash, target, identity)) {
-                        result = Failed;
-                        await Console.Error.WriteLineAsync(
-                            $"Could not remove the global copy {copy}; it stays recorded for the next sync.");
-                    }
-                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                    await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
-                    result = Failed;
-                }
-            }
-        }
+        if (migration is null) return await ContendedAsync("retiring global skills", target.Key, auto);
 
-        var repository = TryAcquire(SkillsLocks.Repository(hash));
-        if (repository is null)
-            return Math.Max(result, await ContendedAsync("this repository's exclusion block", target, auto));
-
-        using (repository) {
+        var result = 0;
+        using (migration) {
             try {
-                SkillsExclusion.Apply(CommonGitDir(anchor, gitDir), RepoRoot(anchor),
-                                      [.. Targets().Select(t => t.Root(anchor))]);
+                foreach (var copy in RetireLegacy(hash, target, identity)) {
+                    result = Failed;
+                    await Console.Error.WriteLineAsync(
+                        $"Could not remove the global copy {copy}; it stays recorded for the next sync.");
+                }
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
                 result = Failed;
@@ -418,10 +477,11 @@ class SkillsCommand(
         return result;
     }
 
-    static async Task<int> ContendedAsync(string work, SkillsTarget target, bool auto) {
+    static async Task<int> ContendedAsync(string work, string? targetKey, bool auto) {
         if (!auto)
-            await Console.Error.WriteLineAsync(
-                $"Another kcap holds the lock for {work} ({target.Key}); this target was left unfinished.");
+            await Console.Error.WriteLineAsync(targetKey is null
+                ? $"Another kcap holds the lock for {work}; nothing was synced."
+                : $"Another kcap holds the lock for {work} ({targetKey}); this target was left unfinished.");
         return Incomplete;
     }
 
@@ -497,7 +557,7 @@ class SkillsCommand(
         Path.Combine(gitDir, "kcap", "skills", targetKey + ".json");
 
     string LegacyManifestPath(string hash, string targetKey) =>
-        config.Path("skills", hash, targetKey, "manifest.json");
+        SkillsLegacyMigration.ManifestPathFor(config.Directory, hash, targetKey);
 
     /// <summary>The working tree the anchor sits in, which the exclusion patterns are written
     /// relative to: <c>info/exclude</c> is resolved from the shared common directory but its
@@ -535,17 +595,11 @@ class SkillsCommand(
     }
 
     /// <summary>Retires the user-global copies this repository owns, returning the ones it could not
-    /// remove; the caller holds the migration lock. An empty deletion list with entries still kept is
-    /// either the planner refusing to decide or a catalogue another repository owns outright, and
-    /// neither is safe to drop. A path that is kept — or whose deletion was refused — stays recorded,
-    /// because a directory no manifest owns is one nothing can ever prune.</summary>
+    /// remove; the caller holds the migration lock. A path that is kept — or whose deletion was
+    /// refused — stays recorded, because a directory no manifest owns is one nothing can ever
+    /// prune.</summary>
     IReadOnlyList<string> RetireLegacy(string hash, SkillsTarget target, SkillsIdentity identity) {
-        // Planning scans every global manifest under the config root, so the common case — nothing
-        // left to retire — must not pay for it on each sync.
-        if (!File.Exists(LegacyManifestPath(hash, target.Key))) return [];
-
-        var plan = SkillsLegacyMigration.Plan(config.Directory, hash, target.Key, identity);
-        if (plan.Delete.Count == 0 && plan.Keep.Count > 0) return [];
+        if (PlanLegacy(hash, target, identity) is not { } plan) return [];
 
         List<string> refused = [];
         List<string> keep    = [.. plan.Keep];
@@ -568,6 +622,20 @@ class SkillsCommand(
             SaveManifest(plan.ManifestPath,
                          kept with { Skills = [.. kept.Skills.Where(e => keep.Contains(e.Path))] });
         return refused;
+    }
+
+    /// <summary>What a retirement would delete for this target, or null when it must not act: no
+    /// ledger, a ledger that will not parse — the only record of directories nothing else can name,
+    /// so deleting it would orphan them — or a plan that decided nothing while still keeping
+    /// entries. Changes nothing on disk, and the existence check comes first because planning scans
+    /// every global manifest under the config root: the common case, nothing left to retire, must
+    /// not pay for that on each sync.</summary>
+    LegacyMigrationPlan? PlanLegacy(string hash, SkillsTarget target, SkillsIdentity identity) {
+        if (!File.Exists(LegacyManifestPath(hash, target.Key))) return null;
+
+        var plan = SkillsLegacyMigration.Plan(config.Directory, hash, target.Key, identity);
+        if (plan.Unreadable) return null;
+        return plan.Delete.Count == 0 && plan.Keep.Count > 0 ? null : plan;
     }
 
     /// <summary>Deletes one user-global directory. Its authorising root is the parent recorded in the
