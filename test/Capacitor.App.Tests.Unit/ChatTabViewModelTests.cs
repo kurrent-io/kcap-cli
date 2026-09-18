@@ -1332,6 +1332,58 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// The daemon reports the parent waiting while its subagents still run; the note follows the
+    /// count and clears when it drops to zero or is unknown.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_working_note_holds_while_only_subagents_run() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            try {
+                var waiting = Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = true };
+                await h.PushAsync(waiting with { LiveSubagents = 2 });
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+                h.Time.Advance(TimeSpan.FromSeconds(65));
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+
+                await h.PushAsync(waiting with { LiveSubagents = 0 });
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+
+                await h.PushAsync(waiting with { LiveSubagents = 1 });
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+
+                await h.PushAsync(waiting with { LiveSubagents = null });
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// A card up means something is blocked on the user, and the note cannot know whether the
+    /// asker is the parent or a subagent: the pause applies to background work too.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_card_pauses_the_note_while_subagents_run() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            try {
+                await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = true, LiveSubagents = 1 });
+                h.Time.Advance(TimeSpan.FromSeconds(65));
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
+                h.Time.Advance(TimeSpan.FromMinutes(10));
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+                h.Time.Advance(TimeSpan.FromSeconds(2));
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 7s");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Arguments(false)]

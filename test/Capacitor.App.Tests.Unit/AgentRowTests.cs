@@ -22,4 +22,10 @@ public class AgentRowTests {
         var row = AgentRow.FromRemote(dto);
         await Assert.That(row.SessionId).IsEqualTo("s2");
     }
+
+    [Test]
+    public async Task FromLocal_carries_the_dtos_live_subagents() {
+        var dto = WorkspaceFixtures.Agent("a1", "claude", true) with { LiveSubagents = 3 };
+        await Assert.That(AgentRow.FromLocal(dto, Repo).LiveSubagents).IsEqualTo(3);
+    }
 }
