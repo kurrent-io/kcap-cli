@@ -29,7 +29,7 @@ public class DetachedImportLogTests {
         var path = tmp.CreateFile("import-run.log", "first\n");
         var contract = new DetachedImportLog(path, null);
 
-        await using (var w = contract.Open()) await w.WriteLineAsync("second");
+        await using (var w = contract.Open()) await w.WriteAsync("second\n");
 
         await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("first\nsecond\n");
         await Assert.That(() => new DetachedImportLog(tmp.PathTo("absent.log"), null).Open()).Throws<FileNotFoundException>();
