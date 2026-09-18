@@ -28,10 +28,11 @@ public class ProcessHelpersDetachedStdinTests {
 
         var psi = new ProcessStartInfo(Comspec) { Arguments = $"/c more > \"{sink}\"" };
 
-        var (pid, standardInput) = ProcessHelpers.StartDetachedWindowsWithStdin(psi);
+        using var child = ProcessHelpers.StartDetachedWindowsWithStdin(psi);
+        var pid = child.Pid;
 
         try {
-            using (var writer = new StreamWriter(standardInput)) {
+            using (var writer = new StreamWriter(child.StandardInput)) {
                 writer.Write("""{"hook_event_name":"SessionEnd","session_id":"abc"}""");
             }
 
@@ -75,7 +76,8 @@ public class ProcessHelpersDetachedStdinTests {
             // `more` with no redirect sits on its stdin, so the child is alive across the probe.
             var psi = new ProcessStartInfo(Comspec) { Arguments = "/c more" };
 
-            var (pid, standardInput) = ProcessHelpers.StartDetachedWindowsWithStdin(psi);
+            using var child = ProcessHelpers.StartDetachedWindowsWithStdin(psi);
+            var       pid   = child.Pid;
 
             try {
                 CloseHandle(probeWrite);
@@ -93,7 +95,7 @@ public class ProcessHelpersDetachedStdinTests {
                 await Assert.That(await read).IsEqualTo(0);
 
                 // The payload pipe is the one handle that DID cross, so it still works.
-                using var writer = new StreamWriter(standardInput);
+                using var writer = new StreamWriter(child.StandardInput);
                 writer.Write("x");
             } finally {
                 Kill(pid);

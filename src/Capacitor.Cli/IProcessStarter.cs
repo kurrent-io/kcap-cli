@@ -22,9 +22,12 @@ public interface IProcessStarter {
 
     /// <summary>
     /// Starts a detached child holding exactly one handle from this process — a pipe on its
-    /// stdin, returned for the caller to write and close — or null if the spawn failed. For a
+    /// stdin, for the caller to write and close — or null if the spawn failed. For a
     /// caller that must hand the child a payload: <see cref="StartDetached"/> refuses every
     /// handle, and a pipe reaches a child only by being inherited.
+    ///
+    /// <para>Either a usable child comes back or none survives: a failure after the spawn leaves the
+    /// caller no pid to clean up with, so this call terminates the child before it throws.</para>
     /// </summary>
-    (int Pid, Stream StandardInput)? StartDetachedWithStdin(ProcessStartInfo psi);
+    DetachedChild? StartDetachedWithStdin(ProcessStartInfo psi);
 }

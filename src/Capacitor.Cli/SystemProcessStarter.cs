@@ -43,7 +43,7 @@ public sealed class SystemProcessStarter : IProcessStarter {
     /// Unix needs no equivalent: the sweep marks this process's pipe descriptors close-on-exec and
     /// <c>exec</c> honours that, leaving only the descriptors the redirect itself installs.
     /// </summary>
-    public (int Pid, Stream StandardInput)? StartDetachedWithStdin(ProcessStartInfo psi) {
+    public DetachedChild? StartDetachedWithStdin(ProcessStartInfo psi) {
         if (OperatingSystem.IsWindows()) {
             return ProcessHelpers.StartDetachedWindowsWithStdin(psi);
         }
@@ -54,12 +54,22 @@ public sealed class SystemProcessStarter : IProcessStarter {
             return null;
         }
 
-        if (psi.RedirectStandardOutput) process.StandardOutput.Close();
-        if (psi.RedirectStandardError) process.StandardError.Close();
+        try {
+            if (psi.RedirectStandardOutput) process.StandardOutput.Close();
+            if (psi.RedirectStandardError) process.StandardError.Close();
 
-        // The wrapper cannot be disposed here — it owns the stdin pipe being handed back, and the
-        // caller has not written the payload yet — so the returned stream owns it instead and
-        // releases it on close.
-        return (process.Id, new ChildStdinStream(process.StandardInput.BaseStream, process));
+            // The wrapper is handed on rather than disposed: it is the child's identity for a
+            // later kill, and the caller has not written the payload yet.
+            return DetachedChild.ForProcess(process, process.StandardInput.BaseStream);
+        } catch {
+            // Failing here is the one case the caller cannot clean up after: it never receives the
+            // pid, so the child would outlive the failure and double-post alongside the inline
+            // fallback that follows.
+            try { process.Kill(entireProcessTree: true); } catch { }
+
+            process.Dispose();
+
+            throw;
+        }
     }
 }

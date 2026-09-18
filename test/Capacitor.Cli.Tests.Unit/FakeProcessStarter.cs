@@ -37,6 +37,22 @@ sealed class FakeProcessStarter : IProcessStarter {
     /// Counts alongside <see cref="Start"/> too, and hands back the stub child's own stdin so a
     /// test can assert on what the caller wrote to it.
     /// </summary>
-    public (int Pid, Stream StandardInput)? StartDetachedWithStdin(ProcessStartInfo psi) =>
-        Start(psi) is { } child ? (child.Id, child.StandardInput.BaseStream) : null;
+    public DetachedChild? StartDetachedWithStdin(ProcessStartInfo psi) {
+        if (Start(psi) is not { } child) {
+            return null;
+        }
+
+        try {
+            return DetachedChild.ForProcess(child, child.StandardInput.BaseStream);
+        } catch {
+            // The real starter terminates a child it cannot hand back, because the caller never
+            // receives one to clean up with; a double that leaked one would let a test pass
+            // against production code that strands it.
+            try { child.Kill(entireProcessTree: true); } catch { }
+
+            child.Dispose();
+
+            throw;
+        }
+    }
 }

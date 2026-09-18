@@ -68,7 +68,7 @@ static partial class ProcessHelpers {
 
     /// <summary>
     /// Starts a detached child holding exactly ONE of this process's handles — the read end of a
-    /// fresh pipe, wired to its stdin — and returns its pid with the writing end. Throws
+    /// fresh pipe, wired to its stdin — and returns it still owning its process handle. Throws
     /// <see cref="Win32Exception"/> if the spawn is refused. Windows only.
     /// </summary>
     /// <remarks>
@@ -78,7 +78,7 @@ static partial class ProcessHelpers {
     /// to a named set, so the pipe crosses while the agent's own handles, the ones that keep its
     /// read of the hook's output from reaching EOF, do not.
     /// </remarks>
-    internal static unsafe (int Pid, Stream StandardInput) StartDetachedWindowsWithStdin(ProcessStartInfo startInfo) {
+    internal static unsafe DetachedChild StartDetachedWindowsWithStdin(ProcessStartInfo startInfo) {
         var security = new SecurityAttributes {
             nLength        = sizeof(SecurityAttributes),
             bInheritHandle = 1
@@ -142,8 +142,12 @@ static partial class ProcessHelpers {
                 }
             }
 
-            CloseHandle(created.hProcess);
             CloseHandle(created.hThread);
+
+            // The process handle is kept, not closed: it is the child's only non-reusable identity,
+            // and a later failure has to be able to kill THIS child rather than whatever has since
+            // taken its pid.
+            var processHandle = new SafeProcessHandle(created.hProcess, ownsHandle: true);
 
             // Ownership moves to the SafeFileHandle BEFORE the stream is built. Constructing it
             // inside the FileStream call would leave a throwing constructor with two owners of one
@@ -153,13 +157,16 @@ static partial class ProcessHelpers {
             parentEnd = nint.Zero;
 
             try {
-                return (created.dwProcessId, new FileStream(writeHandle, FileAccess.Write));
+                return DetachedChild.ForHandle(
+                    created.dwProcessId, processHandle, new FileStream(writeHandle, FileAccess.Write));
             } catch {
-                // The child is already running and its pid is about to be lost, so nothing else
-                // could stop it: the caller's fallback runs the work inline and two owners of it
-                // would duplicate the result.
+                // The caller never receives this child, so nothing else could stop it: its fallback
+                // runs the work inline and two owners of it would duplicate the result.
                 writeHandle.Dispose();
-                TerminateQuietly(created.dwProcessId);
+
+                try { TerminateByHandle(processHandle); } catch { }
+
+                processHandle.Dispose();
 
                 throw;
             }
@@ -182,11 +189,11 @@ static partial class ProcessHelpers {
         }
     }
 
-    static void TerminateQuietly(int pid) {
-        try {
-            using var child = Process.GetProcessById(pid);
-            child.Kill(entireProcessTree: true);
-        } catch { }
+    /// <summary>Kills a child by the handle it was created with, never by its reusable pid.</summary>
+    internal static void TerminateByHandle(SafeProcessHandle handle) {
+        if (!TerminateProcess(handle, 1)) {
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+        }
     }
 
     static char[] Terminated(string value) {
@@ -331,6 +338,10 @@ static partial class ProcessHelpers {
 
     [LibraryImport("kernel32.dll")]
     private static partial void DeleteProcThreadAttributeList(nint lpAttributeList);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool TerminateProcess(SafeProcessHandle hProcess, uint uExitCode);
 
     [StructLayout(LayoutKind.Sequential)]
     struct SecurityAttributes {
