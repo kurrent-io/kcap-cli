@@ -193,7 +193,8 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     ProjectedLine? Project(string eventType, string json, long offset, DateTimeOffset? timestamp) {
         var payload = CanonicalEventJson.TryParse(eventType, json);
         if (payload is null) return null;
-        var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, timestamp ?? _time.GetUtcNow()), _rules);
+        var at = CanonicalEventTime.Of(payload) ?? timestamp ?? _time.GetUtcNow();
+        var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, at), _rules);
         return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 && projected.Subagents.Count == 0 ? null : new(projected, offset);
     }
 
