@@ -1706,7 +1706,10 @@ Run the `GlassChipTests` and `HomeViewSmokeTests` classes — expected all pass.
 using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Capacitor.App.Controls;
 using Capacitor.App.Materials;
 using Capacitor.App.ViewModels;
@@ -1774,6 +1777,12 @@ public class MaterialWindowTests {
             await Assert.That(rail.Margin).IsEqualTo(new Thickness(12, 40, 12, 12));
             await Assert.That(chrome.Height).IsEqualTo(16d);
             await Assert.That(rail.FindControl<Surface>("RailSurface")!.GlassKind).IsEqualTo(GlassKind.Rail);
+
+            // Pins that the glass rail styles actually win: the rail's own UserControl.Styles sit
+            // closer to its buttons than application styles, and App.axaml styles the same presenter.
+            var presenter = rail.FindControl<Button>("RailNewSessionButton")!.GetVisualDescendants()
+                .OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
+            await Assert.That(presenter.Background).IsEqualTo((IBrush)Application.Current!.FindResource("KcapGlassRailButtonBrush")!);
         } finally { window.Close(); }
     });
 }
