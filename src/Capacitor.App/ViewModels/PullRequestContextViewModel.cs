@@ -134,9 +134,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         OpenRowCommand = ReactiveCommand.Create<PullRequestRow>(row => {
             if (CanDisplayReader) LinkPolicy.Open(_opener, row.IsCheck ? PullRequestWire.CheckLink(row.Url) : _selected is null ? null : PrLink(row.Url, _selected.Subject));
         });
-        OpenGitHubCommand = ReactiveCommand.Create(() => {
-            if (_selected is { IsAvailable: true } choice) LinkPolicy.Open(_opener, PrLink(choice.Link.Url, choice.Subject));
-        });
+        OpenGitHubCommand = ReactiveCommand.Create(OpenSource);
         OpenBodyLinkCommand = ReactiveCommand.Create<string>(url => { if (CanDisplayReader) LinkPolicy.Open(_opener, PullRequestWire.BodyLink(url)); });
         SignInCommand = ReactiveCommand.Create(() => signIn?.Invoke());
         LinkGitHubCommand = ReactiveCommand.Create(() => linkGitHub?.Invoke());
@@ -192,12 +190,20 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     }
     /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
     public void Refresh() => RequestRefresh(manual: true);
+    /// On a legacy or unsupported capability the reader would open onto a notice and nothing else,
+    /// so a caller with a PR in hand opens its URL instead.
+    public bool CanOpenReader => HasPullRequest && !_legacy;
     public void OpenReader() {
-        if (_disposed || !HasPullRequest) return;
+        if (_disposed || !CanOpenReader) return;
         _openReader();
         SetReaderVisible(true);
     }
-    /// Work-item PR links the session list has not admitted yet, so the in-app reader can open.
+    /// The selected PR on its host, in the browser.
+    public void OpenSource() {
+        if (_selected is { IsAvailable: true } choice) LinkPolicy.Open(_opener, PrLink(choice.Link.Url, choice.Subject));
+    }
+    /// Work-item PR links the session list has not admitted. Reads route to the local `gh` reader
+    /// first, which needs no session admission; only the server reader would refuse them.
     public void OfferFallbackLinks(IReadOnlyList<PullRequestLinkDto> links) {
         if (_disposed) return;
         _fallbackItems.Clear();

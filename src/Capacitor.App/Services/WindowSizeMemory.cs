@@ -15,7 +15,10 @@ public static class WindowSizeMemory {
     public static (double Width, double Height) Resolve(double? savedWidth, double? savedHeight) =>
         (Fit(savedWidth, MinWidth, DefaultWidth), Fit(savedHeight, MinHeight, DefaultHeight));
 
-    public static PixelPoint? ResolvePosition(int? savedX, int? savedY, IReadOnlyList<PixelRect> workingAreas) {
+    /// A top-left still on some screen is kept as saved, straddling monitors included. Off every
+    /// screen, the whole frame is pulled onto the first area; a frame larger than it keeps its
+    /// top-left edge.
+    public static PixelPoint? ResolvePosition(int? savedX, int? savedY, PixelSize size, IReadOnlyList<PixelRect> workingAreas) {
         if (savedX is not int x || savedY is not int y) return null;
         var pos = new PixelPoint(x, y);
         if (workingAreas.Count == 0) return pos;
@@ -24,7 +27,7 @@ public static class WindowSizeMemory {
         }
 
         var home = workingAreas[0];
-        return new PixelPoint(ClampOnto(x, home.X, home.Width), ClampOnto(y, home.Y, home.Height));
+        return new PixelPoint(ClampOnto(x, home.X, home.Width, size.Width), ClampOnto(y, home.Y, home.Height, size.Height));
     }
 
     public static void Restore(Window window, IAppStateStore store) =>
@@ -34,7 +37,9 @@ public static class WindowSizeMemory {
         var (width, height) = Resolve(state.WindowWidth, state.WindowHeight);
         window.Width = width;
         window.Height = height;
-        if (ResolvePosition(state.WindowX, state.WindowY, WorkingAreas(window)) is { } pos)
+        var scaling = window.Screens?.Primary?.Scaling ?? 1;
+        var size = new PixelSize((int)Math.Ceiling(width * scaling), (int)Math.Ceiling(height * scaling));
+        if (ResolvePosition(state.WindowX, state.WindowY, size, WorkingAreas(window)) is { } pos)
             window.Position = pos;
         if (state.WindowMaximized) window.WindowState = WindowState.Maximized;
     }
@@ -43,6 +48,8 @@ public static class WindowSizeMemory {
         var lastWidth = window.Width;
         var lastHeight = window.Height;
         var lastPos = window.Position;
+        // Minimized is transient: a window minimized from Maximized should come back maximized.
+        var lastShown = window.WindowState;
         var quiet = new DispatcherTimer { Interval = Quiet };
 
         void Snapshot() {
@@ -69,7 +76,7 @@ public static class WindowSizeMemory {
                 WindowHeight = lastHeight,
                 WindowX = lastPos.X,
                 WindowY = lastPos.Y,
-                WindowMaximized = window.WindowState == WindowState.Maximized,
+                WindowMaximized = lastShown == WindowState.Maximized,
             }).GetAwaiter().GetResult();
         }
 
@@ -86,6 +93,7 @@ public static class WindowSizeMemory {
         window.PropertyChanged += (_, e) => {
             if (e.Property != Window.WindowStateProperty) return;
             if (e.OldValue is WindowState.Normal) Snapshot();
+            if (e.NewValue is WindowState state && state != WindowState.Minimized) lastShown = state;
             Schedule();
         };
         window.Closing += (_, _) => Flush();
@@ -105,8 +113,8 @@ public static class WindowSizeMemory {
         return areas;
     }
 
-    static int ClampOnto(int value, int origin, int length) =>
-        Math.Clamp(value, origin, Math.Max(origin, origin + length - 1));
+    static int ClampOnto(int value, int origin, int length, int extent) =>
+        Math.Clamp(value, origin, Math.Max(origin, origin + length - extent));
 
     static double Fit(double? saved, double min, double fallback) {
         if (saved is not double value || !double.IsFinite(value) || value <= 0) return fallback;

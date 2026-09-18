@@ -58,12 +58,9 @@ public sealed class XtermTerminalSurface : ITerminalSurface {
     // A shorter viewport is the mirror case: correcting it needs YBase, which only the buffer can
     // move, and the drift there is already at the viewport's last row, so this leaves it alone.
     //
-    // XTerm.NET 2.x moves both halves itself, and this whole correction goes when the pane can
-    // take it — but the version cannot be raised on its own. SvcSystems.UI.Terminal 1.1.4 ships
-    // compiled against 1.2.0, where BufferCell.Content is a FIELD and in 2.x is a property: the
-    // build stays clean and every model construction throws MissingFieldException from the
-    // control's own render path. It has to move first, which costs it net8.0 and net9.0 —
-    // XTerm.NET 2.x targets net10.0 alone.
+    // XTerm.NET 2.x moves both halves itself, but it cannot be taken on its own: the bundled
+    // terminal control is compiled against 1.2.0's BufferCell.Content as a field, and 2.x makes
+    // it a property, so the build stays clean and rendering throws MissingFieldException.
     void KeepCursorOnItsLine() {
         var buffer = Model.Terminal.Buffer;
         var drift = _cursorLine - (buffer.BaseY + buffer.Y);

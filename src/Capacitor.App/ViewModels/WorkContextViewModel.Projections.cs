@@ -194,9 +194,9 @@ public sealed partial class WorkContextViewModel {
 
     void OpenPullRequest() {
         OfferFallbacks();
-        if (PullRequests is { HasPullRequest: true } prs) prs.OpenReader();
-        else if (_links.FirstOrDefault(l => l.CanOpen) is { } link)
-            LinkPolicy.Open(_opener, link.Url);
+        if (PullRequests is { CanOpenReader: true } reader) reader.OpenReader();
+        else if (PullRequests is { HasPullRequest: true } legacy) legacy.OpenSource();
+        else LinkPolicy.Open(_opener, _links.FirstOrDefault(l => l.CanOpen)?.Url);
     }
 
     void UpdateRequester(AgentStatusDto dto, string vendorLabel) {
@@ -450,10 +450,12 @@ public sealed partial class WorkContextViewModel {
         };
     }
 
+    /// Only `link`-class entries: a `reference` is an ambient mention the server passes through
+    /// for other consumers, not a PR this work item is on.
     List<WorkContextLinkViewModel> ProjectWorkItemPullRequests(IReadOnlyList<WorkItemLinkDto> links) {
         var cards = new List<WorkContextLinkViewModel>();
         foreach (var link in links) {
-            if (!IsPullRequestKind(link.Kind)) continue;
+            if (!IsPullRequestKind(link.Kind) || link.LinkClass != "link") continue;
             AddUnlessDuplicate(cards, Link(PullRequestKey(link.ShortKey), FirstNonBlank(link.Title), link.Url));
         }
         return cards;
@@ -464,9 +466,12 @@ public sealed partial class WorkContextViewModel {
     static string PullRequestKey(string shortKey) =>
         shortKey.StartsWith('!') ? "#" + shortKey[1..] : shortKey;
 
+    /// A PR number is repository-local, so two cards with URLs are the same PR only by URL; the
+    /// display key decides only when one of them has no URL to compare.
     static bool SameLink(WorkContextLinkViewModel left, WorkContextLinkViewModel right) =>
-        left.Key == right.Key
-        || left.Url is { Length: > 0 } url && string.Equals(url, right.Url, StringComparison.OrdinalIgnoreCase);
+        left.Url is { Length: > 0 } url && right.Url is { Length: > 0 } other
+            ? string.Equals(url, other, StringComparison.OrdinalIgnoreCase)
+            : left.Key == right.Key;
 
     static void AddUnlessDuplicate(List<WorkContextLinkViewModel> cards, WorkContextLinkViewModel card) {
         if (cards.TrueForAll(existing => !SameLink(existing, card)))

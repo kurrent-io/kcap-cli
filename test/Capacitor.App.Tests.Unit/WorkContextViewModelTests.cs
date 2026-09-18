@@ -6,6 +6,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
@@ -918,7 +919,8 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// An empty session list still offers the work-item PR so the in-app reader can open.
+    /// An empty session list still offers the work-item PR so the in-app reader can open: reads
+    /// route to the local `gh` reader, which needs no session admission.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_empty_session_list_offers_the_work_item_pull_request() {
@@ -947,6 +949,82 @@ public class WorkContextViewModelTests {
                 await Assert.That(opened).IsEqualTo(1);
             } finally {
                 await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// A legacy server lists PRs but cannot serve a native read; the section opens the selected
+    /// PR on its host, as the PR card's disabled View PR already implies.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_legacy_reader_sends_the_pull_request_section_to_the_host() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var opened = 0;
+            var source = new FakePullRequestSource(h.Time) { Capability = PullRequestCapabilityKind.Legacy };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => opened++);
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item()));
+            try {
+                await h.PushAsync(Dto());
+                await WaitUntilAsync(() => pullRequests.HasListed && pullRequests.HasChoice, what: "legacy list applied");
+                await Assert.That(pullRequests.IsLegacy).IsTrue();
+                await Assert.That(pullRequests.CanOpenReader).IsFalse();
+                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await h.Vm.OpenPullRequestCommand.Execute();
+                await Assert.That(opened).IsEqualTo(0);
+                await Assert.That(h.Opener.Opened).Count().IsEqualTo(1);
+                await Assert.That(h.Opener.Opened[0]).Contains($"/pull/{pullRequests.Selected!.Link.Number}");
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// A `reference` is an ambient mention; only a `link`-class PR is the work item's.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_referenced_pull_request_is_not_shown_as_linked() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Mentioned", linkClass: "reference"),
+                    Link("pr", "!764", "https://github.com/kurrent-io/kcap-cli/pull/764", "Linked"),
+                ],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Links.Select(l => l.Key)).IsEquivalentTo(new[] { "#764" });
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// PR numbers are repository-local: #42 in two repositories is two pull requests.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_same_number_in_two_repositories_is_two_pull_requests() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-cli/pull/42", "CLI"),
+                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-server/pull/42", "Server"),
+                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-server/pull/42", "Server again"),
+                ],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Links.Select(l => l.Url!)).IsEquivalentTo(new[] {
+                    "https://github.com/kurrent-io/kcap-cli/pull/42",
+                    "https://github.com/kurrent-io/kcap-server/pull/42",
+                });
+            } finally {
                 await h.Vm.TeardownAsync();
             }
         });

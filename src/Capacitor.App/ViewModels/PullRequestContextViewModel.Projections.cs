@@ -56,7 +56,7 @@ public sealed partial class PullRequestContextViewModel {
         var rows = CanDisplayReader ? CurrentSection?.Pages.SelectMany(page => page.Rows).ToArray() ?? [] : [];
         if (!_visibleRows.SequenceEqual(rows)) _visibleRows = rows;
         if (!_disposed && _hasPullRequest.Value != HasPullRequest) _hasPullRequest.OnNext(HasPullRequest);
-        foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
+        foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
             nameof(Title), nameof(Lifecycle), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel), nameof(ReviewSummary), nameof(CheckSummary),
             nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
             nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),

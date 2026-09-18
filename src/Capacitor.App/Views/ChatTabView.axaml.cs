@@ -92,8 +92,11 @@ public partial class ChatTabView : UserControl {
         Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
     }
 
+    // Click is raised before the command flips the group, so a keyboard toggle (no pointer press
+    // ahead of it) can still take its anchor here.
     void OnToolSummaryClick(object? sender, RoutedEventArgs e) {
         _followTail = false;
+        if (_anchorItem is null) CaptureToggleAnchor(sender);
         ArmToggleRestore();
     }
 

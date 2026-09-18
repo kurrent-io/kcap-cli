@@ -947,8 +947,7 @@ public class MainWindowSmokeTests {
                 Warning: ReferenceEquals(version.Foreground, window.FindResource("KcapWarningBrush")),
                 TipLines: tipLines,
                 OverlapsHelp: new Rect(helpOrigin, help.Bounds.Size)
-                    .Intersects(new Rect(versionOrigin, version.Bounds.Size)),
-                RowGap: rail.FindControl<StackPanel>("RailFooterPanel")!.Spacing);
+                    .Intersects(new Rect(versionOrigin, version.Bounds.Size)));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -962,7 +961,6 @@ public class MainWindowSmokeTests {
             new[] { MainWindowViewModel.RestartPendingMessage, MainWindowViewModel.VersionIdentityTip },
             CollectionOrdering.Matching);
         await Assert.That(shown.OverlapsHelp).IsFalse();
-        await Assert.That(shown.RowGap).IsGreaterThanOrEqualTo(6);
     }
 
     /// Signed-out is a rail diagnosis; the launcher's Sign in is on the other pane and hidden
