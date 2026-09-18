@@ -6,6 +6,32 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## An idle PTY costs the thread pool nothing
+
+The Unix PTY read blocked in native `poll` on a pool worker, and an idle agent never gave it back.
+The pool creates workers freely up to its minimum — the core count — and past that injects one about
+every half second, so with more idle sessions than cores a keystroke's write queued behind the
+readers still waiting for a worker: 32 idle PTYs on a 24-core machine put 5.4 s on the first echo.
+The inflated pool then hides it until its one spare worker idles out, and the first keystroke after
+a pause pays an injection again — 500 ms after 30 s idle, measured on a pool parked the same way.
+
+Each PTY now has a reader thread of its own. Readiness through the runtime's socket engine would
+have needed no thread at all, but it was not tried: libuv reads some `/dev` files on macOS from a
+select thread because kqueue does not work for them, a PTY master is one of the candidates, and a
+parked thread per session is cheap at the scale a daemon hosts. Raising the worker minimum was the
+mitigation on offer and only moves the threshold. Writes still go through the pool: a write to a
+wedged child blocks, so it cannot run inline, and with the readers gone the pool has workers to give.
+
+The thread reads one chunk ahead and no further, so a stalled consumer still back-pressures the
+child through the PTY's own buffer instead of growing the daemon. Dispose waits for the thread
+before closing the master: the fd number is reusable the moment it closes, and a reader still
+holding it would drain the next agent's terminal.
+
+The regression probe runs in a process of its own because the pool is process-global, and sizes
+itself from that process's worker minimum rather than a fixed count. It asserts the pool stayed
+smaller than the PTY count as well as the echo latency — once the pool has inflated, latency alone
+reads as healthy.
+
 ## The restart setup asks for now carries its own message
 
 Hooks, skills and MCP servers are read when an agent session starts, so the session that runs setup
