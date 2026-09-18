@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Capacitor.Cli;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
@@ -691,12 +692,20 @@ switch (command) {
         }
 
         var detached = DetachedImportLog.FromEnvironment(Environment.GetEnvironmentVariable);
-        StreamWriter? detachedLog = null;
+        StreamWriter?             detachedLog         = null;
+        PosixSignalRegistration?  detachedSighupGuard = null;
         if (detached is not null) {
             detachedLog = detached.Open();
             Console.SetOut(detachedLog);
             Console.SetError(detachedLog);
             ProcessHelpers.DetachFromControllingTerminal();
+
+            // setsid() moves the child out of the parent's session, but the kernel still sends
+            // SIGHUP when that session's controlling terminal goes away with the exiting setup
+            // parent; SIGHUP's default action would otherwise kill this detached import.
+            if (!OperatingSystem.IsWindows()) {
+                detachedSighupGuard = PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => ctx.Cancel = true);
+            }
         }
 
         try {
@@ -720,6 +729,7 @@ switch (command) {
                 discoverOnly:            discoverOnly,
                 discoverJson:            discoverJson);
         } finally {
+            detachedSighupGuard?.Dispose();
             detachedLog?.Dispose();
         }
     }
