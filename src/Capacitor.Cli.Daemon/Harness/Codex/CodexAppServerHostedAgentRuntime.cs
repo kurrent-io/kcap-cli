@@ -277,8 +277,6 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         await StartThreadAsync(linked.Token).ConfigureAwait(false);
         _clock?.ClearLaunchStage();
 
-        await TryPublishSkillsAsync(linked.Token).ConfigureAwait(false);
-
         if (!string.IsNullOrEmpty(_launch.InitialPrompt)) {
             if (_deferFirstTurn) {
                 // DEFERRED first turn: the dispatcher is sealed, so this enqueue parks the prompt at the
@@ -291,6 +289,12 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
                 await _dispatcher.EnqueueAsync(_launch.InitialPrompt, linked.Token).ConfigureAwait(false);
             }
         }
+
+        // Discover skills off the launch-critical path: skills/list is optional, so a slow or hung
+        // request must not delay the first turn or consume the launch timeout. Fire-and-forget on the
+        // runtime lifetime token (teardown cancels it); the relay buffers the result until the
+        // orchestrator attaches its callback after registration.
+        _ = TryPublishSkillsAsync(_cts.Token);
     }
 
     /// <summary>

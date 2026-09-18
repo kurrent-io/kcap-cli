@@ -5,9 +5,8 @@ using Capacitor.Cli.Daemon.Harness.Codex;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 
 /// <summary>Pins the defensive Codex <c>skills/list</c> mapping: a flat array or a hooks/list-style
-/// grouping both yield <c>{name, description}</c> commands, and an unexpected/absent shape yields
-/// nothing rather than throwing (the wire shape is not yet probe-confirmed, so the picker fails safe
-/// to empty).</summary>
+/// grouping both yield <c>{name, description}</c> commands, and an absent or unexpected shape yields
+/// an empty list rather than throwing, so the picker fails safe to empty.</summary>
 public class CodexSkillsTests {
     static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 

@@ -5,9 +5,9 @@ namespace Capacitor.Cli.Daemon.Harness.Codex;
 
 /// <summary>Maps a Codex app-server <c>skills/list</c> result to the picker's command list. Codex has
 /// no slash-command surface of its own — skills are the closest analogue — so this is the one place
-/// that shape is read, and it is deliberately defensive: the wire shape is not yet probe-confirmed
-/// here, so an unexpected or absent shape yields an empty list rather than throwing, and the picker
-/// simply shows nothing for Codex until the shape is verified.</summary>
+/// that shape is read. It is deliberately defensive: it accepts the supported candidate shapes and
+/// returns an empty list for absent or unexpected data rather than throwing, so the picker simply
+/// shows nothing for Codex when the response does not match.</summary>
 internal static class CodexSkills {
     public static IReadOnlyList<HostedAgentCommand> Extract(JsonElement result) {
         var list = new List<HostedAgentCommand>();
@@ -19,7 +19,7 @@ internal static class CodexSkills {
             if (result.Arr(arrayName) is not { } arr) continue;
 
             foreach (var entry in arr.EnumerateArray()) {
-                if (entry.ValueKind != JsonValueKind.Object) continue;
+                if (!entry.IsObject) continue;
 
                 if (entry.Arr("skills") is { } nested) {
                     foreach (var skill in nested.EnumerateArray()) Add(list, skill);
@@ -35,7 +35,7 @@ internal static class CodexSkills {
     }
 
     static void Add(List<HostedAgentCommand> list, JsonElement entry) {
-        if (entry.ValueKind != JsonValueKind.Object) return;
+        if (!entry.IsObject) return;
 
         var name = entry.Str("name");
         if (string.IsNullOrWhiteSpace(name)) return;

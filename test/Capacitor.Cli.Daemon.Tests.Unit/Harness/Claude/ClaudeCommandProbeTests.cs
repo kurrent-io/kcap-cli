@@ -1,6 +1,7 @@
-using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Harness.Claude;
 
-namespace Capacitor.Cli.Core.Tests.Unit.Harness.Claude;
+namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Claude;
 
 /// <summary>Pins the parse half of the Claude command probe against the real
 /// <c>--input-format stream-json</c> initialize response shape — commands live at

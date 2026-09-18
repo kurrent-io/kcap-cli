@@ -12,10 +12,10 @@ public class HostedAgentCommandsRelayTests {
     [Test]
     public async Task Publish_before_a_callback_attaches_is_flushed_on_attach() {
         var relay = new HostedAgentCommandsRelay();
-        relay.Publish(Sample); // captured during start, no callback yet
+        relay.Publish(Sample);
 
         IReadOnlyList<HostedAgentCommand>? seen = null;
-        relay.Callback = c => seen = c; // orchestrator attaches after start
+        relay.Callback = c => seen = c;
 
         await Assert.That(seen).IsNotNull();
         await Assert.That(seen!.Count).IsEqualTo(1);

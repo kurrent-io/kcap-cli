@@ -9,13 +9,13 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// hint, so that stays null.</summary>
 internal static class AcpAvailableCommands {
     public static IReadOnlyList<HostedAgentCommand> Extract(JsonElement? source) {
-        if (source is not { ValueKind: JsonValueKind.Object } obj) return [];
+        if (source is not { } obj || !obj.IsObject) return [];
         if (obj.Arr("availableCommands") is not { } commands) return [];
 
         var list = new List<HostedAgentCommand>();
 
         foreach (var entry in commands.EnumerateArray()) {
-            if (entry.ValueKind != JsonValueKind.Object) continue;
+            if (!entry.IsObject) continue;
 
             var name = entry.Str("name");
             if (string.IsNullOrWhiteSpace(name)) continue;

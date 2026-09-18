@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Daemon.Services;
 
-namespace Capacitor.Cli.Core.Harness.Claude;
+namespace Capacitor.Cli.Daemon.Harness.Claude;
 
 /// <summary>Probes a Claude harness for its slash commands WITHOUT starting a session: runs
 /// <c>claude -p --input-format stream-json</c>, sends one <c>initialize</c> control request, reads the
@@ -61,14 +64,24 @@ static class ClaudeCommandProbe {
             await process.StandardInput.FlushAsync(linkedCts.Token);
             process.StandardInput.Close();
 
-            var stdout = await process.StandardOutput.ReadToEndAsync(linkedCts.Token);
+            // Drain stderr concurrently: verbose Claude diagnostics and hook output can fill the stderr
+            // pipe, and a child blocked writing to a full stderr never closes stdout or exits — the
+            // probe would then hit its timeout and return nothing.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(linkedCts.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(linkedCts.Token);
+
             await process.WaitForExitAsync(linkedCts.Token);
+            var stdout = await stdoutTask;
+            await stderrTask;
 
             return ParseCommands(stdout);
         } catch (Exception ex) {
             log($"claude command probe failed: {ex.Message}");
 
-            try { process.Kill(entireProcessTree: true); } catch {
+            // ProcessTree.Kill, never Process.Kill(bool): this child shares the daemon's process group,
+            // and the daemon's tree-kill (SIGKILL only, children before parents, each pid identity-checked)
+            // is the one sanctioned way to stop it.
+            try { ProcessTree.Kill(process); } catch {
                 /* best-effort */
             }
 
@@ -102,7 +115,7 @@ static class ClaudeCommandProbe {
             var list = new List<HostedAgentCommand>();
 
             foreach (var entry in commands.EnumerateArray()) {
-                if (entry.ValueKind != JsonValueKind.Object) continue;
+                if (!entry.IsObject) continue;
 
                 var name = entry.Str("name");
                 if (string.IsNullOrWhiteSpace(name)) continue;
