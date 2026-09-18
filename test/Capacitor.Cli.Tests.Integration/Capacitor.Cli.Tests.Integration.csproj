@@ -10,6 +10,9 @@
         <ProjectReference Include="..\..\src\Capacitor.Cli.Daemon\Capacitor.Cli.Daemon.csproj" />
     </ItemGroup>
     <ItemGroup>
+        <None Include="../fixtures/daemon-connect.v2.json" Link="fixtures/daemon-connect.v2.json" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+    <ItemGroup>
         <PackageReference Include="TUnit" />
         <PackageReference Include="WireMock.Net" />
     </ItemGroup>

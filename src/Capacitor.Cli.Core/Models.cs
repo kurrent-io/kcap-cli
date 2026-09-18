@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.RepoEvidence;
@@ -357,6 +358,11 @@ public record EvalContextEntry {
 
     [JsonPropertyName("tool")]
     public string? Tool { get; init; }
+
+    // Plan entries only: the artifact's full size when the server truncated it. The CLI does not
+    // read this field; it exists so a response that carries it still deserializes.
+    [JsonPropertyName("original_bytes")]
+    public long? OriginalBytes { get; init; }
 }
 
 public record EvalContextCompactionSummary {
@@ -374,6 +380,23 @@ public record EvalContextCompactionSummary {
 
     [JsonPropertyName("bytes_saved")]
     public required long BytesSaved { get; init; }
+
+    // Additive loss signals — false/0 from a server that predates them, which reads as "nothing
+    // lost" and matches that server's actual behavior (it couldn't report a loss it didn't measure).
+    [JsonPropertyName("plan_discovery_degraded")]
+    public bool PlanDiscoveryDegraded { get; init; }
+
+    [JsonPropertyName("skipped_streams")]
+    public int SkippedStreams { get; init; }
+
+    [JsonPropertyName("plan_artifacts_truncated")]
+    public int PlanArtifactsTruncated { get; init; }
+
+    [JsonPropertyName("plan_artifacts_unavailable")]
+    public int PlanArtifactsUnavailable { get; init; }
+
+    [JsonPropertyName("plan_artifacts_dropped")]
+    public int PlanArtifactsDropped { get; init; }
 }
 
 public record EvalContextResult {
@@ -990,6 +1013,17 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCatalogDto))]
 [JsonSerializable(typeof(EvalCatalogQuestionDto))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
+[JsonSerializable(typeof(EvalQuestionAssessment))]
+[JsonSerializable(typeof(List<EvalQuestionAssessment>))]
+[JsonSerializable(typeof(EvalCategoryAssessment))]
+[JsonSerializable(typeof(EvalEvidenceCoverage))]
+[JsonSerializable(typeof(EvalEvidenceCitation))]
+[JsonSerializable(typeof(EvalEvidenceOmission))]
+[JsonSerializable(typeof(EvalQuestionFailure))]
+[JsonSerializable(typeof(List<EvalQuestionFailure>))]
+[JsonSerializable(typeof(SessionEvalCompletedPayloadV4))]
+[JsonSerializable(typeof(QuestionResultV2))]
+[JsonSerializable(typeof(FinalizeEvalV2Command))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(List<CliProjectSummary>))]
 [JsonSerializable(typeof(CliProjectDetail))]
@@ -2082,7 +2116,11 @@ public readonly record struct DaemonConnect(
         bool                                       SupportsCorrelatedStatusReports = false,
         // Vendor tokens this daemon accepts a launch-time permission mode for (Claude when hosted).
         // Null from a daemon predating this field, which the server reads as "refuse a mode".
-        string[]?                                  PermissionModeVendors = null
+        string[]?                                  PermissionModeVendors = null,
+        // 1 = verdict-only RunQuestion/FinalizeEval; 2 = RunQuestionV2/FinalizeEvalV2 with outcomes
+        // and coded failures. A daemon predating this field sends nothing, which the server reads
+        // as 1.
+        int                                         EvalProtocolVersion = 1
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2233,16 +2271,19 @@ public readonly record struct EvalQuestionStarted(
         string QuestionId
     );
 
-/// <summary>Daemon → server: a judge question completed with a verdict.</summary>
+/// <summary>Daemon → server: a judge question completed. <c>Score</c>/<c>Verdict</c> are null for
+/// an unassessed outcome; <c>Outcome</c> is trailing so an older daemon that omits it is read as
+/// assessed.</summary>
 public readonly record struct EvalQuestionCompleted(
-        string EvalRunId,
-        string SessionId,
-        int    Index,
-        int    Total,
-        string Category,
-        string QuestionId,
-        int    Score,
-        string Verdict
+        string  EvalRunId,
+        string  SessionId,
+        int     Index,
+        int     Total,
+        string  Category,
+        string  QuestionId,
+        int?    Score,
+        string? Verdict,
+        string? Outcome = null
     );
 
 /// <summary>Daemon → server: a judge question failed (claude returned no/unparseable result, timed out, or emitted an out-of-range score). The overall eval continues to the next question.</summary>
@@ -2256,11 +2297,12 @@ public readonly record struct EvalQuestionFailed(
         string Reason
     );
 
-/// <summary>Daemon → server: eval run finished end-to-end and aggregate has been persisted.</summary>
+/// <summary>Daemon → server: eval run finished end-to-end and aggregate has been persisted.
+/// <c>OverallScore</c> is null when no question was assessed.</summary>
 public readonly record struct EvalFinished(
         string EvalRunId,
         string SessionId,
-        int    OverallScore,
+        int?   OverallScore,
         string Summary
     );
 

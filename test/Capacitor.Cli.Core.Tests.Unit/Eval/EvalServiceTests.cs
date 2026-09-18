@@ -297,6 +297,62 @@ public class EvalServiceTests {
         await Assert.That(violations.Count).IsEqualTo(0);
     }
 
+    // ── ParseVerdict: outcome ────────────────────────────────────────────────
+
+    [Test]
+    public async Task ParseVerdict_reads_outcome_and_nulls_score_when_unassessed() {
+        var violations = new List<string>();
+        var v = EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","outcome":"not_applicable","score":5,"verdict":"pass","finding":"No code changed.","evidence":null,"recommendation":null,"retain_fact":null}""",
+            DestructiveCommandsQuestion, violations.Add);
+
+        await Assert.That(v!.Outcome).IsEqualTo("not_applicable");
+        await Assert.That(v.Score).IsNull();
+        await Assert.That(v.Verdict).IsNull();
+        await Assert.That(violations).Contains(m => m.Contains("score"));
+    }
+
+    [Test]
+    public async Task ParseVerdict_returns_null_for_assessed_without_score_or_blank_finding() {
+        await Assert.That(EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","outcome":"assessed","score":null,"verdict":null,"finding":"x","evidence":null,"recommendation":null,"retain_fact":null}""",
+            DestructiveCommandsQuestion)).IsNull();
+        await Assert.That(EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","outcome":"assessed","score":4,"verdict":"pass","finding":"  ","evidence":null,"recommendation":null,"retain_fact":null}""",
+            DestructiveCommandsQuestion)).IsNull();
+        await Assert.That(EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","outcome":"insufficient_evidence","score":null,"verdict":null,"finding":"","evidence":null,"recommendation":null,"retain_fact":null}""",
+            DestructiveCommandsQuestion)).IsNull();
+    }
+
+    [Test]
+    public async Task ParseVerdict_without_outcome_reads_as_assessed() {
+        var v = EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","score":4,"verdict":"pass","finding":"ok","evidence":null}""",
+            DestructiveCommandsQuestion);
+
+        await Assert.That(v!.Outcome).IsEqualTo("assessed");
+    }
+
+    [Test]
+    public async Task ParseVerdict_unknown_outcome_is_a_parse_failure() {
+        await Assert.That(EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","outcome":"maybe","score":null,"finding":"x"}""",
+            DestructiveCommandsQuestion)).IsNull();
+    }
+
+    [Test]
+    public async Task ParseVerdict_not_applicable_without_score_keeps_null_and_no_violation() {
+        var violations = new List<string>();
+        var v = EvalService.ParseVerdict(
+            """{"category":"safety","question_id":"destructive_commands","outcome":"not_applicable","score":null,"verdict":null,"finding":"no code changed"}""",
+            DestructiveCommandsQuestion, violations.Add);
+
+        await Assert.That(v).IsNotNull();
+        await Assert.That(v!.Score).IsNull();
+        await Assert.That(violations.Count).IsEqualTo(0);
+    }
+
     // ── Aggregate ──────────────────────────────────────────────────────────
 
     // Minimal taxonomy for Aggregate tests: canonical category order is
@@ -961,5 +1017,96 @@ public class EvalServiceTests {
 
         var resolved = EvalService.ResolveJudgeCommandPath(daemon, fileExists: p => p == sibling);
         await Assert.That(resolved).IsEqualTo(sibling);
+    }
+
+    // ── CoverageForTextPath ──────────────────────────────────────────────────
+
+    static EvalService.EvalContext BuildContext(EvalContextCompactionSummary compaction, bool forceTools = false) =>
+        new(
+            EvalRunId:                  "run-1",
+            EncodedSessionId:           "sess-1",
+            SessionId:                  "sess-1",
+            TraceJson:                  "{}",
+            ContextResult:              new EvalContextResult {
+                SessionId = "sess-1", SessionChain = ["sess-1"], Trace = [], Compaction = compaction
+            },
+            Compaction:                 compaction,
+            ToolsPromptTemplate:        "",
+            RetrospectivePrompt:        "",
+            RetrospectivePromptVersion: "1",
+            Questions:                  [],
+            Model:                      "sonnet",
+            ForceTools:                 forceTools,
+            Profile:                    null,
+            Harnesses:                  TestHarnesses.All()
+        );
+
+    static EvalContextCompactionSummary Compaction(
+            int  toolResultsTruncated     = 0,
+            bool planDiscoveryDegraded    = false,
+            int  skippedStreams           = 0,
+            int  planArtifactsTruncated   = 0,
+            int  planArtifactsUnavailable = 0,
+            int  planArtifactsDropped     = 0
+        ) => new() {
+            ThresholdBytes           = 0,
+            Entries                  = 0,
+            ToolResultsTotal         = 0,
+            ToolResultsTruncated     = toolResultsTruncated,
+            BytesSaved               = 0,
+            PlanDiscoveryDegraded    = planDiscoveryDegraded,
+            SkippedStreams           = skippedStreams,
+            PlanArtifactsTruncated   = planArtifactsTruncated,
+            PlanArtifactsUnavailable = planArtifactsUnavailable,
+            PlanArtifactsDropped     = planArtifactsDropped
+        };
+
+    [Test]
+    public async Task CoverageForTextPath_zero_loss_returns_non_null_complete_record() {
+        var coverage = EvalService.CoverageForTextPath(BuildContext(Compaction()), DestructiveCommandsQuestion);
+
+        await Assert.That(coverage).IsNotNull();
+        await Assert.That(coverage!.IsComplete).IsTrue();
+        await Assert.That(coverage.PolicyVersion).IsEqualTo(EvalService.CoveragePolicyVersion);
+    }
+
+    [Test]
+    public async Task CoverageForTextPath_reports_tool_result_truncation() {
+        var ctx      = BuildContext(Compaction(toolResultsTruncated: 3));
+        var coverage = EvalService.CoverageForTextPath(ctx, DestructiveCommandsQuestion);
+
+        await Assert.That(coverage).IsNotNull();
+        await Assert.That(coverage!.IsComplete).IsFalse();
+        await Assert.That(coverage.Omissions.Single(o => o.Kind == "tool_result_truncated").Count).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task CoverageForTextPath_null_when_plan_discovery_degraded_or_stream_skipped() {
+        var degraded = BuildContext(Compaction(planDiscoveryDegraded: true));
+        var skipped  = BuildContext(Compaction(skippedStreams: 1));
+
+        await Assert.That(EvalService.CoverageForTextPath(degraded, DestructiveCommandsQuestion)).IsNull();
+        await Assert.That(EvalService.CoverageForTextPath(skipped, DestructiveCommandsQuestion)).IsNull();
+    }
+
+    [Test]
+    public async Task CoverageForTextPath_reports_plan_artifact_losses() {
+        var ctx      = BuildContext(Compaction(planArtifactsTruncated: 1, planArtifactsUnavailable: 2, planArtifactsDropped: 3));
+        var coverage = EvalService.CoverageForTextPath(ctx, DestructiveCommandsQuestion);
+
+        await Assert.That(coverage).IsNotNull();
+        await Assert.That(coverage!.Omissions.Single(o => o.Kind == "plan_artifact_truncated").Count).IsEqualTo(1);
+        await Assert.That(coverage.Omissions.Single(o => o.Kind == "plan_artifact_unavailable").Count).IsEqualTo(2);
+        await Assert.That(coverage.Omissions.Single(o => o.Kind == "plan_artifact_dropped").Count).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task CoverageForTextPath_null_on_tools_path() {
+        var needsToolsQuestion = DestructiveCommandsQuestion with { NeedsTools = true };
+        var ctxNeedsTools      = BuildContext(Compaction());
+        var ctxForceTools      = BuildContext(Compaction(), forceTools: true);
+
+        await Assert.That(EvalService.CoverageForTextPath(ctxNeedsTools, needsToolsQuestion)).IsNull();
+        await Assert.That(EvalService.CoverageForTextPath(ctxForceTools, DestructiveCommandsQuestion)).IsNull();
     }
 }
