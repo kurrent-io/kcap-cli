@@ -235,6 +235,11 @@ class SkillsCommand(
         List<PendingPrune> journal    = [];
         DateTimeOffset?    lastSynced = null;
         var                failed     = false;
+
+        // Destinations at THIS anchor that the ledger about to be emptied still vouches for: a
+        // checkout moved with its files carries them along, so they exist before the run starts
+        // and no surviving row names them.
+        List<string> carried = [];
         try {
             if (!TryLoadManifest(manifestPath, out manifest)) return (Failed, false, false);
 
@@ -300,6 +305,11 @@ class SkillsCommand(
                 var owning = OldRoot(manifest, target, anchor);
                 journal    = [.. SkillsJournal.Merge(journal, (manifest.Skills ?? [])
                     .Select(entry => new PendingPrune(entry.Path, owning)))];
+                // Only the anchor changed, so each entry's destination at the new root is
+                // derivable from the slug it owned — and a checkout that moved with its files
+                // already has it on disk.
+                carried    = [.. (manifest.Skills ?? [])
+                    .Select(entry => SkillsMaterializer.SkillDirFor(root, entry.Slug))];
                 manifest   = manifest with { Skills = [], Etag = null };
                 lastSynced = null;
             }
@@ -397,8 +407,10 @@ class SkillsCommand(
             // A destination that already exists and no ledger row names is the repository's own,
             // and may be tracked. Recording it would make a later prune delete it whole, so it is
             // refused before ownership is recorded — the journal counts as a ledger row, since a
-            // path awaiting deletion is one kcap wrote and a rename can come back to it.
-            var ledger = (manifest?.Skills ?? []).Select(e => e.Path).Concat(merged.Select(p => p.Path))
+            // path awaiting deletion is one kcap wrote and a rename can come back to it, and so do
+            // the destinations an anchor change carried over.
+            var ledger = (manifest?.Skills ?? []).Select(e => e.Path)
+                .Concat(merged.Select(p => p.Path)).Concat(carried)
                 .Select(CanonicalPath.Resolve).ToHashSet(StringComparer.Ordinal);
             foreach (var w in writes) {
                 var dir = SkillsMaterializer.SkillDirFor(root, w.Slug);

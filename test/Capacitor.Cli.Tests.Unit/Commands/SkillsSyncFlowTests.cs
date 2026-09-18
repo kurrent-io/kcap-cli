@@ -305,6 +305,40 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.Api.Requests.Single().Etag).IsNull();
     }
 
+    /// <summary>The other half of an anchor change: the checkout moved and took its materialized
+    /// directories with it, while the ledger — which lives in the git directory — came along
+    /// recording the anchor it was written at. Every destination therefore exists before the run
+    /// starts, and every one of them is still kcap's.</summary>
+    [Test]
+    public async Task A_checkout_that_moved_with_its_files_still_owns_them() {
+        using var repo     = Checkout("repo");
+        var       previous = Tmp.CreateDir("previous");
+        var       alpha    = SkillsSyncFixture.Skill("alpha");
+        var       fx       = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", alpha));
+        var       carried  = fx.Materialize(alpha);
+        var       oldDir   = SkillsMaterializer.SkillDirFor(
+            Path.Combine(previous.Path, ClaudePaths.RepoSkillsRelativePath), alpha.Slug);
+
+        fx.WriteManifest(new SkillsManifest {
+            Etag   = "etag-1", SyncedAt = SkillsSyncFixture.Now.AddHours(-1),
+            Anchor = previous.Path, Identity = fx.Identity,
+            Skills = [carried with { Path = oldDir }],
+        });
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(fx.SkillFile("alpha"))).IsEqualTo(Rendered(alpha));
+
+        var manifest = fx.ReadManifest();
+
+        await Assert.That(manifest.Anchor).IsEqualTo(fx.Anchor);
+        await Assert.That(manifest.Skills!.Single().Path).IsEqualTo(fx.SkillDir("alpha"));
+        await Assert.That(manifest.PendingPrunes!).IsEmpty();
+        // A run that refused its own directories would drop both and re-refuse forever.
+        await Assert.That(manifest.Etag).IsEqualTo("etag-2");
+        await Assert.That(manifest.SyncedAt).IsEqualTo(SkillsSyncFixture.Now);
+    }
+
     /// <summary>A <c>304</c> settles the ledger like any other outcome: the pending flag cleared,
     /// the deletion still owed carried out, the exclusion block rewritten and the legacy copy
     /// retired. A pending manifest forfeits the conditional request, so the double answers the
