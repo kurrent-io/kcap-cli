@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Eval.Contracts;
+
 namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
@@ -37,8 +39,9 @@ public interface IEvalObserver {
     /// <summary>Fired just before each judge question is sent to Claude.</summary>
     void OnQuestionStarted(int index, int total, string category, string questionId);
 
-    /// <summary>Fired after a judge question completed successfully and its verdict was parsed.</summary>
-    void OnQuestionCompleted(int index, int total, EvalQuestionVerdict verdict, long inputTokens, long outputTokens);
+    /// <summary>Fired after a judge question completed and its verdict was parsed — including an
+    /// unassessed outcome, which carries no score.</summary>
+    void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, long inputTokens, long outputTokens);
 
     /// <summary>Fired when a judge question fails (null Claude result, unparseable JSON, etc.); the eval continues.</summary>
     void OnQuestionFailed(int index, int total, string category, string questionId, string reason);
@@ -56,7 +59,7 @@ public interface IEvalObserver {
     void OnRetrospectiveFailed(string reason);
 
     /// <summary>Fired once after all judges finished, results aggregated, and the aggregate POSTed to the server.</summary>
-    void OnFinished(SessionEvalCompletedPayloadV3 aggregate);
+    void OnFinished(SessionEvalCompletedPayloadV4 aggregate);
 
     /// <summary>Fired when the eval failed before producing an aggregate (e.g. context fetch failed, all judges failed, persist failed).</summary>
     void OnFailed(string reason);

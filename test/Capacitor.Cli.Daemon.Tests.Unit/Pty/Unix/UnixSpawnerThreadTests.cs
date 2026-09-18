@@ -5,18 +5,17 @@ using Capacitor.Cli.Daemon.Pty.Unix;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
 
 /// <summary>
-/// L1-managed(a) (spec §4.2(b)): every Linux pty_spawn call runs on ONE dedicated,
-/// daemon-lifetime native thread — never a pool thread (PR_SET_PDEATHSIG is a per-THREAD
-/// property; a pool thread retiring would SIGKILL every agent it spawned). Two of these three
-/// tests need a real separate OS process (see this task's testability note) via the
-/// NativeTestHost helper; the third runs in-process.
+/// Every pty_spawn call runs on one dedicated, daemon-lifetime thread, never a pool thread:
+/// PR_SET_PDEATHSIG is tied to the creating thread, so a pool thread retiring would SIGKILL every
+/// agent it spawned. The tests that kill or crash the spawning process watch it from outside,
+/// through <see cref="NativeTestHostProcess"/>.
 /// </summary>
 public class UnixSpawnerThreadTests {
     [Test]
     public async Task Pdeathsig_kills_the_child_when_the_spawner_process_dies() {
         if (!OperatingSystem.IsLinux()) return;
 
-        using var host = StartHost("spawn-dummy");
+        using var host = NativeTestHostProcess.Start("spawn-dummy");
         var childPid = await ReadPidLineAsync(host);
         // The child belongs to the host process, not to us, so once pdeathsig fires and init reaps
         // it the pid is free — assert on the incarnation, not the number.
@@ -32,7 +31,7 @@ public class UnixSpawnerThreadTests {
     public async Task Unexpected_spawner_thread_exit_fail_fasts_the_host_process() {
         if (!OperatingSystem.IsLinux()) return;
 
-        using var host = StartHost("crash-spawner");
+        using var host = NativeTestHostProcess.Start("crash-spawner");
         var exited = host.WaitForExit(10000);
 
         await Assert.That(exited).IsTrue();
@@ -99,36 +98,8 @@ public class UnixSpawnerThreadTests {
         await Assert.That(spawner.IsThreadAlive).IsFalse();
     }
 
-    static Process StartHost(string mode) {
-        var dll = ResolveNativeHostDll();
-        var psi = new ProcessStartInfo("dotnet", $"\"{dll}\" {mode}") {
-            RedirectStandardOutput = true,
-            UseShellExecute        = false,
-        };
-        return Process.Start(psi) ?? throw new InvalidOperationException("failed to start NativeTestHost");
-    }
-
     static async Task<int> ReadPidLineAsync(Process host) {
         var line = await host.StandardOutput.ReadLineAsync() ?? throw new InvalidOperationException("no PID line from host");
         return int.Parse(line["PID=".Length..], CultureInfo.InvariantCulture);
-    }
-
-    // Sibling-project resolution: the test assembly and the host live at
-    // test/Capacitor.Cli.Tests.Unit/bin/<Config>/<TFM>/ and
-    // test/Capacitor.Cli.Tests.Unit.NativeTestHost/bin/<Config>/<TFM>/ respectively. Adjust this
-    // if your local build layout differs (e.g. a custom -o/OutDir); the value is deliberately
-    // derived rather than a hardcoded absolute path so CI and local dev share the same logic.
-    static string ResolveNativeHostDll() {
-        var dir       = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-        var tfm       = Path.GetFileName(dir);
-        var config    = Path.GetFileName(Path.GetDirectoryName(dir)!);
-        var testRoot  = Path.GetFullPath(Path.Combine(dir, "..", "..", "..", ".."));
-        var hostDll   = Path.Combine(testRoot, "Capacitor.Cli.Tests.Unit.NativeTestHost", "bin", config, tfm,
-            "Capacitor.Cli.Tests.Unit.NativeTestHost.dll");
-
-        if (!File.Exists(hostDll))
-            throw new InvalidOperationException($"NativeTestHost not built at {hostDll} — build Capacitor.slnx first");
-
-        return hostDll;
     }
 }
