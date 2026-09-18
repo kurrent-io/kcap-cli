@@ -1,5 +1,4 @@
 using System.Reactive.Subjects;
-using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
@@ -9,26 +8,14 @@ using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Capacitor.App.Views;
-using MarkView.Avalonia.Rendering.Inlines;
 using ReactiveUI.Reactive;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
+using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
 
 namespace Capacitor.App.Tests.Unit;
 
 public class MarkdownViewTests {
-    static (Window Window, Control Root, List<string> Opened) Show(string markdown) {
-        var opened = new List<string>();
-        ICommand open = ReactiveCommand.Create<string>(opened.Add);
-        var view = new MarkdownView { Text = markdown, OpenLink = open, Width = 400 };
-        var window = new Window { Content = view, Width = 500, Height = 400 };
-        window.Show();
-        Dispatcher.UIThread.RunJobs();
-        window.UpdateLayout();
-        return (window, view, opened);
-    }
-
     static (Window Window, Control Root, List<string> Opened, List<string> Ran) ShowRunnable(string markdown) {
         var opened = new List<string>();
         var ran = new List<string>();
@@ -44,8 +31,6 @@ public class MarkdownViewTests {
         window.UpdateLayout();
         return (window, view, opened, ran);
     }
-
-    static IEnumerable<T> All<T>(Visual root) where T : Visual => root.GetVisualDescendants().OfType<T>();
 
     static List<Panel> Hosts(Visual root) => All<Panel>(root).Where(p => p.Classes.Contains("markdown-code-host")).ToList();
 
@@ -76,21 +61,6 @@ public class MarkdownViewTests {
         window.MouseUp(point, MouseButton.Left);
         Dispatcher.UIThread.RunJobs();
     }
-
-    static IEnumerable<TextBlock> Paragraphs(Visual root) => All<TextBlock>(root).Where(t => t.Classes.Contains("markdown-paragraph"));
-
-    /// A text block built from inlines leaves Text null and carries its characters on the
-    /// inline collection, so a "what does this block read as" assertion has to consult both.
-    static string Reads(TextBlock block) => block.Text ?? block.Inlines?.Text ?? "";
-
-    static IEnumerable<T> Spans<T>(InlineCollection inlines) where T : Inline {
-        foreach (var inline in inlines) {
-            if (inline is T t) yield return t;
-            if (inline is Span span) foreach (var nested in Spans<T>(span.Inlines)) yield return nested;
-        }
-    }
-
-    static IEnumerable<MarkdownHyperlink> Links(Visual root) => Paragraphs(root).SelectMany(p => Spans<MarkdownHyperlink>(p.Inlines!));
 
     /// Pins the block map: emphasis and code spans as inlines, fenced code, bullets, a quote and
     /// a rule, each carrying the style class the app's theme keys on.
@@ -128,12 +98,7 @@ public class MarkdownViewTests {
                 await Assert.That(All<Button>(root)).IsEmpty();
 
                 var paragraph = Paragraphs(root).Single();
-                var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
-                var point = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Y + paragraph.Padding.Top + glyph.Height / 2), window)!.Value;
-                window.MouseMove(point);
-                window.MouseDown(point, MouseButton.Left);
-                window.MouseUp(point, MouseButton.Left);
-                Dispatcher.UIThread.RunJobs();
+                ClickAt(window, paragraph, "See ".Length);
                 await Assert.That(opened).IsEquivalentTo(new[] { "https://example.com/docs" });
             } finally { window.Close(); }
         });

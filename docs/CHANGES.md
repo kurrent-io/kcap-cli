@@ -6,6 +6,26 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The pull request reader renders GitHub-flavoured markdown
+
+Review bots write their findings almost entirely in HTML, and the reader showed the markup as
+text. A Markdig `DocumentProcessed` pass (`Capacitor.App.GitHubHtml`) rewrites the HTML the reader
+understands into standard Markdig nodes — formatting tags to emphasis, `<a>` to links, `<img>` to
+image links labelled with their alt text, `<br>` to hard breaks — so MarkView's renderers and the
+app's link policy apply unchanged; only `<details>` and `<pre>` have node types of their own. Chat
+is untouched: `MarkdownView.Flavor` selects the pipeline, and only the reader opts in. Unmatched
+or rejected HTML renders as its source, all or nothing per HTML block; comments inside converted
+content vanish, as on github.com.
+
+Three library facts shaped the design. MarkView builds its selection index once per render and
+never checks visibility, so a collapsed details section renders its header and nothing else, and
+a toggle re-renders the view. MarkView dispatches a click only for a hyperlink that is a direct
+inline of its text block, so the pass hoists links above their emphasis instead of owning
+hit-testing — every Avalonia route from a point to text geometry is quadratic in a line's runs.
+Markdig's renderer throws past 128 nested containers after parsing has returned, so synthesized
+nesting is budgeted at 100 before anything mutates, and normalisation runs before anything
+measures a height.
+
 ## A code block carries its own copy, and runs itself when it is a command
 
 An agent that wants a command run asks for it in a fenced block, and a reader who cannot lift the
