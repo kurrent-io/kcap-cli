@@ -818,7 +818,7 @@ Run the `MaterialPipelineWatchTests` class — expected 2 passed.
 
 ```bash
 /usr/bin/git -C <worktree> add src/Capacitor.App/Materials src/Capacitor.App/Views/AppKitAccessibility.cs test/Capacitor.App.Tests.Unit/MaterialPipelineWatchTests.cs
-/usr/bin/git -C <worktree> commit -m "Read Reduce transparency and watch the glass pipeline for failure" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+/usr/bin/git -C <worktree> commit -m "Feed the material service its platform environment and pipeline failures" -m "The library raises its failure event on the render thread, so the report is posted to the UI thread rather than made in place." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1990,7 +1990,7 @@ Run the `MaterialWindowTests`, `MainWindowSmokeTests` and `MainWindowViewModelTe
 
 ```bash
 /usr/bin/git -C <worktree> add src/Capacitor.App test/Capacitor.App.Tests.Unit/MaterialWindowTests.cs
-/usr/bin/git -C <worktree> commit -m "Scope the sessions surface to the material and float the rail under glass" -m "The workspace host pins itself opaque, so a reading surface never sits on the backdrop." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+/usr/bin/git -C <worktree> commit -m "Scope the sessions surface to the material with a floating rail" -m "The workspace host pins itself opaque, so a reading surface never sits on the backdrop." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
