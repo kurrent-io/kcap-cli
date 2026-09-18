@@ -125,9 +125,15 @@ public sealed class StatusCommand(
             client.Timeout = TimeSpan.FromSeconds(5);
             using var resp = await client.GetAsync($"{baseUrl}/auth/config");
 
-            return resp.IsSuccessStatusCode
-                ? new ServerReach(baseUrl, true, null, await AnnouncedProviderAsync(resp) ?? LastKnownProvider())
-                : new ServerReach(baseUrl, false, (int)resp.StatusCode, LastKnownProvider());
+            if (!resp.IsSuccessStatusCode) return new ServerReach(baseUrl, false, (int)resp.StatusCode, LastKnownProvider());
+
+            var announced = await AnnouncedProviderAsync(resp);
+
+            // Status may be the only thing that ever asks this server, so its answer is recorded
+            // the way discovery records its own: the fallback above has nothing else to read.
+            if (announced is not null) AuthProviderCache.Set(baseUrl, announced, config, time);
+
+            return new ServerReach(baseUrl, true, null, announced ?? LastKnownProvider());
         } catch {
             return new ServerReach(baseUrl, false, null, LastKnownProvider());
         }

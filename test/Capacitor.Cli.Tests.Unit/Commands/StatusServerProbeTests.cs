@@ -67,6 +67,33 @@ public sealed class StatusServerProbeTests : IDisposable {
         await Assert.That(reach.Provider).IsEqualTo(AuthProvider.None);
     }
 
+    // Status may be the only thing that ever asked this server, so its own answer has to be what a
+    // later failed probe falls back on: nothing about setup changed in between.
+    [Test]
+    public async Task An_answer_is_remembered_for_a_later_outage() {
+        StubAuthConfig(200, $$"""{"provider":"{{AuthProvider.None}}"}""");
+        await ProbeAsync(Url);
+        _server.Stop();
+
+        var reach = await ProbeAsync(Url);
+
+        await Assert.That(reach.Reachable).IsFalse();
+        await Assert.That(reach.Provider).IsEqualTo(AuthProvider.None);
+    }
+
+    // A captive portal answers 200 for every host. It names no provider, so it must not replace
+    // the one the real server announced.
+    [Test]
+    public async Task An_answer_that_does_not_parse_leaves_the_last_answer_alone() {
+        AuthProviderCache.Set(Url, AuthProvider.None, Config.Root, TimeProvider.System);
+        StubAuthConfig(200, "<html>captive portal</html>");
+
+        var reach = await ProbeAsync(Url);
+
+        await Assert.That(reach.Provider).IsEqualTo(AuthProvider.None);
+        await Assert.That(AuthProviderCache.TryGet(Url, Config.Root, TimeProvider.System)).IsEqualTo(AuthProvider.None);
+    }
+
     [Test]
     public async Task An_unreachable_server_nobody_ever_asked_has_no_known_provider() {
         _server.Stop();

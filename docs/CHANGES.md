@@ -109,7 +109,8 @@ store; judged on credentials alone it would read as never set up, and a tool gat
 the machine, then the token store -- and `not_required` is configured. The provider comes from the
 probe's own answer, which is the document that announces it, at no extra round trip. When the probe
 gets no answer the last successful discovery on disk stands in, so an outage does not unconfigure
-such a server. Discovery's outage fallback is deliberately not used: it answers "None" for an
+such a server -- and status records its own answers there, because on a freshly set-up machine it may
+be the only thing that has asked. Discovery's outage fallback is deliberately not used: it answers "None" for an
 unreachable server with an empty token store, which would call a machine nobody set up configured.
 
 The auth states are an enum with a wire spelling rather than strings shared between the resolver, the
