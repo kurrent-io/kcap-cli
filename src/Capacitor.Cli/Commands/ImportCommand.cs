@@ -1323,6 +1323,7 @@ class ImportCommand(
         // standalone rather than being silently dropped by CursorImportSource.ImportSessionAsync's
         // nested-child skip.
         routed = ReconcileOrphanedCursorSubagentChildren(routed);
+        routed.Sort(ImportOrdering.RoutedDispatch);
 
         var chains = BuildImportChains(fileBased);
 
@@ -2056,7 +2057,7 @@ class ImportCommand(
     /// wrapped so a file deleted between discovery and chain building can't crash
     /// the whole import run; ordering is best-effort.
     /// </summary>
-    static DateTimeOffset ChainTimestamp(SessionClassification c) {
+    internal static DateTimeOffset ChainTimestamp(SessionClassification c) {
         if (c.Meta.FirstTimestamp is { } ts) return ts;
 
         try {
@@ -2923,25 +2924,22 @@ class ImportCommand(
     /// Group the import-bound subset (New + Partial) into ordered chains by slug.
     /// A chain is a list of classifications sharing the same slug, ordered by
     /// FirstTimestamp ascending. Sessions without a slug (or with a unique slug)
-    /// become chains of length 1. Chain order (across chains) is stable by slug
-    /// string so re-runs import in the same order.
+    /// become chains of length 1. Chains are dispatched newest-first via
+    /// <see cref="ImportOrdering.ChainDispatch"/>; within-chain order is untouched.
     /// </summary>
     internal static List<List<SessionClassification>> BuildImportChains(List<SessionClassification> classifications) {
         var importable = classifications
             .Where(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial)
             .ToList();
 
-        var withSlug = importable
+        var chains = importable
             .Where(c => c.Meta.Slug is not null)
             .GroupBy(c => c.Meta.Slug!, StringComparer.Ordinal)
-            .OrderBy(g => g.Key, StringComparer.Ordinal);
-
-        var chains = withSlug.Select(group => group.OrderBy(ChainTimestamp)
-                .ThenBy(c => c.SessionId, StringComparer.Ordinal)
-                .ToList()
-            )
+            .Select(group => group.OrderBy(ChainTimestamp).ThenBy(c => c.SessionId, StringComparer.Ordinal).ToList())
             .ToList();
-        chains.AddRange(importable.Where(c => c.Meta.Slug is null).OrderBy(c => c.SessionId, StringComparer.Ordinal).Select(solo => (List<SessionClassification>)[solo]));
+        chains.AddRange(importable.Where(c => c.Meta.Slug is null).Select(solo => (List<SessionClassification>)[solo]));
+
+        chains.Sort(ImportOrdering.ChainDispatch);
 
         return chains;
     }
