@@ -1797,7 +1797,13 @@ public sealed class SetupCommand(
             AnsiConsole.MarkupLine(
                 $"  [cyan]{Markup.Escape(workspace.Slug ?? workspace.Url)}[/]  [dim]{Markup.Escape(workspace.Url)}[/]");
 
-        AnsiConsole.MarkupLine("  [dim]Nothing was changed. Run `kcap setup <slug>` to use one.[/]");
+        // A GitHub-App row is identified by origin and carries no slug, so the command it can be
+        // handed is the URL one.
+        var named = payload.Workspaces.FirstOrDefault(w => w.Slug is not null)?.Slug;
+
+        AnsiConsole.MarkupLine(named is not null
+            ? $"  [dim]Nothing was changed. Run `kcap setup {Markup.Escape(named)}` to use one.[/]"
+            : "  [dim]Nothing was changed. Run `kcap setup --server-url <address above>` to use one.[/]");
 
         return 0;
     }

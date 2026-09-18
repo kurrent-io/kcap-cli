@@ -294,6 +294,10 @@ public sealed class OnboardingFacade(
     async Task<DiscoveryReport> DiscoverOnlyCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
         var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
 
+        // A cancelled request comes back as an unreachable one, and reporting an outage for it sends
+        // the reader to look at a service that is fine.
+        if (ct.IsCancellationRequested) return DiscoveryReport.Failure(provider, "Discovery was cancelled.");
+
         if (proxyConfig is null)
             return DiscoveryReport.Failure(provider, "Cannot reach the Kurrent auth service.", AuthFailureReason.Unreachable);
 
@@ -321,8 +325,11 @@ public sealed class OnboardingFacade(
 
         var result = await proxy.DiscoverWorkOSTenantsAsync(endpoints.ProxyUrl, auth.AccessToken, ct);
 
+        if (ct.IsCancellationRequested) return DiscoveryReport.Failure(AuthProvider.WorkOS, "Discovery was cancelled.");
+
         if (result.Error != DiscoveryError.None)
-            return DiscoveryReport.Failure(AuthProvider.WorkOS, TenantDiscovery.Describe(result.Error));
+            return DiscoveryReport.Failure(
+                AuthProvider.WorkOS, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS));
 
         // The hosted lane is the only one that can provision, and only for an account with none.
         return new DiscoveryReport(result.Tenants, AuthProvider.WorkOS, CanCreate: result.Tenants.Length == 0);
@@ -342,10 +349,12 @@ public sealed class OnboardingFacade(
 
         var (tenants, error) = await new TenantDiscovery(proxy, picker).ListAsync(endpoints.ProxyUrl, accessToken, ct);
 
+        if (ct.IsCancellationRequested) return DiscoveryReport.Failure(AuthProvider.GitHubApp, "Discovery was cancelled.");
+
         // GitHub-App discovery has nothing to create with: a workspace arrives by having the app
         // installed on an org, so reporting that this account may create one would be a dead end.
-        return error is not null
-            ? DiscoveryReport.Failure(AuthProvider.GitHubApp, error)
+        return error != DiscoveryError.None
+            ? DiscoveryReport.Failure(AuthProvider.GitHubApp, TenantDiscovery.Describe(error, AuthProvider.GitHubApp))
             : new DiscoveryReport(tenants, AuthProvider.GitHubApp, CanCreate: false);
     }
 
