@@ -889,6 +889,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <inheritdoc cref="IAcpTranscriptSource.ResolvedModel"/>
     public string? ResolvedModel => _resolvedModel;
 
+    readonly HostedAgentCommandsRelay _commandsRelay = new();
+
+    /// <inheritdoc/>
+    public Action<IReadOnlyList<HostedAgentCommand>>? OnCommandsAvailable {
+        get => _commandsRelay.Callback;
+        set => _commandsRelay.Callback = value;
+    }
+
+    void PublishCommands(IReadOnlyList<HostedAgentCommand> commands) => _commandsRelay.Publish(commands);
+
     /// <summary>
     /// Agent capabilities negotiated by <see cref="StartAsync"/>'s <c>initialize</c> call; null
     /// before <see cref="StartAsync"/> resolves. The reconnect path's eligibility gate reads
@@ -1078,6 +1088,13 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // signal EmitModelFallbackNote and registration rely on).
         if (_resolvedModel is null && string.IsNullOrWhiteSpace(requestedModel))
             _resolvedModel = AcpSessionModelList.ExtractCurrentModel(sessionNewResult);
+
+        // Some vendors carry availableCommands on the session/new result; a later
+        // available_commands_update supersedes it. Only publish a non-empty handshake snapshot — a
+        // result that simply omits the field must not clear a list an update will bring.
+        var handshakeCommands = AcpAvailableCommands.Extract(sessionNewResult);
+        if (handshakeCommands.Count > 0)
+            PublishCommands(handshakeCommands);
 
         // Handshake is now fully complete (initialize + session/new + best-effort model selection) —
         // one consolidated Info log carrying the negotiated protocol version, loadSession, and the
@@ -1622,6 +1639,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         }
 
         var reduced = Reduce(updateElement.Clone());
+
+        // The command list is not transcript content (the translator still drops it), so capture it
+        // here and hand it to the picker path rather than emitting an envelope.
+        if (reduced.Kind == AcpUpdateKind.AvailableCommands)
+            PublishCommands(AcpAvailableCommands.Extract(reduced.Raw));
 
         // Only an update that carries actual TURN OUTPUT disarms the watchdog.
         //

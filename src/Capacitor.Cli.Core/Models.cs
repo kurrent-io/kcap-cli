@@ -2178,6 +2178,20 @@ public readonly record struct AgentStatusChanged(
         string? SessionId
     );
 
+/// <summary>One slash command a hosted agent's harness offers, for the composer's `/` picker. JSON
+/// mirror of the server's <c>Capacitor.Api.Public.Abstractions.Agents.AgentSlashCommand</c> — the
+/// property names must keep matching that record.</summary>
+public record HostedAgentCommand(string Name, string? Description, string? ArgumentHint);
+
+/// <summary>The daemon's post-launch report of a hosted agent's slash commands (an ACP
+/// available_commands_update, a Codex skills/list, a Claude probe). Single-record payload so the wire
+/// shape evolves additively; a later report replaces the list. JSON mirror of the server's
+/// <c>ReportAgentCommandsArgs</c>.</summary>
+public readonly record struct ReportAgentCommandsArgs(
+        string                            AgentId,
+        IReadOnlyList<HostedAgentCommand> Commands
+    );
+
 public readonly record struct AgentUnregistered(string AgentId);
 
 public readonly record struct LaunchFailed(
