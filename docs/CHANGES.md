@@ -52,6 +52,21 @@ Markdig's renderer throws past 128 nested containers after parsing has returned,
 nesting is budgeted at 100 before anything mutates, and normalisation runs before anything
 measures a height.
 
+## The harness list answers a machine as well as a person
+
+A tool setting kcap up for someone has to ask which coding agents to record, and the honest option
+list is the one this machine can actually produce. `kcap harness list` already knows it, so `--json`
+emits the same report as one document on stdout and nothing else, the contract `kcap import
+--discover --json` set.
+
+Every harness this build knows is listed, present or not, so a consumer can tell "unsupported" from
+"not installed here" without carrying its own vendor list and going stale the day a vendor is added.
+The two detection signals stay apart rather than being ORed the way the nudge inventory folds them:
+a caller offering someone a choice can then say which signal it saw, and one that only wants "is it
+here" ORs them itself. `--json` is refused on `dismiss` and `reset` rather than ignored, because
+ignoring it would hand a caller expecting JSON a line of prose on a subcommand that writes.
+
+
 ## A code block carries its own copy, and runs itself when it is a command
 
 An agent that wants a command run asks for it in a fenced block, and a reader who cannot lift the

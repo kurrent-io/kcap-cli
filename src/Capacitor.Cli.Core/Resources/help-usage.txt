@@ -33,7 +33,7 @@ Configuration:
   remap --remove <from>            Remove a cwd remap entry
 
 Harness setup nudges:
-  harness list                     Show which coding agents are installed and whether kcap is set up for each
+  harness list [--json]            Show which coding agents are installed and whether kcap is set up for each
   harness dismiss <vendor…>|--all  Stop nudging to set kcap up for an installed-but-unconfigured harness
   harness reset <vendor…>|--all    Offer a previously-dismissed harness again
 

@@ -2156,10 +2156,26 @@ Manage the nudges with `kcap harness`:
 
 ```bash
 kcap harness list                     # detected / kcap-wired / dismissed, per agent
+kcap harness list --json              # the same report, machine-readable
 kcap harness dismiss antigravity      # stop asking about one agent
 kcap harness dismiss --all            # stop asking about every currently-detected agent
 kcap harness reset antigravity        # ask again (undo a dismissal)
 ```
+
+`list --json` emits one JSON document on stdout and nothing else, so it can be piped — the same
+contract as [`kcap import --discover --json`](#loading-historical-sessions). Every harness this build
+knows is listed, present or not, so a consumer can tell "unsupported" from "not on this machine"
+without carrying its own vendor list:
+
+```json
+{"harnesses":[{"vendor":"claude","label":"Claude Code","binary_on_path":true,
+               "config_found":false,"wired":false,"dismissed":false}]}
+```
+
+`vendor` is the stable key — the id `dismiss` and `reset` take. The two detection signals stay
+apart: `binary_on_path` is the vendor's CLI on your search path, `config_found` its own user-level
+data on disk, and either one means installed. A tool choosing which agents to set up wants both,
+since it can then say which signal it saw; one that only needs "is it here" ORs them.
 
 To turn off the nudges entirely (both the in-session and command-line surfaces), set
 `kcap config set disable_harness_nudge true`. Dismissing is per-agent; a brand-new agent installed
