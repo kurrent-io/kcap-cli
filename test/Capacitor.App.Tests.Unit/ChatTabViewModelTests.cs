@@ -32,6 +32,9 @@ public class ChatTabViewModelTests {
     const string ReadCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/repo/x/src/a.cs"}}]}}""";
     const string NoteLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<summary>Agent finished</summary>\n<result>\nAll good.\n</result>\n</task-notification>"}}""";
     const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
+    const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+    const string AgentLaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
+    const string AgentFinishLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}}""";
 
     static AgentStatusDto Dto(string? transcriptPath, string vendor = "claude") =>
         Agent("a1", vendor, hasTerminal: true, repoPath: "/repo/x") with { TranscriptPath = transcriptPath };
@@ -45,15 +48,17 @@ public class ChatTabViewModelTests {
         public FakeTimeProvider Time { get; } = new();
         public RecordingOpener Opener { get; } = new();
         public FakePermissionService Permissions { get; } = new();
+        public SessionSubagents Subagents { get; }
         public TerminalTabViewModel Terminal { get; }
         public ChatTabViewModel Chat { get; }
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null) {
             seed?.Invoke(Permissions);
+            Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, unavailableNote);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -263,6 +268,7 @@ public class ChatTabViewModelTests {
             await Assert.That(group.LiveCalls).IsEmpty();
             await Assert.That(group.Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(group.HasFailure).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
             await h.TeardownAsync();
         });
     }
@@ -291,6 +297,137 @@ public class ChatTabViewModelTests {
             File.AppendAllText(other, ReadCallLine + "\n");
             await h.TickAsync();
             await Assert.That(Group(h.Chat, 0).Calls).Count().IsEqualTo(2);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Fixture_transcripts_drive_the_strip_singular_and_plural() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var raised = new List<string?>();
+            h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
+            await h.PushAsync(Dto(path));
+            await Assert.That(h.Chat.HasRunningSubagents).IsTrue();
+            await Assert.That(h.Chat.RunningSubagent!.Name).IsEqualTo("Explore");
+            await Assert.That(h.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
+            await Assert.That(h.Chat.SubagentSummary).IsEmpty();
+            await Assert.That(h.Subagents.Rows.Single().IsBackground).IsTrue();
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningSubagents));
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.RunningSubagent));
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.SubagentSummary));
+
+            File.AppendAllText(path, AgentCallLine.Replace("toolu_A", "toolu_B") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.RunningSubagent).IsNull();
+            await Assert.That(h.Chat.SubagentSummary).IsEqualTo("2 subagents running");
+
+            File.AppendAllText(path, AgentFinishLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.RunningSubagent!.StateText).StartsWith("running · ");
+            await Assert.That(h.Chat.SubagentSummary).IsEmpty();
+            await Assert.That(h.Chat.Items.OfType<SystemNoteItem>().Count()).IsEqualTo(1);
+
+            File.AppendAllText(path, ToolResultLine.Replace("t1", "toolu_B") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
+            await Assert.That(h.Subagents.Rows.Select(r => r.State)).IsEquivalentTo(new[] { SubagentState.Done, SubagentState.Done }, CollectionOrdering.Matching);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A live turn owns the footer: the activity note is showing, and a foreground launch is
+    /// already a Task row. The note returns once the turn is over and the run is still going.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_yields_to_the_activity_note_while_a_turn_is_live() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var raised = new List<string?>();
+            h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await h.TickAsync();
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
+
+            raised.Clear();
+            await h.PushAsync(Dto(path) with { AwaitingInput = true });
+            await Assert.That(h.Chat.ActivityNote).IsEmpty();
+            await Assert.That(h.Chat.HasRunningSubagents).IsTrue();
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningSubagents));
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_feed_reset_and_a_path_switch_empty_the_strip() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
+            await h.PushAsync(Dto(path));
+            await Assert.That(h.Chat.HasRunningSubagents).IsTrue();
+
+            File.WriteAllLines(path, [UserLine]);
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
+            await Assert.That(h.Subagents.Rows).IsEmpty();
+
+            var other = Tmp.CreateFile("o.jsonl", [AgentCallLine]);
+            await h.PushAsync(Dto(other));
+            await Assert.That(h.Chat.HasRunningSubagents).IsTrue();
+            await h.PushAsync(Dto(path));
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
+            await Assert.That(h.Subagents.Rows).IsEmpty();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// The status can land before the first read: rows projected after the session ended present
+    /// as stopped at once, and a reset under the ended session rebuilds them stopped too.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_status_before_the_first_read_and_a_reset_after_it_leave_no_running_strip() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
+            await h.PushAsync(Dto(path) with { Status = "Completed" });
+            await Assert.That(h.Subagents.Rows).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
+            await Assert.That(h.Subagents.Rows.Single().StateText).IsEqualTo("stopped");
+
+            File.WriteAllLines(path, [AgentCallLine.Replace("Map desktop chat UI surfaces", "Map")]);
+            await h.TickAsync();
+            await Assert.That(h.Subagents.Rows.Single().Description).IsEqualTo("Map");
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stale_generation_read_after_a_feed_switch_adds_no_subagent_rows() {
+        await RunOnUiAsync(async () => {
+            var gate = new TaskCompletionSource();
+            var h = new Harness(new TranscriptChatProjection(new GatedProjection(ClaudeTranscriptEvents.Instance, "OLD", gate), ClaudeChatRules.Instance));
+            var oldPath = Tmp.CreateFile("old.jsonl", [AgentCallLine.Replace("Map desktop chat UI surfaces", "OLD")]);
+            var newPath = Tmp.CreateFile("new.jsonl", [AssistantLine]);
+
+            h.Daemon.Agents.AddOrUpdate(Dto(oldPath));
+            await (h.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var oldRead = h.Chat.PendingReadForTesting!;
+
+            h.Daemon.Agents.AddOrUpdate(Dto(newPath));
+            gate.SetResult();
+            await oldRead;
+            await (h.Chat.PendingReadForTesting ?? Task.CompletedTask);
+            await h.TickAsync();
+
+            await Assert.That(h.Subagents.Rows).IsEmpty();
+            await Assert.That(h.Chat.HasRunningSubagents).IsFalse();
             await h.TeardownAsync();
         });
     }
@@ -1452,7 +1589,7 @@ public class ChatTabViewModelTests {
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
-                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), serverQueue: queue);
+                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionSubagents(new FakeTimeProvider()), serverQueue: queue);
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -1495,7 +1632,7 @@ public class ChatTabViewModelTests {
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
-                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), serverQueue: queue);
+                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionSubagents(new FakeTimeProvider()), serverQueue: queue);
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -1525,7 +1662,7 @@ public class ChatTabViewModelTests {
             var time = new FakeTimeProvider();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
-                new RecordingOpener(), time, new FakePermissionService(), serverQueue: queue);
+                new RecordingOpener(), time, new FakePermissionService(), new SessionSubagents(time), serverQueue: queue);
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -1558,7 +1695,7 @@ public class ChatTabViewModelTests {
             var time = new FakeTimeProvider();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
-                new RecordingOpener(), time, new FakePermissionService());
+                new RecordingOpener(), time, new FakePermissionService(), new SessionSubagents(time));
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Failed);
             await Assert.That(chat.PhaseNote).IsEqualTo("The transcript could not be read: not signed in");

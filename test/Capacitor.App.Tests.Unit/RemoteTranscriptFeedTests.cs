@@ -1,7 +1,10 @@
+using System.Globalization;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core;
 using Capacitor.Remote.Models;
+using Eventuous.SignalR;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.RemoteFixtures;
@@ -247,5 +250,63 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(seed.Status).IsEqualTo(FeedStatus.Reset);
         await Assert.That(seed.Lines.Count).IsEqualTo(1);
         await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
+    }
+
+    /// A notification marked meta yields no row and no input, only its finish; the feed must keep it.
+    [Test]
+    public async Task A_signal_only_projection_survives_the_feed() {
+        using var h = new Harness(vendor: "claude");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","extensions":{"claude_code":{"is_meta":true}}}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the position");
+
+        var line = h.Feed.ReadAppended().Lines.Single();
+        await Assert.That(line.Offset).IsEqualTo(2);
+        await Assert.That(line.Projection.Envelopes).IsEmpty();
+        await Assert.That(line.Projection.SubmittedInputs).IsEmpty();
+        var finished = (SubagentSignal.Finished)line.Projection.Subagents.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
+    }
+
+    /// The payload's own time is transcript-authoritative; the stream envelope only carries when
+    /// the server happened to store it.
+    [Test]
+    public async Task A_live_event_dated_by_its_own_payload_keeps_that_time_not_the_storage_time() {
+        using var h = new Harness();
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"hello","timestamp":"2026-09-17T10:01:00Z"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the live event");
+
+        var envelope = h.Feed.ReadAppended().Lines.Single().Projection.Envelopes.Single();
+        var at = DateTimeOffset.Parse(envelope.TimestampIso!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        await Assert.That(at).IsEqualTo(DateTimeOffset.Parse("2026-09-17T10:01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+    }
+
+    [Test]
+    public async Task A_live_event_with_no_payload_timestamp_keeps_the_envelope_storage_time() {
+        using var h = new Harness();
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+
+        var storedAt = new DateTime(2026, 9, 17, 9, 0, 0, DateTimeKind.Utc);
+        h.Lane.PushStreamEvent(new StreamEventEnvelope {
+            EventId = Guid.NewGuid(), Stream = h.Stream, EventType = CanonicalEventTypes.UserMessageReceived,
+            StreamPosition = 2, GlobalPosition = 2, Timestamp = storedAt, JsonPayload = """{"content":"hello"}""",
+        });
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the live event");
+
+        var envelope = h.Feed.ReadAppended().Lines.Single().Projection.Envelopes.Single();
+        var at = DateTimeOffset.Parse(envelope.TimestampIso!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        await Assert.That(at).IsEqualTo((DateTimeOffset)storedAt);
     }
 }

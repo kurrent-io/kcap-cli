@@ -96,6 +96,8 @@ public class MarkdownViewTests {
                 var link = Links(root).Single();
                 await Assert.That(link.NavigateUri?.ToString()).IsEqualTo("https://example.com/docs");
                 await Assert.That(All<Button>(root)).IsEmpty();
+                await Assert.That(ReferenceEquals(link.Foreground, window.FindResource("KcapInfoBrush"))).IsTrue()
+                    .Because("links are info blue; green is a status colour");
 
                 var paragraph = Paragraphs(root).Single();
                 ClickAt(window, paragraph, "See ".Length);

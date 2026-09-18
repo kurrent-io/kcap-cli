@@ -324,7 +324,8 @@ sealed class CopilotHookCommand(
         var workItemsNudge = HarnessNudgeEmitter.Combine(
             WorkItemsNudgeEmitter.Resolve(HarnessId.Copilot, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Copilot, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Copilot, harnesses));
         WriteSessionStartOutput(Console.Out, fragment, workItemsNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;

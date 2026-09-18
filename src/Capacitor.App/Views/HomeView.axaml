@@ -26,7 +26,7 @@
         <StackPanel Margin="28" Spacing="20" MaxWidth="960" HorizontalAlignment="Stretch">
             <StackPanel Spacing="3">
                 <TextBlock Text="Home" FontSize="22" FontWeight="Bold" Foreground="{StaticResource KcapTextBrush}" />
-                <TextBlock Text="Here's where your work is moving." FontSize="12" Foreground="{StaticResource KcapMutedBrush}" />
+                <TextBlock Text="Here's where your work is moving." FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" />
             </StackPanel>
 
             <!-- The launcher moved to LauncherPaneView (the Sessions surface's empty state);
@@ -35,7 +35,7 @@
             <!-- Active sessions. -->
             <TextBlock Text="Active sessions" FontSize="16" FontWeight="Bold" Foreground="{StaticResource KcapTextBrush}" />
 
-            <TextBlock x:Name="NoSessionsText" Text="No active sessions" FontSize="12" Foreground="{StaticResource KcapMutedBrush}"
+            <TextBlock x:Name="NoSessionsText" Text="No active sessions" FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}"
                        IsVisible="{Binding Sessions.Count, Converter={x:Static views:CountIsZeroConverter.Instance}}" />
 
             <ItemsControl x:Name="SessionCards" ItemsSource="{Binding Sessions}">
@@ -53,13 +53,13 @@
                                     <StackPanel Orientation="Horizontal" Spacing="7">
                                         <Ellipse Width="8" Height="8" Fill="{Binding StatusDot}" VerticalAlignment="Center" />
                                         <TextBlock Text="{Binding Title}" FontWeight="Bold" Foreground="{StaticResource KcapTextBrush}"
-                                                   TextTrimming="CharacterEllipsis" />
+                                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
                                     </StackPanel>
-                                    <TextBlock Text="{Binding Sub}" FontSize="11" Foreground="{StaticResource KcapMutedBrush}"
+                                    <TextBlock Text="{Binding Sub}" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}"
                                                ToolTip.Tip="{Binding RepoFull}" TextTrimming="CharacterEllipsis" />
                                     <Grid ColumnDefinitions="*,Auto">
-                                        <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{StaticResource KcapPurpleBrush}" />
-                                        <TextBlock Grid.Column="1" Text="{Binding Age}" FontSize="10" Foreground="{StaticResource KcapMutedBrush}" />
+                                        <TextBlock Text="{Binding StatusText}" FontSize="12.5" Foreground="{StaticResource KcapPurpleBrush}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Age}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" />
                                     </Grid>
                                 </StackPanel>
                             </Border>

@@ -58,8 +58,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     bool _showsPullRequestTab;
     public bool ShowsPullRequestTab {
         get => _showsPullRequestTab;
-        private set => this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
+            this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
+        }
     }
+    public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab;
 
     WorkspaceTab _activeTab = WorkspaceTab.Chat;
     public WorkspaceTab ActiveTab {
@@ -110,7 +114,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Replay(1)
             .RefCount();
 
-        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb);
+        var subagents = new SessionSubagents(time);
+        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
@@ -169,6 +174,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _showsTerminalTab = showsTerminal
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
             .DisposeWith(_disposables);
+        showsTerminal.Subscribe(_ => this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch)))
+            .DisposeWith(_disposables);
         // ShowTerminalCommand is unguarded — a caller can select the tab before any dto says whether
         // this agent has one — so presence clamps it back rather than leaving a blank pane in front.
         showsTerminal.Subscribe(shows => {
@@ -188,7 +195,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer);
             })
             .DisposeWith(_disposables);
 

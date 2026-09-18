@@ -7,12 +7,13 @@ namespace Capacitor.App.ViewModels;
 
 /// Status → dot brush for session surfaces (Home cards, the rail). ImmutableSolidColorBrush,
 /// not SolidColorBrush: these are built on the daemon client's pump thread and an immutable
-/// brush has no thread affinity, which is also what makes the four instances shareable.
+/// brush has no thread affinity, which is also what makes the instances shareable.
 public static class SessionStatusDots {
     static readonly ImmutableSolidColorBrush RunningDot  = new(Color.Parse(StatusColors.Connected));
     static readonly ImmutableSolidColorBrush StartingDot = new(Color.Parse(StatusColors.InProgress));
     static readonly ImmutableSolidColorBrush FailedDot   = new(Color.Parse(StatusColors.Disrupted));
     static readonly ImmutableSolidColorBrush NeutralDot  = new(Color.Parse(StatusColors.Unavailable));
+    static readonly ImmutableSolidColorBrush WaitingDot  = new(Color.Parse(StatusColors.Waiting));
 
     // Running/Starting/Failed are the daemon's own open vocabulary (AgentOrchestrator); anything
     // else (Completed, or a value this build has never heard of) reads as neutral.
@@ -22,6 +23,13 @@ public static class SessionStatusDots {
         "Failed"   => FailedDot,
         _          => NeutralDot,
     };
+
+    /// Waiting-on-user overrides the process word: a live agent whose turn is idle is not Connected.
+    public static IBrush For(string status, bool waitsOnUser) => waitsOnUser ? WaitingDot : For(status);
+
+    public static IBrush For(AgentStatusDto dto) => For(dto.Status, WaitsOnUser(dto));
+
+    public static IBrush For(AgentRow row) => For(row.Status, WaitsOnUser(row));
 
     /// The daemon's finished-turn verdict, for an agent the user can answer: a flow participant
     /// between rounds waits on the flow, so nothing here may describe it as waiting on the user.
@@ -41,6 +49,8 @@ public static class SessionStatusDots {
     /// Display text for the status: the daemon's own word, except for the one state its
     /// vocabulary does not spell, a live agent whose turn is over.
     public static string Label(AgentStatusDto dto) => WaitsOnUser(dto) ? "Waiting for input" : dto.Status;
+
+    public static string Label(AgentRow row) => WaitsOnUser(row) ? "Waiting for input" : row.Status;
 
     /// Process is gone — Completed/Failed stay in the snapshot until teardown removes the agent.
     public static bool IsTerminal(string? status) => status is "Completed" or "Failed";
