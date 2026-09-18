@@ -177,13 +177,16 @@ sealed class OpenCodeHookCommand(
         var workItemsNudge = canConsumeFragment
             ? HarnessNudgeEmitter.Combine(
                 WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-                PlansNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisablePlansNudge is true, harnesses))
+                PlansNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+                // Inside the gate, unlike the harness nudge below: resolving takes the one-shot
+                // marker, and an older plugin discards this stdout, so outside it the notice would be
+                // spent on a session that never shows it.
+                FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.OpenCode, harnesses))
             : null;
         // The harness nudge is independent of the once-per-session memory lease — it has its own
         // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.
         var combinedNudge = HarnessNudgeEmitter.Combine(
-            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config));
+            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
         await WriteMemoryFragment(stdout, fragment, combinedNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;

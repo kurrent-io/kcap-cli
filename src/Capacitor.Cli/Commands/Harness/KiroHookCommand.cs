@@ -276,7 +276,7 @@ sealed class KiroHookCommand(
             WorkItemsNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config));
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Kiro, harnesses));
         var nudgeDecided = nudgeClaim.IsCompleted;
         var workItemsNudge = nudgeDecided && await nudgeClaim ? ResolveNudges() : null;
         WriteAgentSpawnOutput(Console.Out, fragment, workItemsNudge);

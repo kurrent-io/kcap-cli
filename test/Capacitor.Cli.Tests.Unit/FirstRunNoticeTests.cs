@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -62,17 +63,36 @@ public class FirstRunNoticeTests {
         await Assert.That(store.TryClaim()).IsTrue();
     }
 
+    // What the notice may claim: that kcap is wired in, which the hook delivering it proves.
+    // Never that this session reached the server - a rejected token has its own notice, and this
+    // one would be the line contradicting it.
     [Test]
-    public async Task The_emitter_takes_the_notice_and_names_the_tour() {
+    public async Task The_notice_claims_setup_not_capture() {
+        var fragment = FirstRunNoticeEmitter.Build(offerTour: true);
+
+        await Assert.That(fragment).Contains("set up");
+        await Assert.That(fragment).DoesNotContain("is recording");
+    }
+
+    // The tour reads through the kcap MCP servers, so where they are not registered it is not
+    // something this user can be told to start.
+    [Test]
+    public async Task The_tour_is_offered_only_where_it_can_be_started() {
+        await Assert.That(FirstRunNoticeEmitter.Build(offerTour: true)).Contains("kcap-guided-tour");
+        await Assert.That(FirstRunNoticeEmitter.Build(offerTour: false)).DoesNotContain("kcap-guided-tour");
+        // The rest of the notice stands on its own without it.
+        await Assert.That(FirstRunNoticeEmitter.Build(offerTour: false)).Contains("first session");
+    }
+
+    [Test]
+    public async Task Resolving_takes_the_notice_once() {
         using var dir = new TempDir();
         var (store, config) = Fresh(dir);
         store.Arm();
+        var harnesses = TestHarnesses.All();
 
-        var fragment = FirstRunNoticeEmitter.Resolve(optedOut: false, config);
-
-        await Assert.That(fragment).IsNotNull();
-        await Assert.That(fragment!).Contains("kcap-guided-tour");
-        await Assert.That(FirstRunNoticeEmitter.Resolve(optedOut: false, config)).IsNull();
+        await Assert.That(FirstRunNoticeEmitter.Resolve(false, config, HarnessId.Claude, harnesses)).IsNotNull();
+        await Assert.That(FirstRunNoticeEmitter.Resolve(false, config, HarnessId.Claude, harnesses)).IsNull();
     }
 
     [Test]
@@ -80,7 +100,7 @@ public class FirstRunNoticeTests {
         using var dir = new TempDir();
         var (_, config) = Fresh(dir);
 
-        await Assert.That(FirstRunNoticeEmitter.Resolve(optedOut: false, config)).IsNull();
+        await Assert.That(FirstRunNoticeEmitter.Resolve(false, config, HarnessId.Claude, TestHarnesses.All())).IsNull();
     }
 
     // Opting out must not consume the marker: turning the notice back on before the first session
@@ -91,7 +111,7 @@ public class FirstRunNoticeTests {
         var (store, config) = Fresh(dir);
         store.Arm();
 
-        await Assert.That(FirstRunNoticeEmitter.Resolve(optedOut: true, config)).IsNull();
+        await Assert.That(FirstRunNoticeEmitter.Resolve(true, config, HarnessId.Claude, TestHarnesses.All())).IsNull();
         await Assert.That(store.IsArmed()).IsTrue();
     }
 }

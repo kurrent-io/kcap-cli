@@ -14,12 +14,19 @@ terminal, which works for someone watching it and is the weakest link the moment
 install -- one line at the end of a long transcript, which it has to remember to pass on.
 
 So the next session says it instead. Setup leaves a one-shot marker, and the first session to start
-with hooks in place carries a SessionStart fragment saying recording is on and offering the tour.
-That session is the one that can say it truthfully: the fragment is delivered by the hook whose
-existence is the thing being announced.
+with hooks in place carries a SessionStart fragment saying kcap is wired in, and offering the tour.
+That session is the one that can say it: the fragment is delivered by the hook whose presence is the
+thing being announced.
 
-The marker is claimed under the config lock, so several agents started at once deliver it once
-between them rather than each -- a bare delete races, and a rename only picks a single winner where
+It claims no more than that. Whether this particular session reaches the server is a separate
+question with its own notice - a rejected token already says so - and a fragment asserting "you are
+being recorded" would be the line contradicting it. The tour is offered only where the MCP servers it
+reads through are registered, the same call setup's own Next-steps box makes.
+
+Resolving takes the marker, so it is resolved only where the output is going to be delivered -
+OpenCode's older-plugin gate discards this stdout, and outside that gate the one notice would be
+spent on a session that never showed it. The marker is claimed under the config lock, so several
+agents started at once deliver it once between them rather than each -- a bare delete races, and a rename only picks a single winner where
 the filesystem makes renaming atomic, which is not the same on every platform. The claim never waits
 for the lock: it runs on the SessionStart hook path, where the budget belongs to session capture. Opting out with `disable_first_run_notice` suppresses the fragment without
 consuming the marker, so turning the notice back on before the first session still delivers it. It

@@ -412,7 +412,7 @@ sealed class CodexHookCommand(
             WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config));
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Codex, harnesses));
 
         await RunSessionStartHandshakeForTest(
             writeStdout: () => WriteSessionStartOutput(Console.Out, fragment, workItemsNudge),

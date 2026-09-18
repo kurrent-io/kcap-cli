@@ -220,7 +220,7 @@ sealed class AntigravityHookCommand(
                 WorkItemsNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
                 PlansNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
                 HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config))
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Antigravity, harnesses))
             : null;
         WritePreInvocationOutput(stdout, fragment, workItemsNudge);
         await stdout.FlushAsync();
