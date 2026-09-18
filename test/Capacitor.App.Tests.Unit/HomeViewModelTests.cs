@@ -715,8 +715,6 @@ public class HomeViewModelTests {
         });
     }
 
-    /// A live app lane plus a daemon that never reaches "connected" must leave Connecting
-    /// after CatchUpLimit and offer Sign in.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ALiveAppLaneStopsTreatingDaemonDisconnectAsConnectingAfterTheCatchUpBound() {

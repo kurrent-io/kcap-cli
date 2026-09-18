@@ -362,6 +362,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ITimer _retentionTimer;
     readonly ITimer _catchUpTimer;
     bool _catchUpArmed;
+    long _catchUpGeneration;
+    DateTimeOffset _catchUpDeadline;
 
     // Live mirrors of the attachment gate's inputs, read (never bound) by the in-method re-check
     // StartAsync runs against the captured draft rather than the current selection.
@@ -716,6 +718,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     void StopCatchUp() {
         _catchUpArmed = false;
+        _catchUpGeneration++;
         _catchUpTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         if (_catchUpTimedOut.Value) _catchUpTimedOut.OnNext(false);
     }
@@ -724,12 +727,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (_disposed) return;
         _catchUpTimedOut.OnNext(false);
         _catchUpArmed = true;
+        _catchUpGeneration++;
+        _catchUpDeadline = _time.GetUtcNow().Add(CatchUpLimit);
         _catchUpTimer.Change(CatchUpLimit, Timeout.InfiniteTimeSpan);
     }
 
     void OnCatchUpElapsed() {
+        var generation = _catchUpGeneration;
         RxSchedulers.MainThreadScheduler.Schedule(() => {
-            if (_disposed || !_catchUpArmed) return;
+            if (_disposed || generation != _catchUpGeneration || !_catchUpArmed) return;
+            if (_time.GetUtcNow() < _catchUpDeadline) return;
             _awaitingServerAfterSignIn.OnNext(false);
             _catchUpTimedOut.OnNext(true);
         });
