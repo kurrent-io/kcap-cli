@@ -18,8 +18,10 @@ with hooks in place carries a SessionStart fragment saying recording is on and o
 That session is the one that can say it truthfully: the fragment is delivered by the hook whose
 existence is the thing being announced.
 
-The marker is claimed by an atomic rename, so several agents started at once deliver it once between
-them rather than each. Opting out with `disable_first_run_notice` suppresses the fragment without
+The marker is claimed under the config lock, so several agents started at once deliver it once
+between them rather than each -- a bare delete races, and a rename only picks a single winner where
+the filesystem makes renaming atomic, which is not the same on every platform. The claim never waits
+for the lock: it runs on the SessionStart hook path, where the budget belongs to session capture. Opting out with `disable_first_run_notice` suppresses the fragment without
 consuming the marker, so turning the notice back on before the first session still delivers it. It
 is armed only when setup actually installed something -- with nothing wired up there is nothing to
 announce.

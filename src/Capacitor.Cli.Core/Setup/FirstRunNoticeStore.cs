@@ -9,9 +9,9 @@ namespace Capacitor.Cli.Core.Setup;
 /// that may have scrolled past — or, when a tool drove the install, one line inside a transcript it
 /// has to remember to relay. This marker is what lets the NEXT session say it instead.</para>
 ///
-/// <para>Claiming is an atomic rename, so exactly one session takes the notice however many start at
-/// once. Nothing here throws: a marker that cannot be written costs a notice, and a notice is not
-/// worth failing a setup over.</para>
+/// <para>Claiming runs under the config lock, so exactly one session takes the notice however many
+/// start at once. Nothing here throws: a marker that cannot be written costs a notice, and a notice
+/// is not worth failing a setup over.</para>
 /// </summary>
 public sealed class FirstRunNoticeStore(ConfigRoot config) {
     const string MarkerFileName = "first-run-notice";
@@ -34,24 +34,35 @@ public sealed class FirstRunNoticeStore(ConfigRoot config) {
     }
 
     /// <summary>
-    /// Takes the notice if it is there, and leaves nothing behind. The rename is the claim: two
-    /// sessions starting together both attempt it, the loser's source no longer exists, and the
-    /// notice is delivered once rather than twice.
+    /// Takes the notice if it is there, and leaves nothing behind.
+    ///
+    /// <para>The lock is what makes it one-shot: a bare delete races, and a rename only decides a
+    /// single winner where the filesystem makes renaming atomic, which is not something to rely on
+    /// across platforms. <paramref name="lockTimeout"/> defaults to no wait at all, because this runs
+    /// on the SessionStart hook path where the budget belongs to session capture: a session that
+    /// loses the race reports nothing rather than holding the hook open, and the winner is already
+    /// delivering the notice.</para>
     /// </summary>
-    public bool TryClaim() {
-        var claimed = $"{_markerPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.claimed";
+    public bool TryClaim(TimeSpan? lockTimeout = null) {
+        IDisposable lease;
 
         try {
-            File.Move(_markerPath, claimed);
+            lease = config.AcquireLock(MarkerFileName, lockTimeout ?? TimeSpan.Zero);
         } catch {
             return false;
         }
 
-        // Best effort: the claim already happened above, and a leftover file here only wastes a few
-        // bytes — it is never read.
-        try { File.Delete(claimed); } catch { /* ignored */ }
+        using (lease) {
+            try {
+                if (!File.Exists(_markerPath)) return false;
 
-        return true;
+                File.Delete(_markerPath);
+
+                return true;
+            } catch {
+                return false;
+            }
+        }
     }
 
     /// <summary>Whether a notice is waiting, without taking it. For <c>status</c>-shaped readers.</summary>

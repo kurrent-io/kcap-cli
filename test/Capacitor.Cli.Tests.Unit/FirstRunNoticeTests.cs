@@ -42,7 +42,10 @@ public class FirstRunNoticeTests {
         var (store, _) = Fresh(dir);
         store.Arm();
 
-        var claims = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(store.TryClaim)));
+        // A real race: every session waits for the lock rather than skipping on contention, so the
+        // test asserts that exactly one takes it, not that the others happened to arrive late.
+        var wait   = TimeSpan.FromSeconds(5);
+        var claims = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => store.TryClaim(wait))));
 
         await Assert.That(claims.Count(c => c)).IsEqualTo(1);
     }
