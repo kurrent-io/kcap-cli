@@ -271,6 +271,26 @@ public class WorkContextViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Who_header_does_not_dim_on_press_when_the_list_does_not_overflow() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var button = host.Find<Button>("WhoToggle");
+            var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(centre);
+            host.Window.MouseDown(centre, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(button.Classes.Contains(":pressed")).IsTrue()
+                .Because("the press must register for the assertion to mean anything");
+            await Assert.That(WhoPresenter(button).Opacity).IsEqualTo(1);
+            await Assert.That(Alpha(WhoPresenter(button).Background)).IsEqualTo((byte)0);
+            host.Window.MouseUp(centre, MouseButton.Left);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Who_header_paints_hover_when_the_list_overflows() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();

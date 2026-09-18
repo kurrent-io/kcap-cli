@@ -1,5 +1,8 @@
 using System.Reactive;
 using Avalonia.Collections;
+using Capacitor.App.Services;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
@@ -14,6 +17,8 @@ public sealed partial class WorkContextViewModel {
     readonly AvaloniaList<WorkContextPartViewModel> _parts = new();
     readonly AvaloniaList<string> _blockedBy = new();
     readonly AvaloniaList<WorkContextLinkViewModel> _links = new();
+    readonly List<WorkContextLinkViewModel> _summaryPrs = [];
+    readonly List<WorkContextLinkViewModel> _workItemPrs = [];
     readonly AvaloniaList<WorkContextPersonViewModel> _contributors = new();
     // The card's identity is the id the server served, which for an absorbed item is the survivor's
     // rather than the assignment's; the requested id stands in when a read carried no item.
@@ -54,7 +59,7 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(DisplayTitle));
         this.RaisePropertyChanged(nameof(HasInlineIssue));
         this.RaisePropertyChanged(nameof(HasSeparateIssue));
-        this.RaisePropertyChanged(nameof(HasRelated));
+        RaiseRelated();
     }
     string? _overview;
     public string? Overview { get => _overview; private set => this.RaiseAndSetIfChanged(ref _overview, value); }
@@ -101,7 +106,24 @@ public sealed partial class WorkContextViewModel {
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasIssue => Issue is not null;
     public bool HasContributors => _contributors.Count > 0;
-    public bool HasRelated => HasPullRequestContext || HasSeparateIssue || (ShowsLegacyLinks && _links.Count > 0);
+    public bool HasRelated => HasSeparateIssue;
+    public bool CanOpenPullRequest => PullRequests is { HasPullRequest: true } || _links.Any(l => l.CanOpen);
+    WorkContextLinkViewModel? FirstLinkedPullRequest => _links.Count > 0 ? _links[0] : null;
+    public string PullRequestNumberText =>
+        PullRequests is { NumberLabel.Length: > 0 } prs ? prs.NumberLabel
+        : FirstLinkedPullRequest?.Key ?? "";
+    public string PullRequestTitleText =>
+        PullRequests is { Title.Length: > 0 } prs ? prs.Title
+        : FirstLinkedPullRequest?.Title ?? "";
+    /// Empty copy waits until the session list and the work-item read have both settled — an
+    /// earlier miss is often the item's link, not a missing PR.
+    public bool ShowsPullRequestEmpty =>
+        Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem
+        && (PullRequests?.HasListed ?? true)
+        && PullRequests is not { HasPullRequest: true }
+        && _links.Count == 0;
+    public const string PullRequestEmptyNote = "No pull request linked";
+    public bool ShowsPullRequestSection => CanOpenPullRequest || ShowsPullRequestEmpty;
     /// Names stay visible; beyond this the header chevron reveals the rest of the list.
     internal const int VisiblePeopleCap = 4;
     public bool PeopleOverflows => _contributors.Count > VisiblePeopleCap;
@@ -155,18 +177,27 @@ public sealed partial class WorkContextViewModel {
     public ReactiveCommand<Unit, Unit> TogglePeopleCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleSessionCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleSubagentsCommand { get; private set; } = null!;
+    public ReactiveCommand<Unit, Unit> OpenPullRequestCommand { get; private set; } = null!;
 
     void InitializeProjections() {
         TogglePartsCommand   = Toggle(() => PartsExpanded = !PartsExpanded);
         TogglePeopleCommand  = Toggle(() => { if (PeopleOverflows) PeopleExpanded = !PeopleExpanded; });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
         ToggleSubagentsCommand = Toggle(() => SubagentsExpanded = !SubagentsExpanded);
+        OpenPullRequestCommand = Toggle(OpenPullRequest);
     }
 
     ReactiveCommand<Unit, Unit> Toggle(Action flip) {
         var command = ReactiveCommand.Create(flip);
         _disposables.Add(command);
         return command;
+    }
+
+    void OpenPullRequest() {
+        OfferFallbacks();
+        if (PullRequests is { HasPullRequest: true } prs) prs.OpenReader();
+        else if (_links.FirstOrDefault(l => l.CanOpen) is { } link)
+            LinkPolicy.Open(_opener, link.Url);
     }
 
     void UpdateRequester(AgentStatusDto dto, string vendorLabel) {
@@ -183,8 +214,10 @@ public sealed partial class WorkContextViewModel {
 
     void ClearServerProjections() {
         ClearCard();
+        _summaryPrs.Clear();
         _links.Clear();
-        this.RaisePropertyChanged(nameof(HasRelated));
+        OfferFallbacks();
+        RaiseRelated();
     }
 
     void ClearCard() {
@@ -203,6 +236,7 @@ public sealed partial class WorkContextViewModel {
         Issue = null;
         _contributors.Clear();
         SessionCount = 0;
+        _workItemPrs.Clear();
         RaiseCardCounts();
     }
 
@@ -222,7 +256,15 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(PeopleOverflows));
         this.RaisePropertyChanged(nameof(VisibleContributors));
         this.RaisePropertyChanged(nameof(WhoCountText));
+    }
+
+    void RaiseRelated() {
         this.RaisePropertyChanged(nameof(HasRelated));
+        this.RaisePropertyChanged(nameof(CanOpenPullRequest));
+        this.RaisePropertyChanged(nameof(PullRequestNumberText));
+        this.RaisePropertyChanged(nameof(PullRequestTitleText));
+        this.RaisePropertyChanged(nameof(ShowsPullRequestEmpty));
+        this.RaisePropertyChanged(nameof(ShowsPullRequestSection));
     }
 
     void ApplyReady(WorkContextRead read) {
@@ -275,6 +317,7 @@ public sealed partial class WorkContextViewModel {
         Replace(_parts, parts, p => (p.Title, p.Mark));
 
         ApplyIssue(item.Links.FirstOrDefault(l => l.Kind == "issue" && l.LinkClass == "link"));
+        Replace(_workItemPrs, ProjectWorkItemPullRequests(item.Links));
 
         var now = _time.GetUtcNow();
         var people = item.Contributors
@@ -348,24 +391,86 @@ public sealed partial class WorkContextViewModel {
     }
 
     void ApplyLinks(WorkContextRead read) {
-        if (read.SummaryFailed) return;
-        if (read.Summary is not { } summary) return;
-        var primaryRepositories = summary.Repositories.Where(repository => repository.IsPrimary).ToArray();
-        if (primaryRepositories.Length == 1) {
-            var repo = primaryRepositories[0];
-            // The host is inferred from a linked pull request sharing the repository hash, else github.com is assumed.
-            var (provider, host) = RepositoryIdentity(summary, repo.RepoHash);
-            PrimaryRepository = new(provider, host, repo.Owner, repo.RepoName, repo.RepoHash);
-        } else PrimaryRepository = null;
+        if (!read.SummaryFailed && read.Summary is { } summary) {
+            var primaryRepositories = summary.Repositories.Where(repository => repository.IsPrimary).ToArray();
+            if (primaryRepositories.Length == 1) {
+                var repo = primaryRepositories[0];
+                // The host is inferred from a linked pull request sharing the repository hash, else github.com is assumed.
+                var (provider, host) = RepositoryIdentity(summary, repo.RepoHash);
+                PrimaryRepository = new(provider, host, repo.Owner, repo.RepoName, repo.RepoHash);
+            } else PrimaryRepository = null;
 
-        var cards = summary.PullRequests
-            .Select(pr => Link(pr.Number, pr.Title, pr.Url))
-            .ToList();
-        if (summary.PrNumber is { } number && !summary.PullRequests.Any(pr => SamePullRequest(pr, summary, number)))
-            cards.Add(Link(number, summary.PrTitle, summary.PrUrl));
+            if (ShowsLegacyLinks) {
+                var cards = summary.PullRequests
+                    .Select(pr => Link(pr.Number, pr.Title, pr.Url))
+                    .ToList();
+                if (summary.PrNumber is { } number && !summary.PullRequests.Any(pr => SamePullRequest(pr, summary, number)))
+                    cards.Add(Link(number, summary.PrTitle, summary.PrUrl));
+                Replace(_summaryPrs, cards);
+            } else _summaryPrs.Clear();
+        }
 
+        RebuildLinks();
+    }
+
+    void RebuildLinks() {
+        List<WorkContextLinkViewModel> cards;
+        if (ShowsLegacyLinks) {
+            cards = [.._summaryPrs];
+            foreach (var pr in _workItemPrs)
+                AddUnlessDuplicate(cards, pr);
+        } else {
+            cards = [.._workItemPrs];
+        }
         Replace(_links, cards, l => (l.Key, l.Title, l.Url));
-        this.RaisePropertyChanged(nameof(HasRelated));
+        OfferFallbacks();
+        RaiseRelated();
+    }
+
+    void OfferFallbacks() {
+        if (PullRequests is null) return;
+        var links = new List<PullRequestLinkDto>();
+        foreach (var card in _links)
+            if (TryParsePullRequestLink(card) is { } link) links.Add(link);
+        PullRequests.OfferFallbackLinks(links);
+    }
+
+    static PullRequestLinkDto? TryParsePullRequestLink(WorkContextLinkViewModel card) {
+        if (card.Url is not { Length: > 0 } url || !PrRefParser.TryParse(url, out var owner, out var repo, out var number)
+            || !Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+        return new PullRequestLinkDto {
+            Provider = ProviderOf(uri),
+            Host = uri.IdnHost,
+            RepoHash = RepoHashHelper.ComputeRepoHash(owner, repo),
+            Owner = owner,
+            RepoName = repo,
+            Number = number,
+            Url = url,
+            Title = card.Title.Length > 0 ? card.Title : null,
+        };
+    }
+
+    List<WorkContextLinkViewModel> ProjectWorkItemPullRequests(IReadOnlyList<WorkItemLinkDto> links) {
+        var cards = new List<WorkContextLinkViewModel>();
+        foreach (var link in links) {
+            if (!IsPullRequestKind(link.Kind)) continue;
+            AddUnlessDuplicate(cards, Link(PullRequestKey(link.ShortKey), FirstNonBlank(link.Title), link.Url));
+        }
+        return cards;
+    }
+
+    static bool IsPullRequestKind(string kind) => kind is "pr" or "pull_request" or "pull-request";
+
+    static string PullRequestKey(string shortKey) =>
+        shortKey.StartsWith('!') ? "#" + shortKey[1..] : shortKey;
+
+    static bool SameLink(WorkContextLinkViewModel left, WorkContextLinkViewModel right) =>
+        left.Key == right.Key
+        || left.Url is { Length: > 0 } url && string.Equals(url, right.Url, StringComparison.OrdinalIgnoreCase);
+
+    static void AddUnlessDuplicate(List<WorkContextLinkViewModel> cards, WorkContextLinkViewModel card) {
+        if (cards.TrueForAll(existing => !SameLink(existing, card)))
+            cards.Add(card);
     }
 
     /// A poll that returns the same rows leaves the bound list alone, so the ItemsControl keeps its
@@ -376,15 +481,26 @@ public sealed partial class WorkContextViewModel {
         target.AddRange(incoming);
     }
 
+    static void Replace<T>(List<T> target, List<T> incoming) {
+        target.Clear();
+        target.AddRange(incoming);
+    }
+
     WorkContextLinkViewModel Link(int number, string? title, string? url) =>
-        new("PULL REQUEST", $"#{number}", title ?? "", url, _opener);
+        Link($"#{number}", title, url);
+
+    WorkContextLinkViewModel Link(string key, string? title, string? url) =>
+        new("PULL REQUEST", key, title ?? "", url, _opener);
 
     static (string Provider, string Host) RepositoryIdentity(SessionSummaryDto summary, string repoHash) {
         var link = summary.PullRequests.FirstOrDefault(pr => pr.RepoHash == repoHash && PullRequestWire.SafeLink(pr.Url) is not null);
         if (link is null) return ("github", "github.com");
         var uri = new Uri(PullRequestWire.SafeLink(link.Url)!);
-        return (uri.AbsolutePath.Contains("/-/merge_requests/", StringComparison.Ordinal) ? "gitlab" : "github", uri.IdnHost);
+        return (ProviderOf(uri), uri.IdnHost);
     }
+
+    static string ProviderOf(Uri uri) =>
+        uri.AbsolutePath.Contains("/-/merge_requests/", StringComparison.Ordinal) ? "gitlab" : "github";
 
     /// PR numbers are repository-local; without a repository identity on the summary the number
     /// alone decides, which never shows one PR twice.

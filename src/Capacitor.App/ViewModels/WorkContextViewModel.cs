@@ -4,6 +4,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.ComponentModel;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
@@ -23,7 +24,20 @@ public enum WorkContextPhase { WaitingForSession, Loading, Ready, NoWorkItem, Si
 /// read; a result applies only for the current lease, every lease is kept until its read settles
 /// so teardown can await them all, and every lease transition happens on the UI thread.
 public sealed partial class WorkContextViewModel : ReactiveObject {
-    public PullRequestContextViewModel? PullRequests { get; internal set; }
+    PullRequestContextViewModel? _pullRequests;
+    public PullRequestContextViewModel? PullRequests {
+        get => _pullRequests;
+        internal set {
+            _pullRequests = value;
+            if (value is not null) {
+                value.PropertyChanged += OnPullRequestChanged;
+                _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
+                OfferFallbacks();
+            }
+            this.RaisePropertyChanged(nameof(HasPullRequestContext));
+            RaiseRelated();
+        }
+    }
     public bool HasPullRequestContext => PullRequests is not null;
     public bool ShowsLegacyLinks => PullRequests is null;
     public PullRequestRepository? PrimaryRepository { get; private set; }
@@ -120,6 +134,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             this.RaisePropertyChanged(nameof(IsReady));
             this.RaisePropertyChanged(nameof(ShowsSignIn));
             this.RaisePropertyChanged(nameof(ShowsRetry));
+            RaiseRelated();
         }
     }
 
@@ -136,6 +151,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public bool IsReady     => Phase == WorkContextPhase.Ready;
     public bool ShowsSignIn => Phase == WorkContextPhase.SignedOut;
     public bool ShowsRetry  => Phase == WorkContextPhase.Unreachable;
+
+    void OnPullRequestChanged(object? sender, PropertyChangedEventArgs e) {
+        if (e.PropertyName is nameof(PullRequestContextViewModel.Title)
+            or nameof(PullRequestContextViewModel.NumberLabel)
+            or nameof(PullRequestContextViewModel.HasPullRequest)
+            or nameof(PullRequestContextViewModel.HasListed))
+            RaiseRelated();
+    }
 
     bool _isStale;
     public bool IsStale { get => _isStale; private set => this.RaiseAndSetIfChanged(ref _isStale, value); }

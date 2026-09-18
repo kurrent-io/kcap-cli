@@ -116,10 +116,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public string? Reason => _reason?.Value;
 
     // The server lane's silent-deafness diagnostic — informational only, never blocking; null
-    // while the lane is healthy or absent. ConnectionTip is what the footer actually hovers:
-    // this diagnostic when present, otherwise copy that names the attach (not the visible word).
+    // while the lane is healthy or absent. Two-line hovers put extra info on the lighter line
+    // and the fragment's name (AttachStatusTip, ServerUrlTip, …) on the darker caption; a
+    // fragment with nothing extra keeps the name as a one-line tip.
     ObservableAsPropertyHelper<string?>? _serverLaneTip;
     public string? ServerLaneTip => _serverLaneTip?.Value;
+
+    ObservableAsPropertyHelper<bool>? _connectionHasDetail;
+    public bool ConnectionHasDetail => _connectionHasDetail?.Value ?? false;
 
     ObservableAsPropertyHelper<string>? _connectionTip;
     public string ConnectionTip => _connectionTip?.Value ?? AttachStatusTip;
@@ -131,6 +135,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// server it talks to is what the hover tells you.
     public const string ServerUrlTip = "Capacitor server for this organization";
     public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
+    public const string AgentCountTip = "Agents running on this daemon";
 
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
 
@@ -204,6 +209,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Whether the two report items have somewhere to go — the same oracle the menu bar's items use.
     public bool CanOpenFeedback { get; }
+
+    /// Opens the re-auth sign-in surface. Inert without an action to route it to.
+    public ReactiveCommand<Unit, Unit> SignInCommand { get; }
+
+    ObservableAsPropertyHelper<bool>? _signInVisible;
+    /// True while the footer reads Signed out and a sign-in action exists — the launcher's
+    /// Sign in lives on the other pane and is hidden once a workspace is open.
+    public bool SignInVisible => _signInVisible?.Value ?? false;
 
     string? _startMessage;
     // Cleared on every new start attempt and on Connected; set when a start attempt fails.
@@ -286,6 +299,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Null means a dropped local row is only ever an ended session — the only reading a caller with
     /// no directory can give it.
     /// </param>
+    /// <param name="requestSignIn">
+    /// Opens the re-auth sign-in surface (App owns the window). Null hides the rail Sign in —
+    /// a window with no dialog to open.
+    /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,
             CancellationToken shutdownToken, ActivityViewModel activity, TimeProvider time,
@@ -297,7 +314,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
-            Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null) {
+            Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
+            Action? requestSignIn = null) {
         _service = service;
         _time = time;
         Activity = activity;
@@ -316,6 +334,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         CanOpenFeedback     = openFeedback is not null;
         OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
         OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
+        SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
+        var offersSignIn    = requestSignIn is not null;
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
         // "not currently executing" (confirmed against the installed ReactiveUI 23.2.28 API
@@ -399,6 +419,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DistinctUntilChanged()
                 .ObserveOn(RxSchedulers.MainThreadScheduler);
 
+            _signInVisible = signInExpired
+                .Select(expired => expired && offersSignIn)
+                .ToProperty(this, x => x.SignInVisible, false)
+                .DisposeWith(disposables);
+
             _connectionDisplay = status.CombineLatest(daemonConnection, signInExpired, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
@@ -446,6 +471,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             _serverLaneTip = lane
                 .Select(s => s.Diagnostic)
                 .ToProperty(this, x => x.ServerLaneTip, (string?)null)
+                .DisposeWith(disposables);
+
+            _connectionHasDetail = lane
+                .Select(s => !string.IsNullOrWhiteSpace(s.Diagnostic))
+                .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
             _connectionTip = lane

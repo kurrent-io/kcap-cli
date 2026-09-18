@@ -28,6 +28,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly Dictionary<PullRequestSubjectDto, Position> _positions = [];
     readonly HashSet<string> _pageRequests = new(StringComparer.Ordinal);
     readonly AvaloniaList<PullRequestChoice> _choices = [];
+    readonly List<PullRequestLinkDto> _sessionItems = [];
+    readonly List<PullRequestLinkDto> _fallbackItems = [];
     // A subject, not WhenAnyValue: that needs ReactiveUI's global init, which a headless test run does not reliably prime first.
     readonly BehaviorSubject<bool> _hasPullRequest = new(false);
     readonly ITimer _timer;
@@ -55,6 +57,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     bool _stopped;
     bool _disposed;
     bool _legacy;
+    bool _hasListed;
     long? _lastRefresh;
     long? _lastOverview;
     DateTime? _retryAt;
@@ -78,6 +81,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool HasChoice => _selected is not null;
     public bool HasPullRequest => _choices.Any(choice => choice.IsAvailable);
     public IObservable<bool> HasPullRequestChanges => _hasPullRequest;
+    public bool HasListed => _hasListed;
     public bool IsLegacy => _legacy;
     public string Section => _section;
     public double ScrollOffset { get; set; }
@@ -118,7 +122,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _primaryRepo = primaryRepo;
         _readers = source as IPullRequestReaders;
         RefreshCommand = ReactiveCommand.Create(Refresh);
-        OpenReaderCommand = ReactiveCommand.Create(() => { _openReader(); SetReaderVisible(true); });
+        OpenReaderCommand = ReactiveCommand.Create(OpenReader);
         ShowSectionCommand = ReactiveCommand.Create<string>(ShowSection);
         LoadMoreCommand = ReactiveCommand.Create(() => { if (CurrentSection?.Next is { } cursor) RequestPage(cursor); });
         ReloadEarlierCommand = ReactiveCommand.Create(() => { if (CurrentSection?.Evicted is { } cursor) RequestPage(cursor, earlier: true); });
@@ -149,14 +153,17 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             CancelReads();
             _session = id;
             _choices.Clear();
+            _sessionItems.Clear();
             _selected = null;
             _explicitSelection = false;
             _positions.Clear();
             ClearProtected();
             _stopped = false;
+            _hasListed = false;
             _lastRefresh = null;
             SetNotice("Loading pull requests…");
             RequestRefresh();
+            if (_fallbackItems.Count > 0) ApplyChoices(listed: false);
         }).DisposeWith(_subscriptions);
         signInCompleted?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
             if (_session is null || _disposed) return;
@@ -185,6 +192,18 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     }
     /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
     public void Refresh() => RequestRefresh(manual: true);
+    public void OpenReader() {
+        if (_disposed || !HasPullRequest) return;
+        _openReader();
+        SetReaderVisible(true);
+    }
+    /// Work-item PR links the session list has not admitted yet, so the in-app reader can open.
+    public void OfferFallbackLinks(IReadOnlyList<PullRequestLinkDto> links) {
+        if (_disposed) return;
+        _fallbackItems.Clear();
+        _fallbackItems.AddRange(links);
+        if (_session is not null) ApplyChoices(listed: _hasListed);
+    }
     public void SetReaderVisible(bool visible) {
         if (_readerVisible == visible) return;
         _readerVisible = visible;

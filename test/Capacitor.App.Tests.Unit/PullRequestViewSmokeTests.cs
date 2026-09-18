@@ -61,7 +61,7 @@ public class PullRequestViewSmokeTests {
     });
 
     [Test]
-    public Task The_tab_shows_only_while_the_session_has_a_linked_PR_and_the_sidebar_card_always_shows() => RunOnUiAsync(async () => {
+    public Task The_tab_and_sidebar_section_show_only_while_a_PR_is_linked() => RunOnUiAsync(async () => {
         var daemon = new FakeDaemonClientService();
         var time = new FakeTimeProvider();
         var source = new FakePullRequestSource(time) { Links = [] };
@@ -73,15 +73,17 @@ public class PullRequestViewSmokeTests {
         try {
             daemon.Agents.AddOrUpdate(Agent("agent", "claude", hasTerminal: false, sessionId: "session"));
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var pane = view.FindControl<WorkContextView>("WorkContextHost")!;
             var tab = view.FindControl<Button>("PullRequestTabButton")!;
-            var card = view.FindControl<WorkContextView>("WorkContextHost")!.FindControl<PullRequestCard>("PullRequestCard")!;
+            var section = pane.FindControl<StackPanel>("PullRequestSection")!;
             vm.PullRequests!.SetForeground(true);
             await WaitUntilAsync(() => source.Lists == 1 && !vm.PullRequests.IsReading, what: "empty PR list applied");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
-            await Assert.That(card.IsVisible).IsTrue();
+            await Assert.That(section.IsVisible).IsFalse();
             await Assert.That(vm.PullRequests.Title).IsEqualTo("");
-            await Assert.That(vm.PullRequests.Notice).IsEqualTo("No pull requests linked to this session.");
+            await Assert.That(vm.PullRequests.Notice).IsEqualTo("");
+            await Assert.That(vm.WorkContext.ShowsPullRequestEmpty).IsFalse();
 
             source.Links = [FakePullRequestSource.Link(1)];
             time.Advance(TimeSpan.FromSeconds(16));
@@ -89,7 +91,7 @@ public class PullRequestViewSmokeTests {
             await WaitUntilAsync(() => vm.PullRequests.CanReveal, what: "linked PR loaded");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsTrue();
-            await Assert.That(card.IsVisible).IsTrue();
+            await Assert.That(section.IsVisible).IsTrue();
 
             await vm.ShowPullRequestCommand.Execute();
             source.Links = [];
@@ -98,7 +100,7 @@ public class PullRequestViewSmokeTests {
             await WaitUntilAsync(() => !vm.PullRequests.HasPullRequest, what: "PR unlinked");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
-            await Assert.That(card.IsVisible).IsTrue();
+            await Assert.That(section.IsVisible).IsFalse();
             await Assert.That(vm.IsChatActive).IsTrue();
         } finally { window.Close(); await vm.TeardownAsync(); }
     });

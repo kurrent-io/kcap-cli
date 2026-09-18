@@ -36,6 +36,10 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _needsYou;
     public bool NeedsYou => _needsYou.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _showsHeaderBadge;
+    /// Collapsed-header chrome only; expanded, the session rows carry the same badge.
+    public bool ShowsHeaderBadge => _showsHeaderBadge.Value;
+
     readonly ObservableAsPropertyHelper<string> _statusBadge;
     public string StatusBadge => _statusBadge.Value;
 
@@ -104,7 +108,8 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
         _isExpanded = expanded
             .ToProperty(this, x => x.IsExpanded)
             .DisposeWith(_disposables);
-        _sessionsVisible = expanded.Select(isExpanded => isExpanded || !showHeader)
+        var sessionsVisible = expanded.Select(isExpanded => isExpanded || !showHeader);
+        _sessionsVisible = sessionsVisible
             .ToProperty(this, x => x.SessionsVisible)
             .DisposeWith(_disposables);
         ToggleCommand = ReactiveCommand.Create(() => collapse.Set(path, IsExpanded));
@@ -118,10 +123,16 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
         // Both projections compare against AgentRow.Id (the logical agent id), never the cache's
         // own key — that key is source-scoped ("local:"/"remote:" prefixed) so it never matches
         // selectedAgentId or an agentsWithPending member verbatim.
-        _needsYou = sessionsCache.Connect().QueryWhenChanged()
+        var needsYou = sessionsCache.Connect().QueryWhenChanged()
             .CombineLatest(agentsWithPending, (q, set) =>
-                q.Items.Any(r => SessionStatusDots.NeedsAttention(r) || set.Contains(r.Id)))
+                q.Items.Any(r => SessionStatusDots.NeedsAttention(r) || set.Contains(r.Id)));
+        _needsYou = needsYou
             .ToProperty(this, x => x.NeedsYou, initialValue: false)
+            .DisposeWith(_disposables);
+        _showsHeaderBadge = needsYou.CombineLatest(
+                sessionsVisible,
+                (needs, visible) => needs && !visible)
+            .ToProperty(this, x => x.ShowsHeaderBadge, initialValue: false)
             .DisposeWith(_disposables);
 
         _statusBadge = sessionsCache.Connect().QueryWhenChanged()

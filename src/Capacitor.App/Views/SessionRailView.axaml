@@ -20,6 +20,9 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="7" />
+            <!-- 32 is the attention badge (20) plus the header's vertical padding; without a
+                 floor the collapsed header grows onto the badge and the rail jumps. -->
+            <Setter Property="MinHeight" Value="32" />
         </Style>
         <Style Selector="Button.holdsSelected">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
@@ -68,6 +71,9 @@
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <Style Selector="TextBlock.footerMeta.restartPending">
+            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+        </Style>
         <!-- U+00B7 sits at mid x-height by design, so the glyph centres itself against the
              fragments it separates. It is enlarged by a render transform rather than a FontSize,
              which would give it a taller line box than the row and drop its baseline below the
@@ -78,6 +84,9 @@
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
             <Setter Property="Text" Value="·" />
             <Setter Property="RenderTransform" Value="scale(1.5)" />
+        </Style>
+        <Style Selector="WrapPanel#RailDaemonRow > TextBlock">
+            <Setter Property="Margin" Value="0,0,5,0" />
         </Style>
         <!-- WrapPanel Center matches layout boxes, not glyph baselines, so a padded 11px
              chip sits the vendor word high of 12.5px meta. One line box and Bottom
@@ -144,28 +153,51 @@
                  then the daemon on this machine and what it is running. The server URL rides the
                  org's hover — at rail width it wraps to two lines and outweighs its neighbours. -->
             <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
-                <StackPanel Margin="16,10,16,10" Spacing="2">
-                    <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7"
-                                ToolTip.Tip="{Binding ConnectionTip}">
-                        <!-- The word IS the indicator: it takes StatusBrush itself, so the status
-                             colour needs no disc with a line box of its own to align against.
-                             Both fragments draw their size from footerValue and override only the
-                             brush, so the row cannot end up with two sizes and two baselines. -->
-                        <TextBlock Text="{Binding ConnectionDisplay}" Classes="footerValue"
-                                   Foreground="{Binding StatusBrush}" TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" Classes="footerValue"
-                                   Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis"
-                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <StackPanel x:Name="RailFooterPanel" Margin="16,10,16,10" Spacing="6">
+                    <DockPanel>
+                        <Button x:Name="RailSignInButton" DockPanel.Dock="Right" Classes="kcapChip"
+                                Content="Sign in" Command="{Binding SignInCommand}"
+                                IsVisible="{Binding SignInVisible}"
+                                FontSize="11" FontWeight="SemiBold" Padding="8,3" CornerRadius="6"
+                                Margin="8,0,0,0" VerticalAlignment="Center"
+                                AutomationProperties.Name="Sign in" />
+                        <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
+                            <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
+                                 diagnostic takes the extra slot; without one the caption stands
+                                 alone at default colour, same as daemon / agents / help. -->
                             <ToolTip.Tip>
                                 <StackPanel Spacing="2">
-                                    <TextBlock Text="{Binding ServerUrl}" />
-                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.ServerUrlTip}"
-                                               FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
+                                    <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
+                                               IsVisible="{Binding ConnectionHasDetail}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                               Classes="kcapTipCaption"
+                                               IsVisible="{Binding ConnectionHasDetail}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                               IsVisible="{Binding !ConnectionHasDetail}" />
                                 </StackPanel>
                             </ToolTip.Tip>
-                        </TextBlock>
-                    </StackPanel>
-                    <DockPanel>
+                            <!-- The word IS the indicator: it takes StatusBrush itself, so the status
+                                 colour needs no disc with a line box of its own to align against.
+                                 Both fragments draw their size from footerValue and override only the
+                                 brush, so the row cannot end up with two sizes and two baselines. -->
+                            <TextBlock Text="{Binding ConnectionDisplay}" Classes="footerValue"
+                                       Foreground="{Binding StatusBrush}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" Classes="footerValue"
+                                       Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis"
+                                       IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <ToolTip.Tip>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding ServerUrl}" />
+                                        <TextBlock Text="{x:Static vm:MainWindowViewModel.ServerUrlTip}"
+                                                   Classes="kcapTipCaption" />
+                                    </StackPanel>
+                                </ToolTip.Tip>
+                            </TextBlock>
+                        </StackPanel>
+                    </DockPanel>
+                    <!-- ClipToBounds plus WrapPanel: a horizontal StackPanel sizes children
+                         unbounded, so a long daemon line paints into the help chip. -->
+                    <DockPanel ClipToBounds="True">
                         <Button x:Name="RailHelpButton" DockPanel.Dock="Right" Classes="kcapChip"
                                 Width="22" Height="22" Padding="0" CornerRadius="6" Margin="10,0,0,0"
                                 ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support"
@@ -201,8 +233,7 @@
                              font size across the row, so the baselines coincide outright.
                              Each dot repeats the visibility of the fragment to its RIGHT, so a
                              fragment takes its separator with it rather than leaving it dangling. -->
-                        <StackPanel x:Name="RailDaemonRow" Orientation="Horizontal" Spacing="5"
-                                    VerticalAlignment="Bottom">
+                        <WrapPanel x:Name="RailDaemonRow" VerticalAlignment="Bottom">
                             <TextBlock x:Name="RailDaemonNameText" Text="{Binding DaemonName}" Classes="footerMeta"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip.Tip="{x:Static vm:MainWindowViewModel.DaemonNameTip}"
@@ -210,17 +241,26 @@
                             <TextBlock Classes="footerDot"
                                        IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay}" Classes="footerMeta"
-                                       ToolTip.Tip="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
-                                       IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                       Classes.restartPending="{Binding RestartPending}"
+                                       IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <ToolTip.Tip>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"
+                                                   IsVisible="{Binding RestartPending}" />
+                                        <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
+                                                   Classes="kcapTipCaption"
+                                                   IsVisible="{Binding RestartPending}" />
+                                        <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
+                                                   IsVisible="{Binding !RestartPending}" />
+                                    </StackPanel>
+                                </ToolTip.Tip>
+                            </TextBlock>
                             <TextBlock Classes="footerDot"
                                        IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
+                                       ToolTip.Tip="{x:Static vm:MainWindowViewModel.AgentCountTip}"
                                        IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            <TextBlock Classes="footerDot" IsVisible="{Binding RestartPending}" />
-                            <TextBlock Text="update pending" Classes="footerMeta"
-                                       ToolTip.Tip="{Binding RestartPendingText}"
-                                       IsVisible="{Binding RestartPending}" />
-                        </StackPanel>
+                        </WrapPanel>
                     </DockPanel>
                 </StackPanel>
             </Border>
@@ -250,7 +290,7 @@
                                                 <StackPanel>
                                                     <Button Command="{Binding ToggleCommand}" IsVisible="{Binding ShowHeader}"
                                                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                                                            Padding="8,5" Margin="0,2,0,0"
+                                                            Padding="8,6" Margin="0,2,0,0"
                                                             ToolTip.Tip="{Binding Tooltip}"
                                                             Classes="railRow" Classes.holdsSelected="{Binding HoldsSelected}">
                                                         <DockPanel>
@@ -258,7 +298,7 @@
                                                                         VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding CountText}" FontSize="12"
                                                                            Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
-                                                                <Border Classes="attentionBadge" IsVisible="{Binding NeedsYou}">
+                                                                <Border Classes="attentionBadge" IsVisible="{Binding ShowsHeaderBadge}">
                                                                     <Panel>
                                                                         <TextBlock Text="{Binding StatusBadge}" IsVisible="{Binding !ShowsIdleBadge}" />
                                                                         <PathIcon Classes="idleMark" Data="{StaticResource IdleClockIcon}"

@@ -119,7 +119,8 @@ public class WorkspaceViewSmokeTests {
             var pane = Find<WorkContextView>(window, "WorkContextHost")!;
             foreach (var name in new[] {
                 "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
-                "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton", "LinkCards", "IssueCard",
+                "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton",
+                "PullRequestSection", "PullRequestToggle", "PullRequestNumberText", "PullRequestTitleButton", "PullRequestTitleText", "PullRequestEmptyText", "IssueCard",
                 "WhoToggle", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts", "SessionIdButton", "OpenWorkItemButton", "PaneScroll",
             })
                 await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");

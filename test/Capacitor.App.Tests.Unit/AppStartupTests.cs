@@ -55,6 +55,28 @@ public class AppStartupTests {
         await Assert.That(isVisible).IsTrue();
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_restores_the_remembered_window_placement() {
+        await new AppStateStore(Config.Root.Path("app-state.json"))
+            .UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888, WindowX = 120, WindowY = 80 });
+
+        var placement = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            Dispatcher.UIThread.RunJobs();
+            var result = (window.Width, window.Height, window.Position.X, window.Position.Y);
+            window.Close();
+            return result;
+        });
+
+        await Assert.That(placement.Width).IsEqualTo(1552);
+        await Assert.That(placement.Height).IsEqualTo(888);
+        await Assert.That(placement.X).IsEqualTo(120);
+        await Assert.That(placement.Y).IsEqualTo(80);
+    }
+
     /// The service composition StartAsync builds once and shares between the window, the tray and
     /// the pause controller (spec §7 one code path, §11 one banner/stderr channel).
     static (AgentActionService Actions, IAppNotifier Notifier) NewActions(FakeDaemonClientService service) {

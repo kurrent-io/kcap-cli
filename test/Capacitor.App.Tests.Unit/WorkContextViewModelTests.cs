@@ -886,6 +886,107 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// Session-admitted PRs and the work item's own links are different facts. Refreshing the
+    /// session list cannot invent a row that only exists on the item.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_work_item_pull_request_link_shows_when_the_session_has_none() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("issue", "WK-1"),
+                    Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar"),
+                    Link("pull_request", "#764", "https://github.com/kurrent-io/kcap-cli/pull/764", "Also"),
+                ],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Links.Select(l => (l.Eyebrow, l.Key, l.Title, l.Url))).IsEquivalentTo(
+                    new (string, string, string, string?)[] {
+                        ("PULL REQUEST", "#763", "Sidebar", "https://github.com/kurrent-io/kcap-cli/pull/763"),
+                        ("PULL REQUEST", "#764", "Also", "https://github.com/kurrent-io/kcap-cli/pull/764"),
+                    }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
+                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("#763");
+                await Assert.That(h.Vm.PullRequestTitleText).IsEqualTo("Sidebar");
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// An empty session list still offers the work-item PR so the in-app reader can open.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_empty_session_list_offers_the_work_item_pull_request() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var opened = 0;
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => opened++);
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar")],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await WaitUntilAsync(() => source.Lists == 1 && !pullRequests.IsReading, what: "empty session PR list");
+                await Assert.That(pullRequests.HasListed).IsTrue();
+                await Assert.That(pullRequests.HasPullRequest).IsTrue();
+                await Assert.That(pullRequests.Notice).IsEqualTo("");
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await Assert.That(h.Vm.Links[0].Key).IsEqualTo("#763");
+                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("#763");
+                await h.Vm.OpenPullRequestCommand.Execute();
+                await Assert.That(opened).IsEqualTo(1);
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// Empty copy waits until both the session list and the work-item read have settled.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Empty_pull_request_copy_waits_until_the_session_list_and_work_item_have_settled() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            var gate = h.Source.Gate();
+            try {
+                h.Push(Dto());
+                await WaitUntilAsync(() => source.Lists == 1 && pullRequests.HasListed, what: "session PR list settled empty");
+                await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+                await Assert.That(pullRequests.Notice).IsEqualTo("");
+
+                gate.SetResult(ReadyWith(Row("w1", "t"), Item()));
+                await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
+                await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Ready);
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+                await Assert.That(h.Vm.CanOpenPullRequest).IsFalse();
+                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("");
+                await Assert.That(h.Vm.PullRequestTitleText).IsEqualTo("");
+            } finally {
+                if (!gate.Task.IsCompleted) gate.TrySetCanceled();
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     /// The section lists people, so its count names people first; the session count stays beside
     /// it because one person can hold several sessions. Without a listed contributor the requester
     /// row stands in and the session count alone is shown.

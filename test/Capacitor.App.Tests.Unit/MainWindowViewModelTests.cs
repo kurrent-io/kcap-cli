@@ -262,6 +262,43 @@ public class MainWindowViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task SignInVisible_tracks_signed_out_only_when_a_sign_in_action_exists() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var without = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System, laneStatus: lane.Status);
+            var with = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                laneStatus: lane.Status, requestSignIn: () => { });
+            using var a = without.Activator.Activate();
+            using var b = with.Activator.Activate();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+            await Assert.That(without.SignInVisible).IsFalse();
+            await Assert.That(with.SignInVisible).IsTrue();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(with.SignInVisible).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task SignInCommand_invokes_the_supplied_action() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var clicks = 0;
+            var vm = new MainWindowViewModel(
+                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                requestSignIn: () => clicks++);
+            await vm.SignInCommand.Execute().ToTask();
+            await Assert.That(clicks).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task ConnectionTip_uses_the_lane_diagnostic_otherwise_names_attach() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
@@ -271,13 +308,16 @@ public class MainWindowViewModelTests {
             using var activation = vm.Activator.Activate();
 
             await Assert.That(vm.ConnectionTip).IsEqualTo(MainWindowViewModel.AttachStatusTip);
+            await Assert.That(vm.ConnectionHasDetail).IsFalse();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
             await Assert.That(vm.ConnectionTip).IsEqualTo("diagnostic-marker");
             await Assert.That(vm.ServerLaneTip).IsEqualTo("diagnostic-marker");
+            await Assert.That(vm.ConnectionHasDetail).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await Assert.That(vm.ConnectionTip).IsEqualTo(MainWindowViewModel.AttachStatusTip);
+            await Assert.That(vm.ConnectionHasDetail).IsFalse();
         });
     }
 

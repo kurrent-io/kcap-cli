@@ -6,6 +6,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -598,6 +599,27 @@ public class ChatTabViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(host.Composer.Bounds.Width).IsGreaterThan(host.View.Bounds.Width - 100);
+            await host.CloseAsync();
+        });
+    }
+
+    /// Typed composer copy shares the chat body's line box (15 / 24) plus a hair of tracking,
+    /// not Fluent's tight default metrics. The presenter is what paints the glyphs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Composer_text_uses_the_chat_body_line_box() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Type("hello");
+            host.Window.UpdateLayout();
+            var presenter = host.Composer.GetVisualDescendants().OfType<TextPresenter>().Single();
+            await Assert.That(host.Composer.FontSize).IsEqualTo(15);
+            await Assert.That(host.Composer.LineHeight).IsEqualTo(24);
+            await Assert.That(host.Composer.LetterSpacing).IsEqualTo(0.2);
+            await Assert.That(host.Composer.MinHeight).IsEqualTo(44);
+            await Assert.That(presenter.FontSize).IsEqualTo(15);
+            await Assert.That(presenter.LineHeight).IsEqualTo(24);
+            await Assert.That(presenter.LetterSpacing).IsEqualTo(0.2);
             await host.CloseAsync();
         });
     }

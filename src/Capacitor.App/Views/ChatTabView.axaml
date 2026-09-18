@@ -255,7 +255,7 @@
                 <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
                                            IsVisible="{Binding Tray.HasAttachments}" />
                 <TextBox x:Name="ComposerInput" Classes="kcapEmbedded" Text="{Binding ComposerText}" AcceptsReturn="True" TextWrapping="Wrap"
-                         MinHeight="38" MaxHeight="160" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}" />
+                         MinHeight="44" MaxHeight="160" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}" />
                 <!-- A flow participant is addressed through the flow protocol, never messaged
                      directly, so the banner replaces the input rather than overlaying a dead one. -->
                 <Border x:Name="ReadOnlyBanner" IsVisible="{Binding IsReadOnlyParticipant}"

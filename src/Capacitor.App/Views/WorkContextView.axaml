@@ -1,7 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
-             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.WorkContextView"
              x:DataType="vm:WorkContextViewModel"
              Background="{StaticResource KcapSurfaceBrush}">
@@ -50,10 +49,19 @@
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
+        <Style Selector="Button.copyValue /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
         <Style Selector="Button.copyValue:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.copyValue:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="Button.copyValue:pressed">
+            <Setter Property="RenderTransform" Value="scale(1)" />
         </Style>
         <Style Selector="Border.pill.shipped">
             <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
@@ -121,15 +129,25 @@
         <Style Selector="Button.sectionHeader.expandable">
             <Setter Property="Cursor" Value="Hand" />
         </Style>
+        <Style Selector="Button.sectionHeader /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
         <Style Selector="Button.sectionHeader:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.sectionHeader:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="Button.sectionHeader:pressed">
+            <Setter Property="RenderTransform" Value="scale(1)" />
         </Style>
         <Style Selector="Button.sectionHeader.expandable:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.sectionHeader.expandable:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Opacity" Value="1" />
         </Style>
         <!-- Expanded body hangs off the header the same way rail sessions hang off a worktree:
              a left rule plus indent, not a sibling in the pane flow. -->
@@ -340,10 +358,30 @@
                     </StackPanel>
                 </Border>
 
+                <StackPanel x:Name="PullRequestSection" Margin="0,18,0,0" IsVisible="{Binding ShowsPullRequestSection}">
+                <Button x:Name="PullRequestToggle" Classes="sectionHeader">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBlock Text="PULL REQUEST" Classes="eyebrow" />
+                        <TextBlock x:Name="PullRequestNumberText" Grid.Column="1" Text="{Binding PullRequestNumberText}" Classes="sectionMeta"
+                                   IsVisible="{Binding PullRequestNumberText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </Grid>
+                </Button>
+                <Border Classes="sectionBody">
+                    <Panel>
+                        <Button x:Name="PullRequestTitleButton" Classes="copyValue" Command="{Binding OpenPullRequestCommand}"
+                                IsVisible="{Binding CanOpenPullRequest}" ToolTip.Tip="{Binding PullRequestTitleText}"
+                                HorizontalAlignment="Stretch">
+                            <TextBlock x:Name="PullRequestTitleText" Text="{Binding PullRequestTitleText}" FontSize="13" LineHeight="16"
+                                       TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
+                        </Button>
+                        <TextBlock x:Name="PullRequestEmptyText" Text="{x:Static vm:WorkContextViewModel.PullRequestEmptyNote}"
+                                   FontSize="13" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
+                                   IsVisible="{Binding ShowsPullRequestEmpty}" />
+                    </Panel>
+                </Border>
+                </StackPanel>
+
                 <StackPanel Spacing="8" Margin="0,18,0,0" IsVisible="{Binding HasRelated}">
-                    <ItemsControl x:Name="LinkCards" ItemsSource="{Binding Links}" ItemTemplate="{StaticResource LinkCard}" IsVisible="{Binding ShowsLegacyLinks}" />
-                    <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}"
-                        IsVisible="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).HasPullRequestContext}" />
                     <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}" IsVisible="{Binding HasSeparateIssue}" />
                 </StackPanel>
 
