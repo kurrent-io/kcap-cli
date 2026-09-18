@@ -84,13 +84,17 @@ public sealed class ClaudeHookCommand(
 
         var budget = clock.Budget(Ceiling(command));
 
-        // Ahead of every gate below: the hosting daemon's turn-boundary hint is local, so neither
-        // the server's reachability nor the credential may hold it back. Spends this hook's own
-        // budget, which the clock has been counting since the process started. A subagent's tool
-        // call (agent_id set) runs this same hook with the parent's environment, but it is not the
-        // parent's turn: a background subagent must not clear a wait the parent just began.
-        if (agentId is null
-         && command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
+        // Ahead of every gate below: the hosting daemon's hints are local, so neither the server's
+        // reachability nor the credential may hold them back. They spend this hook's own budget,
+        // which the clock has been counting since the process started. A subagent's hook (agent_id
+        // set) runs with the parent's environment but is not the parent's turn: it reports the
+        // subagent alive or gone and never touches the parent's wait — a background subagent must
+        // not clear a wait the parent just began.
+        if (agentId is not null)
+            await DaemonBridgeRelay.NotifySubagentAsync(
+                hosted, "claude", sessionId, cwd, agentId, live: command != "subagent-stop",
+                clock.Time.GetUtcNow().ToUnixTimeMilliseconds(), budget.Remaining);
+        else if (command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
             await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
 
         // The daemon holds a prompt until it hears the tool is done, and an answer given in the
