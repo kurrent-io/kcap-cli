@@ -2651,7 +2651,9 @@ host pins itself opaque: glass is for navigation and controls, never for a readi
 Glass is a control, not a brush — a brush cannot sample what is behind it — so a card is a
 `Surface` whose template changes, and all glass drawing sits in one `GlassLayer`. The chat view's
 own cards stay `Border`s: two are rows of the virtualised list, where a templated control triples
-the visuals, and the view is always opaque. Three traps shaped it. Content drawn beside the glass is captured into the glass's own backdrop and blurred under
+the visuals, and the view is always opaque. A `Surface`'s content joins the visual tree on first
+measure rather than on assignment, so content under a collapsed ancestor is reached through the
+name scope, never by a visual-tree walk. Three traps shaped it. Content drawn beside the glass is captured into the glass's own backdrop and blurred under
 itself, so every glass template's root sets `IsExcludedFromCapture`. The backdrop snapshot is per
 top-level window, so under glass a panel flyout moves into the owner's window
 (`Popup.ShouldUseOverlayLayer`); a native popup would refract only itself. And Fluent's per-state

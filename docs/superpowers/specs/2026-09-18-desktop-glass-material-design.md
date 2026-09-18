@@ -194,6 +194,11 @@ drag-over brush from a style, and a local value would outrank both.
   sat inside the card's excluded `LiquidGlassSurface`. Every glass template in this
   design (surface, chip, both flyout presenters) sets the flag on its root.
 - A material switch re-applies the template around the same `Content` instance.
+- A `Surface`'s content joins the visual tree on the control's first measure, not on
+  assignment as a `Border`'s child does. Under a collapsed ancestor it is never
+  realised, so such content is reached through the name scope (`FindControl`), never
+  by a visual-tree walk. Styles and bindings are unaffected: the content is a logical
+  child from assignment.
 - Glass colours are named resources (`KcapGlass*`) beside the styles, not inline hex.
 
 ### Glass layer
