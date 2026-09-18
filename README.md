@@ -754,9 +754,9 @@ goes to `.claude/skills` and nowhere else — but Copilot, Cursor, and OpenCode 
 `.claude/skills` too, so any of them working in the same checkout can see a skill approved only
 for Claude Code. Claude and Kiro are also the only vendors whose tree is fetched under their own
 name, so a skill restricted to Codex, Copilot, Cursor, Gemini, OpenCode, Pi, or Antigravity is not
-delivered at all: every tree those harnesses read — `.agents/skills` and `.gemini/skills` alike — is
-fetched without a vendor, which keeps every vendor-restricted doc out of it. Requires `kcap login`
-and a repo checkout (the repo is detected from the working directory).
+delivered at all: no request names them, and a request that names no vendor keeps every
+vendor-restricted doc out of what it returns. Requires `kcap login` and a repo checkout (the
+repo is detected from the working directory).
 
 ```bash
 kcap skills sync              # fetch, write and prune this repo's skills

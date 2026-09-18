@@ -75,8 +75,8 @@ today and which an adoption rule driven by measured readers alone would silently
 
 **Which restrictions can be delivered at all.** Only a restriction to Claude or Kiro has a tree
 fetched with that vendor. A skill restricted to Codex, Copilot, Cursor, Gemini, OpenCode, Pi or
-Antigravity is excluded from every request this design makes, because every tree those harnesses
-read — `.agents/skills` and `.gemini/skills` alike — is fetched without a vendor. That is a bounded
+Antigravity is excluded from every request this design makes: no request names them, and a request
+that names no vendor keeps every vendor-restricted doc out of what it returns. That is a bounded
 limitation of the four-tree decision, recorded for #962, not a promise this design keeps.
 
 ## The anchor
@@ -196,7 +196,7 @@ today; both must still clear a pending flag, run migration, and refresh the excl
 
 ## Serialization
 
-The per-worktree manifest lock no longer covers what stays shared: the legacy global manifest, the
+The per-worktree manifest lock does not cover what is shared: the legacy global manifest, the
 global directories it owns, and `info/exclude`, which Git resolves to one file for the repository and
 all its worktrees.
 
