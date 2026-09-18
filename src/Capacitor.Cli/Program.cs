@@ -40,7 +40,12 @@ if (args is ["mcp", "review"] &&
 // to arm if the parent is already gone. Installing later leaves a window where
 // the launching agent can exit during that startup work — the watchdog then
 // never starts and the very first prompt still orphans us.
-if (InteractiveLifetime.IsInteractiveCommand(command)) {
+// The detached remainder import (setup's background child) is meant to OUTLIVE the setup parent,
+// so it must not arm the parent-liveness watchdog — it would Exit(130) the import seconds after
+// setup returns. It has no terminal, prompts or Ctrl-C either, so skip the lifetime install whole.
+var isDetachedImport = command == "import"
+    && DetachedImportLog.FromEnvironment(Environment.GetEnvironmentVariable) is not null;
+if (InteractiveLifetime.IsInteractiveCommand(command) && !isDetachedImport) {
     InteractiveLifetime.Install();
 }
 
