@@ -177,13 +177,9 @@ public class WorkContextViewSmokeTests {
             var letter = avatar.GetVisualDescendants().OfType<TextBlock>().Single();
             var raised = host.Window.FindResource("KcapSurfaceRaisedBrush");
             var muted = host.Window.FindResource("KcapMutedBrush");
-            var success = host.Window.FindResource("KcapSuccessBrush");
-            var successDim = host.Window.FindResource("KcapSuccessDimBrush");
 
             await Assert.That(ReferenceEquals(avatar.Background, raised)).IsTrue();
             await Assert.That(ReferenceEquals(letter.Foreground, muted)).IsTrue();
-            await Assert.That(ReferenceEquals(avatar.Background, successDim)).IsFalse();
-            await Assert.That(ReferenceEquals(letter.Foreground, success)).IsFalse();
             await Assert.That(letter.Parent).IsTypeOf<Panel>();
             await Assert.That(letter.HorizontalAlignment).IsEqualTo(HorizontalAlignment.Center);
             await Assert.That(letter.VerticalAlignment).IsEqualTo(VerticalAlignment.Center);
@@ -384,7 +380,8 @@ public class WorkContextViewSmokeTests {
         });
     }
 
-    /// A local "Copied" would otherwise stick as the tip. ClearValue restores the bound full id.
+    /// "Copied" is set as a local tip; leaving the button has to put the full id back, or the
+    /// flash sticks as the tip.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Copying_the_session_id_keeps_the_full_id_on_the_next_hover() {

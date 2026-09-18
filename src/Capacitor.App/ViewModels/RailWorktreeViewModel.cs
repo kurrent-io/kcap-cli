@@ -40,10 +40,9 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
     /// Collapsed-header chrome only; expanded, the session rows carry the same badge.
     public bool ShowsHeaderBadge => _showsHeaderBadge.Value;
 
-    readonly ObservableAsPropertyHelper<string> _statusBadge;
-    public string StatusBadge => _statusBadge.Value;
-
     readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
+    /// Clock when every attention row is a finished turn; one failure or pending permission
+    /// turns the whole group's badge into "!".
     public bool ShowsIdleBadge => _showsIdleBadge.Value;
 
     readonly ObservableAsPropertyHelper<bool> _holdsSelected;
@@ -135,11 +134,6 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.ShowsHeaderBadge, initialValue: false)
             .DisposeWith(_disposables);
 
-        _statusBadge = sessionsCache.Connect().QueryWhenChanged()
-            .CombineLatest(agentsWithPending, (q, set) =>
-                q.Items.Any(r => r.Status == "Failed" || set.Contains(r.Id)) ? "!" : "")
-            .ToProperty(this, x => x.StatusBadge, initialValue: "")
-            .DisposeWith(_disposables);
         _showsIdleBadge = sessionsCache.Connect().QueryWhenChanged()
             .CombineLatest(agentsWithPending, (q, set) =>
                 q.Items.Any(SessionStatusDots.WaitsOnUser)

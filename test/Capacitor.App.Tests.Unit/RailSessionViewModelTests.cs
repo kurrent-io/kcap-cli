@@ -139,12 +139,10 @@ public class RailSessionViewModelTests {
             using var older   = new RailSessionViewModel(Row(awaitingInput: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             await Assert.That(waiting.NeedsYou).IsTrue();
             await Assert.That(waiting.ShowsIdleBadge).IsTrue();
-            await Assert.That(waiting.StatusBadge).IsEqualTo("");
             await Assert.That(waiting.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running", true));
             await Assert.That(waiting.Tooltip).Contains("waiting for input");
             await Assert.That(working.NeedsYou).IsFalse();
             await Assert.That(working.ShowsIdleBadge).IsFalse();
-            await Assert.That(working.StatusBadge).IsEqualTo("");
             await Assert.That(working.Tooltip).DoesNotContain("waiting for input");
             await Assert.That(older.NeedsYou).IsFalse();
         });
@@ -221,16 +219,15 @@ public class RailSessionViewModelTests {
 
             using var failed = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             await Assert.That(failed.NeedsYou).IsTrue();
-            await Assert.That(failed.StatusBadge).IsEqualTo("!");
+            await Assert.That(failed.ShowsIdleBadge).IsFalse();
 
+            // A pending permission outranks the finished turn: the "!" replaces the clock.
             using var idle = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(idle.StatusBadge).IsEqualTo("");
             await Assert.That(idle.ShowsIdleBadge).IsTrue();
             pending.OnNext(new HashSet<string> { "a1" });
-            await Assert.That(idle.StatusBadge).IsEqualTo("!");
+            await Assert.That(idle.NeedsYou).IsTrue();
             await Assert.That(idle.ShowsIdleBadge).IsFalse();
             pending.OnNext(new HashSet<string>());
-            await Assert.That(idle.StatusBadge).IsEqualTo("");
             await Assert.That(idle.ShowsIdleBadge).IsTrue();
         });
     }

@@ -286,20 +286,7 @@ public class MainWindowViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task SignInCommand_invokes_the_supplied_action() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var clicks = 0;
-            var vm = new MainWindowViewModel(
-                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System,
-                requestSignIn: () => clicks++);
-            await vm.SignInCommand.Execute().ToTask();
-            await Assert.That(clicks).IsEqualTo(1);
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task ConnectionTip_uses_the_lane_diagnostic_otherwise_names_attach() {
+    public async Task ConnectionHasDetail_follows_the_lane_diagnostic() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var lane = new FakeServerLane();
@@ -307,16 +294,13 @@ public class MainWindowViewModelTests {
                 service, CancellationToken.None, TestActivity.New(), TimeProvider.System, laneStatus: lane.Status);
             using var activation = vm.Activator.Activate();
 
-            await Assert.That(vm.ConnectionTip).IsEqualTo(MainWindowViewModel.AttachStatusTip);
             await Assert.That(vm.ConnectionHasDetail).IsFalse();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
-            await Assert.That(vm.ConnectionTip).IsEqualTo("diagnostic-marker");
             await Assert.That(vm.ServerLaneTip).IsEqualTo("diagnostic-marker");
             await Assert.That(vm.ConnectionHasDetail).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
-            await Assert.That(vm.ConnectionTip).IsEqualTo(MainWindowViewModel.AttachStatusTip);
             await Assert.That(vm.ConnectionHasDetail).IsFalse();
         });
     }

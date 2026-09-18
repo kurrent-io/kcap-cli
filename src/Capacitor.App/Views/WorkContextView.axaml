@@ -311,35 +311,35 @@
                                 </Button>
                                 <Border Classes="sectionBody" IsVisible="{Binding PartsExpanded}">
                                     <ItemsControl x:Name="PartsList" ItemsSource="{Binding Parts}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Spacing="8" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:WorkContextPartViewModel">
-                                            <StackPanel Orientation="Horizontal" Spacing="9">
-                                                <!-- Settled is green (outcome). This session is purple like IN FLIGHT — location, not done. -->
-                                                <Panel Width="12" Height="16" VerticalAlignment="Center">
-                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
-                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !IsSettled}" />
-                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
-                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
-                                                    <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
-                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
-                                                    <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
-                                                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsSettled}" />
-                                                    <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
-                                                          Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                          IsVisible="{Binding IsSettled}" />
-                                                </Panel>
-                                                <TextBlock Text="{Binding Title}" FontSize="13" LineHeight="16" TextWrapping="Wrap"
-                                                           VerticalAlignment="Center" Foreground="{StaticResource KcapTextBrush}"
-                                                           Classes.settled="{Binding IsSettled}" />
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Spacing="8" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:WorkContextPartViewModel">
+                                                <StackPanel Orientation="Horizontal" Spacing="9">
+                                                    <!-- Settled is green (outcome). This session is purple like IN FLIGHT — location, not done. -->
+                                                    <Panel Width="12" Height="16" VerticalAlignment="Center">
+                                                        <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !IsSettled}" />
+                                                        <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
+                                                        <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
+                                                        <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsSettled}" />
+                                                        <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
+                                                              Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                              IsVisible="{Binding IsSettled}" />
+                                                    </Panel>
+                                                    <TextBlock Text="{Binding Title}" FontSize="13" LineHeight="16" TextWrapping="Wrap"
+                                                               VerticalAlignment="Center" Foreground="{StaticResource KcapTextBrush}"
+                                                               Classes.settled="{Binding IsSettled}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                 </Border>
                             </StackPanel>
                         </StackPanel>
@@ -359,31 +359,30 @@
                 </Border>
 
                 <StackPanel x:Name="PullRequestSection" Margin="0,18,0,0" IsVisible="{Binding ShowsPullRequestSection}">
-                <Button x:Name="PullRequestToggle" Classes="sectionHeader">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                        <TextBlock Text="PULL REQUEST" Classes="eyebrow" />
-                        <TextBlock x:Name="PullRequestNumberText" Grid.Column="1" Text="{Binding PullRequestNumberText}" Classes="sectionMeta"
-                                   IsVisible="{Binding PullRequestNumberText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    </Grid>
-                </Button>
-                <Border Classes="sectionBody">
-                    <Panel>
-                        <Button x:Name="PullRequestTitleButton" Classes="copyValue" Command="{Binding OpenPullRequestCommand}"
-                                IsVisible="{Binding CanOpenPullRequest}" ToolTip.Tip="{Binding PullRequestTitleText}"
-                                HorizontalAlignment="Stretch">
-                            <TextBlock x:Name="PullRequestTitleText" Text="{Binding PullRequestTitleText}" FontSize="13" LineHeight="16"
-                                       TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
-                        </Button>
-                        <TextBlock x:Name="PullRequestEmptyText" Text="{x:Static vm:WorkContextViewModel.PullRequestEmptyNote}"
-                                   FontSize="13" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                                   IsVisible="{Binding ShowsPullRequestEmpty}" />
-                    </Panel>
-                </Border>
+                    <Button x:Name="PullRequestToggle" Classes="sectionHeader">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <TextBlock Text="PULL REQUEST" Classes="eyebrow" />
+                            <TextBlock x:Name="PullRequestNumberText" Grid.Column="1" Text="{Binding PullRequestNumberText}" Classes="sectionMeta"
+                                       IsVisible="{Binding PullRequestNumberText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </Grid>
+                    </Button>
+                    <Border Classes="sectionBody">
+                        <Panel>
+                            <Button x:Name="PullRequestTitleButton" Classes="copyValue" Command="{Binding OpenPullRequestCommand}"
+                                    IsVisible="{Binding CanOpenPullRequest}"
+                                    HorizontalAlignment="Stretch">
+                                <TextBlock x:Name="PullRequestTitleText" Text="{Binding PullRequestTitleText}" FontSize="13" LineHeight="16"
+                                           TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
+                            </Button>
+                            <TextBlock x:Name="PullRequestEmptyText" Text="{x:Static vm:WorkContextViewModel.PullRequestEmptyNote}"
+                                       FontSize="13" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
+                                       IsVisible="{Binding ShowsPullRequestEmpty}" />
+                        </Panel>
+                    </Border>
                 </StackPanel>
 
-                <StackPanel Spacing="8" Margin="0,18,0,0" IsVisible="{Binding HasRelated}">
-                    <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}" IsVisible="{Binding HasSeparateIssue}" />
-                </StackPanel>
+                <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}"
+                                Margin="0,18,0,0" IsVisible="{Binding HasSeparateIssue}" />
 
                 <!-- Subagents: read from the transcript, so it renders in every pane phase. -->
                 <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasSubagents}" Margin="0,18,0,0">
@@ -425,131 +424,131 @@
 
                 <!-- Session facts. -->
                 <StackPanel Margin="0,18,0,0">
-                <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                        <TextBlock Text="SESSION" Classes="eyebrow" />
-                        <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
-                            <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SessionExpanded}" />
-                            <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SessionExpanded}" />
-                        </Panel>
-                    </Grid>
-                </Button>
-                <Border Classes="sectionBody">
-                    <Panel>
-                <TextBlock x:Name="SessionSummaryText" Text="{Binding SessionSummaryLine}" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
-                           IsVisible="{Binding !SessionExpanded}" />
-                <Grid x:Name="SessionFacts" ColumnDefinitions="108,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
-                      RowSpacing="8"
-                      IsVisible="{Binding SessionExpanded}">
-                    <Grid.Styles>
-                        <Style Selector="TextBlock.factLabel">
-                            <Setter Property="FontSize" Value="10.5" />
-                            <Setter Property="FontWeight" Value="Bold" />
-                            <Setter Property="LetterSpacing" Value="0.8" />
-                            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
-                            <Setter Property="VerticalAlignment" Value="Center" />
-                            <Setter Property="Margin" Value="0,0,12,0" />
-                        </Style>
-                        <Style Selector="SelectableTextBlock.factValue">
-                            <Setter Property="FontSize" Value="13" />
-                            <Setter Property="LineHeight" Value="18" />
-                            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                            <Setter Property="TextWrapping" Value="Wrap" />
-                            <Setter Property="VerticalAlignment" Value="Center" />
-                        </Style>
-                        <Style Selector="TextBlock.factValue">
-                            <Setter Property="FontSize" Value="13" />
-                            <Setter Property="LineHeight" Value="18" />
-                            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                            <Setter Property="VerticalAlignment" Value="Center" />
-                        </Style>
-                    </Grid.Styles>
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="REPOSITORY" Classes="factLabel" />
-                    <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Repository}" Classes="factValue" ToolTip.Tip="{Binding RepositoryPath}" />
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="WORKTREE" Classes="factLabel" />
-                    <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Worktree}" Classes="factValue" ToolTip.Tip="{Binding WorktreePath}" />
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="BRANCH" Classes="factLabel" />
-                    <SelectableTextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Branch}" Classes="factValue" />
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="HARNESS" Classes="factLabel" />
-                    <SelectableTextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Harness}" Classes="factValue" />
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="TRANSPORT" Classes="factLabel" />
-                    <SelectableTextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Transport}" Classes="factValue" />
-                    <TextBlock Grid.Row="5" Grid.Column="0" Text="ID" Classes="factLabel" />
-                    <Button x:Name="SessionIdButton" Grid.Row="5" Grid.Column="1" Classes="copyValue" Click="OnSessionIdClick"
-                            IsVisible="{Binding CanCopySessionId}"
-                            AutomationProperties.Name="Copy session ID"
-                            ToolTip.Tip="{Binding SessionIdText}">
-                        <TextBlock Text="{Binding SessionIdDisplay}" Classes="factValue" />
+                    <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <TextBlock Text="SESSION" Classes="eyebrow" />
+                            <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
+                                <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SessionExpanded}" />
+                                <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SessionExpanded}" />
+                            </Panel>
+                        </Grid>
                     </Button>
-                    <SelectableTextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SessionIdText}" Classes="factValue"
-                                         IsVisible="{Binding !CanCopySessionId}" />
-                </Grid>
-                    </Panel>
-                </Border>
+                    <Border Classes="sectionBody">
+                        <Panel>
+                            <TextBlock x:Name="SessionSummaryText" Text="{Binding SessionSummaryLine}" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
+                                       IsVisible="{Binding !SessionExpanded}" />
+                            <Grid x:Name="SessionFacts" ColumnDefinitions="108,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                                  RowSpacing="8"
+                                  IsVisible="{Binding SessionExpanded}">
+                                <Grid.Styles>
+                                    <Style Selector="TextBlock.factLabel">
+                                        <Setter Property="FontSize" Value="10.5" />
+                                        <Setter Property="FontWeight" Value="Bold" />
+                                        <Setter Property="LetterSpacing" Value="0.8" />
+                                        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+                                        <Setter Property="VerticalAlignment" Value="Center" />
+                                        <Setter Property="Margin" Value="0,0,12,0" />
+                                    </Style>
+                                    <Style Selector="SelectableTextBlock.factValue">
+                                        <Setter Property="FontSize" Value="13" />
+                                        <Setter Property="LineHeight" Value="18" />
+                                        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+                                        <Setter Property="TextWrapping" Value="Wrap" />
+                                        <Setter Property="VerticalAlignment" Value="Center" />
+                                    </Style>
+                                    <Style Selector="TextBlock.factValue">
+                                        <Setter Property="FontSize" Value="13" />
+                                        <Setter Property="LineHeight" Value="18" />
+                                        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+                                        <Setter Property="VerticalAlignment" Value="Center" />
+                                    </Style>
+                                </Grid.Styles>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="REPOSITORY" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Repository}" Classes="factValue" ToolTip.Tip="{Binding RepositoryPath}" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="WORKTREE" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Worktree}" Classes="factValue" ToolTip.Tip="{Binding WorktreePath}" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="BRANCH" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Branch}" Classes="factValue" />
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="HARNESS" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Harness}" Classes="factValue" />
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="TRANSPORT" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Transport}" Classes="factValue" />
+                                <TextBlock Grid.Row="5" Grid.Column="0" Text="ID" Classes="factLabel" />
+                                <Button x:Name="SessionIdButton" Grid.Row="5" Grid.Column="1" Classes="copyValue" Click="OnSessionIdClick"
+                                        IsVisible="{Binding CanCopySessionId}"
+                                        AutomationProperties.Name="Copy session ID"
+                                        ToolTip.Tip="{Binding SessionIdText}">
+                                    <TextBlock Text="{Binding SessionIdDisplay}" Classes="factValue" />
+                                </Button>
+                                <SelectableTextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SessionIdText}" Classes="factValue"
+                                                     IsVisible="{Binding !CanCopySessionId}" />
+                            </Grid>
+                        </Panel>
+                    </Border>
                 </StackPanel>
 
                 <!-- Who's on it: names stay visible; the chevron only appears when the list is longer than the cap. -->
                 <StackPanel Margin="0,18,0,0">
-                <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader"
-                        Classes.expandable="{Binding PeopleOverflows}">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                        <TextBlock Text="WHO'S ON IT" Classes="eyebrow" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBlock x:Name="WhoCountText" Text="{Binding WhoCountText}" Classes="sectionMeta"
-                                       IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            <Panel Width="12" Height="12" IsVisible="{Binding PeopleOverflows}">
-                                <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
-                                <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
-                            </Panel>
-                        </StackPanel>
-                    </Grid>
-                </Button>
-                <Border Classes="sectionBody">
-                    <Panel>
-                <ItemsControl x:Name="ContributorList" ItemsSource="{Binding VisibleContributors}" IsVisible="{Binding HasContributors}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Spacing="8" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
-                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                    <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader"
+                            Classes.expandable="{Binding PeopleOverflows}">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <TextBlock Text="WHO'S ON IT" Classes="eyebrow" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock x:Name="WhoCountText" Text="{Binding WhoCountText}" Classes="sectionMeta"
+                                           IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                <Panel Width="12" Height="12" IsVisible="{Binding PeopleOverflows}">
+                                    <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
+                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
+                                </Panel>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                    <Border Classes="sectionBody">
+                        <Panel>
+                            <ItemsControl x:Name="ContributorList" ItemsSource="{Binding VisibleContributors}" IsVisible="{Binding HasContributors}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Spacing="8" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                            <Border Classes="avatar" VerticalAlignment="Center">
+                                                <Panel>
+                                                    <TextBlock Text="{Binding Initial}" />
+                                                </Panel>
+                                            </Border>
+                                            <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
+                                                    HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
+                                                               IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                </StackPanel>
+                                            </Button>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" IsVisible="{Binding !HasContributors}">
                                 <Border Classes="avatar" VerticalAlignment="Center">
                                     <Panel>
-                                        <TextBlock Text="{Binding Initial}" />
+                                        <TextBlock Text="{Binding RequesterInitial}" />
                                     </Panel>
                                 </Border>
-                                <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
-                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
+                                <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
+                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}">
                                     <StackPanel>
-                                        <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
+                                        <TextBlock Text="{Binding RequesterDisplay}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
-                                                   IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding RequesterRole}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0" />
                                     </StackPanel>
                                 </Button>
                             </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" IsVisible="{Binding !HasContributors}">
-                    <Border Classes="avatar" VerticalAlignment="Center">
-                        <Panel>
-                            <TextBlock Text="{Binding RequesterInitial}" />
                         </Panel>
                     </Border>
-                    <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
-                            HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}">
-                        <StackPanel>
-                            <TextBlock Text="{Binding RequesterDisplay}" FontSize="13" FontWeight="SemiBold"
-                                       Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="{Binding RequesterRole}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
-                    </Panel>
-                </Border>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

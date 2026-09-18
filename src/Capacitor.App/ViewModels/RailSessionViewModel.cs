@@ -44,10 +44,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     /// A remote row greys out while the lane is stale; a local row is never stale.
     public bool IsStale => _isStale.Value;
 
-    readonly ObservableAsPropertyHelper<string> _statusBadge;
-    public string StatusBadge => _statusBadge.Value;
-
     readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
+    /// The badge is a clock for a finished turn; a failure or a pending permission takes "!" instead.
     public bool ShowsIdleBadge => _showsIdleBadge.Value;
 
     readonly CompositeDisposable _disposables = new();
@@ -86,10 +84,6 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var byStatus = SessionStatusDots.NeedsAttention(row);
         _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
-            .DisposeWith(_disposables);
-        _statusBadge = agentsWithPending.Select(set => row.Status == "Failed" || set.Contains(row.Id)
-                ? "!" : "")
-            .ToProperty(this, x => x.StatusBadge, initialValue: "")
             .DisposeWith(_disposables);
         _showsIdleBadge = agentsWithPending.Select(set =>
                 SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed" && !set.Contains(row.Id))

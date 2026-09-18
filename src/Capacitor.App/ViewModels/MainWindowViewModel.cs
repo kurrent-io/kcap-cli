@@ -116,17 +116,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public string? Reason => _reason?.Value;
 
     // The server lane's silent-deafness diagnostic — informational only, never blocking; null
-    // while the lane is healthy or absent. Two-line hovers put extra info on the lighter line
-    // and the fragment's name (AttachStatusTip, ServerUrlTip, …) on the darker caption; a
-    // fragment with nothing extra keeps the name as a one-line tip.
+    // while the lane is healthy or absent.
     ObservableAsPropertyHelper<string?>? _serverLaneTip;
     public string? ServerLaneTip => _serverLaneTip?.Value;
 
     ObservableAsPropertyHelper<bool>? _connectionHasDetail;
     public bool ConnectionHasDetail => _connectionHasDetail?.Value ?? false;
-
-    ObservableAsPropertyHelper<string>? _connectionTip;
-    public string ConnectionTip => _connectionTip?.Value ?? AttachStatusTip;
 
     public const string AttachStatusTip = "Attach status to the daemon on this machine";
     public const string DaemonNameTip = "Name of the daemon on this machine";
@@ -476,11 +471,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             _connectionHasDetail = lane
                 .Select(s => !string.IsNullOrWhiteSpace(s.Diagnostic))
                 .ToProperty(this, x => x.ConnectionHasDetail, false)
-                .DisposeWith(disposables);
-
-            _connectionTip = lane
-                .Select(s => string.IsNullOrWhiteSpace(s.Diagnostic) ? AttachStatusTip : s.Diagnostic)
-                .ToProperty(this, x => x.ConnectionTip, AttachStatusTip)
                 .DisposeWith(disposables);
 
             status.Where(s => s.State == AttachState.Connected)

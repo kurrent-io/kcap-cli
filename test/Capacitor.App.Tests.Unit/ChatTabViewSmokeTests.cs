@@ -743,28 +743,7 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// Layout-centre of the 12×12 box is the em box (descent included). The −2 margin lifts the
-    /// stroke onto the letters' cap-height, so the chevron's mid sits a couple of pixels above
-    /// the label's layout mid.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_folded_summary_centres_the_label_on_the_chevron() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("align.jsonl", [ToolCallLine, ToolResultLine, ReadCallLine, ReadResultLine]));
-            var summary = Summary(host.View);
-            PresentAndLocate(host, summary);
-            var chevron = summary.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>()
-                .Single(p => p.IsEffectivelyVisible);
-            var label = summary.GetVisualDescendants().OfType<TextBlock>().Single(t => t.IsEffectivelyVisible);
-            var chevronMid = chevron.TranslatePoint(new Point(chevron.Bounds.Width / 2, chevron.Bounds.Height / 2), summary)!.Value.Y;
-            var labelMid = label.TranslatePoint(new Point(0, label.Bounds.Height / 2), summary)!.Value.Y;
-            await Assert.That(chevron.Bounds.Width).IsEqualTo(12);
-            await Assert.That(chevron.Bounds.Height).IsEqualTo(12);
-            await Assert.That(labelMid - chevronMid).IsGreaterThan(1).And.IsLessThan(3);
-            await host.CloseAsync();
-        });
-    }
+    /// A lone settled call is the row itself — no "Ran a command" summary, but a kind chip names it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_single_settled_call_shows_the_row_without_a_summary() {

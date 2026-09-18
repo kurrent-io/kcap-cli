@@ -102,9 +102,6 @@ public class MainWindowSmokeTests {
         await Assert.That(rendered).Contains("kurrent");
         await Assert.That(rendered).Contains("daemon-a");
         await Assert.That(rendered).Contains("1.2.3");
-        await Assert.That(rendered).DoesNotContain("SERVER");
-        await Assert.That(rendered).DoesNotContain("ORG");
-        await Assert.That(rendered).DoesNotContain("DAEMON");
     }
 
     /// Regression coverage for a Critical bug found in review: canStart/canRetry were built

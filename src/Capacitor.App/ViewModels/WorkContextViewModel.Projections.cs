@@ -106,7 +106,6 @@ public sealed partial class WorkContextViewModel {
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasIssue => Issue is not null;
     public bool HasContributors => _contributors.Count > 0;
-    public bool HasRelated => HasSeparateIssue;
     public bool CanOpenPullRequest => PullRequests is { HasPullRequest: true } || _links.Any(l => l.CanOpen);
     WorkContextLinkViewModel? FirstLinkedPullRequest => _links.Count > 0 ? _links[0] : null;
     public string PullRequestNumberText =>
@@ -259,7 +258,6 @@ public sealed partial class WorkContextViewModel {
     }
 
     void RaiseRelated() {
-        this.RaisePropertyChanged(nameof(HasRelated));
         this.RaisePropertyChanged(nameof(CanOpenPullRequest));
         this.RaisePropertyChanged(nameof(PullRequestNumberText));
         this.RaisePropertyChanged(nameof(PullRequestTitleText));
@@ -317,7 +315,8 @@ public sealed partial class WorkContextViewModel {
         Replace(_parts, parts, p => (p.Title, p.Mark));
 
         ApplyIssue(item.Links.FirstOrDefault(l => l.Kind == "issue" && l.LinkClass == "link"));
-        Replace(_workItemPrs, ProjectWorkItemPullRequests(item.Links));
+        _workItemPrs.Clear();
+        _workItemPrs.AddRange(ProjectWorkItemPullRequests(item.Links));
 
         var now = _time.GetUtcNow();
         var people = item.Contributors
@@ -328,8 +327,8 @@ public sealed partial class WorkContextViewModel {
         RaiseCardCounts();
     }
 
-    /// WorkOS user ids (`user_` + ULID) are not a display name. DisplayName is null for an owner
-    /// with no user row; the session requester's email/name stands in when it is the same person.
+    /// DisplayName is null for an owner with no user row; the session requester's email/name
+    /// stands in when it is the same person, else the name this pane last showed for the id.
     string PersonName(WorkItemContributorDto contributor) {
         if (HumanLabel(contributor.DisplayName) is { } display) return display;
         if (string.Equals(contributor.UserId, _dto?.Requester, StringComparison.Ordinal)
@@ -347,8 +346,8 @@ public sealed partial class WorkContextViewModel {
         return label;
     }
 
-    /// WorkOS user ids are `user_` plus a ULID. github: ids stay visible — they are the fallback
-    /// the pane already shows when a contributor has no display name.
+    /// A WorkOS id (`user_` + ULID) is not a name. `github:` ids stay visible: they are the
+    /// fallback for a contributor with no display name.
     static bool IsOpaqueUserId(string value) {
         if (!value.StartsWith("user_", StringComparison.Ordinal) || value.Length < 25) return false;
         for (var i = 5; i < value.Length; i++)
@@ -406,7 +405,8 @@ public sealed partial class WorkContextViewModel {
                     .ToList();
                 if (summary.PrNumber is { } number && !summary.PullRequests.Any(pr => SamePullRequest(pr, summary, number)))
                     cards.Add(Link(number, summary.PrTitle, summary.PrUrl));
-                Replace(_summaryPrs, cards);
+                _summaryPrs.Clear();
+                _summaryPrs.AddRange(cards);
             } else _summaryPrs.Clear();
         }
 
@@ -477,11 +477,6 @@ public sealed partial class WorkContextViewModel {
     /// containers instead of rebuilding them every 30 seconds.
     static void Replace<T, TKey>(AvaloniaList<T> target, List<T> incoming, Func<T, TKey> key) {
         if (target.Select(key).SequenceEqual(incoming.Select(key))) return;
-        target.Clear();
-        target.AddRange(incoming);
-    }
-
-    static void Replace<T>(List<T> target, List<T> incoming) {
         target.Clear();
         target.AddRange(incoming);
     }

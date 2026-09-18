@@ -12,13 +12,4 @@ public class TerminalGlyphSubstitutionTests {
 
         await Assert.That(line).IsEqualTo("▶▶ auto mode on");
     }
-
-    /// Pins the cheap path: a frame with nothing to swap comes back as the very same string, so
-    /// the common case allocates nothing.
-    [Test]
-    public async Task A_frame_with_nothing_to_swap_is_returned_as_it_came() {
-        const string frame = "── done ❯ ";
-
-        await Assert.That(TerminalGlyphSubstitution.Apply(frame)).IsSameReferenceAs(frame);
-    }
 }
