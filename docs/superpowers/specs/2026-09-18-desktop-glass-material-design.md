@@ -325,9 +325,13 @@ a top drag strip of 16 (44 opaque). The rail keeps its 310 width in both materia
 `SessionsSurface` changes its first column from `310` to `Auto`, so under glass the
 margin widens that column to 334, which is the prototype's layout.
 
-Row styles from the prototype's `GlassSidebarStyles.axaml` move to
-`Controls/GlassRailStyles.axaml`, keyed on the material instead of the
-`glassPrototypeRail` class.
+Row styles from the prototype's `GlassSidebarStyles.axaml` are keyed on the material
+instead of the `glassPrototypeRail` class. The layout and new-session-button styles
+live in `Controls/GlassRailStyles.axaml`; the row styles (radius, selected and held
+fills, hover and pressed fills) live at the end of `SessionRailView.axaml`'s own
+`UserControl.Styles`. Avalonia applies a control's own styles after application
+styles and a later frame wins an equal-priority tie, so a glass row fill declared at
+application level would lose to the rail's opaque row styles.
 
 ## Backdrop
 

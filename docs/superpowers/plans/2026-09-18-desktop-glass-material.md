@@ -1838,8 +1838,8 @@ public class MaterialWindowTests {
             await Assert.That(chrome.Height).IsEqualTo(16d);
             await Assert.That(rail.FindControl<Surface>("RailSurface")!.GlassKind).IsEqualTo(GlassKind.Rail);
 
-            // Pins that the glass rail styles actually win: the rail's own UserControl.Styles sit
-            // closer to its buttons than application styles, and App.axaml styles the same presenter.
+            // The glass button fill applies through the presenter although the Button sets its own
+            // Background locally; the row fills are pinned by their own test.
             var presenter = rail.FindControl<Button>("RailNewSessionButton")!.GetVisualDescendants()
                 .OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
             await Assert.That(presenter.Background).IsEqualTo((IBrush)Application.Current!.FindResource("KcapGlassRailButtonBrush")!);
@@ -2036,7 +2036,7 @@ and close it with `</kcap:Surface>`. The chrome's `Height="44"` is gone from the
 </Styles>
 ```
 
-Include it from `App.axaml` after the `GlassChipStyles.axaml` include. The rail's own `UserControl.Styles` sit closer to its rows than application styles, so if a row fill there still wins under glass, move these row styles to the end of `SessionRailView.axaml`'s `UserControl.Styles` instead; the selectors are unchanged.
+Include it from `App.axaml` after the `GlassChipStyles.axaml` include — but only the layout styles (`Width`, `Margin`, `Grid.railChrome` `Height`) and the `RailNewSessionButton` styles stay in this file. The three ROW styles (`Button.railRow` radius, `Button.selected`/`Button.holdsSelected` fill, `Button.railRow:pointerover/:pressed` presenter fill) go at the END of `SessionRailView.axaml`'s own `UserControl.Styles`, selectors unchanged, with one comment naming the trap. Avalonia applies a control's own styles after application styles and a later frame wins an equal-priority tie, so a glass row fill declared at application level loses to the rail's opaque row styles above it; the `RailNewSessionButton` styles are unaffected only because that button carries `kcapChip`, which no rail-local style paints. `KcapGlassRailRowBrush` must stay resolvable from the moved styles; if it does not resolve, its definition moves into `SessionRailView.axaml`'s `UserControl.Resources`.
 
 - [ ] **Step 7: Wire the service at the composition root**
 
