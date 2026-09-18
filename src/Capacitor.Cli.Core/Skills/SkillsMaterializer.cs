@@ -9,9 +9,15 @@ namespace Capacitor.Cli.Core.Skills;
 /// each fetches as is the target catalog's business.
 /// </summary>
 public static class SkillsMaterializer {
-    // The server's slug is already doc-id-anchored and unique; the kcap- prefix namespaces the
+    /// <summary>What marks a directory as kcap's inside a skills root the repository also uses. The
+    /// write, the prune guard and the Git exclusion glob all spell it through this constant: a
+    /// divergence would stop the exclusion matching what the writer creates, with nothing
+    /// failing.</summary>
+    public const string OwnedPrefix = "kcap-";
+
+    // The server's slug is already doc-id-anchored and unique; the prefix namespaces the
     // materialized set inside a shared skills root.
-    public static string SkillDirFor(string root, string slug) => Path.Combine(root, "kcap-" + slug);
+    public static string SkillDirFor(string root, string slug) => Path.Combine(root, OwnedPrefix + slug);
 
     public static string SkillFileFor(string dir) => Path.Combine(dir, "SKILL.md");
 
@@ -48,7 +54,7 @@ public static class SkillsMaterializer {
     public static bool Prune(string root, string anchor, string path) {
         var full = Path.GetFullPath(path);
         if (!string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(root), StringComparison.Ordinal)) return false;
-        if (!Path.GetFileName(full).StartsWith("kcap-", StringComparison.Ordinal)) return false;
+        if (!Path.GetFileName(full).StartsWith(OwnedPrefix, StringComparison.Ordinal)) return false;
         if (!CanonicalPath.IsWithin(full, anchor)) return false;
         if (!Directory.Exists(full)) return false;
         Directory.Delete(full, recursive: true);

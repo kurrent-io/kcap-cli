@@ -29,6 +29,41 @@ public class SkillsExclusionTests {
         await Assert.That(removed).DoesNotContain("kcap-");
     }
 
+    /// <summary>The file belongs to the user, and on Windows it is routinely CRLF: one managed block
+    /// must not convert the whole of it.</summary>
+    [Test]
+    public async Task A_file_written_with_crlf_keeps_its_line_endings() {
+        var gitDir = Tmp.CreateDir("main/.git");
+        var repo   = Tmp.GetResolvedPath("main");
+        Tmp.CreateFile("main/.git/info/exclude", "# existing\r\n*.log\r\n");
+
+        SkillsExclusion.Apply(gitDir, repo, [Path.Combine(".agents", "skills")]);
+        var text = File.ReadAllText(Path.Combine(gitDir, "info", "exclude"));
+
+        await Assert.That(text).Contains("*.log\r\n");
+        await Assert.That(text).Contains("/.agents/skills/kcap-*/\r\n");
+        await Assert.That(text.Replace("\r\n", "")).DoesNotContain("\n");
+    }
+
+    /// <summary>A block whose closing marker was lost — a hand edit, an interrupted write — covers
+    /// the patterns kcap wrote and nothing below them.</summary>
+    [Test]
+    public async Task An_unterminated_block_does_not_take_the_rest_of_the_file() {
+        var gitDir = Tmp.CreateDir("main/.git");
+        var repo   = Tmp.GetResolvedPath("main");
+        Tmp.CreateFile("main/.git/info/exclude",
+                       "# kcap skills (managed) — do not edit between these markers\n"
+                     + "/.agents/skills/kcap-*/\n"
+                     + "# mine\nbuild/\n");
+
+        SkillsExclusion.Apply(gitDir, repo, [Path.Combine(".claude", "skills")]);
+        var text = File.ReadAllText(Path.Combine(gitDir, "info", "exclude"));
+
+        await Assert.That(text).Contains("# mine\nbuild/\n");
+        await Assert.That(text).Contains("/.claude/skills/kcap-*/");
+        await Assert.That(text).DoesNotContain("/.agents/skills/kcap-*/");
+    }
+
     [Test]
     public async Task Patterns_are_relative_to_the_repository_root() {
         var gitDir = Tmp.CreateDir("main/.git");
