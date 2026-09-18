@@ -21,7 +21,9 @@ The user chose:
 - **vendored source** over the vendored `.nupkg` or waiting for NuGet.org;
 - **a `Surface` control with an inherited material property** over a custom
   `ThemeVariant` or productionising the prototype's attach code;
-- **every inline card migrated to `Surface` now** over migrating only the glass sites;
+- **every inline card migrated to `Surface` now, except the chat view's own**, over
+  migrating only the glass sites; the permission request and the elicitation
+  questions migrate even though the chat hosts them;
 - **Soft glass as the macOS default** over Opaque.
 
 Material is a second axis beside palette. `ThemeVariant` stays pinned to `Dark` and
@@ -240,32 +242,36 @@ Every inline `Border` that is a card becomes a `Surface`. A `Border` is a card w
 carries a Kcap surface brush, a border brush and a corner radius, and holds content.
 Pills (radius 999), row highlights and control-template internals stay `Border`s.
 
-Thirty sites. Twenty-nine are inline: `ChatTabView` (4), `HomeView` (1),
-`LauncherPaneView` (1), `OnboardingWindow` (7), `SignInStepView` (2),
-`PendingCardTemplates` (3), `PullRequestCard` (1), `RemoteSessionView` (2),
-`SettingsWindow` (2), `WorkspaceView` (6). The thirtieth is the link card in
-`WorkContextView`, which takes its look from a `Border.card` class style rather than
-inline attributes. The attachment chip in `AttachmentChipStrip` meets the letter of
-the rule but is a chip, and stays a `Border`. Of the 38 `Border`s that carry a Kcap
-surface background, the other eight are pills, dividers, avatars and borderless
-blocks. The plan lists every site.
+Twenty-six sites. Twenty-five are inline: `HomeView` (1), `LauncherPaneView` (1),
+`OnboardingWindow` (7), `SignInStepView` (2), `PendingCardTemplates` (3: the
+permission request and the two elicitation questions), `PullRequestCard` (1),
+`RemoteSessionView` (2), `SettingsWindow` (2), `WorkspaceView` (6). The twenty-sixth
+is the link card in `WorkContextView`, which takes its look from a `Border.card` class
+style rather than inline attributes.
+
+**The chat view stays as it is.** `ChatTabView`'s four cards — the system note, the
+tool group, the queued-messages banner and the composer — remain `Border`s: the first
+two are rows of the virtualised list, where a templated control costs three visuals
+for every one, and the view is always in an opaque scope. The attachment chip in
+`AttachmentChipStrip` meets the letter of the rule but is a chip, and also stays. Of
+the 38 `Border`s that carry a Kcap surface background, the other eight are pills,
+dividers, avatars and borderless blocks. The plan lists every site.
 
 An `x:Name` and any class move onto the `Surface`, and a `Border.<class>` selector
-that targeted a migrated card is retargeted to `kcap|Surface.<class>`. Nine existing
-tests resolve these cards as `Border` and four read `.BorderBrush` from them; they
-change to `Surface`, which has the same property. Several cards sit in the
-virtualised chat list, where a templated control costs three visuals instead of one;
-the chat smoke tests guard the layout. Every migrated site outside `SessionsSurface`
+that targeted a migrated card is retargeted to `kcap|Surface.<class>`. Five existing
+tests resolve migrated cards as `Border`; they change to `Surface`, which has the same
+`BorderBrush`, `Classes` and `Name`. Every migrated site outside `SessionsSurface`
 resolves `Opaque` and must render as it does today.
 
 **Attachment drop targets.** `GoalCard` in the launcher and `ComposerCard` in
 `ChatTabView` carry `attachTarget`, and `AttachmentDropPaste` toggles `dragOver` on
-them. The `Border.attachTarget` selectors in `App.axaml` stop matching a `Surface`,
-so they are replaced:
+them. `ComposerCard` stays a `Border`, so the two `Border.attachTarget` styles in
+`App.axaml` stay for it. `GoalCard` becomes a `Surface`, which those selectors do not
+match, so it gets its own:
 
-- The resting brush needs no style any more: an opaque `Surface` takes
-  `KcapBorderBrush` from its theme, and a glass `card` has no rim, so its resting
-  `BorderBrush` is transparent.
+- Its resting brush needs no style: an opaque `Surface` takes `KcapBorderBrush` from
+  its theme, and a glass `card` has no rim, so its resting `BorderBrush` is
+  transparent.
 - `kcap|Surface.attachTarget.dragOver` sets `BorderBrush` to `KcapPrimaryBrush`. It is
   declared after the `Surface.axaml` include, so it wins over the material styles in
   both materials.
@@ -273,8 +279,8 @@ so they are replaced:
   through the `GlassLayer` rim. Drag-over is therefore visible under glass as a 1 px
   primary rim on a card that otherwise has none.
 
-`HomeViewSmokeTests` and `ChatTabViewSmokeTests` look these cards up as `Border`s;
-the lookups change to `Surface` and the behavioural assertions stay.
+`HomeViewSmokeTests` looks `GoalCard` up as a `Border`; that lookup changes to
+`Surface` and its behavioural assertions stay. The chat composer's test is untouched.
 
 ## Chips
 

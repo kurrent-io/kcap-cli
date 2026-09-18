@@ -4,7 +4,7 @@
 
 **Goal:** Ship the liquid glass material study as a production setting of the desktop app: Opaque, Soft glass or Liquid glass, chosen in Settings, applied live to the rail, the launcher's goal card and chips, and the panel flyouts.
 
-**Architecture:** An inherited attached property, `MaterialScope.Material`, carries the material down the logical tree; styles select on it. A `Surface` control replaces every inline card `Border` and swaps its template between an opaque `Border` and a glass template. All glass drawing sits in one `GlassLayer` control that wraps the vendored `LiquidGlassSurface`. A `MaterialService` resolves the effective material from the stored choice, the platform, macOS "Reduce transparency" and a latched pipeline failure.
+**Architecture:** An inherited attached property, `MaterialScope.Material`, carries the material down the logical tree; styles select on it. A `Surface` control replaces the inline card `Border`s outside the chat view and swaps its template between an opaque `Border` and a glass template. All glass drawing sits in one `GlassLayer` control that wraps the vendored `LiquidGlassSurface`. A `MaterialService` resolves the effective material from the stored choice, the platform, macOS "Reduce transparency" and a latched pipeline failure.
 
 **Tech Stack:** .NET 10, Avalonia 12.1.2, ReactiveUI, SkiaSharp 3.119.4, TUnit on Microsoft Testing Platform, LiquidGlassAvaloniaUI v0.2.0 (vendored source, MIT).
 
@@ -1403,15 +1403,18 @@ Run the `SurfaceTests` class — expected 8 passed (the last test runs twice).
 
 ---
 
-### Task 6: Migrate every card to Surface
+### Task 6: Migrate the cards to Surface
 
 **Files:**
-- Modify: the ten views below, `src/Capacitor.App/Views/WorkContextView.axaml`, `src/Capacitor.App/App.axaml` (remove the two `Border.attachTarget` styles)
-- Modify tests: `ChatTabViewSmokeTests.cs`, `RemoteSessionViewSmokeTests.cs`, `HomeViewSmokeTests.cs`, `WorkContextViewSmokeTests.cs`
+- Modify: the nine views below and `src/Capacitor.App/Views/WorkContextView.axaml`
+- Modify tests: `ChatTabViewSmokeTests.cs` (one lookup), `RemoteSessionViewSmokeTests.cs`, `HomeViewSmokeTests.cs`, `WorkContextViewSmokeTests.cs`
+- Untouched on purpose: `src/Capacitor.App/Views/ChatTabView.axaml` and the two `Border.attachTarget` styles in `App.axaml`
 
 **Interfaces:**
 - Consumes: `Surface` and its `raised`, `attachTarget`, `dragOver` classes.
-- Produces: no inline card `Border` remains; `GoalCard`, `ComposerCard`, `QueuedMessagesBanner`, `QuestionCard`, `AcpQuestionCard`, `AccessBanner` and `StartingPanel` are `Surface`s with the same names.
+- Produces: `GoalCard`, `QuestionCard`, `AcpQuestionCard`, `AccessBanner` and `StartingPanel` are `Surface`s with the same names. `ComposerCard`, `QueuedMessagesBanner` and the `systemNote` and `toolGroup` rows stay `Border`s.
+
+**The chat view stays as it is.** Its four cards are not migrated: two are rows of the virtualised list, where a templated control costs three visuals for every one, and the view always sits in an opaque scope. The permission request and the two elicitation questions in `PendingCardTemplates.axaml` do migrate, by the user's decision, even though the chat hosts them.
 
 The rule, for every site below:
 
@@ -1435,35 +1438,27 @@ Drop `Background`, `BorderBrush` and `BorderThickness`: the theme supplies them.
 
 | # | File:line | Name / class | Raised |
 |---|---|---|---|
-| 1 | `Views/ChatTabView.axaml:55` | class `systemNote` | |
-| 2 | `Views/ChatTabView.axaml:96` | class `toolGroup`, `Classes.packsWithCard` | |
-| 3 | `Views/ChatTabView.axaml:168` | `QueuedMessagesBanner` | |
-| 4 | `Views/ChatTabView.axaml:194` | `ComposerCard`, class `attachTarget` | |
-| 5 | `Views/HomeView.axaml:50` | — | |
-| 6 | `Views/LauncherPaneView.axaml:31` | `GoalCard`, class `attachTarget` | |
-| 7–13 | `Views/Onboarding/OnboardingWindow.axaml:52, 110, 163, 210, 230, 273, 301` | — | |
-| 14–15 | `Views/Onboarding/SignInStepView.axaml:47, 102` | — | |
-| 16 | `Views/PendingCardTemplates.axaml:7` | — | yes |
-| 17 | `Views/PendingCardTemplates.axaml:36` | `QuestionCard` | yes |
-| 18 | `Views/PendingCardTemplates.axaml:229` | `AcpQuestionCard` | yes |
-| 19 | `Views/PullRequestCard.axaml:7` | — | yes |
-| 20 | `Views/RemoteSessionView.axaml:74` | `AccessBanner` | |
-| 21 | `Views/RemoteSessionView.axaml:95` | — | |
-| 22–23 | `Views/SettingsWindow.axaml:37, 57` | — | |
-| 24–29 | `Views/WorkspaceView.axaml:101, 121, 133, 140, 149, 167` | `StartingPanel` on the last | |
-| 30 | `Views/WorkContextView.axaml:135` | class `card` (class-styled) | yes |
+| 1 | `Views/HomeView.axaml:50` | — | |
+| 2 | `Views/LauncherPaneView.axaml:31` | `GoalCard`, class `attachTarget` | |
+| 3–9 | `Views/Onboarding/OnboardingWindow.axaml:52, 110, 163, 210, 230, 273, 301` | — | |
+| 10–11 | `Views/Onboarding/SignInStepView.axaml:47, 102` | — | |
+| 12 | `Views/PendingCardTemplates.axaml:7` | permission request | yes |
+| 13 | `Views/PendingCardTemplates.axaml:36` | `QuestionCard` | yes |
+| 14 | `Views/PendingCardTemplates.axaml:229` | `AcpQuestionCard` | yes |
+| 15 | `Views/PullRequestCard.axaml:7` | — | yes |
+| 16 | `Views/RemoteSessionView.axaml:74` | `AccessBanner` | |
+| 17 | `Views/RemoteSessionView.axaml:95` | — | |
+| 18–19 | `Views/SettingsWindow.axaml:37, 57` | — | |
+| 20–25 | `Views/WorkspaceView.axaml:101, 121, 133, 140, 149, 167` | `StartingPanel` on the last | |
+| 26 | `Views/WorkContextView.axaml:135` | class `card` (class-styled) | yes |
 
-Not migrated, and why: `AttachmentChipStrip.axaml:13` is a chip; `SettingsWindow.axaml:15` is a pill; `OnboardingWindow.axaml:315` is a self-closing ring; `SessionRailView.axaml:52` is the rail root (Task 8); `SessionRailView.axaml:245`, `ChatTabView.axaml:42`, `AttachmentChipStrip.axaml:19`, `PullRequestReader.axaml:88` and `:150` have no border; `WorkContextView.axaml:173` overrides its card class to transparent.
+Not migrated, and why: `ChatTabView.axaml:55, 96, 168, 194` are the chat view's own cards (see above); `AttachmentChipStrip.axaml:13` is a chip; `SettingsWindow.axaml:15` is a pill; `OnboardingWindow.axaml:315` is a self-closing ring; `SessionRailView.axaml:52` is the rail root (Task 8); `SessionRailView.axaml:245`, `ChatTabView.axaml:42`, `AttachmentChipStrip.axaml:19`, `PullRequestReader.axaml:88` and `:150` have no border; `WorkContextView.axaml:173` overrides its card class to transparent.
 
-- [ ] **Step 1: Point the four test files at `Surface` first**
+- [ ] **Step 1: Point the five test lookups at `Surface` first**
 
-These lookups fail to compile or to find their element until the views change, which is the failing test for this task. Add `using Capacitor.App.Controls;` to each file.
+These lookups fail to find their element until the views change, which is the failing test for this task. Add `using Capacitor.App.Controls;` to each file.
 
-- `ChatTabViewSmokeTests.cs:442` — `FindControl<Border>("QueuedMessagesBanner")` → `FindControl<Surface>("QueuedMessagesBanner")`
-- `ChatTabViewSmokeTests.cs:944` — `OfType<Border>().Single(b => b.Classes.Contains("systemNote"))` → `OfType<Surface>().Single(…)`
-- `ChatTabViewSmokeTests.cs:1038` — the same change for `"toolGroup"`
-- `ChatTabViewSmokeTests.cs:1097` — `OfType<Border>().Single(b => b.Name == "QuestionCard")` → `OfType<Surface>().Single(…)`
-- `ChatTabViewSmokeTests.cs:1308` — `FindControl<Border>("ComposerCard")` → `FindControl<Surface>("ComposerCard")`
+- `ChatTabViewSmokeTests.cs:1097` — `OfType<Border>().Single(b => b.Name == "QuestionCard")` → `OfType<Surface>().Single(…)`. This is the only change in that file: the lookups at `:442` (`QueuedMessagesBanner`), `:944` (`systemNote`), `:1038` (`toolGroup`) and `:1308` (`ComposerCard`) stay `Border`, because those cards do.
 - `RemoteSessionViewSmokeTests.cs:87` — `OfType<Border>().Any(b => b.Name == "AcpQuestionCard")` → `OfType<Surface>().Any(…)`
 - `RemoteSessionViewSmokeTests.cs:106` — `FindControl<Border>("AccessBanner")` → `FindControl<Surface>("AccessBanner")`
 - `HomeViewSmokeTests.cs:695` — `Find<Border>(window, "GoalCard")` → `Find<Surface>(window, "GoalCard")`
@@ -1476,7 +1471,7 @@ Every assertion after these lookups stays as written: `Surface` is a `TemplatedC
 Run the `HomeViewSmokeTests` class.
 Expected: `A_drop_on_the_goal_card_stages_the_file` FAILS, no `Surface` named `GoalCard`.
 
-- [ ] **Step 3: Migrate the thirty sites**
+- [ ] **Step 3: Migrate the twenty-six sites**
 
 Apply the rule to each row. For `WorkContextView.axaml`, the card's look comes from a `Border.card` style in the view's own `Styles` (lines 115–121): change `<Border Classes="card" …>` at line 135 to `<kcap:Surface Classes="card raised" …>`, retarget every `Border.card` selector in that file to `kcap|Surface.card`, and in the base style delete the `Background`, `BorderBrush` and `BorderThickness` setters (the theme and `raised` supply them) while keeping `CornerRadius` and `Padding`. The hover style that sets `BorderBrush` to `KcapFaintBrush` keeps working: a style outranks the theme. Line 173 stays a `Border`; its class no longer matches anything and its local values already made it invisible.
 
@@ -1485,22 +1480,24 @@ Apply the rule to each row. For `WorkContextView.axaml`, the card's look comes f
 Run, from the repo root:
 
 ```bash
-rtk proxy grep -rnE --include='*.axaml' 'Border\.(systemNote|toolGroup|attachTarget|card|packsWithCard)' src/Capacitor.App
+rtk proxy grep -rnE --include='*.axaml' 'Border\.card|Border#(GoalCard|QuestionCard|AcpQuestionCard|AccessBanner|StartingPanel)' src/Capacitor.App
 ```
 
-Change each hit from `Border.<class>` to `kcap|Surface.<class>` (add the `kcap` namespace to that file if missing), except in `App.axaml`: there, delete the `Border.attachTarget` and `Border.attachTarget.dragOver` styles and their comment outright. `SurfaceStyles.axaml` already carries `kcap|Surface.attachTarget.dragOver`, and the resting brush now comes from the `Surface` theme.
+Change each hit from `Border…` to `kcap|Surface…` (add the `kcap` namespace to that file if missing). Leave the `Border.attachTarget` and `Border.attachTarget.dragOver` styles in `App.axaml` exactly as they are: the chat's `ComposerCard` is still a `Border` and still needs them. `GoalCard` is served by `kcap|Surface.attachTarget.dragOver` in `SurfaceStyles.axaml`, and its resting brush now comes from the `Surface` theme.
+
+Confirm the chat view is untouched: `/usr/bin/git -C <worktree> diff --stat -- src/Capacitor.App/Views/ChatTabView.axaml` must print nothing.
 
 - [ ] **Step 5: Build, then run every app UI suite**
 
 Run: `dotnet build Capacitor.slnx` — expected 0 warnings, 0 errors. An `AVLN` XAML warning here is an error in CI.
 Run: `dotnet run --project test/Capacitor.App.Tests.Unit/Capacitor.App.Tests.Unit.csproj`
-Expected: every test passes. A chat-list layout failure means a migrated `DataTemplate` card changed a row's first-measure size; check that the `Surface` kept the `Border`'s `Margin`, alignment and `Padding` exactly.
+Expected: every test passes. The permission and question cards are rows of the chat list, so a chat layout failure means one of them changed its first-measure size; check that the `Surface` kept the `Border`'s `Margin`, alignment and `Padding` exactly.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 /usr/bin/git -C <worktree> add src/Capacitor.App test/Capacitor.App.Tests.Unit
-/usr/bin/git -C <worktree> commit -m "Define every card through the Surface control" -m "Cards outside the sessions surface resolve the opaque template and render as before." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+/usr/bin/git -C <worktree> commit -m "Define cards outside the chat view through the Surface control" -m "The chat's own cards stay Borders: two are rows of the virtualised list, where a templated control triples the visuals." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2613,9 +2610,10 @@ later does not multiply the glass variants. An inherited `MaterialScope.Material
 it down the logical tree, which is how a flyout takes its opener's material and how the workspace
 host pins itself opaque: glass is for navigation and controls, never for a reading surface.
 
-Glass is a control, not a brush — a brush cannot sample what is behind it — so every card is a
-`Surface` whose template changes, and all glass drawing sits in one `GlassLayer`. Three traps shaped
-it. Content drawn beside the glass is captured into the glass's own backdrop and blurred under
+Glass is a control, not a brush — a brush cannot sample what is behind it — so a card is a
+`Surface` whose template changes, and all glass drawing sits in one `GlassLayer`. The chat view's
+own cards stay `Border`s: two are rows of the virtualised list, where a templated control triples
+the visuals, and the view is always opaque. Three traps shaped it. Content drawn beside the glass is captured into the glass's own backdrop and blurred under
 itself, so every glass template's root sets `IsExcludedFromCapture`. The backdrop snapshot is per
 top-level window, so under glass a panel flyout moves into the owner's window
 (`Popup.ShouldUseOverlayLayer`); a native popup would refract only itself. And Fluent's per-state
