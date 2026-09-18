@@ -77,4 +77,21 @@ public class BackgroundImportSpawnerTests {
         await Assert.That(starter.Starts).IsEqualTo(0);
         await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("someone else's");
     }
+
+    [Test]
+    public async Task An_unwritable_config_dir_fails_the_spawn_instead_of_throwing() {
+        if (OperatingSystem.IsWindows()) return; // no mode bits to take away
+        if (Environment.UserName == "root") return; // root ignores the missing write bit
+        var starter = FakeProcessStarter.Refusing();
+        File.SetUnixFileMode(Config.Directory, UnixFileMode.UserRead);
+        try {
+            var launch = new BackgroundImportSpawner(Config.Root, starter).Spawn(Request());
+
+            await Assert.That(launch.Status).IsEqualTo(BackgroundImportStatus.Failed);
+            await Assert.That(starter.Starts).IsEqualTo(0);
+            await Assert.That(launch.Error).Contains("could not create");
+        } finally {
+            File.SetUnixFileMode(Config.Directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
 }

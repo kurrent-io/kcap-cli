@@ -1374,7 +1374,7 @@ sealed class SetupCommand(
                     runId, time.GetUtcNow(), handoff.Offered, handoff.Reason, outcome, launch,
                     inputs.ServerUrl, inputs.ProfileName, unattributedOnDisk)
                 .Write(config, time);
-        } catch (IOException ex) {
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             AnsiConsole.MarkupLine($"  [yellow]![/] Could not write the import handoff file: {Markup.Escape(ex.Message)}");
         }
 

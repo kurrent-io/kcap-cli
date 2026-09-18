@@ -985,6 +985,28 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task An_unwritable_config_dir_warns_on_the_handoff_file_and_still_completes_the_step() {
+        if (OperatingSystem.IsWindows()) return; // no mode bits to take away
+        if (Environment.UserName == "root") return; // root ignores the missing write bit
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var spawner  = FakeBackgroundImportSpawner.Running();
+        var launcher = FakeHandoffAgentLauncher.Ran();
+        using var capture = new SpectreCapture();
+
+        File.SetUnixFileMode(Config.Directory, UnixFileMode.UserRead);
+        SetupCommand.ImportStepResult result;
+        try {
+            result = await Command(runner, spawner, launcher, Config.Directory).RunImportStepAsync(Inputs());
+        } finally {
+            File.SetUnixFileMode(Config.Directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(capture.Text).Contains("Could not write the import handoff file");
+        await Assert.That(result.Handoff!.Offered).IsTrue();
+        await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
+    }
+
+    [Test]
     public async Task No_prompt_imports_everything_uncapped_with_no_child_no_file_no_handoff() {
         var runner = FakeImportRunner.Succeeding();
         var spawner = FakeBackgroundImportSpawner.Running();

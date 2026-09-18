@@ -14,7 +14,7 @@ sealed class BackgroundImportSpawner(ConfigRoot config, IProcessStarter starter)
         var logPath = config.Path($"import-{request.RunId}.log");
         try {
             using (OwnerOnlyFile.CreateNew(logPath)) { }
-        } catch (IOException ex) {
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return new BackgroundImportLaunch(BackgroundImportStatus.Failed, logPath, null, $"could not create {logPath}: {ex.Message}");
         }
 
