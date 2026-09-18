@@ -14,12 +14,12 @@ namespace Capacitor.Cli.Commands;
 
 /// <summary>
 /// MCP tools for publishing artefacts — a self-contained HTML page the server hosts and hands back a
-/// link to. Cloned from <see cref="McpWorkItemsServer"/>'s stdio JSON-RPC loop.
+/// link to — and for waiting on the answers people give one.
 ///
-/// <para>The tool list is deliberately three tools wide. An agent's context pays for every schema it
-/// carries whether or not it publishes anything, and a surface wide enough to be worth disabling is
-/// worse than a narrow one: reading, versioning history and takedown all live in the web UI, which
-/// is where a person is when they need them.</para>
+/// <para>The tool list is deliberately narrow. An agent's context pays for every schema it carries
+/// whether or not it publishes anything, and a surface wide enough to be worth disabling is worse
+/// than a narrow one: reading, version history and takedown all live in the web UI, which is where
+/// a person is when they need them.</para>
 /// </summary>
 sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
         TelemetryStartup startup, TimeProvider time) {
@@ -60,7 +60,11 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await http.ForSessionAsync();
+                if (client is null) {
+                    client = await http.ForSessionAsync();
+                    LiftClientTimeout(client);
+                }
+
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
@@ -171,30 +175,35 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             return BuildErrorResponse(id, -32602, "Missing params.name");
         }
 
+        // The wait gets a budget past the server's own ceiling, so it ends because the SERVER decided
+        // it had — never because this side gave up first and left the agent unable to tell a
+        // timeout from a lost answer.
+        using var budget = new CancellationTokenSource(
+            toolName == "await_artefact_responses" ? ClientWaitBudget : RequestBudget, time);
+
+        var ct = budget.Token;
+
         try {
             using var httpResponse = toolName switch {
-                "publish_artefact" => await PublishAsync(client, baseUrl, arguments),
+                "publish_artefact" => await PublishAsync(client, baseUrl, arguments, ct),
 
-                "list_my_artefacts" => await client.GetAsync($"{baseUrl}/api/artefacts"),
+                "list_my_artefacts" => await client.GetAsync($"{baseUrl}/api/artefacts", ct),
 
                 "set_artefact_visibility" => await client.PutAsync(
-                    ArtefactUrl(baseUrl, arguments, "visibility"), ToJsonContent(BuildVisibilityBody(arguments))),
+                    ArtefactUrl(baseUrl, arguments, "visibility"), ToJsonContent(BuildVisibilityBody(arguments)), ct),
 
-                // The long poll. Its own client timeout, well past the server's own ceiling, so the
-                // wait ends because the SERVER decided it had — never because this side gave up
-                // first and left the agent unable to tell a timeout from a lost answer.
-                "await_artefact_responses" => await WaitAsync(client, baseUrl, arguments, time),
+                "await_artefact_responses" => await client.GetAsync(WaitUrl(baseUrl, arguments), ct),
 
                 "get_artefact_results" => await client.GetAsync(
-                    $"{ArtefactUrl(baseUrl, arguments, "results")}{VersionQuery(arguments)}"),
+                    $"{ArtefactUrl(baseUrl, arguments, "results")}{VersionQuery(arguments)}", ct),
 
                 "close_artefact_responses" => await client.PostAsync(
-                    ArtefactUrl(baseUrl, arguments, "responses/close"), ToJsonContent(BuildCloseBody(arguments))),
+                    ArtefactUrl(baseUrl, arguments, "responses/close"), ToJsonContent(BuildCloseBody(arguments)), ct),
 
                 _ => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
-            var body = await httpResponse.Content.ReadAsStringAsync();
+            var body = await httpResponse.Content.ReadAsStringAsync(ct);
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
@@ -220,6 +229,8 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (OperationCanceledException) when (budget.IsCancellationRequested) {
+            return BuildToolResult(id, "Error: the server did not answer in time.", isError: true);
         } catch (IOException ex) {
             // A `path` the agent named that cannot be read. Its own message carries the path it
             // already knows, so nothing local leaks that it did not supply.
@@ -227,24 +238,34 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         }
     }
 
-    /// <summary>A publish is either a new artefact or a new version of one, chosen by
-    /// <c>update_id</c>. Both carry the same HTML, so the content is resolved once, before the
-    /// branch.</summary>
-    static async Task<HttpResponseMessage> PublishAsync(HttpClient client, string baseUrl, JsonObject? args) {
-        var html = ResolveHtml(args);
+    static async Task<HttpResponseMessage> PublishAsync(HttpClient client, string baseUrl, JsonObject? args, CancellationToken ct) {
+        var (url, body) = BuildPublishRequest(baseUrl, args, ResolveHtml(args));
 
-        if (args?["update_id"] is { } updateNode) {
-            if (updateNode is not JsonValue updateValue || !updateValue.TryGetValue<string>(out var updateId))
-                throw new ArgumentException("'update_id' must be a string.");
+        return await client.PostAsync(url, ToJsonContent(body), ct);
+    }
 
-            if (updateId.Length > 0) {
-                var body = new JsonObject { ["html"] = html };
+    /// <summary>
+    /// A publish is either a new artefact or a new version of one, chosen by <c>update_id</c>.
+    ///
+    /// <para>An <c>update_id</c> that is present must name an artefact: falling back to a create
+    /// would hand the agent a second page and a second URL while it believes it revised the
+    /// first. A version carries content and its own response schema only, so an audience passed
+    /// alongside is refused rather than dropped.</para>
+    /// </summary>
+    internal static (string Url, JsonObject Body) BuildPublishRequest(string baseUrl, JsonObject? args, string html) {
+        if (args?["update_id"] is null) return ($"{baseUrl}/api/artefacts", BuildPublishBody(args, html));
 
-                return await client.PostAsync($"{baseUrl}/api/artefacts/{Escape(updateId)}/versions", ToJsonContent(body));
-            }
-        }
+        var url = ArtefactUrl(baseUrl, args, "versions", idKey: "update_id");
 
-        return await client.PostAsync($"{baseUrl}/api/artefacts", ToJsonContent(BuildPublishBody(args, html)));
+        if (args["visibility"] is not null || args["grants"] is not null)
+            throw new ArgumentException(
+                "'visibility' and 'grants' are not read with 'update_id' — change the audience with set_artefact_visibility.");
+
+        var body = new JsonObject { ["html"] = html };
+
+        if (ReadResponseSchema(args) is { } schema) body["response_schema"] = schema;
+
+        return (url, body);
     }
 
     /// <summary>
@@ -255,8 +276,8 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// publishes something nobody asked for.</para>
     /// </summary>
     internal static string ResolveHtml(JsonObject? args) {
-        var html = OptionalString(args, "html");
-        var path = OptionalString(args, "path");
+        var html = McpToolArguments.OptionalString(args, "html");
+        var path = McpToolArguments.OptionalString(args, "path");
 
         if (html is { Length: > 0 } && path is { Length: > 0 })
             throw new ArgumentException("Pass either 'html' or 'path', not both.");
@@ -287,19 +308,12 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             ["html"]  = html
         };
 
-        if (OptionalString(args, "description") is { Length: > 0 } description) body["description"] = description;
-        if (OptionalString(args, "visibility") is { Length: > 0 } visibility) body["visibility"] = visibility;
+        if (McpToolArguments.OptionalString(args, "description") is { Length: > 0 } description) body["description"] = description;
+        if (McpToolArguments.OptionalString(args, "visibility") is { Length: > 0 } visibility) body["visibility"] = visibility;
 
         if (ReadGrants(args) is { } grants) body["grants"] = grants;
 
-        // Forwarded whole rather than reshaped: the server owns every rule about what a schema may
-        // declare, and a second interpretation here would be a second place for them to drift.
-        if (args is not null && args.TryGetPropertyValue("response_schema", out var schema) && schema is not null) {
-            if (schema is not JsonObject declared)
-                throw new ArgumentException("'response_schema' must be an object.");
-
-            body["response_schema"] = declared.DeepClone();
-        }
+        if (ReadResponseSchema(args) is { } schema) body["response_schema"] = schema;
 
         // The session is cited without being asked for: an artefact published mid-session belongs
         // with the session that produced it, and an agent that has to remember to say so mostly
@@ -309,6 +323,16 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             body["sources"] = new JsonArray((JsonNode?)JsonValue.Create(ambient));
 
         return body;
+    }
+
+    /// <summary>Forwarded whole rather than reshaped: the server owns every rule about what a schema
+    /// may declare, and a second interpretation here would be a second place for them to drift.</summary>
+    static JsonNode? ReadResponseSchema(JsonObject? args) {
+        if (args?["response_schema"] is not { } schema) return null;
+
+        if (schema is not JsonObject declared) throw new ArgumentException("'response_schema' must be an object.");
+
+        return declared.DeepClone();
     }
 
     internal static JsonObject BuildVisibilityBody(JsonObject? args) {
@@ -343,7 +367,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
             // The name is display only and an agent has no directory to look one up in; the id is
             // the honest stand-in, and the server replaces it with the real name when it knows one.
-            var name = OptionalString(grant, "grantee_name") is { Length: > 0 } supplied ? supplied : id;
+            var name = McpToolArguments.OptionalString(grant, "grantee_name") is { Length: > 0 } supplied ? supplied : id;
 
             result.Add((JsonNode?)new JsonObject {
                 ["grant_type"]   = type,
@@ -377,57 +401,47 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         return result;
     }
 
-    /// <summary>Reads an optional string argument. An absent key is null; a present one of the wrong
-    /// shape throws, so a malformed argument fails loudly instead of being dropped.</summary>
-    internal static string? OptionalString(JsonObject? args, string key) {
-        if (args is null || !args.TryGetPropertyValue(key, out var node) || node is null) return null;
-
-        if (node is not JsonValue value || !value.TryGetValue<string>(out var text))
-            throw new ArgumentException($"'{key}' must be a string.");
-
-        return text;
-    }
-
     /// <summary>Builds an artefact-scoped URL from a REQUIRED id. There is no ambient artefact to
     /// fall back to, and a default here would change the audience of the wrong page.</summary>
-    internal static string ArtefactUrl(string baseUrl, JsonObject? args, string suffix) {
-        var id = McpToolArguments.RequireString(args, "artefact_id");
+    internal static string ArtefactUrl(string baseUrl, JsonObject? args, string suffix, string idKey = "artefact_id") {
+        var id = McpToolArguments.RequireString(args, idKey);
 
         // Escaping alone leaves "." and ".." to walk out of the route.
         if (id is "." or ".." || id.Contains('/') || id.Contains('\\'))
-            throw new ArgumentException("'artefact_id' is not a valid artefact id.");
+            throw new ArgumentException($"'{idKey}' is not a valid artefact id.");
 
         return $"{baseUrl}/api/artefacts/{Escape(id)}/{suffix}";
     }
 
     static string Escape(string id) => Uri.EscapeDataString(id);
 
+    internal static string WaitUrl(string baseUrl, JsonObject? args) {
+        var url = new StringBuilder(ArtefactUrl(baseUrl, args, "responses/wait"))
+            .Append("?min_respondents=")
+            .Append(McpToolArguments.TryReadInt(args, "min_respondents", out var min) ? min : 1);
+
+        if (McpToolArguments.TryReadInt(args, "version", out var version)) url.Append("&version=").Append(version);
+        if (McpToolArguments.TryReadInt(args, "timeout_s", out var timeout)) url.Append("&timeout_s=").Append(timeout);
+
+        return url.ToString();
+    }
+
     /// <summary>
-    /// The blocking read.
+    /// Longer than the server's own 25-minute ceiling.
     ///
     /// <para>The server caps how long it will hold one poll and answers 200 with whatever it has, so
     /// a client that timed out first would turn "nobody has answered yet" into an error the agent
-    /// cannot distinguish from a broken server. The client budget is therefore deliberately longer
-    /// than anything the server will hold.</para>
+    /// cannot distinguish from a broken server.</para>
     /// </summary>
-    static async Task<HttpResponseMessage> WaitAsync(HttpClient client, string baseUrl, JsonObject? args, TimeProvider time) {
-        var url = new StringBuilder(ArtefactUrl(baseUrl, args, "responses/wait"));
+    internal static readonly TimeSpan ClientWaitBudget = TimeSpan.FromMinutes(30);
 
-        url.Append(VersionQuery(args).Length == 0 ? '?' : '&').Append("min_respondents=")
-           .Append(McpToolArguments.TryReadInt(args, "min_respondents", out var min) ? min : 1);
+    /// <summary>What every call but the wait gets — HttpClient's own default, restated because the
+    /// shared client has none.</summary>
+    internal static readonly TimeSpan RequestBudget = TimeSpan.FromSeconds(100);
 
-        if (VersionQuery(args) is { Length: > 0 } version) url.Append('&').Append(version.TrimStart('?'));
-
-        if (McpToolArguments.TryReadInt(args, "timeout_s", out var timeout)) url.Append("&timeout_s=").Append(timeout);
-
-        using var budget = new CancellationTokenSource(ClientWaitBudget, time);
-
-        return await client.GetAsync(url.ToString(), budget.Token);
-    }
-
-    /// <summary>Longer than the server's own 25-minute ceiling, so the wait always ends on the
-    /// server's terms.</summary>
-    static readonly TimeSpan ClientWaitBudget = TimeSpan.FromMinutes(30);
+    /// <summary>HttpClient's default timeout would abort a wait the server is still holding, and it
+    /// applies to the whole client, so it is lifted and each call carries its own budget.</summary>
+    internal static void LiftClientTimeout(HttpClient client) => client.Timeout = Timeout.InfiniteTimeSpan;
 
     static string VersionQuery(JsonObject? args) =>
         McpToolArguments.TryReadInt(args, "version", out var version) ? $"?version={version}" : "";

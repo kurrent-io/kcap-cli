@@ -42,7 +42,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     }
 
     async Task<int> PublishAsync(string[] args) {
-        var flags = Flags.Parse(args, 2);
+        if (Parse(args) is not { } flags) return 1;
         if (flags.Positionals.Count != 1) return Fail("Publish takes exactly one HTML file.");
 
         var html = ReadHtml(flags.Positionals[0]);
@@ -75,7 +75,8 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     }
 
     async Task<int> ListAsync(string[] args) {
-        var flags  = Flags.Parse(args, 2);
+        if (Parse(args) is not { } flags) return 1;
+
         var listed = await artefacts.ListAsync();
 
         if (flags.Has("--mine")) listed = [.. listed.Where(a => a.IsOwner)];
@@ -92,7 +93,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     }
 
     async Task<int> ShareAsync(string[] args) {
-        var flags = Flags.Parse(args, 2);
+        if (Parse(args) is not { } flags) return 1;
         if (flags.Positionals.Count != 1) return Fail("Share takes exactly one artefact id.");
 
         if (flags.Value("--visibility") is not { Length: > 0 } visibility)
@@ -101,11 +102,12 @@ class ArtefactCommand(IArtefactsApi artefacts) {
         var grants = ParseGrants(flags.Values("--to"));
         if (grants is null) return 1;
 
-        return Report(await artefacts.SetVisibilityAsync(flags.Positionals[0], visibility, Nullify(grants)), "shared");
+        // A full replacement: under `scoped`, naming nobody is an audience of nobody, said outright.
+        return Report(await artefacts.SetVisibilityAsync(flags.Positionals[0], visibility, grants), "shared");
     }
 
     async Task<int> DeleteAsync(string[] args) {
-        var flags = Flags.Parse(args, 2);
+        if (Parse(args) is not { } flags) return 1;
         if (flags.Positionals.Count != 1) return Fail("Delete takes exactly one artefact id.");
 
         return Report(await artefacts.DeleteAsync(flags.Positionals[0]), "deleted");
@@ -186,6 +188,19 @@ class ArtefactCommand(IArtefactsApi artefacts) {
 
     static List<T>? Nullify<T>(List<T> items) => items.Count == 0 ? null : items;
 
+    /// <summary>A value flag given without its value stops the command: read as absent, a forgotten
+    /// <c>--update</c> id publishes a second artefact and a forgotten <c>--to</c> empties an
+    /// audience.</summary>
+    static Flags? Parse(string[] args) {
+        var flags = Flags.Parse(args, 2);
+
+        if (flags.MissingValue() is not { } bare) return flags;
+
+        Fail($"{bare} needs a value.");
+
+        return null;
+    }
+
     static int Fail(string? message) {
         if (message is not null) Console.Error.WriteLine(message);
         Console.Error.WriteLine(Usage);
@@ -206,6 +221,12 @@ class ArtefactCommand(IArtefactsApi artefacts) {
         public List<string> Values(string flag) =>
             values.TryGetValue(flag, out var v) ? [.. v.Where(x => x.Length > 0)] : [];
 
+        /// <summary>The first flag that takes a value and was given none.</summary>
+        public string? MissingValue() =>
+            values.FirstOrDefault(f => !Switches.Contains(f.Key) && f.Value.Contains("")).Key;
+
+        static readonly HashSet<string> Switches = new(StringComparer.Ordinal) { "--mine" };
+
         public static Flags Parse(string[] args, int from) {
             var flags = new Flags();
 
@@ -217,8 +238,8 @@ class ArtefactCommand(IArtefactsApi artefacts) {
 
                 var name = args[i];
 
-                // A flag followed by another flag, or by nothing, is a bare switch: recorded as
-                // present with an empty value, which Has() sees and Values() drops.
+                // A flag followed by another flag, or by nothing, is recorded as present with an
+                // empty value: right for a switch, and what MissingValue() reports for any other.
                 var value = i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)
                     ? args[++i]
                     : "";

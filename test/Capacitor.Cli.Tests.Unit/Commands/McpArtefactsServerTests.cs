@@ -247,6 +247,81 @@ public class McpArtefactsServerTests {
                               Args("""{"title":"Plan","response_schema":"fields"}"""), "<p>x</p>"))
                     .Throws<ArgumentException>();
 
+    // ── a revision ────────────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task Without_update_id_a_publish_creates_an_artefact() {
+        var (url, _) = McpArtefactsServer.BuildPublishRequest("https://kcap.test", Args("""{"title":"Plan"}"""), "<p>x</p>");
+
+        await Assert.That(url).IsEqualTo("https://kcap.test/api/artefacts");
+    }
+
+    [Test]
+    public async Task With_update_id_a_publish_is_a_version_of_that_artefact() {
+        var (url, body) = McpArtefactsServer.BuildPublishRequest(
+            "https://kcap.test", Args("""{"title":"Plan","update_id":"a b"}"""), "<p>x</p>");
+
+        await Assert.That(url).IsEqualTo("https://kcap.test/api/artefacts/a%20b/versions");
+        await Assert.That(body["html"]!.GetValue<string>()).IsEqualTo("<p>x</p>");
+    }
+
+    [Test]
+    [Arguments("""{"title":"Plan","update_id":""}""")]
+    [Arguments("""{"title":"Plan","update_id":"  "}""")]
+    [Arguments("""{"title":"Plan","update_id":7}""")]
+    public async Task An_update_id_that_names_nothing_is_refused_rather_than_creating_an_artefact(string args) =>
+        await Assert.That(() => McpArtefactsServer.BuildPublishRequest("https://kcap.test", Args(args), "<p>x</p>"))
+                    .Throws<ArgumentException>();
+
+    [Test]
+    public async Task A_revision_carries_its_own_response_schema() {
+        // The server keeps a schema per version, so one dropped here leaves the revision unanswerable.
+        var (_, body) = McpArtefactsServer.BuildPublishRequest(
+            "https://kcap.test",
+            Args("""{"title":"Plan","update_id":"a1","response_schema":{"fields":[{"id":"ok","type":"text"}]}}"""),
+            "<p>x</p>");
+
+        await Assert.That(body["response_schema"]!["fields"]!.AsArray().Count).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments("visibility", "\"org\"")]
+    [Arguments("grants", "[]")]
+    public async Task A_revision_refuses_an_audience_it_would_not_apply(string key, string value) =>
+        await Assert.That(() => McpArtefactsServer.BuildPublishRequest(
+                              "https://kcap.test", Args($$"""{"title":"Plan","update_id":"a1","{{key}}":{{value}}}"""), "<p>x</p>"))
+                    .Throws<ArgumentException>();
+
+    // ── the long poll ─────────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task A_wait_defaults_to_one_respondent_on_the_latest_version() {
+        var url = McpArtefactsServer.WaitUrl("https://kcap.test", Args("""{"artefact_id":"a1"}"""));
+
+        await Assert.That(url).IsEqualTo("https://kcap.test/api/artefacts/a1/responses/wait?min_respondents=1");
+    }
+
+    [Test]
+    public async Task A_wait_on_a_named_version_still_reaches_the_wait_route() {
+        var url = McpArtefactsServer.WaitUrl(
+            "https://kcap.test", Args("""{"artefact_id":"a1","version":2,"min_respondents":3,"timeout_s":60}"""));
+
+        await Assert.That(url).IsEqualTo(
+            "https://kcap.test/api/artefacts/a1/responses/wait?min_respondents=3&version=2&timeout_s=60");
+    }
+
+    [Test]
+    public async Task The_clients_own_timeout_cannot_end_a_wait_before_the_server_does() {
+        // HttpClient's 100-second default would abort a wait the server is still holding; each call
+        // carries its own budget instead.
+        using var client = new HttpClient();
+
+        McpArtefactsServer.LiftClientTimeout(client);
+
+        await Assert.That(client.Timeout).IsEqualTo(Timeout.InfiniteTimeSpan);
+        await Assert.That(McpArtefactsServer.ClientWaitBudget).IsGreaterThan(McpArtefactsServer.RequestBudget);
+    }
+
     [Test]
     public async Task The_instructions_tell_an_agent_the_page_cannot_reach_the_network() {
         // The one thing that fails silently: an external URL renders as nothing under the sandbox.
