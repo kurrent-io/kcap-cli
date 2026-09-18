@@ -2722,7 +2722,7 @@ In `src/Capacitor.App/Views/SettingsWindow.axaml` add the `kcap` namespace. The 
                             <StackPanel Spacing="6">
                                 <TextBlock Classes="kcapLabel" Text="Material" />
                                 <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                           Text="How the session rail, the launcher and its menus are drawn. Reading surfaces stay opaque." />
+                                           Text="How the session rail and the launcher are drawn. Menus and reading surfaces stay opaque." />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Spacing="8" IsEnabled="{Binding MaterialChoicesEnabled}">
                                 <RadioButton x:Name="MaterialOpaque" Classes="kcapChoice" GroupName="Material"
@@ -2773,8 +2773,8 @@ In `docs/CHANGES.md`, as the first `##` entry:
 Opaque, Soft glass or Liquid glass, chosen under Settings → Appearance. Material is a second axis
 beside palette, not a theme variant: `ThemeVariant` stays pinned to `Dark`, so a light palette
 later does not multiply the glass variants. An inherited `MaterialScope.Material` property carries
-it down the logical tree, which is how a flyout takes its opener's material and how the workspace
-host pins itself opaque: glass is for navigation and controls, never for a reading surface.
+it down the logical tree, which is how the workspace host pins itself opaque and how any subtree
+can: glass is for navigation and controls, never for a reading surface.
 
 Glass is a control, not a brush — a brush cannot sample what is behind it — so a card is a
 `Surface` whose template changes, and all glass drawing sits in one `GlassLayer`. The chat view's
@@ -2782,9 +2782,11 @@ own cards stay `Border`s: two are rows of the virtualised list, where a template
 the visuals, and the view is always opaque. A `Surface`'s content joins the visual tree on first
 measure rather than on assignment, so content under a collapsed ancestor is reached through the
 name scope, never by a visual-tree walk. Three traps shaped it. Content drawn beside the glass is captured into the glass's own backdrop and blurred under
-itself, so every glass template's root sets `IsExcludedFromCapture`. The backdrop snapshot is per
-top-level window, so under glass a panel flyout moves into the owner's window
-(`Popup.ShouldUseOverlayLayer`); a native popup would refract only itself. And Fluent's per-state
+itself, so every glass template's root sets `IsExcludedFromCapture`. The panel flyouts stay
+opaque: glass in a `Flyout`'s popup never receives a backdrop snapshot — in the presenter's
+template or wrapped around the content alike — while a bare overlay-layer popup with the same
+layer blurs, and the probe under `docs/probes/2026-09-18-glass-overlay-flyout/` is the record and
+the starting point for the follow-up. And Fluent's per-state
 `Button` fills target `PART_ContentPresenter` and survive a `Template` swap, so the glass chip names
 its presenter `ChipContent`, as `RadioButton.kcapChoice` already does.
 
@@ -2800,7 +2802,7 @@ is the default on macOS unless "Reduce transparency" is on; an explicit choice o
 In `README.md`, under `### Desktop app (macOS)`, after the paragraph that begins "Open **Settings…**":
 
 ```markdown
-**Appearance** in the same window sets the material of the session rail, the launcher and its menus: **Opaque**, **Soft glass** or **Liquid glass**. It applies at once. Soft glass is the default unless macOS **Reduce transparency** is on; picking a glass material overrides that. Sessions, the pull request reader and every other window stay opaque. If the glass renderer cannot start, the app uses Opaque until the next launch and the Appearance card says why.
+**Appearance** in the same window sets the material of the session rail and the launcher: **Opaque**, **Soft glass** or **Liquid glass**. It applies at once. Soft glass is the default unless macOS **Reduce transparency** is on; picking a glass material overrides that. Menus, sessions, the pull request reader and every other window stay opaque. If the glass renderer cannot start, the app uses Opaque until the next launch and the Appearance card says why.
 ```
 
 - [ ] **Step 3: Verify the whole change**
