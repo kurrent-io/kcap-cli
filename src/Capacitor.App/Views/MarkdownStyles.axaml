@@ -113,4 +113,71 @@
         <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
         <Setter Property="TextDecorations" Value="{x:Null}" />
     </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-pre-text">
+        <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="3,0,0,0" />
+        <Setter Property="Padding" Value="12,4" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-note">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-tip">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-important">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-warning">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapWarningBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-caution">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-alert-header">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-details">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:checked /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-details-label">
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
 </Styles>
