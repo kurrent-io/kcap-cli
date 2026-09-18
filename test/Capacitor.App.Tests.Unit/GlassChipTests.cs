@@ -74,6 +74,8 @@ public class GlassChipTests {
         } finally { window.Close(); }
     });
 
+    /// The any-glass style is two selector arms around one template: without this, a dropped
+    /// LiquidGlass arm would leave Liquid glass opaque and no test would notice.
     [Test]
     public Task A_liquid_glass_picker_takes_the_glass_template_too() => AvaloniaSession.RunOnUiAsync(async () => {
         var chip = Picker();

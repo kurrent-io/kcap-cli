@@ -9,8 +9,8 @@
     <UserControl.Styles>
         <!-- A session card is a Button purely so the whole card is a click target; every piece of
              chrome the theme would paint (its own background/border, and the hover and pressed
-             fills it puts on PART_ContentPresenter) is neutralized here, so the card renders exactly
-             as it did before it became clickable. Style setters outrank the control theme's. -->
+             fills it puts on PART_ContentPresenter) is neutralized here. Style setters outrank
+             the control theme's. -->
         <Style Selector="Button.sessionCard">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />

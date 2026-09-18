@@ -4,7 +4,7 @@ using Capacitor.App.Materials;
 
 namespace Capacitor.App.Controls;
 
-/// Inherited, so a subtree pins its own material and a flyout takes its opener's.
+/// Inherited, so a subtree pins its own material.
 public sealed class MaterialScope : AvaloniaObject {
     MaterialScope() { }
 

@@ -50,7 +50,7 @@ public class MaterialWindowTests {
             var host = window.FindControl<ContentControl>("WorkspaceHost")!;
             await Assert.That(MaterialScope.GetMaterial(sessions)).IsEqualTo(SurfaceMaterial.SoftGlass);
             await Assert.That(MaterialScope.GetMaterial(host)).IsEqualTo(SurfaceMaterial.Opaque);
-            await Assert.That(host.Background).IsNotNull();
+            await Assert.That(host.Background).IsEqualTo((IBrush)Application.Current!.FindResource("KcapCanvasBrush")!);
             await Assert.That(window.FindControl<MaterialBackdrop>("MaterialBackdrop")!.IsVisible).IsTrue();
 
             material.OnNext(State(SurfaceMaterial.Opaque));
@@ -75,7 +75,11 @@ public class MaterialWindowTests {
             await Assert.That(rail.Width).IsEqualTo(310d);
             await Assert.That(rail.Margin).IsEqualTo(new Thickness(12, 40, 12, 12));
             await Assert.That(chrome.Height).IsEqualTo(16d);
-            await Assert.That(rail.FindControl<Surface>("RailSurface")!.GlassKind).IsEqualTo(GlassKind.Rail);
+            var railSurface = rail.FindControl<Surface>("RailSurface")!;
+            await Assert.That(railSurface.GlassKind).IsEqualTo(GlassKind.Rail);
+            var backdrop = window.FindControl<MaterialBackdrop>("MaterialBackdrop")!;
+            await Assert.That(railSurface.Bounds.Width + rail.Margin.Left + rail.Margin.Right)
+                .IsEqualTo(backdrop.RailWidth);
 
             // The glass button fill reaches the presenter even though the Button sets its own
             // Background locally.

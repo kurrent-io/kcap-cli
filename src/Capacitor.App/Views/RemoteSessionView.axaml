@@ -46,8 +46,8 @@
         </Border>
 
         <kcap:Surface x:Name="AccessBanner" Grid.Row="1" Margin="20,10,20,0"
-                CornerRadius="10" Padding="13,10"
-                IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                      CornerRadius="10" Padding="13,10"
+                      IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
             <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
                        FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" />
         </kcap:Surface>
@@ -66,7 +66,7 @@
                                            CaretBrush="{StaticResource KcapTextBrush}"
                                            Model="{Binding Terminal.Surface, Converter={x:Static views:TerminalSurfaceModelConverter.Instance}}" />
                 <kcap:Surface Grid.Row="0" IsVisible="{Binding Terminal.ShowsBanner}"
-                        CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
+                              CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
                     <TextBlock x:Name="TerminalPhaseNote" Text="{Binding Terminal.PhaseNote}" Foreground="{StaticResource KcapMutedBrush}" />
                 </kcap:Surface>
                 <!-- Read-only: the keys the daemon accepts are the only input that crosses. -->

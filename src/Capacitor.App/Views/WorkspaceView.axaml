@@ -69,7 +69,7 @@
             <Panel x:Name="TerminalBanners" IsVisible="{Binding ShowsTerminalBanners}">
 
                 <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Connecting}"
-                        CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
+                              CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
                     <TextBlock Text="Connecting…" Foreground="{StaticResource KcapMutedBrush}" />
                 </kcap:Surface>
 
@@ -88,7 +88,7 @@
                 </Border>
 
                 <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalDetachedOrFailedVisibleConverter.Instance}}"
-                        CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                              CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <StackPanel Spacing="10" HorizontalAlignment="Center">
                         <TextBlock Text="{Binding Terminal.State, Converter={x:Static views:TerminalDetachedOrFailedMessageConverter.Instance}}"
                                    Foreground="{StaticResource KcapTextBrush}" HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="380" />
@@ -99,13 +99,13 @@
                 </kcap:Surface>
 
                 <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Exited}"
-                        CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                              CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <TextBlock Text="{Binding Terminal.State.ExitCode, StringFormat='Session exited (code {0})'}"
                                Foreground="{StaticResource KcapTextBrush}" />
                 </kcap:Surface>
 
                 <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=NotFound}"
-                        CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                              CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <StackPanel Spacing="10" HorizontalAlignment="Center">
                         <TextBlock Text="{Binding Terminal.State.Detail}" Foreground="{StaticResource KcapTextBrush}" />
                         <Button Content="Retry" Command="{Binding Terminal.RetryResolveCommand}" HorizontalAlignment="Center" Padding="14,4" />
@@ -113,7 +113,7 @@
                 </kcap:Surface>
 
                 <kcap:Surface IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=SessionEnded}"
-                        CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                              CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <TextBlock x:Name="SessionEndedNote" Text="This session has ended." Foreground="{StaticResource KcapMutedBrush}" />
                 </kcap:Surface>
             </Panel>
@@ -130,7 +130,7 @@
                  stage line is the only sign the launch is alive during a handshake that can run
                  for many seconds. -->
             <kcap:Surface x:Name="StartingPanel" IsVisible="{Binding IsStarting}"
-                    CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                          CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                 <StackPanel Spacing="6" HorizontalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
                         <Ellipse Width="8" Height="8" Fill="{StaticResource KcapWarningBrush}" Classes="pulsing" VerticalAlignment="Center" />

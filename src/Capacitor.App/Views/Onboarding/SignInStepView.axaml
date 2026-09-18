@@ -46,8 +46,8 @@
 
         <!-- Browser fallback lives at the foot: open + selectable URL, not buried in the log. -->
         <kcap:Surface DockPanel.Dock="Bottom" Margin="0,16,0,0"
-                CornerRadius="12" Padding="16,14"
-                IsVisible="{Binding BrowserUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                      CornerRadius="12" Padding="16,14"
+                      IsVisible="{Binding BrowserUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
             <StackPanel Spacing="10">
                 <TextBlock Text="Finish in your browser"
                            FontSize="13.5" FontWeight="SemiBold"
@@ -99,7 +99,7 @@
             <StackPanel Spacing="16">
                 <StackPanel Spacing="10">
                     <kcap:Surface CornerRadius="12" Padding="16,14"
-                            IsVisible="{Binding DeviceCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                  IsVisible="{Binding DeviceCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                         <StackPanel Spacing="10">
                             <TextBlock Text="Enter this code to finish signing in"
                                        Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5" />
