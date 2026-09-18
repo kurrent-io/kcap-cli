@@ -89,11 +89,16 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         var texts = new List<string>();
         var index = 0;
         var sawResult = false;
+        // The root object describes one result and names none: on a line with several it is
+        // attributed to none of them.
+        var toolUseResult = CountResults(blocks) == 1 ? root.Obj("toolUseResult") : null;
         foreach (var block in blocks.EnumerateArray()) {
             switch (block.Str("type")) {
                 case "tool_result":
                     sawResult = true;
-                    emitter.Add(index, ToolResult(block, record), ClaudeCodeExtension.Flags(record.IsSidechain, isError: block.Bool("is_error") == true));
+                    emitter.Add(index, ToolResult(block, record), ClaudeCodeExtension.Flags(
+                        record.IsSidechain, isError: block.Bool("is_error") == true,
+                        toolUseResult: toolUseResult is { } obj ? StructOf(obj) : null));
                     break;
                 case "text":
                     if (block.Str("text") is { } t) texts.Add(t);
@@ -130,6 +135,12 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
     static bool HasTextBlock(JsonElement blocks) {
         foreach (var block in blocks.EnumerateArray()) if (block.Str("type") == "text") return true;
         return false;
+    }
+
+    static int CountResults(JsonElement blocks) {
+        var count = 0;
+        foreach (var block in blocks.EnumerateArray()) if (block.Str("type") == "tool_result") count++;
+        return count;
     }
 
     static bool IsDeferredToolsInjection(string text) => text.AsSpan().TrimStart().StartsWith("<available-deferred-tools");

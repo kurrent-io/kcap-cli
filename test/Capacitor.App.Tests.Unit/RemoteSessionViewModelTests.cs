@@ -428,4 +428,116 @@ public class RemoteSessionViewModelTests {
             await vm.TeardownAsync();
         });
     }
+
+    const string AgentCall = """{"tool_calls":[{"call_id":"toolu_A","tool_name":"Agent","arguments":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}""";
+    const string AgentLaunch = """{"call_id":"toolu_A","result":"Async agent launched successfully.","extensions":{"claude_code":{"tool_use_result":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}}}""";
+    const string AgentNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}""";
+    const string MetaNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","extensions":{"claude_code":{"is_meta":true}}}""";
+
+    /// Events shaped as the server writes them: tool_use_result on the result, no origin_kind on
+    /// the notification.
+    [Test]
+    public async Task Server_shaped_events_drive_the_strip_through_a_background_launch_and_its_finish() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var vm = h.Build(Harness.Row(vendor: "claude"));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the strip");
+            await Assert.That(vm.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await Assert.That(vm.Chat.Items.OfType<ToolGroupItem>().Single().Calls.Single().Outcome).IsEqualTo(ToolOutcome.Done);
+
+            h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, AgentNotification));
+            await h.UntilAsync(vm, () => !vm.Chat.HasRunningSubagents, "the finish");
+            await Assert.That(vm.Chat.Items.OfType<SystemNoteItem>().Count()).IsEqualTo(1);
+            await Assert.That(vm.Chat.Items.OfType<UserTurnItem>().Any()).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The not-before-start guard in SessionSubagents compares a completion's own time with the
+    /// launch it would end; a batch stored late must not let a stale completion win that compare.
+    [Test]
+    public async Task A_completion_stored_late_but_dated_before_the_resumed_launch_leaves_it_running() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            const string firstCall = """{"tool_calls":[{"call_id":"toolu_A","tool_name":"Agent","arguments":{"description":"d","prompt":"p","subagent_type":"Explore"}}],"timestamp":"2026-09-17T10:00:00Z"}""";
+            const string firstLaunch = """{"call_id":"toolu_A","result":"Async agent launched successfully.","timestamp":"2026-09-17T10:00:05Z","extensions":{"claude_code":{"tool_use_result":{"isAsync":true,"status":"async_launched","agentId":"a"}}}}""";
+            const string firstFinish = """{"content":"<task-notification>\n<task-id>a</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","timestamp":"2026-09-17T10:01:30Z"}""";
+            const string secondCall = """{"tool_calls":[{"call_id":"toolu_B","tool_name":"Agent","arguments":{"description":"d","prompt":"p","subagent_type":"Explore"}}],"timestamp":"2026-09-17T10:02:00Z"}""";
+            const string secondLaunch = """{"call_id":"toolu_B","result":"Async agent launched successfully.","timestamp":"2026-09-17T10:02:05Z","extensions":{"claude_code":{"tool_use_result":{"isAsync":true,"status":"async_launched","agentId":"a"}}}}""";
+            const string taskStop = """{"call_id":"toolu_S","result":"ok","timestamp":"2026-09-17T10:01:00Z","extensions":{"claude_code":{"tool_use_result":{"task_id":"a","task_type":"local_agent","message":"Successfully stopped task: a"}}}}""";
+
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, firstCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, firstLaunch)));
+            var vm = h.Build(Harness.Row(vendor: "claude"));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the first launch");
+
+            h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, firstFinish));
+            await h.UntilAsync(vm, () => !vm.Chat.HasRunningSubagents, "the first finish");
+
+            h.Lane.PushStreamEvent(Envelope("s1", 3, CanonicalEventTypes.AssistantToolCallsGenerated, secondCall));
+            h.Lane.PushStreamEvent(Envelope("s1", 4, CanonicalEventTypes.ToolResultReceived, secondLaunch));
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the second launch");
+
+            // A completion that lands after this synchronization marker was folded into the strip
+            // before the marker's own row could appear, since the tail applies its stream in order.
+            h.Lane.PushStreamEvent(Envelope("s1", 5, CanonicalEventTypes.ToolResultReceived, taskStop));
+            h.Lane.PushStreamEvent(Envelope("s1", 6, CanonicalEventTypes.AssistantTextGenerated, """{"content":"__sync__"}"""));
+            await h.UntilAsync(vm, () => vm.Chat.Items.OfType<AssistantTextItem>().Any(i => i.Text == "__sync__"), "the sync marker");
+
+            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
+            await Assert.That(vm.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_meta_notification_finishes_its_subagent_without_a_row() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var vm = h.Build(Harness.Row(vendor: "claude"));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the strip");
+            var rows = vm.Chat.Items.Count;
+
+            h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, MetaNotification));
+            await h.UntilAsync(vm, () => !vm.Chat.HasRunningSubagents, "the finish");
+            await Assert.That(vm.Chat.Items.Count).IsEqualTo(rows);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_row_removal_stops_the_strip_and_its_reappearance_restores_it() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var vm = h.Build(Harness.Row(vendor: "claude"));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the strip");
+
+            h.Directory.Rows.Remove("remote:a1");
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.Chat.HasRunningSubagents).IsFalse();
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row(vendor: "claude"));
+            await Assert.That(vm.SessionEnded).IsFalse();
+            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
+            await Assert.That(vm.Chat.SubagentSummary).IsEqualTo("1 subagent running");
+            await vm.TeardownAsync();
+        });
+    }
 }

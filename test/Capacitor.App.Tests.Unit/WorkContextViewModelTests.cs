@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using Avalonia.Controls;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
@@ -27,10 +28,13 @@ public class WorkContextViewModelTests {
         public Subject<ReactiveUnit> SignIn { get; } = new();
         public int SignInRequests;
         public List<string> OpenedWorkItems { get; } = [];
+        public SessionSubagents Subagents { get; }
         public WorkContextViewModel Vm { get; }
 
-        public Harness() =>
-            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, () => SignInRequests++, SignIn, OpenedWorkItems.Add);
+        public Harness() {
+            Subagents = new SessionSubagents(Time);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Subagents, () => SignInRequests++, SignIn, OpenedWorkItems.Add);
+        }
 
         /// For a read that will answer from the queue: pushes and awaits the read it starts.
         public async Task PushAsync(AgentStatusDto dto) {
@@ -56,6 +60,12 @@ public class WorkContextViewModelTests {
     static WorkContextRead Ready() => WorkContextRead.Of(WorkContextReadKind.Ready) with {
         Summary = new SessionSummaryDto { SessionId = SessionA },
     };
+
+    static ChatProjectionResult Spawn(string callId, DateTimeOffset at) =>
+        new([], [], [new SubagentSignal.Started(callId, "Explore", "Map the UI", at)]);
+
+    static ChatProjectionResult Finish(string callId, DateTimeOffset at) =>
+        new([], [], [new SubagentSignal.Finished(callId, null, SubagentOutcome.Done, at)]);
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1164,6 +1174,75 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.PartsExpanded).IsFalse();
             await Assert.That(h.Vm.PeopleExpanded).IsTrue();
             await Assert.That(h.Vm.SessionExpanded).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_subagents_section_is_hidden_without_rows_and_its_header_counts_running_and_total() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var raised = new List<string?>();
+            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            await Assert.That(h.Vm.HasSubagents).IsFalse();
+
+            var now = h.Time.GetUtcNow();
+            h.Subagents.Apply(Spawn("c1", now));
+            h.Subagents.Apply(Spawn("c2", now));
+            await Assert.That(h.Vm.HasSubagents).IsTrue();
+            await Assert.That(h.Vm.Subagents).Count().IsEqualTo(2);
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 running · 2 total");
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasSubagents));
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.SubagentsHeader));
+
+            h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running · 2 total");
+            h.Subagents.Apply(Finish("c2", now.AddSeconds(6)));
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 total");
+            await Assert.That(h.Vm.HasSubagents).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The section is a session-local fact like the facts under SESSION: it renders whatever
+    /// phase the server read is in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_subagents_section_renders_while_the_pane_read_is_loading_or_failed() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Source.Gate();
+            h.Push(Dto());
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
+            h.Subagents.Apply(Spawn("c1", h.Time.GetUtcNow()));
+            await Assert.That(h.Vm.HasSubagents).IsTrue();
+            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running · 1 total");
+
+            gate.SetResult(WorkContextRead.Of(WorkContextReadKind.Unreachable, "no response"));
+            await h.Vm.PendingReadForTesting!;
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Unreachable);
+            await Assert.That(h.Vm.HasSubagents).IsTrue();
+
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.SignedOut));
+            await h.TickAsync();
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.SignedOut);
+            await Assert.That(h.Vm.HasSubagents).IsTrue();
+            await Assert.That(h.Vm.Subagents).Count().IsEqualTo(1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_subagents_section_starts_expanded_and_the_toggle_folds_it() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
+            await h.Vm.ToggleSubagentsCommand.Execute();
+            await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
+            await h.Vm.ToggleSubagentsCommand.Execute();
+            await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
             await h.Vm.TeardownAsync();
         });
     }

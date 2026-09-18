@@ -128,6 +128,16 @@
             <Setter Property="StrokeLineCap" Value="Round" />
             <Setter Property="StrokeJoin" Value="Round" />
         </Style>
+        <!-- The state word, never only the dot: failed is painted danger through the class, so a
+             local Foreground must not be set on it. -->
+        <Style Selector="TextBlock.subagentState">
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.subagentState.failed">
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
     </UserControl.Styles>
     <UserControl.Resources>
         <DataTemplate x:Key="LinkCard" x:DataType="vm:WorkContextLinkViewModel">
@@ -329,6 +339,44 @@
                 </StackPanel>
 
                 <Border Height="1" Background="{StaticResource KcapBorderBrush}" Margin="0,16,0,12" />
+
+                <!-- Subagents: read from the transcript, so it renders in every pane phase. -->
+                <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasSubagents}" Margin="0,0,0,12">
+                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleSubagentsCommand}" Classes="sectionHeader">
+                        <DockPanel>
+                            <Panel DockPanel.Dock="Right" Width="12" Height="12" VerticalAlignment="Center">
+                                <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SubagentsExpanded}" />
+                                <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SubagentsExpanded}" />
+                            </Panel>
+                            <TextBlock x:Name="SubagentsHeaderText" DockPanel.Dock="Right" Text="{Binding SubagentsHeader}" FontSize="10.5"
+                                       Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <TextBlock Text="SUBAGENTS" Classes="eyebrow" />
+                        </DockPanel>
+                    </Button>
+                    <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Subagents}" Margin="0,10,0,0" IsVisible="{Binding SubagentsExpanded}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SubagentRow">
+                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="9" Margin="0,0,0,8">
+                                    <!-- Pulsing warning while running, success done, danger failed, neutral stopped. -->
+                                    <Panel Grid.Row="0" Grid.Column="0" Width="8" Height="8" VerticalAlignment="Center">
+                                        <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" Background="{StaticResource KcapWarningBrush}" IsVisible="{Binding IsRunning}" />
+                                        <Ellipse Width="8" Height="8" Fill="{StaticResource KcapSuccessBrush}" IsVisible="{Binding IsDone}" />
+                                        <Ellipse Width="8" Height="8" Fill="{StaticResource KcapDangerBrush}" IsVisible="{Binding IsFailed}" />
+                                        <Ellipse Width="8" Height="8" Fill="{StaticResource KcapFaintBrush}" IsVisible="{Binding IsStopped}" />
+                                    </Panel>
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Name}" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Row="0" Grid.Column="2" Text="background" FontSize="10" Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
+                                               IsVisible="{Binding IsBackground}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding Description}" FontSize="10.5"
+                                               Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
+                                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
 
                 <!-- Session facts. -->
                 <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader">
