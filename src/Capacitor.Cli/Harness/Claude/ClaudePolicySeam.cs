@@ -212,12 +212,12 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
             RawPayloadJson = rawPayload,
         };
 
-        return new PolicyDecisionEmitter(config, time).EmitAsync(new PolicyDecisionEventV1(
-            sessionId, f.AgentId, "claude", PolicySeams.ClaudePermissionRequest,
-            snapshot?.Id ?? "unknown", PolicyEngine.Version, "full", "ask", "prompt_stands",
-            PolicyWire.ToWire(action), [], snapshot?.Degraded ?? false, "evaluation_error",
-            f.CallId, consumed.Ambiguous, time.GetUtcNow().ToString("O"),
-            PendingAskConsumed: true, FreshOutcome: "error"), snapshot);
+        return new PolicyDecisionEmitter(config, time).EmitAsync(PolicyWire.Decision(
+            sessionId: sessionId, agentId: f.AgentId, vendor: "claude", seam: PolicySeams.ClaudePermissionRequest,
+            snapshot: snapshot, mode: EvaluationMode.Full, requestedOutcome: "ask", effectiveOutcome: "prompt_stands",
+            action: PolicyWire.ToWire(action), matchedRules: [], time: time,
+            failureClass: "evaluation_error", correlationId: f.CallId, correlationAmbiguous: consumed.Ambiguous,
+            pendingAskConsumed: true, freshOutcome: "error"), snapshot);
     }
 
     /// <summary><see cref="JsonNode.GetValue{T}"/> throws on a value of another type, which would
@@ -227,12 +227,12 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
 
     Task Emit(SeamContext ctx, string requested, string effective, bool? ambiguous = null,
               bool? pendingAskConsumed = null, string? freshOutcome = null) =>
-        new PolicyDecisionEmitter(config, time).EmitAsync(new PolicyDecisionEventV1(
-            ctx.SessionId, ctx.AgentId, "claude", ctx.Seam, ctx.Snapshot.Id, PolicyEngine.Version,
-            ctx.Mode == EvaluationMode.Full ? "full" : "tighten_only", requested, effective,
-            PolicyWire.ToWire(ctx.Action), PolicyWire.ToWire(ctx.Eval.MatchedRules),
-            ctx.Snapshot.Degraded, null, ctx.CallId, ambiguous ?? (ctx.CallId is null),
-            time.GetUtcNow().ToString("O"), pendingAskConsumed, freshOutcome), ctx.Snapshot);
+        new PolicyDecisionEmitter(config, time).EmitAsync(PolicyWire.Decision(
+            sessionId: ctx.SessionId, agentId: ctx.AgentId, vendor: "claude", seam: ctx.Seam,
+            snapshot: ctx.Snapshot, mode: ctx.Mode, requestedOutcome: requested, effectiveOutcome: effective,
+            action: PolicyWire.ToWire(ctx.Action), matchedRules: PolicyWire.ToWire(ctx.Eval.MatchedRules), time: time,
+            correlationId: ctx.CallId, correlationAmbiguous: ambiguous ?? (ctx.CallId is null),
+            pendingAskConsumed: pendingAskConsumed, freshOutcome: freshOutcome), ctx.Snapshot);
 
     // camelCase keys are Claude's own PreToolUse hook contract, outside kcap's snake_case
     // convention — the same exemption LocalPermissionBridge.BuildClaudeResponse takes.
