@@ -55,4 +55,10 @@ public class SetupDiscoverGuardTests {
     public async Task A_workspace_is_still_caught_when_a_later_value_repeats_it() =>
         await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "acme", "--daemon-name", "acme"]))
             .Contains("cannot also be given one");
+
+    // …nor in the other order, where the value comes first and the workspace repeats it.
+    [Test]
+    public async Task A_workspace_repeating_an_earlier_value_does_not_start_discovery() =>
+        await Assert.That(SetupCommand.DiscoverArgumentError(["setup", "--discover", "--profile", "acme", "acme"]))
+            .IsNotNull();
 }
