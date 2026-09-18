@@ -924,6 +924,21 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>
+    /// Best-effort: report the slash commands a hosted agent's harness offers, for the composer's `/`
+    /// picker. A single-record (arity 1) payload so the wire shape evolves additively; a later report
+    /// supersedes the previous list. Fire-and-forget over the persistent connection, swallowed when
+    /// the connected server is older and has no <c>ReportAgentCommands</c> hub method, so a
+    /// mixed-version rollout never surfaces this as a failure. Virtual so tests can capture it.
+    /// </summary>
+    public virtual async Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
+        try {
+            await _hub.SendAsync("ReportAgentCommands", new ReportAgentCommandsArgs(agentId, commands), cancellationToken: _ct);
+        } catch (Exception ex) {
+            LogReportCommandsFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
     /// Task 8: reports the CONCRETE resolved model an explicit-model reviewer actually launched
     /// with (the post-launch counterpart of the preflight RPC), over the persistent connection to the
     /// server's <c>ReportExplicitReviewerModelResolved</c> hub method — a single-record (arity 1)
@@ -1857,6 +1872,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (server may not support it)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report slash commands for agent {AgentId} (server may not support it)")]
+    partial void LogReportCommandsFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to send ACP auto-approval audit for agent {AgentId} (server may not support it)")]
     partial void LogNotifyAcpAutoApprovalFailed(Exception ex, string agentId);

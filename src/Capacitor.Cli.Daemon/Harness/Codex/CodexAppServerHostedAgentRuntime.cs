@@ -198,6 +198,14 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
     /// null until the handshake completes. Feeds the existing launch-attempt reporting.</summary>
     public string? ResolvedModel => _resolvedModel;
 
+    readonly HostedAgentCommandsRelay _commandsRelay = new();
+
+    /// <inheritdoc/>
+    public Action<IReadOnlyList<HostedAgentCommand>>? OnCommandsAvailable {
+        get => _commandsRelay.Callback;
+        set => _commandsRelay.Callback = value;
+    }
+
     /// <summary>Daemon-held thread id — the deterministic session-id correlation that replaces the
     /// <c>CodexSessionRolloutLocator</c> timestamp race.</summary>
     public string? ThreadId => _threadId;
@@ -268,6 +276,8 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
 
         await StartThreadAsync(linked.Token).ConfigureAwait(false);
         _clock?.ClearLaunchStage();
+
+        await TryPublishSkillsAsync(linked.Token).ConfigureAwait(false);
 
         if (!string.IsNullOrEmpty(_launch.InitialPrompt)) {
             if (_deferFirstTurn) {
@@ -378,6 +388,21 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             }
         }
         return entries;
+    }
+
+    // Best-effort: surface Codex's skills as the composer's `/` picker entries. skills/list is not
+    // required for the launch, so an older app-server without the method — or an unexpected shape —
+    // must not fail it; the picker just shows nothing for Codex.
+    async Task TryPublishSkillsAsync(CancellationToken ct) {
+        try {
+            var listParams = new JsonObject { ["cwds"] = new JsonArray((JsonNode?) _launch.Cwd) };
+            var result     = await RequestAsync("skills/list", listParams, ct).ConfigureAwait(false);
+
+            var commands = CodexSkills.Extract(result);
+            if (commands.Count > 0) _commandsRelay.Publish(commands);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "codex app-server: skills/list failed; no slash commands surfaced.");
+        }
     }
 
     async Task StartThreadAsync(CancellationToken ct) {
