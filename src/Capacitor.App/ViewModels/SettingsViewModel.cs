@@ -179,7 +179,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         _ => null,
     };
 
-    // A radio only ever reports the one that turned on; SetAsync never throws, the store swallows a failed write.
+    // A radio only ever reports the one that turned on; the store swallows a failed write, and the
+    // service drops a publish that lands after disposal.
     void Choose(SurfaceMaterial material) {
         if (_material is null || material == _materialState.Effective) return;
         _ = _material.SetAsync(material);

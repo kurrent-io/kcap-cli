@@ -105,6 +105,14 @@ public class MaterialServiceTests {
         await Assert.That(service.Current.Effective).IsEqualTo(SurfaceMaterial.Opaque);
     }
 
+    /// A choice that lands after shutdown is dropped, never thrown.
+    [Test]
+    public async Task A_set_after_dispose_completes_without_throwing() {
+        var service = new MaterialService(new InMemoryAppStateStore(), Mac, requested: null);
+        service.Dispose();
+        await service.SetAsync(SurfaceMaterial.LiquidGlass);
+    }
+
     /// Cannot prove the absence of a race: pins only that the final state keeps the failure
     /// whatever the interleaving of SetAsync and ReportPipelineFailure.
     [Test]

@@ -11,6 +11,7 @@ public sealed class MaterialService : IMaterialService, IDisposable {
     readonly Lock _gate = new();
     SurfaceMaterial? _requested;
     string? _failure;
+    bool _disposed;
 
     public MaterialService(IAppStateStore store, MaterialEnvironment environment, SurfaceMaterial? requested) {
         _store = store;
@@ -46,6 +47,7 @@ public sealed class MaterialService : IMaterialService, IDisposable {
     // the UI thread and can race ReportPipelineFailure.
     void Publish() {
         lock (_gate) {
+            if (_disposed) return;
             var next = Resolve();
             if (next != _states.Value) _states.OnNext(next);
         }
@@ -61,5 +63,10 @@ public sealed class MaterialService : IMaterialService, IDisposable {
         return new MaterialState(effective, _requested, availability, reason, _environment.ReduceTransparency);
     }
 
-    public void Dispose() => _states.Dispose();
+    public void Dispose() {
+        lock (_gate) {
+            _disposed = true;
+            _states.Dispose();
+        }
+    }
 }
