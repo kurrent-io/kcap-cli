@@ -80,6 +80,25 @@ public class ChildStdinStreamTests {
         }
     }
 
+    /// <summary>The same exceptional path down the async close, which has its own <c>finally</c>.</summary>
+    [Test]
+    public async Task The_owner_is_released_even_when_closing_the_pipe_throws_asynchronously() {
+        var child = Process.Start(IgnoresItsStdin())!;
+        var pid   = child.Id;
+        var pipe  = new CountingStream { ThrowOnDispose = true };
+
+        try {
+            var stream = new ChildStdinStream(pipe, child);
+
+            await Assert.ThrowsAsync<IOException>(async () => await stream.DisposeAsync());
+
+            await Assert.That(pipe.AsyncDisposals).IsEqualTo(1);
+            await Assert.That(IsReleased(child)).IsTrue();
+        } finally {
+            Kill(pid);
+        }
+    }
+
     /// <summary>
     /// Pins the disposal gate. <c>base.DisposeAsync()</c> routes back through
     /// <c>Dispose(bool)</c>, so without the gate an async close would release the pipe a second
