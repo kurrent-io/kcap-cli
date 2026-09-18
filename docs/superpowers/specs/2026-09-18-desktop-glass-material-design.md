@@ -196,9 +196,11 @@ drag-over brush from a style, and a local value would outrank both.
 
 `GlassLayer : TemplatedControl` in `Controls/` is the one place glass is drawn and
 parameterised. Its template is a `Panel` with the `LiquidGlassSurface` and a 1 px rim
-`Border`; the control is not hit-testable. It has the class variants `card`, `rail`,
-`panel` and `chip`, and its styles, keyed on class and `MaterialScope.Material`, own
-every glass parameter below except the radius. The host always passes the radius and
+`Border`; the control is not hit-testable. It has a `Kind` property (`Card`, `Rail`,
+`Panel`, `Chip`) rather than classes, because a host template can bind a property but
+cannot set a class. Its styles, keyed on `Kind` and `MaterialScope.Material`, own
+every glass parameter below except the radius. `Surface` carries a matching
+`GlassKind`, which its `rail` class sets to `Rail`. The host always passes the radius and
 the rim brush (`BorderBrush`) in, and the layer applies that one radius to both the
 shader and the rim, so the two cannot disagree:
 
@@ -238,10 +240,23 @@ Every inline `Border` that is a card becomes a `Surface`. A `Border` is a card w
 carries a Kcap surface brush, a border brush and a corner radius, and holds content.
 Pills (radius 999), row highlights and control-template internals stay `Border`s.
 
-About 38 sites across the Onboarding, Settings, pull request reader, pending card,
-attachment strip, Home, rail and launcher views. The plan's first migration task
-produces the exact inventory. An `x:Name` moves onto the `Surface`. Every migrated
-site outside `SessionsSurface` resolves `Opaque` and must render as it does today.
+Thirty sites. Twenty-nine are inline: `ChatTabView` (4), `HomeView` (1),
+`LauncherPaneView` (1), `OnboardingWindow` (7), `SignInStepView` (2),
+`PendingCardTemplates` (3), `PullRequestCard` (1), `RemoteSessionView` (2),
+`SettingsWindow` (2), `WorkspaceView` (6). The thirtieth is the link card in
+`WorkContextView`, which takes its look from a `Border.card` class style rather than
+inline attributes. The attachment chip in `AttachmentChipStrip` meets the letter of
+the rule but is a chip, and stays a `Border`. Of the 38 `Border`s that carry a Kcap
+surface background, the other eight are pills, dividers, avatars and borderless
+blocks. The plan lists every site.
+
+An `x:Name` and any class move onto the `Surface`, and a `Border.<class>` selector
+that targeted a migrated card is retargeted to `kcap|Surface.<class>`. Nine existing
+tests resolve these cards as `Border` and four read `.BorderBrush` from them; they
+change to `Surface`, which has the same property. Several cards sit in the
+virtualised chat list, where a templated control costs three visuals instead of one;
+the chat smoke tests guard the layout. Every migrated site outside `SessionsSurface`
+resolves `Opaque` and must render as it does today.
 
 **Attachment drop targets.** `GoalCard` in the launcher and `ComposerCard` in
 `ChatTabView` carry `attachTarget`, and `AttachmentDropPaste` toggles `dragOver` on
@@ -263,9 +278,13 @@ the lookups change to `Surface` and the behavioural assertions stay.
 
 ## Chips
 
-Under a glass scope `Button.kcapChip` takes the prototype's `ControlTemplate`, moved
-to `Controls/GlassChipStyles.axaml`: a `GlassLayer.chip`, the content, a focus ring,
-`FocusAdorner` nulled, radius 12. Swapping the template is not enough on its own:
+Under a glass scope the five launcher chips take the prototype's `ControlTemplate`,
+moved to `Controls/GlassChipStyles.axaml`: a `GlassLayer` of kind `Chip`, the content,
+the dropdown chevron, a focus ring, `FocusAdorner` nulled, radius 12. They are marked
+with a new `picker` class, and the template is keyed on `Button.kcapChip.picker`.
+Every other `kcapChip` (Activity, Reconnect, the rail's new-session button) keeps the
+opaque style under glass, as in the prototype. Swapping the template is not enough on
+its own:
 
 - **Opaque fills.** Two sets of styles paint a fill on a presenter named
   `PART_ContentPresenter`: Fluent's per-state `Button` theme styles, which stay active
@@ -278,8 +297,6 @@ to `Controls/GlassChipStyles.axaml`: a `GlassLayer.chip`, the content, a focus r
   `CornerRadius="999"` locally, which outranks any style. Those two attributes move
   into a `Button.kcapChip.picker` style: `11,5` and `999` under `Opaque`, `12,7` under
   glass, where the template's radius 12 applies.
-- The dropdown chevron shows only on chips with the new `picker` class. The five
-  launcher chips get it.
 - Soft: blur 8, refraction 6 (height 8), tint `#16DCEFFF`, surface `#302C3F52`,
   highlight 0.45 / 0.65, vibrancy 1.05, shadow `#40040C16` r 7 (0,2).
 - Liquid: blur 3, refraction 12, chromatic aberration on, highlight 0.7 / 0.9.
@@ -290,9 +307,10 @@ to `Controls/GlassChipStyles.axaml`: a `GlassLayer.chip`, the content, a focus r
 ## Rail
 
 The rail's root becomes `Surface.rail`. Styles keyed on the material set the floating
-layout: margin `12,40,12,12` so the panel starts below the macOS window controls,
-width 334 (310 opaque), top drag strip 16 (44 opaque). `SessionsSurface` changes its
-first column from `310` to `Auto` so the rail owns its width.
+layout: margin `12,40,12,12` so the panel starts below the macOS window controls, and
+a top drag strip of 16 (44 opaque). The rail keeps its 310 width in both materials;
+`SessionsSurface` changes its first column from `310` to `Auto`, so under glass the
+margin widens that column to 334, which is the prototype's layout.
 
 Row styles from the prototype's `GlassSidebarStyles.axaml` move to
 `Controls/GlassRailStyles.axaml`, keyed on the material instead of the
@@ -354,6 +372,12 @@ for both presenter types:
 - **Pass:** both presenters ship with the glass templates.
 - **Fail:** flyouts stay opaque in this change and the finding is kept.
 
+A scratch run against the unmodified v0.2.0 source on Avalonia 12.1.2 already showed
+the mechanism holds for a bare overlay-layer `Popup`: the stripe-edge contrast behind
+it fell from 10.8 to 0.4, a sibling text ghost of 1360 px fell to 0 with the capture
+flag, and the inherited material reached both presenter types. The recorded probe
+repeats that through the app's own templates.
+
 ## Settings
 
 `SettingsWindow` gets an **Appearance** card above the daemon cards. The "Daemon"
@@ -384,9 +408,10 @@ that fails to compile is written to `Console` and painted as an error hint, and 
 missing `ISkiaSharpApiLeaseFeature` makes `Render` return having drawn nothing.
 `LiquidGlassDiagnostics` holds capture counters only.
 
-So the library takes one local patch, listed in `VENDORED.md`: a static
-`PipelineUnavailable` event on the draw operation, raised once with a reason from
-those two paths. It fires on the render thread; the app marshals it to the UI thread
+So the library takes one local patch, listed in `VENDORED.md`: a new public static
+class `LiquidGlassPipeline` with an `Unavailable` event, raised once per process with
+a reason from those two paths in `LiquidGlassDrawOperation`. It is its own type
+because the draw operation is internal. It fires on the render thread; the app marshals it to the UI thread
 and calls `ReportPipelineFailure`, which drops `Effective` to `Opaque` for the rest of
 the session and keeps the stored choice.
 
