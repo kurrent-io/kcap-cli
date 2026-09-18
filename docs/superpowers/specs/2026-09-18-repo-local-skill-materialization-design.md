@@ -93,8 +93,10 @@ subdirectories.
 right documents at the wrong paths, and neither the conditional request nor the planner would notice:
 the etag would return `304`, and the planner compares document, version, hash and slug, never the
 destination. So a mismatched anchor discards the etag, treats every entry as a write at the new
-paths, and moves every old path into the pending-prune journal below, to be deleted once the new
-copies exist.
+paths, and moves every old path into the pending-prune journal below, each recorded with the root
+that authorises it, to be deleted once the new copies exist. When an identity change arrives at the
+same time, the identity rule wins and the old paths go first; the precedence is stated once, under
+crash recovery.
 
 ## Containment
 
@@ -148,16 +150,30 @@ Two mechanisms, because the manifest is the only thing that makes a file prunabl
 planned entries, `pending: true`, and a `pending_prunes` journal before any file is written, then
 re-saved with `pending: false` and an empty journal once the writes and prunes succeed.
 
-The journal is a plain list of paths awaiting deletion, deliberately not part of the document-keyed
-entries. The entries hold one row per document, so a rename — same document, new slug — cannot record
-the old path and the new one at once, and saving only the planned entries would lose the old path
-entirely. A crash between the pending save and the prune would then leave `kcap-old` on disk with
-nothing owning it, even if the document is revoked before the next attempt.
+The journal holds paths awaiting deletion, deliberately not as document-keyed entries. The entries
+hold one row per document, so a rename — same document, new slug — cannot record the old path and the
+new one at once, and saving only the planned entries would lose the old path entirely. A crash
+between the pending save and the prune would then leave `kcap-old` on disk with nothing owning it,
+even if the document is revoked before the next attempt.
 
-Recovery deletes every path still in the journal, under the same prune-safety and containment rules
-as any other prune, before planning the new snapshot. A crash between the write and the manifest
-save likewise leaves every published path owned, so a later sync prunes or rewrites it whatever the
-snapshot has since done.
+**Each journal path carries the root that authorises it.** A path is recorded as a pair: the
+directory to delete, and the skills root it was a direct child of. Containment is defined against an
+anchor, and the prune guard admits only a direct child of the root it is given, so after a move from
+one anchor to another the new anchor's root cannot authorise the old anchor's paths. Recovery
+validates each pair against its own recorded root, with the same prune-safety and containment rules
+as any other prune. A journal is merged, never replaced: recording a new transition cannot discard
+paths an earlier one is still waiting to delete.
+
+A crash between the write and the manifest save likewise leaves every published path owned, so a
+later sync prunes or rewrites it whatever the snapshot has since done.
+
+**Precedence, when more than one transition is outstanding.** An identity retirement runs first and
+unconditionally: every entry and every journal path belonging to the retired identity is deleted
+before any snapshot is requested, whether or not a replacement exists. An anchor movement is
+copy-before-delete, and only while the identity is unchanged: a journal path is deleted once its
+replacement has been written, or once a snapshot confirms the document is gone. So a crash straight
+after a pending save, with no replacement yet written and the identity unchanged, leaves the old copy
+in place and retries; the same crash followed by an account switch deletes it before fetching.
 
 **Publication is atomic.** `SKILL.md` is written to a temporary file in its own directory and moved
 into place, as the manifest already is. An interrupted write must never leave a half-file that the
@@ -195,13 +211,34 @@ removes a global directory only when no other global manifest under the config r
 otherwise it drops its own entry and leaves the files. Deleting a directory another repository still
 serves would break the issue's promise that other repositories are untouched.
 
+**A retired identity refines that rule rather than overriding it.** When an identity is retired and a
+remaining owner records the same retired identity, the directory is deleted: nobody is serving it
+under a live credential. It survives only while some other manifest owns it under a different, live
+identity — a case the manifest records, and which resolves when that owner migrates or retires in
+turn. The guarantee about previous-identity files is bounded accordingly in the acceptance criteria:
+unconditional for copies this repository alone owns, conditional for a copy another repository is
+still serving.
+
+**Lock lifetime.** No shared lock is ever held across a network request. The per-worktree manifest
+lock keeps today's lifetime, spanning the fetch for one target, and the manifest is re-read under it
+after the fetch, as it is today. The migration lock covers only the legacy critical section, which is
+local filesystem work, and the repository lock only the exclusion block's rewrite. Holding either
+across a snapshot request would serialize unrelated repositories on someone else's network.
+
+**Contention is reported, never counted as done.** Auto mode may skip a periodic refresh when another
+process holds the lock, as it does today. It may not skip pending recovery or an identity retirement:
+those run ahead of the six-hour throttle, and a run that could not take a lock it needed reports the
+work as incomplete rather than returning success, so the next start retries it instead of assuming a
+lock holder did it.
+
 ## Reconciliation and migration
 
 The planner, the drift rule, the prune safety rule and the whole-snapshot slug validation are
 unchanged. The same document delivered to several repositories is several independent
 materializations keyed by one stable document id, which the planner already handles.
 
-Migration runs under the repository-wide lock, after a successful repository-local sync for a target:
+Migration runs under the machine-wide migration lock, after a successful repository-local sync for a
+target:
 
 1. Write the repository-local files, with ownership already recorded and publication atomic.
 2. Save the repository-local manifest with `pending: false`.
@@ -215,7 +252,7 @@ sync that reaches step 3 by the no-change path.
 ## Git exclusion
 
 One managed block in the worktree's `info/exclude`, delimited by marker comments and rewritten whole
-under the repository-wide lock, so it can be added and removed cleanly and cannot interleave with
+under the repository lock, so it can be added and removed cleanly and cannot interleave with
 another worktree's rewrite. Git resolves that file to the shared common directory, so a single block
 covers the repository and all its worktrees.
 
@@ -270,8 +307,14 @@ removes.
   the old path from the journal; two worktrees migrating concurrently serialize; two repositories
   migrating concurrently through final cleanup leave no ownerless global directory; an account switch
   after an interrupted migration, whose replacement fetch then fails, leaves no previous-identity
-  files either locally or globally; an anchor change with an identical snapshot and etag still
-  materializes the new paths and removes the old ones.
+  files either locally or globally, except a global copy another repository still serves, which is
+  recorded; an anchor change with an identical snapshot and etag still materializes the new paths and
+  removes the old ones; a pending move from one anchor to another, resumed at a third, prunes the
+  first anchor's paths through the roots recorded beside them, with the identity unchanged and with
+  it changed, and with the replacement fetch failing; two repositories owning one global copy through
+  an account switch leave it exactly when a live owner remains; a repository needing recovery while
+  another holds a lock across a slow fetch reports incomplete work and retries rather than reporting
+  success.
 - **The command path end to end against a mocked snapshot API.** Manifest read, fetch, plan, write,
   exclude, save, migrate, including the no-change and 304 paths, a same-profile account replacement,
   and a failed replacement fetch. `SyncTargetAsync` has no test today, so this is new coverage rather
@@ -308,8 +351,10 @@ consumer-based adoption.
       another repository still owns is left alone, and two repositories finishing at once leave no
       copy that no manifest can prune.
 - [ ] A credential, server or account change neither reuses another identity's conditional request
-      nor leaves its catalogue in place, locally or globally, including when the replacement fetch
-      fails and when a migration was interrupted before it.
+      nor leaves its catalogue in place, including when the replacement fetch fails and when a
+      migration was interrupted before it. Unconditional for every local copy and every global copy
+      this repository alone owns; a global copy another repository still serves under a live identity
+      survives, and the manifest records that it did.
 - [ ] A sync at a different anchor materializes the new paths and removes the old ones, even when the
       snapshot and its etag are unchanged.
 - [ ] Server-provided home and applicability metadata survive materialization, with the repository
