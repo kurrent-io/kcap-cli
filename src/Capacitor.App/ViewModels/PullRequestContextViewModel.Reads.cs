@@ -166,13 +166,16 @@ public sealed partial class PullRequestContextViewModel {
         else if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
             || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") EnterGrace();
         else ClearProtected();
-        SetNotice(Reason(read));
+        SetNotice(read.Kind == PullRequestReadKind.SubjectUnavailable && _selected is { IsListed: false } ? UnlistedNotice : Reason(read));
     }
+    /// The server reader's refusal of a work-item PR the session was not credited with, which is
+    /// what a read falls to without a local reader; the header's GitHub button still opens it.
+    public const string UnlistedNotice = "This pull request is linked to the work item, not this session. Open it on GitHub.";
     void ApplyChoices(bool listed) {
         var incoming = _sessionItems.Select(link => new PullRequestChoice(link)).ToList();
         foreach (var fallback in _fallbackItems) {
             if (incoming.TrueForAll(existing => !SamePullRequest(existing.Link, fallback)))
-                incoming.Add(new PullRequestChoice(fallback));
+                incoming.Add(new PullRequestChoice(fallback, IsListed: false));
         }
         var previous = _selected?.Subject;
         var selected = _explicitSelection ? incoming.FirstOrDefault(choice => choice.Subject == previous) : null;

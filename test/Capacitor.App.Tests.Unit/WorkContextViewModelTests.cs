@@ -954,6 +954,35 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// Without a local reader the read falls to the server, which refuses a PR the session was not
+    /// credited with; the notice must then say what happened and point at the GitHub button.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_work_item_pull_request_the_server_refuses_names_the_reason() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+                PullRequestReadKind.SubjectUnavailable, Subject: subject, Reason: "subject_unavailable", AccessFailure: "invalid")));
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar")],
+            }));
+            try {
+                await h.PushAsync(Dto());
+                await WaitUntilAsync(() => source.Overviews == 1 && !pullRequests.IsReading, what: "server refused the unlisted PR");
+                await Assert.That(pullRequests.Selected!.IsListed).IsFalse();
+                await Assert.That(pullRequests.Notice).IsEqualTo(PullRequestContextViewModel.UnlistedNotice);
+                await Assert.That(pullRequests.CanOpenSource).IsTrue();
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     /// A legacy server lists PRs but cannot serve a native read; the section opens the selected
     /// PR on its host, as the PR card's disabled View PR already implies.
     [Test]
