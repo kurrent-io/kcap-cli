@@ -11,7 +11,8 @@ persists. On macOS the default is Soft glass; everywhere else, and for anyone wi
 macOS "Reduce transparency" switched on, the default is Opaque.
 
 Glass covers the navigation and control layer: the session rail, the launcher's goal
-card (`GoalCard`) and chips, and the panel flyouts. Reading surfaces (chat, remote
+card (`GoalCard`) and chips. The panel flyouts were in scope subject to a render probe,
+and the probe failed: they stay opaque in this change (see Flyouts). Reading surfaces (chat, remote
 sessions, the pull request reader) and the Settings, Onboarding and Feedback windows
 stay opaque.
 
@@ -167,10 +168,8 @@ Class variants:
 | `card` | `KcapSurfaceBrush`, 1 px `KcapBorderBrush`, radius 12 | yes |
 | `raised` | `KcapSurfaceRaisedBrush`, same border | same template as `card` |
 | `rail` | today's rail background and border | yes |
-| `panel` | none: transparent, no border — the `kcapPanel` presenter draws the opaque chrome | yes, radius 12 |
 
-A flyout's content is a `Surface.panel`; the presenter itself is never glass (see
-Flyouts).
+Flyout panels are not `Surface`s and are not glass in this change (see Flyouts).
 
 `CornerRadius` and `Padding` are set per site, as the inline `Border`s set them today.
 A site's `CornerRadius` governs the opaque template only. Under glass the radius is a
@@ -354,57 +353,45 @@ surface. With `l` the rail width, `w` the remaining width and `h` the height:
 
 ## Flyouts
 
-The glass is the flyout's content, not its presenter. Every one of the seven
-`kcapPanel` flyouts is a `Flyout` (the rail's help flyout included; no `MenuFlyout`
-ships), and each wraps its content in a `Surface` of the `panel` class:
-`GlassFlyouts.Panel(content)` in code, `<kcap:Surface Classes="panel">` in XAML.
+Flyouts stay opaque in this change. The seven `kcapPanel` flyouts keep today's
+presenter chrome under every material and open as native popups; nothing
+flyout-specific ships in the app.
 
-- `Surface.panel` sets `GlassKind` to `Panel` and `GlassCornerRadius` to 12. Its opaque
-  look is chrome-less — transparent fill, no border — because under `Opaque` the
-  `kcapPanel` presenter draws the panel chrome exactly as it does today.
-- Under glass the presenter goes transparent by two setters (`Background`,
-  `BorderBrush`) on `FlyoutPresenter.kcapPanel`, one selector arm per glass material,
-  and the `Surface` draws the glass through its ordinary glass template.
-- `PopupFlyoutBase.Popup` is public, so `GlassFlyouts.FollowMaterial` sets
-  `Popup.ShouldUseOverlayLayer` on each flyout while its owner's scope is glass; no
-  call site restates the rule. Under `Opaque` they stay native popups.
-
-**Why not a presenter template.** A `GlassLayer` placed in the presenter's own
-template tints but never paints the backdrop: under it the stripes of the probe's
-backdrop keep their full contrast, pixel-identical to a frame with the layer hidden,
-while the same layer placed as the flyout's content under the stock presenter
-template blurs them to nothing, in the window and in an overlay-layer popup alike.
-Capture exclusion, clipping, show ordering and snapshot timing were each ruled out.
-The cause inside the vendored capture path is not established; the content placement
-is the one that measurably works, so it is the design.
+**Why.** Glass in a `Flyout`'s popup was measured twice and painted no backdrop either
+way: as a `GlassLayer` in the presenter's own template, and as a `Surface` panel
+wrapping the flyout's content under a transparent presenter. Inside the panel the
+probe's stripe edges keep a contrast of 4.3–4.4 against 10.4–10.8 on a row clear of
+it, and with tint, surface and highlight zeroed the frame is pixel-identical to the
+opaque one. A bare overlay-layer `Popup` holding the same layer in the same window
+blurs the stripes to 0.0, so the mechanism is sound and the fault is specific to a
+`Flyout`'s popup: its glass never receives a backdrop snapshot and draws through the
+library's not-ready path. Capture exclusion, clipping, light dismiss, show ordering,
+snapshot timing, an extra frame and the owner top-level (checked by reference) were
+each ruled out. The remaining lead is a diagnostic build that instruments the
+vendored `LiquidGlassBackdropProvider` and compares the two popups; it is a
+follow-up, not part of this change.
 
 **The probe.** `docs/probes/2026-09-18-glass-overlay-flyout/` is its own executable,
 a separate process built with `UseSkia()` and `UseHeadless(new
 AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })`. `UseHeadlessDrawing`
 selects the dummy drawing backend, so it must be off for Skia to draw at all; the
 unit suite keeps the dummy backend and cannot be reconfigured. The window holds a
-hard-edged striped backdrop, so blur is measurable, and opens an overlay-layer
-`kcapPanel` `Flyout` whose content is a `Surface.panel`, under a glass scope, through
-the app's own styles. It passes when:
+hard-edged striped backdrop, so blur is measurable. The probe is self-contained: it
+carries both placements' styles and the content-wrapping helper as probe-local files,
+so the app has none of them, and its `findings.md` records the three measurements
+(presenter template, content wrapping, the bare popup control) so the follow-up
+starts from a runnable measurement. Its pass criteria stand for that follow-up:
 
 1. the presenter and the content resolve the inherited material through the popup's
    logical parent;
 2. `PipelineUnavailable` was not raised and `LiquidGlassDiagnostics` reports published
    captures;
-3. the popup region differs from the same frame rendered with the glass layer hidden,
-   and the stripe edges inside it are measurably softer than on a row clear of the
-   panel — a draw operation that returned without drawing fails this, because the
-   stripes would pass through unchanged;
+3. the popup region differs from the same flyout opened under `Opaque`, and the stripe
+   edges inside it are measurably softer than on a row clear of the panel — a draw
+   operation that returned without drawing fails this, because the stripes would pass
+   through unchanged;
 4. changing the popup's foreground text leaves pixels outside the glyph bounds
    unchanged, which proves the capture boundary keeps content out of its own backdrop.
-
-Its `findings.md` records both placements: the presenter-template one that failed
-criterion 3 and the content one that passes.
-
-A scratch run against the unmodified v0.2.0 source on Avalonia 12.1.2 had already
-shown the mechanism holds for a bare overlay-layer `Popup`: the stripe-edge contrast
-behind it fell from 10.8 to 0.4, a sibling text ghost of 1360 px fell to 0 with the
-capture flag, and the inherited material reached the presenter.
 
 ## Settings
 
@@ -476,10 +463,8 @@ asserts pixels. Shader output is the probe's job.
   disabled states, and the padding is `12,7`.
 - **Drop targets:** `dragOver` sets the primary brush on `GoalCard` under both
   materials and on the chat `ComposerCard`.
-- **Flyouts:** under glass a `kcapPanel` flyout opens in the overlay layer, its
-  presenter is transparent, and its content `Surface.panel` carries a `GlassLayer` of
-  kind `Panel` at radius 12; under `Opaque` it stays a native popup with the
-  presenter's chrome and no glass; the wrapped content is the instance passed in.
+- **Flyouts:** nothing — they are unchanged, and the app carries no flyout-specific
+  glass code; the probe under `docs/probes/` is the record.
 - **`AppState`:** round trip; missing → no explicit choice; an unknown string → no
   explicit choice with every other field intact.
 - **`MaterialService`:** each arm of the `Effective` order, including an explicit glass
