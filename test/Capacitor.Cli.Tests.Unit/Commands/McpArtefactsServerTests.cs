@@ -323,6 +323,15 @@ public class McpArtefactsServerTests {
     }
 
     [Test]
+    public async Task A_request_with_a_duplicated_property_is_dropped_rather_than_ending_the_loop() {
+        // The duplicate surfaces when the property table is first read, not in Parse.
+        await Assert.That(McpArtefactsServer.TryParseRequest("""{"jsonrpc":"2.0","id":1,"id":2,"method":"tools/list"}""")).IsNull();
+        await Assert.That(McpArtefactsServer.TryParseRequest("""[1,2]""")).IsNull();
+        await Assert.That(McpArtefactsServer.TryParseRequest("""not json""")).IsNull();
+        await Assert.That(McpArtefactsServer.TryParseRequest("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")).IsNotNull();
+    }
+
+    [Test]
     public async Task The_instructions_tell_an_agent_the_page_cannot_reach_the_network() {
         // The one thing that fails silently: an external URL renders as nothing under the sandbox.
         await Assert.That(McpArtefactsServer.ServerInstructions).Contains("data URI");

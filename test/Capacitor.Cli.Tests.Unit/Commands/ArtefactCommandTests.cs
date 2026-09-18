@@ -63,6 +63,18 @@ public class ArtefactCommandTests {
         await Assert.That(api.SharedGrants!.Count).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task A_flag_the_command_does_not_read_is_a_usage_error() {
+        var api = new RecordingArtefactsApi();
+
+        using var console = ConsoleOutput.StartFullCapture();
+        var exit = await new ArtefactCommand(api).HandleAsync(["artefact", "share", "a1", "--visibility", "org", "--title", "New"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(api.Calls).IsEmpty();
+        await Assert.That(console.GetCapturedError()).Contains("--title is not a flag of this command");
+    }
+
     sealed class RecordingArtefactsApi : IArtefactsApi {
         public List<string> Calls { get; } = [];
 

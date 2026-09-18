@@ -25,7 +25,8 @@ Options for publish:
   --update <artefactId>            Publish a new version of an existing
                                    artefact. The URL does not change, so a link
                                    you already shared stays good. Content only —
-                                   change a title or an audience with `share`.
+                                   change the audience with `share`; a title
+                                   cannot be changed after publishing.
 
 Options for share:
   --visibility none|org|scoped     Required.

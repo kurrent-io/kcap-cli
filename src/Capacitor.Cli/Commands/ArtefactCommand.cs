@@ -42,7 +42,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     }
 
     async Task<int> PublishAsync(string[] args) {
-        if (Parse(args) is not { } flags) return 1;
+        if (Parse(args, "--title", "--description", "--visibility", "--to", "--session", "--update") is not { } flags) return 1;
         if (flags.Positionals.Count != 1) return Fail("Publish takes exactly one HTML file.");
 
         var html = ReadHtml(flags.Positionals[0]);
@@ -53,7 +53,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
         // rather than appear to have applied them.
         if (flags.Value("--update") is { Length: > 0 } updateId) {
             if (flags.Has("--title") || flags.Has("--description") || flags.Has("--visibility") || flags.Has("--to"))
-                return Fail("--update publishes content only. Change a title or an audience with `kcap artefact share`.");
+                return Fail("--update publishes content only. Change the audience with `kcap artefact share`; a title cannot be changed after publishing.");
 
             return Report(await artefacts.PublishVersionAsync(updateId, html), "published");
         }
@@ -75,7 +75,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     }
 
     async Task<int> ListAsync(string[] args) {
-        if (Parse(args) is not { } flags) return 1;
+        if (Parse(args, "--mine") is not { } flags) return 1;
 
         var listed = await artefacts.ListAsync();
 
@@ -93,7 +93,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     }
 
     async Task<int> ShareAsync(string[] args) {
-        if (Parse(args) is not { } flags) return 1;
+        if (Parse(args, "--visibility", "--to") is not { } flags) return 1;
         if (flags.Positionals.Count != 1) return Fail("Share takes exactly one artefact id.");
 
         if (flags.Value("--visibility") is not { Length: > 0 } visibility)
@@ -191,8 +191,16 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     /// <summary>A value flag given without its value stops the command: read as absent, a forgotten
     /// <c>--update</c> id publishes a second artefact and a forgotten <c>--to</c> empties an
     /// audience.</summary>
-    static Flags? Parse(string[] args) {
+    static Flags? Parse(string[] args, params string[] known) {
         var flags = Flags.Parse(args, 2);
+
+        // A flag the command does not read is refused too: `share --title` would otherwise report a
+        // rename that never happened.
+        if (flags.Unknown(known) is { } unknown) {
+            Fail($"{unknown} is not a flag of this command.");
+
+            return null;
+        }
 
         if (flags.MissingValue() is not { } bare) return flags;
 
@@ -226,6 +234,9 @@ class ArtefactCommand(IArtefactsApi artefacts) {
             values.FirstOrDefault(f => !Switches.Contains(f.Key) && f.Value.Contains("")).Key;
 
         static readonly HashSet<string> Switches = new(StringComparer.Ordinal) { "--mine" };
+
+        public string? Unknown(IReadOnlyCollection<string> known) =>
+            values.Keys.FirstOrDefault(k => !known.Contains(k, StringComparer.Ordinal));
 
         public static Flags Parse(string[] args, int from) {
             var flags = new Flags();

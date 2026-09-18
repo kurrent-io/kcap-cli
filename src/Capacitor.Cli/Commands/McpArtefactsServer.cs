@@ -102,11 +102,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
                 JsonObject? request;
 
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue; // skip malformed JSON
-                }
+                request = TryParseRequest(line);
 
                 if (request is null) continue;
 
@@ -464,6 +460,20 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     }
 
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
+
+    /// <summary>Null for a line the loop must not act on. A JsonObject fills its property table
+    /// lazily, so a duplicated key surfaces on the first read rather than in Parse; forcing it here
+    /// keeps that inside the guard instead of ending the server.</summary>
+    internal static JsonObject? TryParseRequest(string line) {
+        try {
+            var request = JsonNode.Parse(line)?.AsObject();
+            _ = request?.Count;
+
+            return request;
+        } catch {
+            return null;
+        }
+    }
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
         ToResponse<McpToolCallResult>(id, new([new("text", text)], isError ? true : null), McpJsonContext.Default.McpToolCallResult);
