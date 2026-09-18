@@ -74,9 +74,13 @@ public static class GitRepository {
         if (root is null) return null;
 
         var dotGit = Path.Combine(root, ".git");
-        if (Directory.Exists(dotGit)) return CanonicalPath.Resolve(dotGit);
 
         try {
+            // Resolving walks the path a component at a time, so it reads the filesystem and can
+            // fail the same ways the pointer read below does — an unresolvable git directory is
+            // this method's null, never an exception at the call site.
+            if (Directory.Exists(dotGit)) return CanonicalPath.Resolve(dotGit);
+
             var line = File.ReadAllText(dotGit).Trim();
             const string marker = "gitdir:";
             if (!line.StartsWith(marker, StringComparison.Ordinal)) return null;

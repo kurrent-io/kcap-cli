@@ -4,8 +4,9 @@ namespace Capacitor.Cli.Core;
 /// ancestor symlink is how a path outside a boundary textually matches one inside it.</summary>
 public static class CanonicalPath {
     // A symlink cycle can't loop forever: cap total resolution steps and return the best-resolved
-    // path on hitting the cap.
-    const int MaxResolveSteps = 64;
+    // path on hitting the cap. 40 mirrors the common OS-level MAXSYMLINKS limit, so a chain this
+    // walk refuses is one the kernel would refuse too.
+    const int MaxResolveSteps = 40;
 
     public static string Resolve(string path) => RealPath(Path.GetFullPath(path));
 
