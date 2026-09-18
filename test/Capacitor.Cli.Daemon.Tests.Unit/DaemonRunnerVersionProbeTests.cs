@@ -61,9 +61,13 @@ public class DaemonRunnerVersionProbeTests {
     public async Task A_version_whose_output_exceeds_the_pipe_buffer_is_drained_not_deadlocked() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary is a POSIX shell script.");
         using var tmp = new TempDir();
-        // ~500 KB to stderr — past every platform's pipe buffer — before the version line on stdout.
+        // ~200 KB to stderr — past every platform's pipe buffer — before the version line on stdout.
+        // Not the full 500 KB: the launch probe's budget is only 3s, and on a loaded runner the
+        // `yes | head` pipeline could overrun it and be killed before it ever reached the stdout
+        // echo, leaving stderr's flood as the only output to parse. 200 KB still exceeds the buffer
+        // by 3x while finishing comfortably inside the budget.
         var cli = tmp.CreateFile(
-            "faketool", "#!/bin/sh\nyes 0123456789ABCDEFGHIJ | head -c 500000 1>&2\necho 'faketool 9.9.9'\n");
+            "faketool", "#!/bin/sh\nyes 0123456789ABCDEFGHIJ | head -c 200000 1>&2\necho 'faketool 9.9.9'\n");
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 

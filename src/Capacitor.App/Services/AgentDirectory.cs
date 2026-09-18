@@ -67,13 +67,13 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     public AgentDirectory(
             IDaemonClientService local, IRemoteAgentsService remote, IServerLane lane,
             RepoIdentityResolver repoIdentity, Func<string, string> resolveLocalRepoRoot,
-            string? localMachineId, string? appServerUrl, TimeProvider? time = null) {
+            string? localMachineId, string? appServerUrl, TimeProvider time) {
         _local = local;
         _repoIdentity = repoIdentity;
         _resolveLocalRepoRoot = resolveLocalRepoRoot;
         _localMachineId = localMachineId;
         _appServerUrl = appServerUrl;
-        _time = time ?? TimeProvider.System;
+        _time = time;
         _placeholderExpiry = _time.CreateTimer(_ => Recompute(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
         RemoteStale = lane.Status.Select(s => s.State != ServerLaneState.Connected).DistinctUntilChanged();

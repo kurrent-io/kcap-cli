@@ -8,12 +8,12 @@ namespace Capacitor.App.Tests.Unit;
 /// A launch the daemon is still starting, or one the app has only had accepted, renders as a row
 /// of its own until a real agent row for the same id arrives.
 public class PendingLaunchRowsTests {
-    static (FakeDaemonClientService Local, AgentDirectory Dir) Build(TimeProvider? time = null) {
+    static (FakeDaemonClientService Local, AgentDirectory Dir) Build(TimeProvider time) {
         var (local, _, dir) = BuildWithRemote(time);
         return (local, dir);
     }
 
-    static (FakeDaemonClientService Local, FakeRemoteAgents Remote, AgentDirectory Dir) BuildWithRemote(TimeProvider? time = null) {
+    static (FakeDaemonClientService Local, FakeRemoteAgents Remote, AgentDirectory Dir) BuildWithRemote(TimeProvider time) {
         var local = new FakeDaemonClientService();
         var remote = new FakeRemoteAgents();
         var dir = new AgentDirectory(
@@ -32,7 +32,7 @@ public class PendingLaunchRowsTests {
 
     [Test]
     public async Task A_daemon_pending_launch_is_a_starting_row_until_the_agent_is_published() {
-        var (local, dir) = Build();
+        var (local, dir) = Build(TimeProvider.System);
         using var _d = dir;
 
         local.Pending.AddOrUpdate(Pending("p1"));
@@ -54,7 +54,7 @@ public class PendingLaunchRowsTests {
 
     [Test]
     public async Task A_placeholder_yields_to_the_daemons_own_pending_entry_and_then_to_the_agent() {
-        var (local, dir) = Build();
+        var (local, dir) = Build(TimeProvider.System);
         using var _d = dir;
 
         dir.AddPlaceholder("p2", "codex", "/r", "Fix the flaky test", "gpt-5-codex");
@@ -76,7 +76,7 @@ public class PendingLaunchRowsTests {
 
     [Test]
     public async Task Removing_a_placeholder_drops_its_row() {
-        var (_, dir) = Build();
+        var (_, dir) = Build(TimeProvider.System);
         using var _d = dir;
         dir.AddPlaceholder("p3", "claude", "/r", null, null);
         await Assert.That(dir.Rows.Lookup("pending:p3").HasValue).IsTrue();
@@ -122,7 +122,7 @@ public class PendingLaunchRowsTests {
     /// stand-ins match on the normalized id, or the placeholder would outlive the real row.
     [Test]
     public async Task A_placeholder_matches_the_daemons_rows_across_guid_spellings() {
-        var (local, dir) = Build();
+        var (local, dir) = Build(TimeProvider.System);
         using var _d = dir;
         const string dashed = "0123abcd-4567-89ef-0123-456789abcdef";
         var n = Guid.Parse(dashed).ToString("N");
@@ -144,7 +144,7 @@ public class PendingLaunchRowsTests {
     /// launch's placeholder nor hides the daemon's own pending entry.
     [Test]
     public async Task A_remote_row_with_the_same_id_leaves_the_local_stand_ins_alone() {
-        var (local, remote, dir) = BuildWithRemote();
+        var (local, remote, dir) = BuildWithRemote(TimeProvider.System);
         using var _d = dir;
         remote.Cache.AddOrUpdate(new Capacitor.Remote.Models.AgentInstanceDto {
             AgentId = "p6", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1", Vendor = "claude", RepoOwner = "o", RepoName = "r",
@@ -160,7 +160,7 @@ public class PendingLaunchRowsTests {
 
     [Test]
     public async Task A_pending_row_never_claims_a_session() {
-        var (local, dir) = Build();
+        var (local, dir) = Build(TimeProvider.System);
         using var _d = dir;
         local.Pending.AddOrUpdate(Pending("p4"));
         await Assert.That(dir.VendorOfSession("s1")).IsNull();

@@ -78,10 +78,12 @@ internal sealed class SettlementBackoff {
 
     readonly Func<double> _jitter;
 
-    /// <param name="jitter">Uniform sample in [0,1). Defaults to <see cref="Random.Shared"/>.</param>
-    public SettlementBackoff(Func<double>? jitter = null) => _jitter = jitter ?? Random.Shared.NextDouble;
+    /// <param name="jitter">Uniform sample in [0,1).</param>
+    public SettlementBackoff(Func<double> jitter) => _jitter = jitter;
 
-    public static SettlementBackoff Default { get; } = new();
+    /// <summary>The shared instance, jittered from the process-wide RNG. Named here so the one
+    /// unseeded source in the schedule is visible at its call sites rather than inside a default.</summary>
+    public static SettlementBackoff Default { get; } = new(Random.Shared.NextDouble);
 
     /// <summary>Deterministic instance for tests — <see cref="Random"/> is not thread-safe, but a
     /// backoff is only ever consulted from one lane at a time.</summary>

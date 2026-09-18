@@ -23,7 +23,7 @@ public class AgentDirectoryTests {
         var lane = new FakeServerLane();
         var dir = new AgentDirectory(
             local, remote, lane, new RepoIdentityResolver(_ => null), p => p,
-            machineId, Server);
+            machineId, Server, TimeProvider.System);
         return (local, remote, lane, dir);
     }
 

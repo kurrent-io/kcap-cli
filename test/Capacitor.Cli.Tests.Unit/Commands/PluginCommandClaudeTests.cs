@@ -174,5 +174,6 @@ public class PluginCommandClaudeTests {
         Stderr:            stderr ?? TextWriter.Null
     ) {
         Harnesses = TestHarnesses.Under(new(fakeHome)),
+        Binaries  = TestBinaries.None,
     };
 }

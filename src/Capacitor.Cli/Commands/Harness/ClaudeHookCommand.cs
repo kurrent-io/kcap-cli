@@ -1184,7 +1184,7 @@ public sealed class ClaudeHookCommand(
     /// to a <see cref="DrainOutcome"/>. On a successful <c>session-end</c> replay, handles the
     /// <c>generate_whats_done</c> side effect so it is not lost.
     /// </summary>
-    Func<string, string, Task<DrainOutcome>> ClaudePoster(HttpClient client, TimeSpan perAttempt) =>
+    internal Func<string, string, Task<DrainOutcome>> ClaudePoster(HttpClient client, TimeSpan perAttempt) =>
         async (route, body) => {
             try {
                 using var content = new StringContent(body, Encoding.UTF8, "application/json");

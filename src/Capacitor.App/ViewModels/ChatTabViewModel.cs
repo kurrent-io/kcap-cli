@@ -193,6 +193,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
     public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
+    public ReactiveCommand<string, Unit> RunCodeCommand { get; }
 
     readonly ObservableAsPropertyHelper<string> _composerHint;
     public string ComposerHint => _composerHint.Value;
@@ -485,6 +486,24 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
         _disposables.Add(OpenLinkCommand);
+
+        // A code block's command goes out the composer's own path rather than straight to the
+        // channel, so it is queued, recalled and cleared exactly as a typed prompt is. Whatever
+        // draft is sitting there is replaced, which is what putting it in the composer means.
+        // A send that is still uploading has not reached the channel, so the channel still reports
+        // it can take text: without the command's own executing state a code block could start a
+        // second send over the same tray, and whichever upload lands first takes the chips while
+        // the other send is refused.
+        var canRun = Observable.CombineLatest(
+            _input.WhenAnyValue(i => i.CanAcceptText),
+            this.WhenAnyValue(x => x.IsReadOnlyParticipant),
+            SendCommand.IsExecuting,
+            (can, readOnly, sending) => can && !readOnly && !sending);
+        RunCodeCommand = ReactiveCommand.CreateFromTask<string>(async text => {
+            ComposerText = text;
+            await SendCommand.Execute();
+        }, canRun);
+        _disposables.Add(RunCodeCommand);
 
         serverQueue?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(ApplyServerQueue).DisposeWith(_disposables);
     }

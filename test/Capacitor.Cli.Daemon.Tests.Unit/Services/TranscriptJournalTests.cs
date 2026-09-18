@@ -97,15 +97,23 @@ public class TranscriptJournalTests {
     public async Task Record_never_blocks_while_the_sink_hangs() {
         using var tmp = new TempDir();
         using var hang = new ManualResetEventSlim(false);
+        // The sink hangs on EVERY append — unconditionally, so the writer is parked from its first
+        // append and can never drain the queue out from under the assertion. Reading the file to
+        // decide whether to hang (its header lands via Open, not this sink) left a window where a
+        // fast runner drained enough that the final Record's TryWrite succeeded and PendingGap fell
+        // back to 0.
         var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time,
-            append: (path, bytes) => { if (JournalFiles.ReadLines(path).Length >= 1) hang.Wait(); File.AppendAllText(path, System.Text.Encoding.UTF8.GetString(bytes)); },
+            append: (path, bytes) => { hang.Wait(); File.AppendAllText(path, System.Text.Encoding.UTF8.GetString(bytes)); },
             capacity: 4);
         journal.Open(null, null);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         for (var i = 0; i < 100; i++) journal.Record(Text(i.ToString(CultureInfo.InvariantCulture)));
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromMilliseconds(500));
+        // Generous: this asserts Record never blocks, and 100 TryWrites on a loaded runner can take
+        // well over the 500ms that reads as comfortable on an idle one.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
 
+        // 100 records into a 4-deep queue whose writer is parked: the tail must be unrecorded.
         await Assert.That(journal.PendingGap).IsGreaterThan(0);
         hang.Set();
         await journal.CompleteAsync();

@@ -129,7 +129,7 @@ public sealed class UninstallCommand(
         // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
         if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
 
-        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses);
+        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries);
         var pluginCommand = new PluginCommand(env, workdir);
 
         // User-level agent integrations. Each remove command is idempotent and

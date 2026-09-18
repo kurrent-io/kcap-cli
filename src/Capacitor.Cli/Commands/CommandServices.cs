@@ -49,7 +49,8 @@ public static class CommandServices {
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
-                sp.GetRequiredService<HarnessRegistry>()));
+                sp.GetRequiredService<HarnessRegistry>(),
+                sp.GetRequiredService<BinaryProbe>()));
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
         services.AddCapacitorHttp(env, machine);

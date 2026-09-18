@@ -284,7 +284,8 @@ public class TrayViewModelTests {
             var remoteAgents = new FakeRemoteAgents();
             var lane = new FakeServerLane();
             using var directory = new AgentDirectory(
-                local, remoteAgents, lane, new RepoIdentityResolver(_ => null), p => p, "m1", "http://localhost:9999");
+                local, remoteAgents, lane, new RepoIdentityResolver(_ => null), p => p, "m1", "http://localhost:9999",
+                TimeProvider.System);
 
             RemoteTraySummary? seen = null;
             using var sub = TrayViewModel.SummaryFrom(directory).Subscribe(v => seen = v);

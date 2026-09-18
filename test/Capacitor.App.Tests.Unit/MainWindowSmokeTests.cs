@@ -523,7 +523,7 @@ public class MainWindowSmokeTests {
             : p;
         var directory = new AgentDirectory(
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-            resolveRepoRoot, null, null);
+            resolveRepoRoot, null, null, TimeProvider.System);
         var rail = new SessionRailViewModel(
             directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System, resolveRepoRoot);
         vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,

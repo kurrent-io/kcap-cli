@@ -13,8 +13,10 @@ internal static class WaitHarness {
     /// <inheritdoc cref="PollBound"/>
     internal static readonly TimeSpan Bounded = TimeSpan.FromSeconds(30);
 
-    /// <inheritdoc cref="PollBound"/>
-    internal static readonly TimeSpan AcpHangGuard = TimeSpan.FromSeconds(30);
+    /// <summary>The ACP suites' own deadline, longer than the rest: their fakes carry a full
+    /// handshake and reconnect exchange per test, and a contended two-core runner has overrun 30 s
+    /// on work that finishes in under a second unloaded.</summary>
+    internal static readonly TimeSpan AcpHangGuard = TimeSpan.FromSeconds(60);
 
     internal static async Task PollUntilAsync(Func<bool> condition) {
         var deadline = DateTime.UtcNow + PollBound;

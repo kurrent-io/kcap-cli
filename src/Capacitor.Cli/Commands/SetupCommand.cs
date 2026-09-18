@@ -422,7 +422,8 @@ public sealed class SetupCommand(
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
-        ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
+        ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
+        BinaryProbe binaries) {
 
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -762,7 +763,7 @@ public sealed class SetupCommand(
             InstallCursorHooks:     PluginCommand.InstallCursorHooks,
             InstallCopilotHooks:    PluginCommand.InstallCopilotHooks,
             InstallGeminiHooks:     PluginCommand.InstallGeminiHooks,
-            CapacitorOnPath:        () => BinaryProbe.OnPath("kcap"),
+            CapacitorOnPath:        () => binaries.Finds("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
             InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses),

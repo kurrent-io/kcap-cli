@@ -56,6 +56,36 @@ public class ChatComposerTests {
         });
     }
 
+    /// Pins what a code block's "run it" does: the text goes down the composer's own send path, so
+    /// the prompt is queued, recorded and cleared exactly as a typed one is.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_a_code_block_sends_its_text_through_the_composer() {
+        await RunOnUiAsync(async () => {
+            var (_, _, _, chat, client, _) = await BuildAttachedAsync();
+            await chat.RunCodeCommand.Execute("! kcap agent ls");
+            await Assert.That(client.SentInput[0]).IsEquivalentTo(TerminalInputEncoder.Paste("! kcap agent ls"));
+            await Assert.That(chat.ComposerText).IsEqualTo("");
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// Pins the gate: a channel that cannot take text cannot be made to take it through a code
+    /// block either.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_a_code_block_is_refused_once_the_session_has_ended() {
+        await RunOnUiAsync(async () => {
+            var (daemon, _, _, chat, client, _) = await BuildAttachedAsync();
+            await Assert.That(await chat.RunCodeCommand.CanExecute.FirstAsync()).IsTrue();
+
+            daemon.Agents.Remove("a1");
+            await Assert.That(await chat.RunCodeCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(client.SentInput).IsEmpty();
+            await chat.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Hint_follows_send_availability() {

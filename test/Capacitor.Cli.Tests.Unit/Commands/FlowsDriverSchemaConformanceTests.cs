@@ -206,6 +206,7 @@ public class FlowsDriverSchemaConformanceTests {
         new(Home: new(home), Profiles: new ProfileConfig(), ResolvePluginPath: () => pluginRoot,
             Stdout: TextWriter.Null, Stderr: TextWriter.Null) {
             Harnesses = TestHarnesses.Under(new(home)),
+            Binaries  = TestBinaries.None,
             ResolveMcpBinaryPath = () => InjectedBinaryPath
         };
 
