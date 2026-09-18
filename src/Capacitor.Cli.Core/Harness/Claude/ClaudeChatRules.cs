@@ -62,13 +62,14 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 return [new SubagentSignal.Started(callId, name, description, evt.Timestamp)];
             }
             case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
-                if (SchemaExtensions.Text(result, "status") == "async_launched" && SchemaExtensions.Text(result, "agentId") is { Length: > 0 } agentId)
+                if (SchemaExtensions.Text(result, "status") == "async_launched"
+                    && (SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id")) is { Length: > 0 } agentId)
                     return [new SubagentSignal.Detached(callId, agentId)];
                 // The message gate keeps a TaskGet or TaskOutput probe, which carries the same
                 // task_id, from ending a running subagent.
                 if (SchemaExtensions.Text(result, "task_type") == "local_agent"
                     && SchemaExtensions.Text(result, "task_id") is { Length: > 0 } taskId
-                    && (SchemaExtensions.Text(result, "message") ?? "").StartsWith(StoppedTaskMessage, StringComparison.Ordinal))
+                    && (SchemaExtensions.Text(result, "message") ?? "").AsSpan().TrimStart().StartsWith(StoppedTaskMessage, StringComparison.OrdinalIgnoreCase))
                     return [new SubagentSignal.Finished(null, taskId, SubagentOutcome.Stopped, evt.Timestamp)];
                 return [];
             }
@@ -77,7 +78,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 var callId = Tag(TaskToolUseId(), text);
                 var agentId = Tag(TaskId(), text);
                 if (callId is null && agentId is null) return [];
-                var outcome = Tag(TaskStatus(), text) == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed;
+                var outcome = string.Equals(Tag(TaskStatus(), text), "completed", StringComparison.OrdinalIgnoreCase) ? SubagentOutcome.Done : SubagentOutcome.Failed;
                 return [new SubagentSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
             }
             default:
@@ -131,19 +132,20 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     [GeneratedRegex(@"<command-args>(.*?)</command-args>", RegexOptions.Singleline)]
     private static partial Regex CommandArgs();
 
-    [GeneratedRegex(@"<summary>(.*?)</summary>", RegexOptions.Singleline)]
+    // A stored notification can end before its closing tag, so it stays optional in the pattern.
+    [GeneratedRegex(@"<summary>(.*?)(?:</summary>|$)", RegexOptions.Singleline)]
     private static partial Regex TaskSummary();
 
-    [GeneratedRegex(@"<result>(.*?)</result>", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<result>(.*?)(?:</result>|$)", RegexOptions.Singleline)]
     private static partial Regex TaskResult();
 
-    [GeneratedRegex(@"<task-id>(.*?)</task-id>", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<task-id>(.*?)(?:</task-id>|$)", RegexOptions.Singleline)]
     private static partial Regex TaskId();
 
-    [GeneratedRegex(@"<tool-use-id>(.*?)</tool-use-id>", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<tool-use-id>(.*?)(?:</tool-use-id>|$)", RegexOptions.Singleline)]
     private static partial Regex TaskToolUseId();
 
-    [GeneratedRegex(@"<status>(.*?)</status>", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<status>(.*?)(?:</status>|$)", RegexOptions.Singleline)]
     private static partial Regex TaskStatus();
 
     [GeneratedRegex(@"</?task-notification>")]

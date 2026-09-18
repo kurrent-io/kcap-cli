@@ -265,4 +265,35 @@ public class ClaudeChatRulesTests {
         var shell = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: b1"}]},"toolUseResult":{"task_id":"b1","task_type":"local_bash","message":"Successfully stopped task: b1"}}""");
         await Assert.That(shell.Subagents).IsEmpty();
     }
+
+    [Test]
+    public async Task A_launch_acknowledgement_spelled_agent_id_still_detaches() {
+        var launch = R(LaunchResult.Replace("\"agentId\":\"a9f262478e032f427\"", "\"agent_id\":\"a9f262478e032f427\""));
+        var detached = (SubagentSignal.Detached)launch.Subagents.Single();
+        await Assert.That(detached.CallId).IsEqualTo("toolu_A");
+        await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
+    public async Task A_notification_cut_off_before_its_closing_tag_still_finishes() {
+        var line = """{"type":"user","message":{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A"}}""";
+        var finished = (SubagentSignal.Finished)R(line).Subagents.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
+    public async Task A_notification_status_is_matched_without_regard_to_case() {
+        var finished = (SubagentSignal.Finished)R(Notification(originKind: true, status: "Completed")).Subagents.Single();
+        await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
+    }
+
+    [Test]
+    public async Task A_stop_message_is_matched_after_leading_whitespace_without_regard_to_case() {
+        var stop = R("""{"type":"user","timestamp":"2026-09-17T10:07:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"successfully stopped task: a9f262478e032f427"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"  successfully stopped task: a9f262478e032f427"}}""");
+        var stopped = (SubagentSignal.Finished)stop.Subagents.Single();
+        await Assert.That(stopped.CallId).IsNull();
+        await Assert.That(stopped.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(stopped.Outcome).IsEqualTo(SubagentOutcome.Stopped);
+    }
 }
