@@ -92,7 +92,7 @@ public class BrowserTenantPickerTests {
         // host cannot answer, which makes "fell back" observable as a null.
         var picker = new BrowserTenantPicker(
             launcher ?? new StubLauncher(), new SpectreTenantPicker(isInteractive: () => false),
-            new SilentProgress(), keys ?? new SilentKeys(), time, canPrompt);
+            time, new SilentProgress(), keys ?? new SilentKeys(), canPrompt);
 
         return (picker, time);
     }
@@ -328,7 +328,7 @@ public class BrowserTenantPickerTests {
         // An interactive fallback, so reaching it would be observable as a throw rather than a null.
         var picker = new BrowserTenantPicker(
             new StubLauncher(), new SpectreTenantPicker(isInteractive: () => true),
-            new SilentProgress(), new SilentKeys(), new FakeTimeProvider(DateTimeOffset.UnixEpoch));
+            new FakeTimeProvider(DateTimeOffset.UnixEpoch), new SilentProgress(), new SilentKeys());
 
         await Assert.That(await picker.PickAsync(Two, Context(proxy), cts.Token)).IsNull();
     }

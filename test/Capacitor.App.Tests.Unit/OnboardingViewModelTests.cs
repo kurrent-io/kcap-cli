@@ -173,7 +173,7 @@ public class OnboardingViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Back_is_disabled_on_the_first_step_and_skip_is_disabled_on_the_last_step() {
-        var (backOnFirst, skipOnFirst, backOnLast, skipOnLast) = await AvaloniaSession.DispatchAsync(async () => {
+        var (backOnFirst, skipOnFirst, nextOnFirst, skipVisibleOnFirst, backOnLast, skipOnLast, nextOnLast, skipVisibleOnLast) = await AvaloniaSession.DispatchAsync(async () => {
             var connect = new FakeWizardStep(WizardStepId.Connect);
             var done = new FakeWizardStep(WizardStepId.Done);
             var vm = new OnboardingViewModel([connect, done]);
@@ -181,19 +181,25 @@ public class OnboardingViewModelTests {
 
             var backOnFirst = CanExecute(vm.BackCommand);
             var skipOnFirst = CanExecute(vm.SkipCommand);
+            var nextOnFirst = vm.NextLabel;
+            var skipVisibleOnFirst = vm.SkipVisible;
 
             await vm.NextCommand.Execute().ToTask(); // -> Done
 
             var backOnLast = CanExecute(vm.BackCommand);
             var skipOnLast = CanExecute(vm.SkipCommand);
 
-            return (backOnFirst, skipOnFirst, backOnLast, skipOnLast);
+            return (backOnFirst, skipOnFirst, nextOnFirst, skipVisibleOnFirst, backOnLast, skipOnLast, vm.NextLabel, vm.SkipVisible);
         });
 
         await Assert.That(backOnFirst).IsFalse();
         await Assert.That(skipOnFirst).IsTrue();
+        await Assert.That(nextOnFirst).IsEqualTo("Next");
+        await Assert.That(skipVisibleOnFirst).IsTrue();
         await Assert.That(backOnLast).IsTrue();
         await Assert.That(skipOnLast).IsFalse();
+        await Assert.That(nextOnLast).IsEqualTo("Get started");
+        await Assert.That(skipVisibleOnLast).IsFalse();
     }
 
     [Test]
@@ -255,15 +261,19 @@ public class OnboardingViewModelTests {
             Dispatcher.UIThread.RunJobs();
 
             var text = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
+                .FirstOrDefault(t => t.Name == "StepTitleText");
+            var chromeTitle = window.Title;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return text;
+            return (text?.Text, text?.LetterSpacing, text?.Classes.Contains("kcapTitle"), chromeTitle);
         });
 
-        await Assert.That(rendered).IsEqualTo("Connect to Capacitor");
+        await Assert.That(rendered.Item1).IsEqualTo("Connect to Capacitor");
+        await Assert.That(rendered.Item2).IsEqualTo(-0.3);
+        await Assert.That(rendered.Item3).IsTrue();
+        await Assert.That(rendered.Item4).IsEqualTo("Kurrent Capacitor — Setup");
     }
 
     // ── Busy gate and veto handling ──────────────────────────

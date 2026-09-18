@@ -30,7 +30,7 @@ public class CwdRepositoryTests {
     public async Task Construction_spawns_nothing() {
         var commands = new List<string>();
 
-        _ = new CwdRepository(Config.Root, Cwd.Path, RecordingRunner(commands));
+        _ = new CwdRepository(Config.Root, Cwd.Path, new GitProviderRouter(), TimeProvider.System, RecordingRunner(commands));
 
         await Assert.That(commands).IsEmpty();
     }
@@ -38,7 +38,7 @@ public class CwdRepositoryTests {
     [Test]
     public async Task Hash_comes_from_origin_without_a_provider_probe() {
         var commands = new List<string>();
-        var repo     = new CwdRepository(Config.Root, Cwd.Path, RecordingRunner(commands));
+        var repo     = new CwdRepository(Config.Root, Cwd.Path, new GitProviderRouter(), TimeProvider.System, RecordingRunner(commands));
 
         var hash = await repo.GetHashAsync();
 
@@ -50,7 +50,7 @@ public class CwdRepositoryTests {
     [Test]
     public async Task Resolution_runs_once_per_instance() {
         var commands = new List<string>();
-        var repo     = new CwdRepository(Config.Root, Cwd.Path, RecordingRunner(commands));
+        var repo     = new CwdRepository(Config.Root, Cwd.Path, new GitProviderRouter(), TimeProvider.System, RecordingRunner(commands));
 
         await repo.GetHashAsync();
         var spawned = commands.Count;
@@ -64,7 +64,7 @@ public class CwdRepositoryTests {
 
     [Test]
     public async Task Outside_a_checkout_there_is_no_repository_and_no_hash() {
-        var repo = new CwdRepository(Config.Root, Cwd.Path, (_, _, _, _) => Task.FromResult<string?>(null));
+        var repo = new CwdRepository(Config.Root, Cwd.Path, new GitProviderRouter(), TimeProvider.System, (_, _, _, _) => Task.FromResult<string?>(null));
 
         await Assert.That(await repo.GetAsync()).IsNull();
         await Assert.That(await repo.GetHashAsync()).IsNull();
@@ -73,7 +73,7 @@ public class CwdRepositoryTests {
     [Test]
     public async Task A_checkout_without_an_origin_remote_has_no_hash() {
         var commands = new List<string>();
-        var repo     = new CwdRepository(Config.Root, Cwd.Path, RecordingRunner(commands, origin: null));
+        var repo     = new CwdRepository(Config.Root, Cwd.Path, new GitProviderRouter(), TimeProvider.System, RecordingRunner(commands, origin: null));
 
         await Assert.That(await repo.GetAsync()).IsNotNull();
         await Assert.That(await repo.GetHashAsync()).IsNull();

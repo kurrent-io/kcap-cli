@@ -6,6 +6,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Cursor;
 
@@ -49,14 +50,19 @@ internal sealed class CursorImportSource : IImportSource {
     readonly ConfigRoot                             _config;
     readonly CursorMarkers                          _markers;
 
+    readonly TimeProvider _time;
+
     public CursorImportSource(
         ConfigRoot                               config,
         string                                   projectsDir,
         string                                   workspaceStorageDir,
+        GitProviderRouter                        router,
+        TimeProvider                             time,
         Func<string, Task<RepositoryPayload?>>?  repoDetector                = null
     ) {
+        _time                = time;
         _config              = config;
-        _markers             = new CursorMarkers(config);
+        _markers             = new CursorMarkers(config, time);
         _projectsDir         = projectsDir;
         _workspaceStorageDir = workspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
@@ -68,7 +74,7 @@ internal sealed class CursorImportSource : IImportSource {
         // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
         // The LIVE Cursor hook path (CursorHookCommand → EnrichWithRepositoryInfoFromCwd) is a
         // separate call site untouched by this default and keeps live PR detection.
-        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false));
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false));
     }
 
     /// <summary>
@@ -230,8 +236,6 @@ internal sealed class CursorImportSource : IImportSource {
         // Per-workspace repo cache so we only run RepositoryDetection once per
         // unique cwd in this Classify call — sessions cluster heavily inside
         // the same workspace folder.
-        var repoCache    = new Dictionary<string, string?>(StringComparer.Ordinal); // cwd → "owner/repo" or null
-        var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
 
         // correlate subagent (child) sessions to their parent by prompt-hash across
         // all discovered transcripts. A child is ingested under the parent's AgentSubsession
@@ -325,7 +329,7 @@ internal sealed class CursorImportSource : IImportSource {
             // source D0's quarantine exists to shut off. Quarantine is always keyed on the FAMILY
             // identity — the top-level (parent) session id — since CursorRewriteGuard is
             // constructed from the watcher process's own `sessionId` argument, which for a
-            // spawned CHILD watcher is the parent id (WatcherManager.BuildSpawnArgs:
+            // spawned CHILD watcher is the parent id (ProcessWatcherSpawner.BuildSpawnArgs:
             // sessionIdOverride ?? key). ResolveQuarantineIdentity resolves that mapping — see its
             // doc for round-2 review fix #7's fallback when `--session <child>` (or an
             // inaccessible/omitted parent transcript) filters the parent out of `subagentLinks`
@@ -381,20 +385,7 @@ internal sealed class CursorImportSource : IImportSource {
                 // Best effort.
             }
 
-            string? repoKey = null;
-            if (hasExcludes && s.Cwd is { } cwd) {
-                if (!repoCache.TryGetValue(cwd, out repoKey)) {
-                    try {
-                        var repo = await _repoDetector(cwd);
-                        repoKey = repo is { Owner: { } o, RepoName: { } n } ? $"{o}/{n}" : null;
-                    } catch {
-                        repoKey = null;
-                    }
-                    repoCache[cwd] = repoKey;
-                }
-            }
 
-            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, repoKey, ctx);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -424,8 +415,6 @@ internal sealed class CursorImportSource : IImportSource {
                 Status          = status,
                 Vendor          = Vendor,
                 ResumeFromLine  = resumeFromLn,
-                ExcludedRepoKey = excludedRepoKey,
-                ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
                 SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, quarantineIdentity, subagentLinks, childrenByParent),
             });
@@ -578,7 +567,7 @@ internal sealed class CursorImportSource : IImportSource {
                 sessionId:     classification.SessionId,
                 filePath:      transcriptPath,
                 agentId:       null,
-                startLine:     startLine,
+                startLine:     startLine, time: _time,
                 vendor:        Vendor,
                 progress:      ctx.Progress,
                 abortDelivery: () => _markers.IsQuarantined(quarantineIdentity));
@@ -855,7 +844,7 @@ internal sealed class CursorImportSource : IImportSource {
                 sessionId:     parentSessionId,
                 filePath:      child.TranscriptPath,
                 agentId:       agentId,
-                startLine:     startLine,
+                startLine:     startLine, time: _time,
                 vendor:        Vendor,
                 progress:      ctx.Progress,
                 failOnError:   true,
@@ -954,12 +943,12 @@ internal sealed class CursorImportSource : IImportSource {
         }
     }
 
-    static async Task<bool> PostSyntheticHookAsync(
+    async Task<bool> PostSyntheticHookAsync(
         HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
     ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, _time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
@@ -1012,12 +1001,12 @@ internal sealed class CursorImportSource : IImportSource {
         return (lastIdx, count);
     }
 
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct, string? agentId = null) {
+    async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct, string? agentId = null) {
         // agentId set → probe the AgentSubsession-{sessionId}-{agentId} watermark.
         var url = string.IsNullOrEmpty(agentId)
             ? $"{baseUrl}/api/sessions/{sessionId}/last-line"
             : $"{baseUrl}/api/sessions/{sessionId}/last-line?agentId={Uri.EscapeDataString(agentId)}";
-        using var resp = await http.GetWithRetryAsync(url, ct: ct);
+        using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         // Construct via the (string?, Exception?, HttpStatusCode?) overload so .StatusCode is
@@ -1069,27 +1058,6 @@ internal sealed class CursorImportSource : IImportSource {
     /// </summary>
     internal static bool IsRetryableWatermarkProbeStatus(HttpStatusCode? statusCode) =>
         statusCode is { } code && ((int)code >= 500 && (int)code <= 599 || code == HttpStatusCode.RequestTimeout);
-
-    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
-        string? cwd, string? repoKey, ClassifyContext ctx
-    ) {
-        string? excludedRepoKey = null;
-        if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
-         && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
-            excludedRepoKey = repoKey;
-        }
-
-        string? excludedPathKey = null;
-        if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
-            foreach (var entry in paths) {
-                if (PathExclusion.IsExcluded(cwd, [entry], ctx.Home)) {
-                    excludedPathKey = PathExclusion.Normalize(entry, ctx.Home);
-                    break;
-                }
-            }
-        }
-        return (excludedRepoKey, excludedPathKey);
-    }
 
     IReadOnlyDictionary<string, string?> BuildSanitizedToFolderMap() {
         // EncodeWorkspacePath is lossy — "/foo/bar" and "/foo-bar" both encode

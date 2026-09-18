@@ -10,16 +10,19 @@ Subcommands:
 Config keys:
   server_url              Server URL
   daemon.name                 Daemon name
-  daemon.max_agents           Max concurrent hosted coding agents
+  daemon.max_agents           Max concurrent hosted coding agents (0 = unlimited)
   daemon.claude_path          Path to claude binary (default: claude)
   daemon.codex_path           Path to codex binary (default: codex)
   default_visibility          Default session visibility (private, project, org_public, public)
   disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)
   disable_memory_index        Skip injecting the team-memory index at SessionStart (true/false)
   disable_workitems_nudge     Skip injecting the work-items nudge at SessionStart (true/false)
+  disable_first_run_notice    Skip the one-shot notice in the first session after setup (true/false)
+  disable_plans_nudge         Skip injecting the plans nudge at SessionStart (true/false)
   disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)
   use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)
   excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)
+  allowed_repos               Capture only these repos, comma-separated; empty allows all
   update_check                Enable update check (true/false)
   flows.reviewer_vendor       Preferred review-flow reviewer vendor (used only when the definition names none)
   telemetry                   Pseudonymous CLI usage reporting, machine-wide (on/off)

@@ -48,7 +48,7 @@ public static class AppConfig {
     // so the deprecation notice in LoadProfileConfig fires at most once per run.
     static bool _v1MigrationSignalled;
 
-    public static string RepoRoot => GetGitRepoRoot() ?? Environment.CurrentDirectory;
+    public static string RepoRootOf(WorkingDirectory workdir) => GetGitRepoRoot(workdir.Path) ?? workdir.Path;
 
     /// <summary>
     /// Resolve server URL using only the active profile (or KCAP_PROFILE /
@@ -80,7 +80,8 @@ public static class AppConfig {
         return new(resolved, loaded);
     }
 
-    public static async Task<ProfileContext> ResolveForRepo(string[] args, ConfigRoot root, ProfileOverrides env, int gitTimeoutMs = 5000) {
+    public static async Task<ProfileContext> ResolveForRepo(
+            string[] args, ConfigRoot root, ProfileOverrides env, WorkingDirectory workdir, int gitTimeoutMs = 5000) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
 
@@ -107,7 +108,7 @@ public static class AppConfig {
         {
             var config = await LoadProfileConfig(root);
 
-            var repoRoot = GetGitRepoRoot(gitTimeoutMs) ?? Environment.CurrentDirectory;
+            var repoRoot = GetGitRepoRoot(workdir.Path, gitTimeoutMs) ?? workdir.Path;
 
             RepoConfig? repoConfig     = null;
             var         repoConfigPath = Path.Combine(repoRoot, ".kcap.json");
@@ -121,7 +122,7 @@ public static class AppConfig {
                 }
             }
 
-            var remoteUrls = GetGitRemoteUrls(gitTimeoutMs);
+            var remoteUrls = GetGitRemoteUrls(workdir.Path, gitTimeoutMs);
 
             var resolver = new ProfileResolver(
                 config,
@@ -143,9 +144,10 @@ public static class AppConfig {
         }
     }
 
-    static string[] GetGitRemoteUrls(int timeoutMs = 5000) {
+    static string[] GetGitRemoteUrls(string cwd, int timeoutMs = 5000) {
         try {
             var psi = new ProcessStartInfo("git", "remote -v") {
+                WorkingDirectory       = cwd,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
@@ -175,9 +177,10 @@ public static class AppConfig {
         }
     }
 
-    static string? GetGitRepoRoot(int timeoutMs = 5000) {
+    static string? GetGitRepoRoot(string cwd, int timeoutMs = 5000) {
         try {
             var psi = new ProcessStartInfo("git", "rev-parse --show-toplevel") {
+                WorkingDirectory       = cwd,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
@@ -227,11 +230,23 @@ public static class AppConfig {
     public static bool HasConfiguredProfile(ProfileConfig config) =>
         config.Profiles.Values.Any(p => !string.IsNullOrWhiteSpace(p.ServerUrl));
 
-    public static async Task<ProfileConfig> LoadProfileConfig(ConfigRoot config, CancellationToken ct = default) {
+    public static async Task<ProfileConfig> LoadProfileConfig(ConfigRoot config, CancellationToken ct = default) =>
+        (await TryLoadProfileConfig(config, ct)).Config;
+
+    /// <summary>
+    /// <see cref="LoadProfileConfig"/>, with the reason a config did not load.
+    /// <para>Every failure answers <see cref="ProfileConfig.Fresh"/> — a default profile with
+    /// nothing set, which reads exactly like a config that deliberately sets nothing. That is the
+    /// right shape for a caller reading a setting, and the wrong one for a caller whose decision
+    /// depends on a list being ABSENT rather than merely UNREADABLE: capture scope refusing an
+    /// unattended launch must not treat a broken config as permission.</para>
+    /// </summary>
+    public static async Task<(ProfileConfigLoad Outcome, ProfileConfig Config)> TryLoadProfileConfig(
+            ConfigRoot config, CancellationToken ct = default) {
         var configPath = GetConfigPath(config);
 
         if (!File.Exists(configPath))
-            return ProfileConfig.Fresh();
+            return (ProfileConfigLoad.Missing, ProfileConfig.Fresh());
 
         string json;
 
@@ -240,17 +255,26 @@ public static class AppConfig {
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync($"Warning: could not read config at {configPath}: {ex.Message}");
 
-            return ProfileConfig.Fresh();
+            return (ProfileConfigLoad.Unreadable, ProfileConfig.Fresh());
         }
 
-        ConfigMigration.MigrationResult result;
+        ConfigMigration.MigrationResult  result;
+        ConfigMigrationOutcome           migration;
 
         try {
-            result = ConfigMigration.MigrateIfNeeded(json);
+            (migration, result) = ConfigMigration.TryMigrate(json);
         } catch (JsonException ex) {
+            // A typed field that will not deserialize. The migration reports the other two shapes
+            // — not JSON, and JSON that is not an object — rather than throwing them.
             await Console.Error.WriteLineAsync($"Warning: invalid config at {configPath}: {ex.Message}");
 
-            return ProfileConfig.Fresh();
+            return (ProfileConfigLoad.Unreadable, ProfileConfig.Fresh());
+        }
+
+        if (migration == ConfigMigrationOutcome.Unreadable) {
+            await Console.Error.WriteLineAsync($"Warning: unreadable config at {configPath}");
+
+            return (ProfileConfigLoad.Unreadable, ProfileConfig.Fresh());
         }
 
         // Persist a v1→v2 migration when possible, but never drop the in-memory
@@ -293,7 +317,7 @@ public static class AppConfig {
             }
         }
 
-        return NormalizeProfileVisibilities(result.Config);
+        return (ProfileConfigLoad.Ok, NormalizeProfileVisibilities(result.Config));
     }
 
     /// <summary>

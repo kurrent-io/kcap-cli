@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -12,8 +13,8 @@ namespace Capacitor.Cli.Tests.Integration;
 /// two concurrent hooks racing the same key can't double-spawn. Mirrors <see cref="WatcherLifecycleTests"/> —
 /// uses <c>KCAP_WATCHER_DIR</c> — but never lets <c>EnsureWatcherRunning</c> launch a real
 /// child process: the "wedged watcher" is a real, disposable dummy process (so <c>KillWatcher</c>
-/// can genuinely terminate it) while the respawn itself goes through <see cref="Cli.WatcherManager.SpawnOverrideForTesting"/>
-/// so the test stays fast and deterministic.
+/// can genuinely terminate it) while the respawn goes to a substituted spawner, so the test stays
+/// fast and deterministic.
 /// </summary>
 [NotInParallel]
 public class WatcherHeartbeatStalenessTests {
@@ -27,8 +28,16 @@ public class WatcherHeartbeatStalenessTests {
     static readonly ConfigRoot Root = new(Tmp.Path);
 
     // One manager over that root and the URL these spawns target — the two values production hands
-    // it, so a watcher here can never point at a second server.
-    static readonly WatcherManager Watchers = new(Root, Resolutions.At("http://localhost:0", Root), new FixedCapacitorHttpClient());
+    // it, so a watcher here can never point at a second server. The directory is named rather than
+    // read back off the environment, which this class's own static initialiser would race.
+    static readonly ProfileContext Profiles = Resolutions.At("http://localhost:0", Root);
+    static readonly WatcherPaths   Paths    = new(TempDir);
+
+    static readonly WatcherManager Watchers =
+        TestWatchers.In(Paths, Root, Profiles, new FixedCapacitorHttpClient());
+
+    static WatcherManager Managing(IWatcherSpawner spawner) =>
+        new(Root, Profiles, new FixedCapacitorHttpClient(), SystemProcessStarter.Instance, Paths, spawner, TimeProvider.System);
 
     static string? _previousWatcherDir;
 
@@ -44,9 +53,6 @@ public class WatcherHeartbeatStalenessTests {
         Tmp.Dispose();
         Transcripts.Dispose();
     }
-
-    [After(Test)]
-    public void ResetSpawnOverride() => Cli.WatcherManager.SpawnOverrideForTesting = null;
 
     static (string key, string transcriptPath, string pidFile) NewKey(string prefix) {
         var key            = $"{prefix}-{Guid.NewGuid():N}";
@@ -76,7 +82,7 @@ public class WatcherHeartbeatStalenessTests {
         var longAgo = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(5);
         File.WriteAllText(pidFile, pid.ToString(CultureInfo.InvariantCulture));
         WatcherHeartbeat.Touch(Path.Combine(TempDir, $"{key}.started"), longAgo);
-        WatcherHeartbeat.Touch(Watchers.GetHeartbeatFilePath(key), longAgo);
+        WatcherHeartbeat.Touch(Paths.HeartbeatFile(key), longAgo);
     }
 
     [Test]
@@ -102,7 +108,7 @@ public class WatcherHeartbeatStalenessTests {
             File.WriteAllText(pidFile, dummy.Id.ToString(CultureInfo.InvariantCulture));
             var now = DateTimeOffset.UtcNow;
             WatcherHeartbeat.Touch(Path.Combine(TempDir, $"{key}.started"), now - TimeSpan.FromMinutes(5));
-            WatcherHeartbeat.Touch(Watchers.GetHeartbeatFilePath(key), now);
+            WatcherHeartbeat.Touch(Paths.HeartbeatFile(key), now);
 
             await Assert.That(Watchers.IsWatcherAlive(key)).IsTrue();
         } finally {
@@ -135,7 +141,7 @@ public class WatcherHeartbeatStalenessTests {
         var firstEntered = new TaskCompletionSource();
         var release      = new TaskCompletionSource();
 
-        Cli.WatcherManager.SpawnOverrideForTesting = async spawnedKey => {
+        var spawner = new FakeWatcherSpawner(async request => {
             Interlocked.Increment(ref spawnCount);
             firstEntered.TrySetResult();
             await release.Task; // held open until the test says both attempts have raced
@@ -143,23 +149,25 @@ public class WatcherHeartbeatStalenessTests {
             // Simulate a successful respawn: fresh pid (this test process — always alive)
             // + fresh heartbeat/started markers, so a losing concurrent caller's re-check
             // under the lock sees a healthy watcher and skips.
-            File.WriteAllText(Path.Combine(TempDir, $"{spawnedKey}.pid"), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            File.WriteAllText(Paths.PidFile(request.Key), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             var now = DateTimeOffset.UtcNow;
-            WatcherHeartbeat.Touch(Path.Combine(TempDir, $"{spawnedKey}.started"), now);
-            WatcherHeartbeat.Touch(Watchers.GetHeartbeatFilePath(spawnedKey), now);
-        };
+            WatcherHeartbeat.Touch(Paths.StartedFile(request.Key), now);
+            WatcherHeartbeat.Touch(Paths.HeartbeatFile(request.Key), now);
+        });
+
+        var watchers = Managing(spawner);
 
         try {
             WriteStaleWatcherFiles(key, pidFile, dummy.Id);
 
             // First caller acquires the spawn lock, kills the dummy, and blocks inside the
             // fake spawn until we release it — holding the lock open for the whole window.
-            var first = Watchers.EnsureWatcherRunning(key, transcriptPath, agentId: null);
+            var first = watchers.EnsureWatcherRunning(key, transcriptPath, agentId: null);
             await firstEntered.Task;
 
             // Second caller races the SAME stale key while the first still holds the lock:
             // it must find the lock contended and return without spawning.
-            var second = Watchers.EnsureWatcherRunning(key, transcriptPath, agentId: null);
+            var second = watchers.EnsureWatcherRunning(key, transcriptPath, agentId: null);
             await second;
 
             await Assert.That(spawnCount).IsEqualTo(1);
@@ -168,7 +176,7 @@ public class WatcherHeartbeatStalenessTests {
             await first;
 
             await Assert.That(spawnCount).IsEqualTo(1);
-            await Assert.That(Watchers.IsWatcherAlive(key)).IsTrue();
+            await Assert.That(watchers.IsWatcherAlive(key)).IsTrue();
         } finally {
             release.TrySetResult();
             try { dummy.Kill(entireProcessTree: true); } catch { /* best effort — likely already dead */ }
@@ -177,12 +185,11 @@ public class WatcherHeartbeatStalenessTests {
 
     [Test]
     public async Task KillWatcher_RemovesHeartbeatAndStartedFiles() {
-        // task 9 (review issue 2): the new sidecar files must not leak per-session the
-        // way the pid file never did. KillWatcher removes the heartbeat + started markers.
+        // The sidecar files must not leak per-session the way the pid file never did.
         var (key, _, pidFile) = NewKey("kill-cleanup");
         using var dummy = StartDummyProcess();
 
-        var heartbeat = Watchers.GetHeartbeatFilePath(key);
+        var heartbeat = Paths.HeartbeatFile(key);
         var started   = Path.Combine(TempDir, $"{key}.started");
 
         try {
@@ -205,7 +212,7 @@ public class WatcherHeartbeatStalenessTests {
         // Cleanup is the one place spawn locks are swept (KillWatcher intentionally leaves them
         // to avoid the unlink-race). Verify all three auxiliary kinds are removed, including orphans.
         var key       = $"purge-{Guid.NewGuid():N}";
-        var heartbeat = Watchers.GetHeartbeatFilePath(key);
+        var heartbeat = Paths.HeartbeatFile(key);
         var started   = Path.Combine(TempDir, $"{key}.started");
         var spawnlock = Path.Combine(TempDir, $"{key}.spawnlock");
 
@@ -226,18 +233,17 @@ public class WatcherHeartbeatStalenessTests {
         var (key, transcriptPath, pidFile) = NewKey("no-reap");
         using var dummy = StartDummyProcess();
 
-        var spawned = false;
-        Cli.WatcherManager.SpawnOverrideForTesting = _ => { spawned = true; return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
 
         try {
             File.WriteAllText(pidFile, dummy.Id.ToString(CultureInfo.InvariantCulture));
             var now = DateTimeOffset.UtcNow;
             WatcherHeartbeat.Touch(Path.Combine(TempDir, $"{key}.started"), now - TimeSpan.FromMinutes(5));
-            WatcherHeartbeat.Touch(Watchers.GetHeartbeatFilePath(key), now);
+            WatcherHeartbeat.Touch(Paths.HeartbeatFile(key), now);
 
-            await Watchers.EnsureWatcherRunning(key, transcriptPath, agentId: null);
+            await Managing(spawner).EnsureWatcherRunning(key, transcriptPath, agentId: null);
 
-            await Assert.That(spawned).IsFalse();
+            await Assert.That(spawner.Spawned).IsEmpty();
             await Assert.That(dummy.HasExited).IsFalse();
         } finally {
             try { dummy.Kill(entireProcessTree: true); } catch { /* best effort */ }

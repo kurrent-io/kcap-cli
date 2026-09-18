@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// by <see cref="Capacitor.Cli.Daemon.Services.AcpHostedAgentRuntime"/> (Task B4).
 ///
 /// <paramref name="requestInteraction"/> is injected as a plain delegate — matching the shape of
-/// <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync"/> — rather
+/// <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync(Capacitor.Cli.Core.AcpInteractionRequest, System.Threading.CancellationToken)"/> — rather
 /// than taking a concrete <c>ServerConnection</c> dependency, so this class is unit-testable
 /// without a real SignalR connection (see <c>AcpInteractionBridgeTests</c>).
 ///
@@ -36,6 +36,7 @@ internal sealed partial class AcpInteractionBridge(
         Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
         string                                                                       agentId,
         ILogger                                                                      logger,
+        TimeProvider time,
         AcpUnattendedInteractionPolicy                                                unattendedPolicy = AcpUnattendedInteractionPolicy.Disabled,
         Action<string>?                                                               unexpectedUnattendedInteraction = null,
         IReadOnlySet<string>?                                                         admittedToolIds = null,
@@ -788,7 +789,7 @@ internal sealed partial class AcpInteractionBridge(
                 sessionId, agentId, policyVendor ?? "unknown", PolicySeams.AcpRequestPermission, snapshot.Id,
                 PolicyEngine.Version, "full", requested, effective, PolicyWire.ToWire(action),
                 PolicyWire.ToWire(evaluation.MatchedRules), snapshot.Degraded, null, correlationId, false,
-                DateTimeOffset.UtcNow.ToString("O")));
+                time.GetUtcNow().ToString("O")));
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: policy decision audit notify threw for agent {AgentId}; ignoring", agentId);
         }

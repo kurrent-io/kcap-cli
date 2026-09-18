@@ -20,6 +20,7 @@ using Capacitor.Cli.Tests.Unit.Harness.OpenCode;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -49,7 +50,7 @@ public class ImportVisibilityTests : IDisposable {
 
     // These tests exercise chaining and repo resolution, not profile selection.
     ImportCommand Import() =>
-        new(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient());
+        new(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System);
     readonly WireMockServer _server = WireMockServer.Start();
     readonly TempDir        _tmp    = new();
     readonly string         _tempDir;
@@ -199,10 +200,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-pos");
         WriteClaudeSession(projectsDir, "vis-chain-handle-pos");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: false,
@@ -233,10 +234,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-neg");
         WriteClaudeSession(projectsDir, "vis-chain-handle-neg");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true,
@@ -269,10 +270,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-resume");
         WriteClaudeSession(projectsDir, "vis-chain-resume-fail");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true,
@@ -305,10 +306,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-short-private");
         WriteClaudeSession(projectsDir, "vis-private-too-short", lines: 3);
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 500,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true
@@ -331,10 +332,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-window");
         WriteClaudeSession(projectsDir, "vis-window");
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true
@@ -368,10 +369,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-newonly");
         WriteClaudeSession(projectsDir, "vis-new-only");
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true
@@ -400,10 +401,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-shared");
         WriteClaudeSession(projectsDir, "vis-chain-shared");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: false,
@@ -432,10 +433,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-plain");
         WriteClaudeSession(projectsDir, "vis-chain-plain");
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true
         );
@@ -457,10 +458,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-already");
         WriteClaudeSession(projectsDir, "vis-already-shared");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             shareWithOrg: true
@@ -491,10 +492,10 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-short");
         WriteClaudeSession(projectsDir, "vis-too-short", lines: 3);
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 500,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             shareWithOrg: true
@@ -518,10 +519,10 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             shareWithOrg: true,
@@ -548,10 +549,10 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.Repo([("kurrent-io", "nothing-here-by-that-name")]),
             skipConfirmation: true,
             onFinished: o => outcome = o
@@ -578,10 +579,10 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             shareWithOrg: true,
@@ -620,10 +621,10 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true,
@@ -657,10 +658,10 @@ public class ImportVisibilityTests : IDisposable {
 
         using var errors = ConsoleOutput.StartErrorCapture();
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true
@@ -703,7 +704,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("copilot");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
@@ -718,13 +719,13 @@ public class ImportVisibilityTests : IDisposable {
         var partialPath = WriteTranscript("copilot-partial.jsonl");
         var partial = RoutedClassification("copilot-partial-1", ImportCommand.ClassificationStatus.Partial,
             new() { ["TranscriptPath"] = partialPath }, resumeFromLine: 2);
-        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths).ImportSessionAsync(partial, ctx, CancellationToken.None);
+        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(partial, ctx, CancellationToken.None);
         await Assert.That(SessionStartBody("copilot").ContainsKey("default_visibility")).IsFalse();
 
         var alreadyPath = WriteTranscript("copilot-already.jsonl");
         var already = RoutedClassification("copilot-already-1", ImportCommand.ClassificationStatus.AlreadyLoaded,
             new() { ["TranscriptPath"] = alreadyPath }, totalLines: 5);
-        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths).ImportSessionAsync(already, ctx, CancellationToken.None);
+        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(already, ctx, CancellationToken.None);
 
         var alreadyBody = JsonNode.Parse(
             _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/session-start/copilot")
@@ -742,7 +743,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
-        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("copilot")["default_visibility"]?.GetValue<string>())
             .IsEqualTo("private");
@@ -759,7 +760,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir, TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("gemini");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
@@ -774,7 +775,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir, TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("gemini").ContainsKey("default_visibility")).IsFalse();
     }
@@ -788,7 +789,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
-        await new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir, TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("gemini")["default_visibility"]?.GetValue<string>())
             .IsEqualTo("private");
@@ -805,7 +806,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("kiro");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
@@ -820,7 +821,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("kiro").ContainsKey("default_visibility")).IsFalse();
     }
@@ -834,7 +835,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("kiro")["default_visibility"]?.GetValue<string>())
             .IsEqualTo("private");
@@ -851,7 +852,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("pi");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
@@ -866,7 +867,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("pi").ContainsKey("default_visibility")).IsFalse();
     }
@@ -880,7 +881,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
-        await new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         // Pi's existing forcePrivate behavior (stamping the literal "private") is untouched —
         // the new guard must never override it with the org-level default.
@@ -903,10 +904,10 @@ public class ImportVisibilityTests : IDisposable {
         StubAllHookEndpoints();
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
 
@@ -928,10 +929,10 @@ public class ImportVisibilityTests : IDisposable {
         StubAllHookEndpoints();
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
 
@@ -961,7 +962,7 @@ public class ImportVisibilityTests : IDisposable {
             Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
         };
 
-        var source = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var ctx    = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
         var result = await source.ImportSessionAsync(c, ctx, CancellationToken.None);
 
@@ -980,10 +981,10 @@ public class ImportVisibilityTests : IDisposable {
         StubAllHookEndpoints();
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
 
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
@@ -1005,7 +1006,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths, TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("antigravity");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
@@ -1020,7 +1021,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths, TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("antigravity").ContainsKey("default_visibility")).IsFalse();
     }
@@ -1036,7 +1037,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths, TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("antigravity").ContainsKey("default_visibility")).IsFalse();
     }
@@ -1050,7 +1051,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
-        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths, TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("antigravity");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
@@ -1072,7 +1073,7 @@ public class ImportVisibilityTests : IDisposable {
         await new CursorImportSource(Config.Root, 
                 Path.Combine(_tempDir, "unused-cursor-projects"),
                 Path.Combine(_tempDir, "unused-cursor-workspace-storage")
-            )
+            , router: new GitProviderRouter(), time: TimeProvider.System)
             .ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("cursor");
@@ -1092,7 +1093,7 @@ public class ImportVisibilityTests : IDisposable {
         await new CursorImportSource(Config.Root, 
                 Path.Combine(_tempDir, "unused-cursor-projects-2"),
                 Path.Combine(_tempDir, "unused-cursor-workspace-storage-2")
-            )
+            , router: new GitProviderRouter(), time: TimeProvider.System)
             .ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("cursor").ContainsKey("default_visibility")).IsFalse();
@@ -1110,7 +1111,7 @@ public class ImportVisibilityTests : IDisposable {
         await new CursorImportSource(Config.Root, 
                 Path.Combine(_tempDir, "unused-cursor-projects-3"),
                 Path.Combine(_tempDir, "unused-cursor-workspace-storage-3")
-            )
+            , router: new GitProviderRouter(), time: TimeProvider.System)
             .ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("cursor")["default_visibility"]?.GetValue<string>())
@@ -1135,9 +1136,9 @@ public class ImportVisibilityTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(404));
         StubAllHookEndpoints();
 
-        var source = new CursorImportSource(Config.Root, projectsDir, Path.Combine(_tempDir, "cursor-workspace-storage-rt"));
+        var source = new CursorImportSource(Config.Root, projectsDir, Path.Combine(_tempDir, "cursor-workspace-storage-rt"), router: new GitProviderRouter(), time: TimeProvider.System);
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -1176,25 +1177,25 @@ public class ImportVisibilityTests : IDisposable {
         Func<string, Dictionary<string, object?>> MakeSourceMeta);
 
     RoutedSourceCase CopilotCase() =>
-        new(HarnessId.Copilot, () => new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths), p => new() { ["TranscriptPath"] = p });
+        new(HarnessId.Copilot, () => new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase GeminiCase() =>
-        new(HarnessId.Gemini, () => new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir), p => new() { ["TranscriptPath"] = p });
+        new(HarnessId.Gemini, () => new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir, TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase KiroCase() =>
-        new(HarnessId.Kiro, () => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir), p => new() { ["TranscriptPath"] = p });
+        new(HarnessId.Kiro, () => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase PiCase() =>
-        new(HarnessId.Pi, () => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir), p => new() { ["TranscriptPath"] = p });
+        new(HarnessId.Pi, () => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase AntigravityCase() =>
-        new(HarnessId.Antigravity, () => new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths), p => new() { ["TranscriptPath"] = p });
+        new(HarnessId.Antigravity, () => new AntigravityImportSource(AntigravityHarness.Over(GeminiHarness.FromEnvironment(Home)).Paths, TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase CursorCase() =>
         new(HarnessId.Cursor,
             () => new CursorImportSource(Config.Root, 
                 Path.Combine(_tempDir, $"unused-cursor-projects-{Guid.NewGuid():N}"),
-                Path.Combine(_tempDir, $"unused-cursor-workspace-storage-{Guid.NewGuid():N}")),
+                Path.Combine(_tempDir, $"unused-cursor-workspace-storage-{Guid.NewGuid():N}"), router: new GitProviderRouter(), time: TimeProvider.System),
             p => new() { ["TranscriptPath"] = p, ["WorkspaceFolder"] = "/Users/me/proj" });
 
     async Task AssertAlreadyLoadedOmitsDefaultVisibility(RoutedSourceCase rc) {
@@ -1349,10 +1350,10 @@ public class ImportVisibilityTests : IDisposable {
         StubAllHookEndpoints();
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
 
@@ -1376,10 +1377,10 @@ public class ImportVisibilityTests : IDisposable {
         StubAllHookEndpoints();
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
 
@@ -1433,12 +1434,12 @@ public class ImportVisibilityTests : IDisposable {
         // happened to look like an interactive TTY, this call could block forever on
         // Console.ReadLine(). It must not, regardless of ambient TTY state.
         var import = new ImportCommand(Config.Root,
-            Resolutions.Of(new Profile { ExcludedPaths = [excludedDir] }, "autoskip-test", _server.Url!), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient());
+            Resolutions.Of(new Profile { ExcludedPaths = [excludedDir] }, "autoskip-test", _server.Url!), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System);
 
         var task = import.HandleImport(
             filterCwd: null,
             minLines: 1,
-            sources: [new ClaudeImportSource(Config.Root, projectsDir)],
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             autoSkipExclusions: true,
@@ -1460,5 +1461,101 @@ public class ImportVisibilityTests : IDisposable {
 
         // Never actually asked the user to include the excluded path.
         await Assert.That(capture.GetCapturedError()).DoesNotContain("Include");
+    }
+
+    // Globally sequential for the same reason as the test above: it swaps process-global
+    // Console.Error.
+    [Test, NotInParallel]
+    public async Task HandleImport_skips_a_session_outside_allowed_paths() {
+        // The allow-list arm of the same gate. The cwd is real and readable; it is simply not under
+        // the one root the profile admits, which is the case no per-source test ever covered.
+        var allowedDir = Path.Combine(_tempDir, "allowed-proj");
+        var outsideDir = Path.Combine(_tempDir, "outside-proj");
+        Directory.CreateDirectory(allowedDir);
+        Directory.CreateDirectory(outsideDir);
+
+        var projectsDir = Path.Combine(_tempDir, "claude-projects-allowlist");
+        var cwdDir      = Path.Combine(projectsDir, "-outside-proj");
+        Directory.CreateDirectory(cwdDir);
+
+        var cwdJson = System.Text.Json.JsonSerializer.Serialize(outsideDir);
+        var lines   = Enumerable.Range(0, 20).Select(i =>
+            "{\"type\":\"user\",\"timestamp\":\"2026-03-15T10:00:00Z\",\"cwd\":" + cwdJson
+          + ",\"message\":{\"content\":\"line-" + i + "\"}}");
+        File.WriteAllLines(Path.Combine(cwdDir, "outside-sess.jsonl"), lines);
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        StubAllHookEndpoints();
+
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var import = new ImportCommand(Config.Root,
+            Resolutions.Of(new Profile { AllowedPaths = [allowedDir] }, "allowlist-test", _server.Url!), Home,
+            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new GitProviderRouter(), TimeProvider.System);
+
+        var exitCode = await import.HandleImport(
+            filterCwd: null,
+            minLines: 1,
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, new GitProviderRouter(), TimeProvider.System)],
+            scope: new ImportScope.All(),
+            skipConfirmation: true,
+            autoSkipExclusions: true
+        );
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedError()).Contains("Auto-skipping");
+
+        // The notice alone proves only that a bucket was non-empty. What has to hold is that
+        // nothing was sent: assert on the requests the server actually received.
+        await Assert.That(_server.LogEntries.Where(e => e.RequestMessage.Path.StartsWith("/hooks/", StringComparison.Ordinal)))
+                    .IsEmpty();
+    }
+
+    // Globally sequential: swaps process-global Console.Error.
+    [Test, NotInParallel]
+    public async Task HandleImport_excludes_an_ignored_session_with_no_new_work_beside_it() {
+        // An already-loaded session is still sent — the routed path re-asserts its lifecycle hooks
+        // — so the scope verdict has to be acted on even when no New or Partial session is out of
+        // scope to raise the question. Whether it is depends on nothing but this session.
+        var excludedDir = Path.Combine(_tempDir, "settled-excluded-proj");
+        Directory.CreateDirectory(excludedDir);
+
+        var projectsDir = Path.Combine(_tempDir, "claude-projects-settled");
+        var cwdDir      = Path.Combine(projectsDir, "-settled-excluded-proj");
+        Directory.CreateDirectory(cwdDir);
+
+        var cwdJson = System.Text.Json.JsonSerializer.Serialize(excludedDir);
+        var lines   = Enumerable.Range(0, 20).Select(i =>
+            "{\"type\":\"user\",\"timestamp\":\"2026-03-15T10:00:00Z\",\"cwd\":" + cwdJson
+          + ",\"message\":{\"content\":\"line-" + i + "\"}}");
+        File.WriteAllLines(Path.Combine(cwdDir, "settled-sess.jsonl"), lines);
+
+        // Server already holds every line → AlreadyLoaded, so nothing in the run is New or Partial.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("{\"last_line_number\":20}"));
+        StubAllHookEndpoints();
+
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var import = new ImportCommand(Config.Root,
+            Resolutions.Of(new Profile { ExcludedPaths = [excludedDir] }, "settled-test", _server.Url!), Home,
+            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new GitProviderRouter(), TimeProvider.System);
+
+        var exitCode = await import.HandleImport(
+            filterCwd: null,
+            minLines: 1,
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, new GitProviderRouter(), TimeProvider.System)],
+            scope: new ImportScope.All(),
+            skipConfirmation: true,
+            autoSkipExclusions: true
+        );
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedError()).Contains("Auto-skipping");
+        await Assert.That(_server.LogEntries.Where(e => e.RequestMessage.Path.StartsWith("/hooks/", StringComparison.Ordinal)))
+                    .IsEmpty();
     }
 }

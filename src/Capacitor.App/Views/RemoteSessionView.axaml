@@ -1,0 +1,97 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:services="clr-namespace:Capacitor.App.Services"
+             xmlns:terminal="clr-namespace:SvcSystems.UI.Terminal;assembly=SvcSystems.UI.Terminal"
+             x:Class="Capacitor.App.Views.RemoteSessionView"
+             x:DataType="vm:RemoteSessionViewModel"
+             Background="{StaticResource KcapCanvasBrush}">
+    <!-- The session's process lives on another machine: the header, the switch over the server's
+         streams, and the two actions that reach across. -->
+    <Grid RowDefinitions="Auto,Auto,*">
+        <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
+                Padding="20,16,16,16">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <StackPanel Spacing="2" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
+                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding Title}" />
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding StatusDot}" />
+                        <TextBlock x:Name="RemoteStatus" Text="{Binding StatusText}" FontSize="13"
+                                   Foreground="{StaticResource KcapMutedBrush}" />
+                        <TextBlock x:Name="RemoteSubtitle" Text="{Binding RepoLabelText}" FontSize="13"
+                                   Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Border x:Name="SurfaceSwitch" Classes="kcapSegment" IsVisible="{Binding ShowsSurfaceSwitch}">
+                        <StackPanel Orientation="Horizontal" Spacing="2">
+                            <Button x:Name="ChatTabButton" Content="Chat" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsChatActive}" Command="{Binding ShowChatCommand}" />
+                            <Button x:Name="TerminalTabButton" Content="Terminal" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsTerminalActive}" Command="{Binding ShowTerminalCommand}"
+                                    IsVisible="{Binding ShowsTerminalTab}" />
+                        </StackPanel>
+                    </Border>
+                    <Button Content="Open in web" Command="{Binding OpenInWebCommand}"
+                            Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
+                            Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="13.5" />
+                    <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
+                            Padding="10,5" FontSize="13.5" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border x:Name="AccessBanner" Grid.Row="1" Margin="20,10,20,0"
+                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                BorderThickness="1" CornerRadius="10" Padding="13,10"
+                IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
+                       FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" />
+        </Border>
+
+        <Grid Grid.Row="2">
+            <!-- The active-tab flag lives on this VM, which is not the pane's DataContext. -->
+            <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
+                               IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsChatPane}" />
+
+            <Grid x:Name="TerminalPane" RowDefinitions="*,Auto" IsVisible="{Binding ShowsTerminalPane}">
+                <!-- FontFamily MUST be set: the control's default is "Cascadia Mono", which only
+                     exists on Windows — elsewhere it silently falls back to ESTIMATED cell metrics
+                     while drawing with a real typeface, smearing every styled run off its column. -->
+                <terminal:TerminalControl x:Name="TerminalHost" Grid.Row="0"
+                                           FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
+                                           CaretBrush="{StaticResource KcapTextBrush}"
+                                           Model="{Binding Terminal.Surface, Converter={x:Static views:TerminalSurfaceModelConverter.Instance}}" />
+                <Border Grid.Row="0" IsVisible="{Binding Terminal.ShowsBanner}"
+                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
+                    <TextBlock x:Name="TerminalPhaseNote" Text="{Binding Terminal.PhaseNote}" Foreground="{StaticResource KcapMutedBrush}" />
+                </Border>
+                <!-- Read-only: the keys the daemon accepts are the only input that crosses. -->
+                <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="20,8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <ItemsControl Grid.Column="0" ItemsSource="{Binding Terminal.Keys}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="6" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="services:SpecialKeyChoice">
+                                    <Button Classes="specialKey" Content="{Binding Label}" Padding="10,4" FontSize="12" CornerRadius="7"
+                                            Command="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).Terminal.SendKeyCommand}"
+                                            CommandParameter="{Binding Key}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Grid.Column="1" Text="{Binding Terminal.SizeNote}" FontSize="11.5" VerticalAlignment="Center"
+                                   Foreground="{StaticResource KcapFaintBrush}" />
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

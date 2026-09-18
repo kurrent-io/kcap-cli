@@ -70,7 +70,7 @@ public class WorkspaceMcpNeutralizationLiveCertTests {
         using var markers = new TempDir("markers");
         using var repo = HostileRepo(markers, out var marker);
 
-        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance)
+        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System)
             .CreateAsync(repo);
 
         await DriveKiroSessionAsync(info.Path);

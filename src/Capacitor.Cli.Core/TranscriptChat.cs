@@ -11,6 +11,9 @@ public interface IChatDisplayRules {
     /// injected prompts and background notifications must never acknowledge submitted input.
     string? SubmittedInput(CanonicalEvent evt, AcpEventEnvelope raw, AcpEventEnvelope? displayed) =>
         displayed is { Kind: AcpEventKind.UserMessage } user ? user.Text : null;
+
+    /// Subagent facts read off the raw envelope, whatever Filter decides for it.
+    IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) => [];
 }
 
 /// The chat's view of a transcript: the leaf projection, the envelope mapping, one vendor's rules.
@@ -22,16 +25,17 @@ public sealed class TranscriptChatProjection(ITranscriptProjection projection, I
 
     public ChatProjectionResult ProjectWithInputs(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) {
         var result = projection.Project(line, lineNumber, receivedAt, context);
-        if (result.Events.Count == 0) return new([], []);
+        if (result.Events.Count == 0) return new([], [], []);
         var shown = new List<AcpEventEnvelope>(result.Events.Count);
         var submitted = new List<string>();
-        foreach (var evt in result.Events)
-            foreach (var envelope in TranscriptEnvelopes.From(evt)) {
-                var kept = rules.Filter(evt, envelope);
-                if (kept is { } visible) shown.Add(visible);
-                if (rules.SubmittedInput(evt, envelope, kept) is { Length: > 0 } text) submitted.Add(text);
-            }
-        return new(shown, submitted);
+        var subagents = new List<SubagentSignal>();
+        foreach (var evt in result.Events) {
+            var projected = TranscriptChat.Project(evt, rules);
+            shown.AddRange(projected.Envelopes);
+            submitted.AddRange(projected.SubmittedInputs);
+            subagents.AddRange(projected.Subagents);
+        }
+        return new(shown, submitted, subagents);
     }
 }
 
@@ -41,10 +45,34 @@ public static class TranscriptChat {
     public static readonly IChatTranscriptProjection Journal = new EnvelopeJournalProjection();
 
     public static TranscriptChatProjection? For(string vendor) =>
-        TranscriptProjection.For(vendor) is not { } projection ? null
-        : vendor.ToLowerInvariant() switch {
-            "claude" => new TranscriptChatProjection(projection, ClaudeChatRules.Instance),
-            "codex"  => new TranscriptChatProjection(projection, CodexChatRules.Instance),
-            _        => null,
-        };
+        TranscriptProjection.For(vendor) is { } projection && RulesFor(vendor) is { } rules
+            ? new TranscriptChatProjection(projection, rules)
+            : null;
+
+    public static IChatDisplayRules? RulesFor(string vendor) => vendor.ToLowerInvariant() switch {
+        "claude" => ClaudeChatRules.Instance,
+        "codex"  => CodexChatRules.Instance,
+        _        => null,
+    };
+
+    /// The rows for one canonical event, wherever it came from: the envelope mapping, then the
+    /// vendor's rules when it has any. Without rules every envelope shows, and a visible user
+    /// message is the submitted input.
+    public static ChatProjectionResult Project(CanonicalEvent evt, IChatDisplayRules? rules) {
+        var envelopes = TranscriptEnvelopes.From(evt);
+        if (envelopes.Count == 0) return new([], [], []);
+        var shown = new List<AcpEventEnvelope>(envelopes.Count);
+        var submitted = new List<string>();
+        var subagents = new List<SubagentSignal>();
+        foreach (var envelope in envelopes) {
+            var kept = rules is null ? envelope : rules.Filter(evt, envelope);
+            if (kept is { } visible) shown.Add(visible);
+            var text = rules is null
+                ? kept is { Kind: AcpEventKind.UserMessage } user ? user.Text : null
+                : rules.SubmittedInput(evt, envelope, kept);
+            if (text is { Length: > 0 }) submitted.Add(text);
+            if (rules is not null) subagents.AddRange(rules.Subagents(evt, envelope));
+        }
+        return new(shown, submitted, subagents);
+    }
 }

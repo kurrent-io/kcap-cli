@@ -1,8 +1,5 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Config;
-
-using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -33,8 +30,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// dropped final assistant turn when <c>session.shutdown</c> never lands
 /// (e.g. Copilot crash).
 /// </remarks>
-sealed class CopilotFinalizeDrainCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+sealed class CopilotFinalizeDrainCommand(ConfigRoot config, WatcherManager watchers, TimeProvider time) {
 
     // The hook spawns this FIRST — before its capped pre-drain and the retrying
     // session-end POST — so the budget must outlast the worst-case hook lifetime
@@ -83,7 +79,7 @@ sealed class CopilotFinalizeDrainCommand(ConfigRoot config, ProfileContext profi
             TimeSpan pollBudget,
             TimeSpan pollInterval
         ) {
-        var deadline    = DateTimeOffset.UtcNow + pollBudget;
+        var deadline    = time.GetUtcNow() + pollBudget;
         var sawShutdown = false;
 
         while (true) {
@@ -93,12 +89,12 @@ sealed class CopilotFinalizeDrainCommand(ConfigRoot config, ProfileContext profi
                 break;
             }
 
-            if (DateTimeOffset.UtcNow >= deadline) {
+            if (time.GetUtcNow() >= deadline) {
                 break;
             }
 
             try {
-                await Task.Delay(pollInterval);
+                await Task.Delay(pollInterval, time);
             } catch (OperationCanceledException) {
                 break;
             }
@@ -110,7 +106,7 @@ sealed class CopilotFinalizeDrainCommand(ConfigRoot config, ProfileContext profi
 
         // Idempotent: resumes from the server watermark; deterministic event ids
         // dedupe anything the hook's inline-drain already delivered.
-        await _watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "copilot");
+        await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "copilot");
     }
 
     /// <summary>
@@ -148,6 +144,6 @@ sealed class CopilotFinalizeDrainCommand(ConfigRoot config, ProfileContext profi
         }
     }
 
-    static void Log(string message) =>
-        Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [copilot-finalize] {message}");
+    void Log(string message) =>
+        Console.Error.WriteLine($"[{time.GetLocalNow():HH:mm:ss.fff}] [copilot-finalize] {message}");
 }

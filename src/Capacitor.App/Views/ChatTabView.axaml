@@ -4,13 +4,56 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.ChatTabView"
              x:DataType="vm:ChatTabViewModel">
+    <UserControl.Styles>
+        <Style Selector="Border.toolGroup">
+            <Setter Property="Margin" Value="0,4,0,22" />
+        </Style>
+        <Style Selector="Border.toolGroup.folded">
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Margin" Value="0,4,0,10" />
+        </Style>
+        <!-- Same specificity as folded: this must stay last so a packed group keeps the 4px gap. -->
+        <Style Selector="Border.toolGroup.packsWithCard">
+            <Setter Property="Margin" Value="0,4,0,4" />
+        </Style>
+        <!-- Fluent paints the presenter, so rest and hover both pin it — same raised fill as
+             a rail row / expandable section header. Local Background on the Button would
+             outrank the hover and leave Fluent's wash on the dark card. -->
+        <Style Selector="Button.toolSummary">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.toolSummary /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.toolSummary:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.toolSummary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ContentControl.pendingCard">
+            <Setter Property="Margin" Value="0,8,0,12" />
+        </Style>
+        <Style Selector="ContentControl.pendingCard.packsWithPrevious">
+            <Setter Property="Margin" Value="0,4,0,12" />
+        </Style>
+    </UserControl.Styles>
     <Grid RowDefinitions="*,Auto,Auto,Auto,Auto">
         <!-- The template owns the ScrollViewer: that is the shape Avalonia virtualizes. An
              ItemsControl inside an external ScrollViewer is measured at infinite height. -->
         <ItemsControl x:Name="ChatItems" Grid.Row="0" ItemsSource="{Binding Items}">
             <ItemsControl.Template>
                 <ControlTemplate>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" BringIntoViewOnFocusChange="False">
                         <!-- ItemsPanel does not reach the presenter on its own: without this
                              template binding it falls back to its own default StackPanel and
                              every row is realized. -->
@@ -27,19 +70,32 @@
                 <DataTemplate x:DataType="vm:UserTurnItem">
                     <Border HorizontalAlignment="Right" MaxWidth="520" Margin="0,8,0,12" Padding="14,11" CornerRadius="10"
                             Background="{StaticResource KcapSurfaceRaisedBrush}">
-                        <views:MarkdownView Text="{Binding Text}"
-                                            OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}" />
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="toolKindChip" Text="You" HorizontalAlignment="Left" />
+                            <views:MarkdownView Text="{Binding Text}"
+                                                OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
+                                                RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
+                        </StackPanel>
                     </Border>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:AssistantTextItem">
-                    <views:MarkdownView Text="{Binding Text}" MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12"
-                                        OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}" />
+                    <StackPanel MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12" Spacing="6">
+                        <TextBlock Classes="toolKindChip"
+                                   Text="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).AssistantTitle}" />
+                        <views:MarkdownView Text="{Binding Text}"
+                                            OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
+                                            RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
+                    </StackPanel>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:SystemNoteItem">
                     <Border Classes="systemNote" MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12" Padding="14,10" CornerRadius="10"
                             Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
-                        <views:MarkdownView Text="{Binding Text}"
-                                            OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}" />
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="toolKindChip" Text="Note" />
+                            <views:MarkdownView Text="{Binding Text}"
+                                                OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
+                                                RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
+                        </StackPanel>
                     </Border>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:ToolCallItem">
@@ -47,12 +103,12 @@
                         <!-- Detail is the useful bit (command, path); paint it brighter. A bare tool
                              name is fallback chrome only, so it stays muted. Selectable so a command
                              can be copied without retyping. -->
-                        <SelectableTextBlock Text="{Binding Detail}" FontSize="12" LineHeight="16"
+                        <SelectableTextBlock Text="{Binding Detail}" FontSize="13.5" LineHeight="18"
                                    FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
                                    Foreground="{StaticResource KcapTextBrush}"
                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
                                    IsVisible="{Binding HasDetail}" />
-                        <SelectableTextBlock Text="{Binding Name}" FontSize="12" LineHeight="16"
+                        <SelectableTextBlock Text="{Binding Name}" FontSize="13.5" LineHeight="18"
                                    FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
                                    Foreground="{StaticResource KcapMutedBrush}"
                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
@@ -76,7 +132,9 @@
                 <DataTemplate x:DataType="vm:ToolGroupItem">
                     <!-- Stretch to the chat column (capped like assistant text) so lone cards are
                          not content-width pills. -->
-                    <Border MaxWidth="660" MinWidth="320" Margin="0,4,0,22" Padding="12,10" CornerRadius="10"
+                    <Border Classes="toolGroup" Classes.packsWithCard="{Binding PacksWithCard}"
+                            Classes.folded="{Binding !IsExpanded}"
+                            MaxWidth="660" MinWidth="320" Padding="12,10" CornerRadius="10"
                             Background="{StaticResource KcapSurfaceBrush}"
                             BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                             HorizontalAlignment="Stretch">
@@ -85,8 +143,6 @@
                                  Plain text (no chip chrome) so it lines up with the detail. -->
                             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding ShowsKindChip}">
                                 <TextBlock Classes="toolKindChip" Text="{Binding KindChip}"
-                                           FontSize="10" FontWeight="SemiBold"
-                                           Foreground="{StaticResource KcapMutedBrush}"
                                            VerticalAlignment="Center" />
                                 <Panel Grid.Column="1" DataContext="{Binding LoneCall}" VerticalAlignment="Center">
                                     <Border Classes="toolStatus" Width="14" Height="8" CornerRadius="4"
@@ -100,263 +156,78 @@
                                                Foreground="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
                                 </Panel>
                             </Grid>
-                            <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}" Command="{Binding ToggleCommand}"
-                                    Background="Transparent" BorderBrush="Transparent" Padding="0,4" MinHeight="28" Cursor="Hand"
-                                    HorizontalAlignment="Left" HorizontalContentAlignment="Left">
-                                <StackPanel Orientation="Horizontal" Spacing="9">
-                                    <Panel Width="12" Height="12" VerticalAlignment="Center">
-                                        <Path Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
+                            <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}"
+                                    Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
+                                <!-- Grid, not a stretching StackPanel: a 28px-tall button would
+                                     stretch the label and leave the 12px chevron floating beside
+                                     top-aligned text. Path is native 12×12 (the data is authored
+                                     in that box). The −2 top margin lifts the stroke onto the
+                                     letters' cap-height: layout-centre is the em box, which sits
+                                     low of the glyphs because of descent. -->
+                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" VerticalAlignment="Center">
+                                    <Panel Width="12" Height="12" VerticalAlignment="Center" Margin="0,-2,0,0">
+                                        <Path Width="12" Height="12" Stretch="None"
+                                              Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
                                               StrokeLineCap="Round" StrokeJoin="Round"
                                               Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IsExpanded}" />
-                                        <Path Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
+                                        <Path Width="12" Height="12" Stretch="None"
+                                              Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
                                               StrokeLineCap="Round" StrokeJoin="Round"
                                               Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
                                     </Panel>
-                                    <TextBlock Text="{Binding SummaryLine}" FontSize="12" Foreground="{StaticResource KcapMutedBrush}"
-                                               TextTrimming="CharacterEllipsis" MaxWidth="560" VerticalAlignment="Center" />
-                                    <Border Classes="toolStatus" Width="14" Height="8" CornerRadius="4"
-                                            Background="{StaticResource KcapDangerBrush}"
-                                            IsVisible="{Binding HasFailure}" VerticalAlignment="Center" />
-                                </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding SummaryLine}" FontSize="13.5"
+                                               Foreground="{StaticResource KcapMutedBrush}"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                </Grid>
                             </Button>
-                            <ItemsControl ItemsSource="{Binding VisibleCalls}" />
+                            <ItemsControl ItemsSource="{Binding VisibleCalls}" IsVisible="{Binding HasVisibleCalls}" />
                         </StackPanel>
                     </Border>
+                </DataTemplate>
+                <DataTemplate x:DataType="vm:PendingCardItem">
+                    <ContentControl Classes="pendingCard" Classes.packsWithPrevious="{Binding PacksWithPrevious}"
+                                    Content="{Binding Card}" MaxWidth="660" HorizontalAlignment="Stretch">
+                        <ContentControl.DataTemplates>
+                            <StaticResource ResourceKey="PermissionCardTemplate" />
+                            <StaticResource ResourceKey="QuestionCardTemplate" />
+                            <StaticResource ResourceKey="AcpQuestionCardTemplate" />
+                        </ContentControl.DataTemplates>
+                    </ContentControl>
                 </DataTemplate>
             </ItemsControl.DataTemplates>
         </ItemsControl>
 
         <TextBlock x:Name="ChatPhaseNote" Grid.Row="0" Text="{Binding PhaseNote}"
                    IsVisible="{Binding PhaseNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                   Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5"
+                   Foreground="{StaticResource KcapMutedBrush}" FontSize="14"
                    HorizontalAlignment="Center" VerticalAlignment="Center" />
 
         <StackPanel x:Name="ChatActivityNote" Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="22,0,22,6"
                     IsVisible="{Binding ActivityNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
             <Border Classes="toolRunning toolStatus" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
                     Background="{StaticResource KcapWarningBrush}" />
-            <TextBlock Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="12"
+            <TextBlock Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
                        VerticalAlignment="Center" />
         </StackPanel>
 
-        <Border x:Name="NeedsYouRow" Grid.Row="2" Margin="22,0,22,4" IsVisible="{Binding HasPendingCards}">
-            <StackPanel Spacing="6">
-                <TextBlock Text="NEEDS YOU" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource KcapMutedBrush}" />
-                <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding PendingCards}">
-                        <ItemsControl.DataTemplates>
-                            <DataTemplate x:DataType="vm:PermissionCardViewModel">
-                                <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapSuccessBrush}"
-                                        BorderThickness="1" CornerRadius="10" Padding="13,10" Margin="0,0,0,6">
-                                    <StackPanel Spacing="6">
-                                        <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" />
-                                        <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding ErrorText}" FontSize="11" Foreground="{StaticResource KcapDangerBrush}"
-                                                   IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
-                                            <Button Content="Deny" Command="{Binding DenyCommand}" Background="Transparent" BorderBrush="Transparent"
-                                                    Foreground="{StaticResource KcapDangerBrush}" Padding="10,4" FontSize="12" CornerRadius="7" />
-                                            <Button Content="Allow always" Command="{Binding AllowAlwaysCommand}" IsVisible="{Binding ShowsAllowAlways}"
-                                                    Background="Transparent" BorderBrush="Transparent" Foreground="{StaticResource KcapMutedBrush}" Padding="10,4" FontSize="12" CornerRadius="7" />
-                                            <Button Content="Allow" Command="{Binding AllowCommand}" Padding="12,4" FontSize="12" FontWeight="SemiBold" CornerRadius="7"
-                                                    Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                            <DataTemplate x:DataType="vm:QuestionCardViewModel">
-                                <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapSuccessBrush}"
-                                        BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
-                                    <Border.Styles>
-                                        <!-- Option chrome lives in class styles only: a local Background/BorderBrush on
-                                             the Button would outrank the selected style and leave it inert, and the
-                                             theme's hover fill on PART_ContentPresenter is overridden for the same reason. -->
-                                        <Style Selector="Button.option">
-                                            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-                                            <Setter Property="BorderThickness" Value="1" />
-                                            <Setter Property="CornerRadius" Value="8" />
-                                            <Setter Property="Padding" Value="12,9" />
-                                            <Setter Property="HorizontalAlignment" Value="Stretch" />
-                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                            <Setter Property="Cursor" Value="Hand" />
-                                        </Style>
-                                        <Style Selector="Button.option:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-                                            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
-                                        </Style>
-                                        <Style Selector="Button.option.selected">
-                                            <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
-                                        </Style>
-                                        <Style Selector="Button.option.selected /template/ ContentPresenter#PART_ContentPresenter">
-                                            <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
-                                        </Style>
-                                        <Style Selector="Border.indicator">
-                                            <Setter Property="Width" Value="16" />
-                                            <Setter Property="Height" Value="16" />
-                                            <Setter Property="BorderThickness" Value="1.5" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
-                                            <Setter Property="Background" Value="Transparent" />
-                                            <Setter Property="VerticalAlignment" Value="Top" />
-                                            <Setter Property="Margin" Value="0,2,11,0" />
-                                        </Style>
-                                        <Style Selector="Button.option.selected Border.indicator">
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
-                                            <Setter Property="Background" Value="{StaticResource KcapSuccessBrush}" />
-                                        </Style>
-                                        <Style Selector="Button.step">
-                                            <Setter Property="Background" Value="Transparent" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-                                            <Setter Property="BorderThickness" Value="1" />
-                                            <Setter Property="CornerRadius" Value="999" />
-                                            <Setter Property="Padding" Value="10,3" />
-                                            <Setter Property="FontSize" Value="11.5" />
-                                            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-                                            <Setter Property="Cursor" Value="Hand" />
-                                        </Style>
-                                        <Style Selector="Button.step.answered">
-                                            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                                        </Style>
-                                        <Style Selector="Button.step.current">
-                                            <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
-                                            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                                            <Setter Property="FontWeight" Value="SemiBold" />
-                                        </Style>
-                                        <Style Selector="Button.step.current /template/ ContentPresenter#PART_ContentPresenter, Button.step:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-                                            <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                                        </Style>
-                                        <Style Selector="Button.reviewRow">
-                                            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
-                                            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-                                            <Setter Property="BorderThickness" Value="1" />
-                                            <Setter Property="CornerRadius" Value="8" />
-                                            <Setter Property="Padding" Value="12,8" />
-                                            <Setter Property="HorizontalAlignment" Value="Stretch" />
-                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                            <Setter Property="Cursor" Value="Hand" />
-                                        </Style>
-                                    </Border.Styles>
-                                    <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
-                                        <ItemsControl ItemsSource="{Binding Steps}" IsVisible="{Binding ShowsSteps}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <WrapPanel Orientation="Horizontal" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:QuestionStepViewModel">
-                                                    <Button Classes="step" Classes.current="{Binding IsCurrent}" Classes.answered="{Binding IsAnswered}"
-                                                            Command="{Binding GoCommand}" Margin="0,0,6,4">
-                                                        <StackPanel Orientation="Horizontal" Spacing="5">
-                                                            <TextBlock Text="✓" FontSize="10.5" Foreground="{StaticResource KcapSuccessBrush}"
-                                                                       IsVisible="{Binding IsAnswered}" VerticalAlignment="Center" />
-                                                            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="180" />
-                                                        </StackPanel>
-                                                    </Button>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                        <ContentControl Content="{Binding CurrentQuestion}" IsVisible="{Binding !IsOnReview}">
-                                            <ContentControl.ContentTemplate>
-                                                <DataTemplate x:DataType="vm:QuestionGroupViewModel">
-                                                    <StackPanel Spacing="8">
-                                                        <Border Background="{StaticResource KcapSurfaceBrush}" CornerRadius="4" Padding="6,2" HorizontalAlignment="Left"
-                                                                IsVisible="{Binding ShowsHeader}">
-                                                            <TextBlock Text="{Binding Header}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource KcapMutedBrush}"
-                                                                       TextTrimming="CharacterEllipsis" MaxLines="1" />
-                                                        </Border>
-                                                        <TextBlock Text="{Binding Text}" FontWeight="SemiBold" FontSize="15" LineHeight="21" TextWrapping="Wrap"
-                                                                   Foreground="{StaticResource KcapTextBrush}" />
-                                                        <ItemsControl ItemsSource="{Binding Options}">
-                                                            <ItemsControl.ItemsPanel>
-                                                                <ItemsPanelTemplate>
-                                                                    <StackPanel Spacing="6" />
-                                                                </ItemsPanelTemplate>
-                                                            </ItemsControl.ItemsPanel>
-                                                            <ItemsControl.ItemTemplate>
-                                                                <DataTemplate x:DataType="vm:QuestionOptionViewModel">
-                                                                    <Button Classes="option" Classes.selected="{Binding IsSelected}" Command="{Binding PickCommand}">
-                                                                        <DockPanel>
-                                                                            <Panel DockPanel.Dock="Left" VerticalAlignment="Top">
-                                                                                <Border Classes="indicator" CornerRadius="8" IsVisible="{Binding !IsMulti}" />
-                                                                                <Border Classes="indicator" CornerRadius="3" IsVisible="{Binding IsMulti}" />
-                                                                            </Panel>
-                                                                            <StackPanel Spacing="3">
-                                                                                <TextBlock Text="{Binding Label}" FontSize="14" FontWeight="Medium" TextWrapping="Wrap"
-                                                                                           Foreground="{StaticResource KcapTextBrush}" />
-                                                                                <TextBlock Text="{Binding Description}" FontSize="12.5" LineHeight="18" TextWrapping="Wrap"
-                                                                                           Foreground="{StaticResource KcapMutedBrush}"
-                                                                                           IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                                                            </StackPanel>
-                                                                        </DockPanel>
-                                                                    </Button>
-                                                                </DataTemplate>
-                                                            </ItemsControl.ItemTemplate>
-                                                        </ItemsControl>
-                                                        <DockPanel>
-                                                            <Button DockPanel.Dock="Right" Content="Answer" Command="{Binding EnterCommand}"
-                                                                    IsVisible="{Binding ShowsOtherAnswer}" Margin="6,0,0,0"
-                                                                    Padding="12,5" FontSize="13" CornerRadius="7"
-                                                                    Classes="kcapPrimary" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
-                                                            <TextBox Text="{Binding OtherText}" PlaceholderText="Other…" MaxLength="{Binding MaxOtherLength}"
-                                                                     AcceptsReturn="False" FontSize="13" MinHeight="34">
-                                                                <TextBox.KeyBindings>
-                                                                    <KeyBinding Gesture="Enter" Command="{Binding EnterCommand}" />
-                                                                </TextBox.KeyBindings>
-                                                            </TextBox>
-                                                        </DockPanel>
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </ContentControl.ContentTemplate>
-                                        </ContentControl>
-                                        <StackPanel Spacing="8" IsVisible="{Binding IsOnReview}">
-                                            <TextBlock Text="Review your answers" FontWeight="SemiBold" FontSize="15" Foreground="{StaticResource KcapTextBrush}" />
-                                            <ItemsControl ItemsSource="{Binding Questions}">
-                                                <ItemsControl.ItemsPanel>
-                                                    <ItemsPanelTemplate>
-                                                        <StackPanel Spacing="6" />
-                                                    </ItemsPanelTemplate>
-                                                </ItemsControl.ItemsPanel>
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate x:DataType="vm:QuestionGroupViewModel">
-                                                        <Button Classes="reviewRow" Command="{Binding EditCommand}">
-                                                            <StackPanel Spacing="3">
-                                                                <TextBlock Text="{Binding Text}" FontSize="12.5" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
-                                                                <TextBlock Text="{Binding AnswerSummary}" FontSize="14" FontWeight="Medium" TextWrapping="Wrap"
-                                                                           Foreground="{StaticResource KcapTextBrush}" IsVisible="{Binding IsAnswered}" />
-                                                                <TextBlock Text="Not answered" FontSize="14" Foreground="{StaticResource KcapWarningBrush}"
-                                                                           IsVisible="{Binding !IsAnswered}" />
-                                                            </StackPanel>
-                                                        </Button>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                        </StackPanel>
-                                        <TextBlock Text="{Binding ErrorText}" FontSize="12" Foreground="{StaticResource KcapDangerBrush}"
-                                                   IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                        <DockPanel IsVisible="{Binding !IsFastPath}">
-                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
-                                                <Button Content="Back" Classes="kcapGhost" Command="{Binding BackCommand}" IsVisible="{Binding ShowsSteps}"
-                                                        Background="Transparent" BorderBrush="Transparent" Foreground="{StaticResource KcapMutedBrush}"
-                                                        Padding="12,5" FontSize="13" CornerRadius="7" />
-                                                <Button Content="{Binding NextLabel}" Command="{Binding NextCommand}" IsVisible="{Binding ShowsNext}"
-                                                        Padding="14,5" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
-                                                        Classes="kcapPrimary" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
-                                                <Button Content="Submit" Command="{Binding SubmitCommand}" IsVisible="{Binding ShowsSubmit}"
-                                                        Padding="14,5" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
-                                                        Classes="kcapPrimary" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
-                                            </StackPanel>
-                                            <TextBlock Text="{Binding StepLabel}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                                        </DockPanel>
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.DataTemplates>
-                    </ItemsControl>
-                </ScrollViewer>
+        <!-- Runs that outlive the turn; the activity note never shares the screen with it. Purple:
+             in flight, not attention. -->
+        <Border x:Name="SubagentsBanner" Grid.Row="2" Margin="22,10,22,0" Padding="13,10"
+                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningSubagents}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
+                        Background="{StaticResource KcapPurpleBrush}" RenderTransform="translateY(-1.5px)" />
+                <StackPanel x:Name="RunningSubagentText" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                            IsVisible="{Binding RunningSubagent, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Binding RunningSubagent.Name}" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding RunningSubagent.StateText}" FontSize="12"
+                               Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock x:Name="SubagentSummaryText" Text="{Binding SubagentSummary}" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center"
+                           IsVisible="{Binding RunningSubagent, Converter={x:Static ObjectConverters.IsNull}}" />
             </StackPanel>
         </Border>
 
@@ -364,18 +235,20 @@
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasQueuedMessages}">
             <StackPanel Spacing="6">
-                <TextBlock Text="{Binding QueueSummary}" FontSize="12" FontWeight="SemiBold"
+                <TextBlock Text="{Binding QueueSummary}" FontSize="13.5" FontWeight="SemiBold"
                            Foreground="{StaticResource KcapTextBrush}" />
                 <ScrollViewer MaxHeight="120" HorizontalScrollBarVisibility="Disabled">
                     <ItemsControl ItemsSource="{Binding QueuedMessages}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:QueuedChatMessage">
                                 <StackPanel Margin="0,2" Spacing="2">
-                                    <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="12"
+                                    <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="13.5"
                                                TextTrimming="CharacterEllipsis" MaxLines="1"
                                                Foreground="{StaticResource KcapMutedBrush}" />
                                     <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
                                                FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
+                                    <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
+                                               FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -384,13 +257,14 @@
             </StackPanel>
         </Border>
 
-        <Border Grid.Row="4" Margin="22,8,22,18"
-                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+        <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="4" Margin="22,8,22,18"
+                Background="{StaticResource KcapSurfaceBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">
+                <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
+                                           IsVisible="{Binding Tray.HasAttachments}" />
                 <TextBox x:Name="ComposerInput" Classes="kcapEmbedded" Text="{Binding ComposerText}" AcceptsReturn="True" TextWrapping="Wrap"
-                         MinHeight="38" MaxHeight="160" Background="Transparent" BorderThickness="0"
-                         PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}" />
+                         MinHeight="44" MaxHeight="160" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}" />
                 <!-- A flow participant is addressed through the flow protocol, never messaged
                      directly, so the banner replaces the input rather than overlaying a dead one. -->
                 <Border x:Name="ReadOnlyBanner" IsVisible="{Binding IsReadOnlyParticipant}"
@@ -399,11 +273,20 @@
                     <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
                                Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
                 </Border>
-                <Grid ColumnDefinitions="*,Auto">
-                    <TextBlock Text="{Binding ComposerHint}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}"
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                    <!-- The hint exists only while the gate is shut, which is exactly when a tooltip
+                         is suppressed by default. -->
+                    <Button x:Name="AttachButton" Content="+" IsVisible="{Binding ShowsComposer}"
+                            IsEnabled="{Binding Attachments.CanAttach}" ToolTip.Tip="{Binding Attachments.AttachHint}"
+                            ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
+                            Width="24" Height="24" Padding="0" FontSize="15" CornerRadius="7" Cursor="Hand"
+                            Margin="0,0,10,0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                            Background="Transparent" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                            Foreground="{StaticResource KcapMutedBrush}" />
+                    <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                    <Button x:Name="SendButton" Grid.Column="1" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="12,0,0,0"
-                            Padding="12,4" FontSize="12" FontWeight="SemiBold" CornerRadius="7"
+                    <Button x:Name="SendButton" Grid.Column="2" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="12,0,0,0"
+                            Padding="12,4" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
                             Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
                             IsVisible="{Binding ShowsComposer}" />
                 </Grid>

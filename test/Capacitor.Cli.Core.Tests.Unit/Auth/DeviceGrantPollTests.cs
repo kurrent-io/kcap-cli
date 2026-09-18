@@ -104,7 +104,7 @@ public class DeviceGrantPollTests {
             github.PollForTokenAsync, new() { ["client_id"] = "c" },
             CapacitorJsonContext.Default.GitHubTokenResponse,
             r => (r.AccessToken, r.Error),
-            device, interval: 0, CancellationToken.None, progress,
+            device, interval: 0, CancellationToken.None, progress, TimeProvider.System,
             attemptTimeout: TimeSpan.FromMilliseconds(200));
 
         await Assert.That(token).IsEqualTo("acc");

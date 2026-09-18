@@ -540,7 +540,7 @@ public class PiRpcHostedAgentRuntimeTests {
         // The stock completion grace bounds the writer against a hung disk, which turns an assertion
         // over 400 fsynced appends into a throughput race the suite's own load can lose. A minute is
         // not enough of one: a two-core runner has spent longer than that on these appends alone.
-        var journal = new TranscriptJournal(tmp.PathTo("journal.jsonl"), NullLogger.Instance, completeGrace: TimeSpan.FromMinutes(3));
+        var journal = new TranscriptJournal(tmp.PathTo("journal.jsonl"), NullLogger.Instance, TimeProvider.System, completeGrace: TimeSpan.FromMinutes(3));
         journal.Open("/w", null);
         var (runtime, process) = NewRuntime(journal: journal);
         await using var _ = runtime;
@@ -571,7 +571,7 @@ public class PiRpcHostedAgentRuntimeTests {
     [Test]
     public async Task Envelope_written_after_channel_completion_is_not_journaled() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
         journal.Open("/w", null);
         var (runtime, process) = NewRuntime(journal: journal);
         await runtime.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);

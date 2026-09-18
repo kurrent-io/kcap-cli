@@ -50,7 +50,7 @@ public interface IProcessRunner {
 /// -d</c> keeps running) and still throws OperationCanceledException; KillTree kills the tree and
 /// awaits its exit first, then STILL throws — cancellation is cancellation, TimedOut is only for
 /// the internal Timeout.
-public sealed class ProcessRunner : IProcessRunner {
+public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
     public async Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
         var psi = new ProcessStartInfo(fileName) {
             RedirectStandardOutput = true,
@@ -68,7 +68,7 @@ public sealed class ProcessRunner : IProcessRunner {
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
 
-        using var timeoutCts = options.Timeout is { } timeout ? new CancellationTokenSource(timeout) : null;
+        using var timeoutCts = options.Timeout is { } timeout ? new CancellationTokenSource(timeout, time) : null;
         using var waitCts = timeoutCts is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try {
@@ -135,7 +135,7 @@ public sealed class ProcessRunner : IProcessRunner {
         var stdoutTask = PumpAsync(process.StandardOutput, ProcessStreamKind.Stdout);
         var stderrTask = PumpAsync(process.StandardError, ProcessStreamKind.Stderr);
 
-        using var timeoutCts = options.Timeout is { } timeout ? new CancellationTokenSource(timeout) : null;
+        using var timeoutCts = options.Timeout is { } timeout ? new CancellationTokenSource(timeout, time) : null;
         using var waitCts = timeoutCts is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try {

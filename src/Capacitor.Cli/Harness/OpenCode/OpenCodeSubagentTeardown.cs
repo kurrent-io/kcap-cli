@@ -24,8 +24,7 @@ namespace Capacitor.Cli.Harness.OpenCode;
 /// session-end path OpenCode has. Best-effort per step (a failure on one subagent — or
 /// one step — never skips the rest).
 /// </summary>
-sealed class OpenCodeSubagentTeardown(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+sealed class OpenCodeSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time) {
 
     /// <summary>
     /// Shared budget for the best-effort kill+drain cleanup ACROSS all children, so a slow
@@ -54,27 +53,29 @@ sealed class OpenCodeSubagentTeardown(ConfigRoot config, ProfileContext profiles
         // children (they STILL get subagent-stop); the overall deadline is a hard ceiling on the
         // whole teardown so an arbitrary file count can't delay session-end — past it, remaining
         // children are left unfinalized (counted + returned for the caller to log).
-        var start           = DateTimeOffset.UtcNow;
+        var start           = time.GetUtcNow();
         var cleanupDeadline = start + CleanupBudget;
         var overallDeadline = start + OverallBudget;
 
         var stopped = 0;
         foreach (var subFile in subFiles) {
-            if (DateTimeOffset.UtcNow >= overallDeadline) break;
+            if (time.GetUtcNow() >= overallDeadline) break;
 
             var childId   = Path.GetFileNameWithoutExtension(subFile);
             var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(childId);
             var agentType = OpenCodeSubagentDiscovery.ResolveAgentType(subFile);
 
-            if (DateTimeOffset.UtcNow < cleanupDeadline) {
+            if (time.GetUtcNow() < cleanupDeadline) {
                 // InlineDrain overlaps harmlessly with any still-live watcher (server dedupes by
                 // deterministic event id); both capped so neither blocks process termination.
-                await CappedAsync(() => _watchers.KillWatcher($"{sessionId}-{agentId}"),                               TimeSpan.FromSeconds(1.5));
-                await CappedAsync(() => _watchers.InlineDrainAsync(sessionId, subFile, agentId, vendor: "opencode"), TimeSpan.FromSeconds(2.5));
+                await CappedAsync(() => watchers.KillWatcher($"{sessionId}-{agentId}"), TimeSpan.FromSeconds(1.5), time);
+                await CappedAsync(
+                    () => watchers.InlineDrainAsync(sessionId, subFile, agentId, vendor: "opencode"),
+                    TimeSpan.FromSeconds(2.5), time);
             }
 
             // The critical SubagentCompleted — attempted for every child within the overall budget.
-            await CappedAsync(() => PostStopAsync(sessionId, agentId, agentType, subFile), TimeSpan.FromSeconds(2.5));
+            await CappedAsync(() => PostStopAsync(sessionId, agentId, agentType, subFile), TimeSpan.FromSeconds(2.5), time);
             stopped++;
         }
 
@@ -86,7 +87,7 @@ sealed class OpenCodeSubagentTeardown(ConfigRoot config, ProfileContext profiles
         using var client  = await http.ForBackgroundAsync();
         var       payload = OpenCodeSubagentDiscovery.BuildStopPayload(sessionId, agentId, agentType, subFile);
         using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content);
+        await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content, time);
     }
 
     /// <summary>
@@ -94,11 +95,11 @@ sealed class OpenCodeSubagentTeardown(ConfigRoot config, ProfileContext profiles
     /// and timeouts so one subagent (or one slow step) never blocks the rest of the shutdown
     /// path. On timeout the step is detached and its fault observed (no unobserved-exception).
     /// </summary>
-    static async Task CappedAsync(Func<Task> op, TimeSpan cap) {
+    static async Task CappedAsync(Func<Task> op, TimeSpan cap, TimeProvider time) {
         Task task;
         try { task = op(); } catch { return; }
 
-        if (await Task.WhenAny(task, Task.Delay(cap)) != task) {
+        if (await Task.WhenAny(task, Task.Delay(cap, time)) != task) {
             _ = task.ContinueWith(t => _ = t.Exception, CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             return;

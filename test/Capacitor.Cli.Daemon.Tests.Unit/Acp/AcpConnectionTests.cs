@@ -301,7 +301,7 @@ public class AcpConnectionTests {
                 return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null));
             },
             agentId: "agent-1",
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         harness.Connection.OnServerRequest = bridge.HandleAsync;
 

@@ -52,7 +52,7 @@ public class AuthCancellationTests {
         var github = new GitHubOAuthClient(new PlainHttpClientFactory(handler));
 
         await Assert.That(async () => await OAuthLoginFlow.RunDeviceFlowAsync(
-                github, "client_id", new RecordingBrowser(), cts.Token))
+                github, "client_id", new RecordingBrowser(), TimeProvider.System, cts.Token))
             .Throws<OperationCanceledException>();
 
         await Assert.That(pollCount).IsGreaterThanOrEqualTo(3);
@@ -83,12 +83,12 @@ public class AuthCancellationTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin:   () => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = nearExpiry, RefreshToken = "rt" }),
             orgSwitch:      (_, _) => Task.FromResult<WorkOSAuthResponse?>(null),
             orglessRefresh: (_, refreshedCt) => { refreshCt = refreshedCt; return Task.FromResult<WorkOSAuthResponse?>(null); },
             provisioner:    provisioner,
-            ct:             cts.Token);
+            ct:             cts.Token, time: TimeProvider.System);
 
         await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Failed>(); // Declined -> non-legacy failure
 

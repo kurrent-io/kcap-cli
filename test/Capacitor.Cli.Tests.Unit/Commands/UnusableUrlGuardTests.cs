@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -11,12 +12,8 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <para>Where a guard sits in front of an injectable seam, the assertion is that the guarded
 /// operation was NEVER ENTERED — not that its effects are absent. Effects are reproducible by the
 /// catch-all every one of these paths already has, so an effect-only assertion passes with the guard
-/// deleted; six review rounds found exactly that, repeatedly.</para>
+/// deleted.</para>
 /// </summary>
-// The two spawn guards below install WatcherManager.ProcessStarterForTesting and Dispose nulls it,
-// both process-global: a concurrent peer's spawn lands in this class's counter, and its own override
-// is cleared under it. Bare, as every other writer of that seam already carries.
-[NotInParallel]
 public class UnusableUrlGuardTests : IDisposable {
     [TempHome] public required TempHome Home { get; init; }
 
@@ -41,23 +38,28 @@ public class UnusableUrlGuardTests : IDisposable {
     // parameter would let a caller point a guard at a URL the process never resolved.
     ProfileContext  Bad => field ??= Resolutions.At(BadUrl, Config.Root);
 
-    AgentHookPoster  Poster => field ??= new(Config.Root, Bad, new FixedCapacitorHttpClient());
+    AgentHookPoster  Poster => field ??= new(Config.Root, Bad, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), TimeProvider.System);
 
-    WatcherManager  Watchers => field ??= new(Config.Root, Bad, new FixedCapacitorHttpClient());
+    WatcherManager  Watchers => field ??= TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient());
+
+    // Collaborators whose starts the test can count: each guard's whole claim is that none is reached.
+    ProcessWatcherSpawner GuardedSpawner(IProcessStarter starter) =>
+        new(Config.Root, Bad, WatcherPaths.FromEnvironment(Config.Root), starter, TimeProvider.System);
+
+    WatcherManager GuardedManager(IProcessStarter starter) =>
+        new(Config.Root, Bad, new FixedCapacitorHttpClient(), starter,
+            WatcherPaths.FromEnvironment(Config.Root), GuardedSpawner(starter), TimeProvider.System);
 
     public UnusableUrlGuardTests() {
         _tdir = _tmp.PathTo("tdir");
         _dir  = _tmp.PathTo("dir");
     }
 
-    public void Dispose() {
-        WatcherManager.ProcessStarterForTesting = null;
-        _tmp.Dispose();
-    }
+    public void Dispose() => _tmp.Dispose();
 
     [Test]
     public async Task PostOrSpool_spools_the_payload_and_reports_Spooled() {
-        var spool   = new HookSpool(_dir);
+        var spool   = new HookSpool(_dir, time: TimeProvider.System);
         var outcome = await Poster.PostOrSpoolAsync(
             "session-start/codex", """{"session_id":"x"}""", "codex-hook", spool, Sid, "session-start/codex");
 
@@ -74,7 +76,7 @@ public class UnusableUrlGuardTests : IDisposable {
         File.WriteAllText(unwritable, "not a directory");
 
         var outcome = await Poster.PostOrSpoolAsync(
-            "session-start/codex", "{}", "codex-hook", new HookSpool(unwritable), Sid, "session-start/codex");
+            "session-start/codex", "{}", "codex-hook", new HookSpool(unwritable, time: TimeProvider.System), Sid, "session-start/codex");
 
         await Assert.That(outcome).IsEqualTo(HookPostOutcome.Skipped);
     }
@@ -113,7 +115,7 @@ public class UnusableUrlGuardTests : IDisposable {
         var entered = false;
 
         await Poster.DrainSpoolsCoreAsync(
-            new HookSpool(_dir), new TranscriptSpool(_tdir), Sid,
+            new HookSpool(_dir, time: TimeProvider.System), new TranscriptSpool(_tdir, time: TimeProvider.System), Sid,
             _ => {
                 entered = true;
                 throw new InvalidOperationException("the drain guard did not run");
@@ -127,25 +129,23 @@ public class UnusableUrlGuardTests : IDisposable {
     }
 
     [Test]
-    public async Task SpawnWatcher_never_starts_a_process() {
-        var starts = 0;
-        WatcherManager.ProcessStarterForTesting = _ => { starts++; return null; };
+    public async Task Spawning_a_watcher_never_starts_a_process() {
+        var starter = FakeProcessStarter.Refusing();
 
-        await Watchers.SpawnWatcher(Sid, Path.Combine(_dir, "t.jsonl"), agentId: null);
+        await GuardedSpawner(starter).SpawnAsync(new WatcherSpawnRequest(Sid, Path.Combine(_dir, "t.jsonl"), AgentId: null));
 
-        await Assert.That(starts).IsEqualTo(0);
+        await Assert.That(starter.Starts).IsEqualTo(0);
     }
 
     [Test]
     public async Task SpawnCopilotFinalizeDrain_never_starts_a_process() {
         // This one writes no marker at all, so "no child left behind" is unfalsifiable — a deleted
         // guard merely lets Process.Start throw or return null, leaving every effect identical.
-        var starts = 0;
-        WatcherManager.ProcessStarterForTesting = _ => { starts++; return null; };
+        var starter = FakeProcessStarter.Refusing();
 
-        Watchers.SpawnCopilotFinalizeDrain(Sid, Path.Combine(_dir, "t.jsonl"));
+        GuardedManager(starter).SpawnCopilotFinalizeDrain(Sid, Path.Combine(_dir, "t.jsonl"));
 
-        await Assert.That(starts).IsEqualTo(0);
+        await Assert.That(starter.Starts).IsEqualTo(0);
     }
 
     // Globally sequential: this test swaps the process-global Console.Error to capture the
@@ -171,7 +171,7 @@ public class UnusableUrlGuardTests : IDisposable {
         // malformed KCAP_URL. A guard rendering a fixed source passes every other test here.
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var watchers = new WatcherManager(Config.Root, Resolutions.At(BadUrl, Config.Root, UrlSource.Environment), new FixedCapacitorHttpClient());
+        var watchers = TestWatchers.For(Config.Root, Resolutions.At(BadUrl, Config.Root, UrlSource.Environment), new FixedCapacitorHttpClient());
 
         await watchers.InlineDrainAsync(Sid, Path.Combine(_dir, "t.jsonl"), agentId: null);
 
@@ -187,7 +187,7 @@ public class UnusableUrlGuardTests : IDisposable {
         // OpenCode ids are base62 and genuinely mixed case; rejecting them would lose the session
         // outright. Case safety on the filesystem is handled by escaping the filename, not by
         // narrowing what is admitted.
-        await Assert.That(new HookSpool(_dir).Append(sessionId, "session-start/opencode", "{}")).IsTrue();
+        await Assert.That(new HookSpool(_dir, time: TimeProvider.System).Append(sessionId, "session-start/opencode", "{}")).IsTrue();
     }
 
     /// <summary>
@@ -205,7 +205,7 @@ public class UnusableUrlGuardTests : IDisposable {
         // normalization, so passing the raw payload id straight through would miss it entirely.
         var body = $$"""{"session_id":"{{dashed}}","hook_event_name":"SessionStart"}""";
 
-        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).ShouldSuppressCaptureAsync(
+        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).ShouldSuppressCaptureAsync(
             dashless, body, "session-start", activeProfile: null, _clock.Budget(Ceiling))).IsTrue();
     }
 
@@ -216,7 +216,7 @@ public class UnusableUrlGuardTests : IDisposable {
 
         var body = $$"""{"session_id":"{{sid}}","hook_event_name":"SessionEnd"}""";
 
-        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).ShouldSuppressCaptureAsync(
+        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).ShouldSuppressCaptureAsync(
             sid, body, "session-end", activeProfile: null, _clock.Budget(Ceiling))).IsTrue();
 
         // Collapsing the gate into a plain boolean would have dropped this cleanup.
@@ -229,7 +229,7 @@ public class UnusableUrlGuardTests : IDisposable {
         var sid  = Guid.NewGuid().ToString("N");
         var body = $$"""{"session_id":"{{sid}}","hook_event_name":"SessionStart"}""";
 
-        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).ShouldSuppressCaptureAsync(
+        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).ShouldSuppressCaptureAsync(
             sid, body, "session-start", activeProfile: null, _clock.Budget(Ceiling))).IsFalse();
     }
 
@@ -238,13 +238,13 @@ public class UnusableUrlGuardTests : IDisposable {
     public async Task Cursor_never_builds_a_client_for_an_unusable_url() {
         var entered = false;
 
-        var exit = await new CursorHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleWithDeps(
+        var exit = await new CursorHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"""),
             _ => {
                 entered = true;
                 throw new InvalidOperationException("the cursor guard did not run");
             },
-            () => new HookSpool(_dir));
+            () => new HookSpool(_dir, time: TimeProvider.System));
 
         await Assert.That(entered).IsFalse();
         await Assert.That(exit).IsEqualTo(0);
@@ -258,8 +258,8 @@ public class UnusableUrlGuardTests : IDisposable {
     public async Task Claude_never_builds_a_client_for_an_unusable_url() {
         var entered = false;
 
-        var exit = await new ClaudeHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleWithDeps(
-            new HookSpool(_dir),
+        var exit = await new ClaudeHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
+            new HookSpool(_dir, time: TimeProvider.System),
             stdin: new StringReader($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}"}"""),
             clientFactory: () => {
                 entered = true;

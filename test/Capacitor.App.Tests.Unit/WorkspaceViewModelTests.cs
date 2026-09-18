@@ -22,17 +22,80 @@ namespace Capacitor.App.Tests.Unit;
 /// so ObserveOn(RxSchedulers.MainThreadScheduler) applies synchronously) and carries
 /// [NotInParallel("AvaloniaSession")] -- see that class's identical header comment.
 public class WorkspaceViewModelTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static WorkspaceViewModel Build(
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
-            FakeTimeProvider time, string agentId = "a1") =>
+            FakeTimeProvider time, string agentId = "a1", IPermissionService? permissions = null,
+            SessionAccessService? access = null) =>
         new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
-            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps());
+            permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
+            new NoAttachmentUploader(), access: access);
+
+    static FakeServerLane ConnectedLane() {
+        var lane = new FakeServerLane();
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        return lane;
+    }
 
     static AgentActionService NewActions(
             ScriptedLocalControlOps ops, RecordingNotifier notifier, RecordingOpener opener,
             Func<string, Task<bool>>? confirmForceStop = null) =>
         new(ops, notifier, opener, new ReplaySubject<DaemonStatusDto>(1), CancellationToken.None,
             confirmForceStop ?? NeverConfirm.Confirm);
+
+    /// Between the launch being accepted and the daemon publishing the agent, the header reads the
+    /// directory's pending row, so the workspace never opens as a blank shell.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_row_fills_the_header_until_the_dto_arrives() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var actions = NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener());
+            var factory = new FakeTerminalAttachClientFactory();
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("a1", "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "spawned"),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            var vm = new WorkspaceViewModel("a1", daemon, actions, factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
+                new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+
+            await Assert.That(vm.IsStarting).IsTrue();
+            await Assert.That(vm.Title).IsEqualTo("Fix the flaky test");
+            await Assert.That(vm.RepoLabelText).IsEqualTo("myproj");
+            await Assert.That(vm.StartingText).IsEqualTo("Starting Claude · Process started");
+
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("a1", "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "session_created"),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            await Assert.That(vm.StartingText).IsEqualTo("Starting Claude · Session created");
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj"));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.IsStarting).IsFalse();
+            await Assert.That(vm.Title).IsEqualTo("myproj");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A workspace over an agent nothing reports is not starting: the placeholder text belongs to
+    /// a launch in flight, never to an unknown id.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unknown_agent_is_not_starting() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var actions = NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener());
+            var factory = new FakeTerminalAttachClientFactory();
+            using var directory = new FakeAgentDirectory();
+            var vm = new WorkspaceViewModel("a1", daemon, actions, factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
+                new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+
+            await Assert.That(vm.IsStarting).IsFalse();
+            await Assert.That(vm.StartingText).IsEqualTo("");
+            await vm.TeardownAsync();
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -221,6 +284,116 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A session the daemon never reports a PTY for still gets a chat pane, and that pane's card
+    /// pipeline is live — the NEEDS YOU cards of a hosted agent have nowhere else to render.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_without_a_terminal_still_hosts_its_pending_cards() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            using var permissions = new FakePermissionService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
+                new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), permissions: permissions);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsTerminalTab).IsFalse();
+            await Assert.That(vm.Chat).IsNotNull();
+
+            permissions.Add(PermissionEntries.Entry(agentId: "a1"));
+            await Assert.That(vm.Chat!.PendingCards.Count).IsEqualTo(1);
+            await Assert.That(vm.Chat.HasPendingCards).IsTrue();
+
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// An ACP-hosted local agent's question arrives only over the server lane, in its session's
+    /// chat group, so the local workspace has to hold that session's lease too.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_dto_carrying_a_session_id_joins_that_sessions_server_group() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = ConnectedLane();
+            using var access = new SessionAccessService(lane, new FakeTimeProvider());
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
+                new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), access: access);
+
+            // No session id yet, so nothing to join.
+            await Assert.That(lane.AccessWatches).IsEmpty();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false, sessionId: "s1"));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await WaitUntilAsync(() => lane.ChatSubscribes.Contains("s1"), what: "the chat join");
+            await Assert.That(lane.AccessWatches).Contains("s1");
+
+            await vm.TeardownAsync();
+            await WaitUntilAsync(() => lane.ChatUnsubscribes.Contains("s1"), what: "released on teardown");
+        });
+    }
+
+    /// A local daemon on another server holds another server's sessions, and this id names a
+    /// different session there. The workspace joins nothing until the daemon is on the app's own
+    /// server — joining would put that other session's prompts in this pane.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task No_session_group_is_joined_while_the_local_daemon_is_on_another_server() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = ConnectedLane();
+            using var access = new SessionAccessService(lane, new FakeTimeProvider());
+            using var onAppServer = new BehaviorSubject<bool>(false);
+            var vm = new WorkspaceViewModel(
+                "a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
+                new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
+                new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
+                new NoAttachmentUploader(), access: access, localDaemonOnAppServer: onAppServer);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false, sessionId: "s1"));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Task.Delay(100); // the join, were it not scoped, lands here
+
+            await Assert.That(lane.AccessWatches).IsEmpty();
+
+            onAppServer.OnNext(true);
+
+            await WaitUntilAsync(() => lane.ChatSubscribes.Contains("s1"), what: "the join once the daemon is on the app's server");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A local agent the server never registered is refused the watch. Nothing in the workspace
+    /// reads that verdict, so the pane looks exactly as it does with no server lane at all.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_denied_watch_leaves_the_local_workspace_unchanged() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = ConnectedLane();
+            lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+            using var access = new SessionAccessService(lane, new FakeTimeProvider());
+            using var permissions = new FakePermissionService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
+                new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), permissions: permissions, access: access);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false, repoPath: "/repo/myproj", sessionId: "s1"));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await WaitUntilAsync(() => lane.AccessWatches.Contains("s1"), what: "the watch");
+
+            await Assert.That(vm.Chat).IsNotNull();
+            await Assert.That(vm.Title).IsEqualTo("myproj");
+            await Assert.That(vm.SessionEnded).IsFalse();
+            await Assert.That(lane.ChatSubscribes).IsEmpty();
+
+            permissions.Add(PermissionEntries.Entry(agentId: "a1"));
+            await Assert.That(vm.Chat!.PendingCards.Count).IsEqualTo(1);
+
+            await vm.TeardownAsync();
+        });
+    }
+
     /// The subtitle names the checkout under the repository. The main checkout reads as the rail
     /// labels it; an older daemon's null worktree keeps the repository alone; a snapshot reviewer
     /// names the checkout it borrowed, not the copy it runs in.
@@ -273,7 +446,7 @@ public class WorkspaceViewModelTests {
             var factory = new FakeTerminalAttachClientFactory();
             var vm = new WorkspaceViewModel("a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
                 factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), source,
-                new ScriptedLocalControlOps());
+                new ScriptedLocalControlOps(), new NoAttachmentUploader());
             await Assert.That(vm.WorkContext.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: "0123456789abcdef0123456789abcdef"));
@@ -287,6 +460,28 @@ public class WorkspaceViewModelTests {
             source.Default = WorkContextRead.Of(WorkContextReadKind.Ready);
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: "ffffffffffffffffffffffffffffffff"));
             await Assert.That(source.Requested.Count).IsEqualTo(1);
+        });
+    }
+
+    const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_chat_and_the_pane_share_one_subagent_tracker() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
+            await Assert.That(vm.WorkContext.HasSubagents).IsTrue();
+            await Assert.That(vm.WorkContext.SubagentsHeader).IsEqualTo("1 running");
+            await Assert.That(vm.WorkContext.Subagents.Single().Name).IsEqualTo("Explore");
+            await vm.TeardownAsync();
         });
     }
 }

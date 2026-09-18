@@ -44,7 +44,7 @@ public class AcpInteractionBridgePresetTests {
             logger: NullLogger.Instance,
             unattendedPolicy: policy,
             preset: Preset(presetToken),
-            notifyAutoApproval: notices.Add);
+            notifyAutoApproval: notices.Add, time: TimeProvider.System);
 
         return (bridge, () => forwarded, () => notices);
     }
@@ -140,7 +140,7 @@ public class AcpInteractionBridgePresetTests {
             agentId: AgentId,
             logger: NullLogger.Instance,
             preset: Preset(AcpPermissionPresets.Explore),
-            notifyAutoApproval: _ => throw new InvalidOperationException("boom"));
+            notifyAutoApproval: _ => throw new InvalidOperationException("boom"), time: TimeProvider.System);
 
         var outcome = await OutcomeOf(bridge, Frame("read", ("allow-once", "allow_once"), ("deny", "deny")));
 

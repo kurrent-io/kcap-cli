@@ -11,8 +11,8 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 class PermissionRequestCommand(
-        ConfigRoot config, ProfileContext profiles, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+        ConfigRoot config, ProfileContext profiles, HostedAgent hosted,
+        ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -64,7 +64,7 @@ class PermissionRequestCommand(
         // no journal shared across the two processes. An excluded session is ungoverned entirely
         // (see selfHealWatcher).
         if (selfHealWatcher && !isRenderedAgent
-            && await new ClaudePolicySeam(config).HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out)
+            && await new ClaudePolicySeam(config, time).HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out)
                 == SeamAnswer.Answered) {
             return 0;
         }
@@ -132,7 +132,7 @@ class PermissionRequestCommand(
                 return;
             }
 
-            await _watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: GetString(node, "cwd"));
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: GetString(node, "cwd"));
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"[kcap] permission-request watcher self-heal failed: {ex.Message}");
         }
@@ -174,6 +174,8 @@ class PermissionRequestCommand(
         if (agentId is not null) payload["agent_id"] = agentId;
         if (node["cwd"] is JsonValue cwd && cwd.TryGetValue<string>(out var c)) payload["cwd"] = c;
         if (node["tool_use_id"] is JsonValue toolUse && toolUse.TryGetValue<string>(out var id)) payload["tool_use_id"] = id;
+        // The hook's agent_id is the subagent's; agent_id on this wire is the hosted agent.
+        if (node["agent_id"] is JsonValue sub && sub.TryGetValue<string>(out var subagentId) && subagentId.Length > 0) payload["subagent_id"] = subagentId;
         return payload;
     }
 

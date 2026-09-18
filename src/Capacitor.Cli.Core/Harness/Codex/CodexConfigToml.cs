@@ -493,8 +493,6 @@ public static class CodexConfigToml {
 
             try {
                 // First-time users have no ~/.codex; create it before the atomic rename.
-                // GetDirectoryName is null/empty for a directory-less path — skip the
-                // create in that case (the file lands in the current directory).
                 var dir = Path.GetDirectoryName(configPath);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 WriteTomlAtomic(configPath, root);

@@ -8,12 +8,13 @@ using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
 /// The input-wait relay a daemon-hosted Claude session sends its daemon: which turn boundaries
 /// reach it, and what silences it. Bare <c>[NotInParallel]</c> because the relay drops its own POST
-/// once <see cref="DaemonInputWaitRelay.Cap"/> is spent and says nothing — on a saturated runner
+/// once <see cref="DaemonBridgeRelay.Cap"/> is spent and says nothing — on a saturated runner
 /// that is the whole second, and a test asserting the POST landed fails for the runner's reasons.
 public class ClaudeHookInputWaitRelayTests {
     [TempHome] public required TempHome Home { get; init; }
@@ -39,8 +40,8 @@ public class ClaudeHookInputWaitRelayTests {
     async Task<int> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "") {
         using var client = new HttpClient(new OkHandler());
         var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{extraFields}}}}""";
-        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
-            .HandleWithDeps(new HookSpool(Config.Root), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
+        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+            .HandleWithDeps(new HookSpool(Config.Root, time: TimeProvider.System), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
     }
 
     [Test, NotInParallel]

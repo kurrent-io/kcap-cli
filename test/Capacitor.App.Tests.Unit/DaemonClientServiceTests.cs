@@ -145,6 +145,27 @@ public class DaemonClientServiceTests {
         await Assert.That(seen[3]).IsEqualTo(new AttachStatus(AttachState.Connecting, null, null));
     }
 
+    /// A pending launch is the daemon's claim on a handshake in progress, and a daemon that dies
+    /// mid-handshake sends no snapshot to retire it; agents stay as history, pending entries do not.
+    [Test]
+    public async Task Unreachable_clears_pending_launches_but_keeps_agents() {
+        var script = new Script();
+        await using var svc = new DaemonClientService("daemon-a", script.Run, NoOpStart());
+        svc.Start();
+
+        var seen = new List<AttachStatus>();
+        using var sub = svc.Status.Subscribe(seen.Add);
+        var snap = Snap("daemon-a", "a1") with { Pending = [new PendingLaunchDto("p1", "claude", "/r", null, DateTime.UtcNow, "spawned")] };
+        script.Feed(new LocalControlEvent.Connected(["status/1"], snap));
+        await WaitUntilAsync(() => svc.Pending.Count == 1, what: "pending entry after Connected");
+
+        script.Feed(new LocalControlEvent.Unreachable("daemon_unreachable"));
+        await WaitUntilAsync(() => seen.Count >= 3, what: "Unreachable status after Unreachable event");
+
+        await Assert.That(svc.Pending.Count).IsEqualTo(0);
+        await Assert.That(svc.Agents.Keys).Contains("a1");
+    }
+
     [Test] // Connected's hello-derived identity threads verbatim into AttachStatus
     public async Task Connected_identity_threads_into_attach_status() {
         var script = new Script();

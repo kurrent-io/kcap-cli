@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
 using Microsoft.AspNetCore.SignalR.Client;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
@@ -19,9 +20,9 @@ public class CursorGuardWiringTests {
     [TempHome] public required TempHome Home { get; init; }
 
     WatchCommand? _watch;
-    WatchCommand Watch => _watch ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource());
+    WatchCommand Watch => _watch ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter(), TimeProvider.System);
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -41,7 +42,7 @@ public class CursorGuardWiringTests {
         var transcriptPath = tmp.PathTo("t.jsonl");
         await File.WriteAllTextAsync(transcriptPath, "abc\n"); // 4 bytes — far shorter than the checkpoint below
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         var state = new WatchState { CursorByteOffset = 100 }; // a checkpoint from a much longer prior file
 
         var tripped = false;
@@ -70,7 +71,7 @@ public class CursorGuardWiringTests {
         var transcriptPath = tmp.PathTo("t.jsonl");
         await File.WriteAllTextAsync(transcriptPath, "line1\nline2\nline3\n");
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         // Seed with a WRONG hash for the first 6 bytes — the seed call never validates
         // against `laterBytes` (nothing to compare against yet), so this is accepted as-is.
         var wrongSeed = new CursorAppendOnlyProbe.Sample(6, CursorAppendOnlyProbe.Sha256Hex("WRONGX"u8));
@@ -102,7 +103,7 @@ public class CursorGuardWiringTests {
         var transcriptPath = tmp.PathTo("t.jsonl");
         await File.WriteAllTextAsync(transcriptPath, "line1\nline2\nline3\n");
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         var wrongSeed = new CursorAppendOnlyProbe.Sample(6, CursorAppendOnlyProbe.Sha256Hex("WRONGX"u8));
         await Assert.That(guard.VerifyFullPrefix(wrongSeed, "WRONGX"u8)).IsTrue();
 
@@ -143,7 +144,7 @@ public class CursorGuardWiringTests {
         // touching the unconnected hub.
         await File.WriteAllTextAsync(transcriptPath, "line1\nline2\nline3\n");
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         var state = new WatchState();
 
         var trippedOnFirstPoll = false;
@@ -197,7 +198,7 @@ public class CursorGuardWiringTests {
         var keptLineByteLength    = "kept\n".Length;
         var checkpointOffset      = (long)(paddingLineByteLength + keptLineByteLength); // right before "new\n"
 
-        var guard = new CursorRewriteGuard(Config.Root, sid) { TrailingBytes = keptLineByteLength }; // exactly "kept\n"
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System) { TrailingBytes = keptLineByteLength }; // exactly "kept\n"
         guard.Checkpoint(checkpointOffset, CursorAppendOnlyProbe.Sha256Hex("kept\n"u8));
 
         var state = new WatchState {
@@ -243,7 +244,7 @@ public class CursorGuardWiringTests {
         var paddingLineByteLength = padding.Length + 1;
         var checkpointOffset      = (long)(paddingLineByteLength + "kept\n".Length);
 
-        var guard = new CursorRewriteGuard(Config.Root, sid) { TrailingBytes = "kept\n".Length };
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System) { TrailingBytes = "kept\n".Length };
         guard.Checkpoint(checkpointOffset, CursorAppendOnlyProbe.Sha256Hex("kept\n"u8));
 
         var state = new WatchState {
@@ -285,7 +286,7 @@ public class CursorGuardWiringTests {
         // without needing a live hub round trip.
         await File.WriteAllTextAsync(transcriptPath, "a\nb\n");
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         guard.Checkpoint(offset: 4, trailingSha: CursorAppendOnlyProbe.Sha256Hex("a\nb\n"u8));
         var state = new WatchState {
             LinesProcessed   = 2,
@@ -342,7 +343,7 @@ public class CursorGuardWiringTests {
         var transcriptPath = tmp.PathTo("t.jsonl");
         await File.WriteAllTextAsync(transcriptPath, "line1\nline2\nline3\n");
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         var state = new WatchState(); // CursorGuardPollCount starts at 0 — this poll is poll 1 (full-prefix-due)
 
         await using var hub = UnconnectedHub();
@@ -390,7 +391,7 @@ public class CursorGuardWiringTests {
         // technique as the finding-#1 test).
         await File.WriteAllTextAsync(transcriptPath, "a\nb\n");
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         guard.Checkpoint(offset: 4, trailingSha: CursorAppendOnlyProbe.Sha256Hex("a\nb\n"u8));
         var state = new WatchState {
             LinesProcessed   = 2,

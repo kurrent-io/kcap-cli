@@ -1,28 +1,18 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using Capacitor.Cli.Core.Commands;
 
 namespace Capacitor.Cli.Core.Http;
 
-internal sealed class FeedbackApi(ICapacitorHttpClient http, CapacitorServer server) : IFeedbackApi {
-    public async Task<FeedbackResult> SubmitAsync(string category, string message, CancellationToken ct = default) {
-        var request = new FeedbackSubmitRequest(
-            Category:        category,
-            Message:         message,
-            ClientRequestId: Guid.NewGuid(),
-            Context: new FeedbackSubmitContext(
-                Source:        "cli",
-                ClientVersion: CapacitorVersion.CurrentDisplay(),
-                Os:            RuntimeInformation.OSDescription
-            )
-        );
+internal sealed class FeedbackApi(ICapacitorHttpClient http, CapacitorServer server, TimeProvider time) : IFeedbackApi {
+    public async Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) {
+        var request = FeedbackSubmitRequest.From(submission);
 
         using var content = JsonContent.Create(request, CapacitorJsonContext.Default.FeedbackSubmitRequest);
         using var response = await CapacitorApiRequests.SendAsync(
-            http, server, (c, token) => c.PostWithRetryAsync($"{server.Url}/api/feedback", content, ct: token), ct);
+            http, server, (c, token) => c.PostWithRetryAsync($"{server.Url}/api/feedback", content, time, ct: token), ct);
 
         if (response.StatusCode == HttpStatusCode.OK) {
             var success = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.FeedbackSubmitResponse, ct);

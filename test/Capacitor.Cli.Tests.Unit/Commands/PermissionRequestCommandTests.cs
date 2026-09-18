@@ -11,7 +11,7 @@ public class PermissionRequestCommandTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     PermissionRequestCommand On(HostedAgent hosted) =>
-        new(Config.Root, Resolutions.None(Config.Root), hosted, new RecordingCapacitorHttpClient());
+        new(Config.Root, Resolutions.None(Config.Root), hosted, new RecordingCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new RecordingCapacitorHttpClient()), TimeProvider.System);
 
     [Test]
     public async Task A_loopback_bridge_is_the_address_the_hook_posts_to() {
@@ -77,6 +77,20 @@ public class PermissionRequestCommandTests {
         await Assert.That(PermissionRequestCommand.BuildBridgePayload(withoutId, "abc", "agent-1")["tool_use_id"]).IsNull();
     }
 
+    /// The hook's own agent_id names the subagent whose tool this is. The daemon scopes the
+    /// request by it so the parent's turn ending cannot answer a background subagent's prompt,
+    /// and it travels under its own name because agent_id on this wire is the hosted agent.
+    [Test]
+    public async Task Bridge_payload_forwards_the_hooks_agent_id_as_subagent_id() {
+        var node = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"},"agent_id":"3f2504e04f8911d39a0c0305e82c3301","cwd":"/repo"}""")!;
+        var payload = PermissionRequestCommand.BuildBridgePayload(node, "abc", "agent-1");
+        await Assert.That(payload["subagent_id"]!.GetValue<string>()).IsEqualTo("3f2504e04f8911d39a0c0305e82c3301");
+        await Assert.That(payload["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
+
+        var mainAgent = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"}}""")!;
+        await Assert.That(PermissionRequestCommand.BuildBridgePayload(mainAgent, "abc", "agent-1")["subagent_id"]).IsNull();
+    }
+
     sealed class Accepting : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) {
@@ -94,10 +108,8 @@ public class PermissionRequestCommandTests {
         using var handler = new Accepting();
         var       http     = new RecordingCapacitorHttpClient(handler);
 
-        var command = new PermissionRequestCommand(
-            Config.Root, Resolutions.None(Config.Root),
-            // The bridge is the rendered agent's route; a terminal one records the event and never posts.
-            new HostedAgent(null, IsRendered: true, new DaemonBridge.Loopback("http://127.0.0.1:51234/bridge")), http);
+        var command = new PermissionRequestCommand(Config.Root, Resolutions.None(Config.Root), // The bridge is the rendered agent's route; a terminal one records the event and never posts.
+            new HostedAgent(null, IsRendered: true, new DaemonBridge.Loopback("http://127.0.0.1:51234/bridge")), http, TestWatchers.For(Config.Root, Resolutions.None(Config.Root), http), TimeProvider.System);
 
         await using var stdout = new StringWriter();
 
@@ -128,8 +140,7 @@ public class PermissionRequestCommandTests {
         using var handler = new Counting();
         var       http     = new RecordingCapacitorHttpClient(handler, AuthStatus.NotAuthenticated);
 
-        var command = new PermissionRequestCommand(
-            Config.Root, Resolutions.At("https://example.test", Config.Root), HostedAgent.Terminal, http);
+        var command = new PermissionRequestCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), HostedAgent.Terminal, http, TestWatchers.For(Config.Root, Resolutions.At("https://example.test", Config.Root), http), TimeProvider.System);
 
         var exit = await command.Handle(
             """{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}""",

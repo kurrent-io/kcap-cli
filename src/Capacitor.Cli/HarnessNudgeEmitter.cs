@@ -35,16 +35,16 @@ static class HarnessNudgeEmitter {
 
     /// <summary>Hook-site convenience: resolve the SessionStart fragment against the default on-disk
     /// ledger/throttle. <paramref name="optedOut"/> is the profile's <c>DisableHarnessNudge</c>.</summary>
-    public static string? ResolveFragmentForHook(bool optedOut, ConfigRoot config, HarnessRegistry harnesses) =>
-        ResolveFragment(harnesses, new HarnessOfferStore(config), optedOut, DateTimeOffset.UtcNow);
+    public static string? ResolveFragmentForHook(
+            bool optedOut, ConfigRoot config, HarnessRegistry harnesses, TimeProvider time) =>
+        ResolveFragment(harnesses, new HarnessOfferStore(config, time), optedOut, time.GetUtcNow());
 
-    /// <summary>Joins an existing SessionStart nudge with the harness nudge (either may be null)
-    /// into one additional-context blob, blank-line separated — so a delivery helper that carries a
-    /// single nudge slot can carry both.</summary>
-    public static string? Combine(string? existing, string? harnessNudge) {
-        if (string.IsNullOrWhiteSpace(harnessNudge)) return existing;
-        if (string.IsNullOrWhiteSpace(existing)) return harnessNudge;
-        return existing + "\n\n" + harnessNudge;
+    /// <summary>Joins SessionStart nudges (any may be null) into one additional-context blob,
+    /// blank-line separated — so a delivery helper that carries a single nudge slot can carry them
+    /// all.</summary>
+    public static string? Combine(params string?[] nudges) {
+        var kept = nudges.Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        return kept.Count == 0 ? null : string.Join("\n\n", kept);
     }
 
     static IReadOnlyList<IHarness> ClaimAndStamp(

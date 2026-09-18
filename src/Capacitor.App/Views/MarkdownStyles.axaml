@@ -11,27 +11,27 @@
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-paragraph">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        <Setter Property="FontSize" Value="13.5" />
-        <Setter Property="LineHeight" Value="21.6" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="24" />
         <Setter Property="Margin" Value="0" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-list-marker">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        <Setter Property="FontSize" Value="13.5" />
-        <Setter Property="LineHeight" Value="21.6" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="24" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h1, mv|MarkdownViewer :is(TextBlock).markdown-h2, mv|MarkdownViewer :is(TextBlock).markdown-h3, mv|MarkdownViewer :is(TextBlock).markdown-h4, mv|MarkdownViewer :is(TextBlock).markdown-h5, mv|MarkdownViewer :is(TextBlock).markdown-h6">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="FontSize" Value="14.5" />
+        <Setter Property="FontSize" Value="16" />
         <Setter Property="Margin" Value="0,4,0,0" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h1">
-        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontSize" Value="20" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h2">
-        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontSize" Value="17.5" />
     </Style>
     <Style Selector="mv|MarkdownViewer Run.markdown-code-inline">
         <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
@@ -48,8 +48,46 @@
     </Style>
     <Style Selector="mv|MarkdownViewer Border.markdown-code-block > TextBlock">
         <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
-        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontSize" Value="13.5" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <!-- Resting code carries no chrome. The strip hides by going transparent and untouchable rather
+         than invisible, because an invisible control is skipped by tab navigation and the buttons
+         would be reachable by pointer alone; focus inside it reveals it as a hover does. The
+         revealing rules must follow the resting one to win. -->
+    <Style Selector="mv|MarkdownViewer Panel.markdown-code-host > StackPanel.markdown-code-actions">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Margin" Value="0,7,7,0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Panel.markdown-code-host:pointerover > StackPanel.markdown-code-actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Panel.markdown-code-host:focus-within > StackPanel.markdown-code-actions">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+    </Style>
+    <!-- Opaque: the strip floats over the block's first line, which it would otherwise show through. -->
+    <Style Selector="mv|MarkdownViewer Button.markdown-code-action">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Button.markdown-code-action:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="TextElement.Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Button.markdown-code-action:disabled /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="TextElement.Foreground" Value="{StaticResource KcapFaintBrush}" />
     </Style>
     <Style Selector="mv|MarkdownViewer Border.markdown-blockquote">
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -72,7 +110,74 @@
         <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
     </Style>
     <Style Selector="mv|MarkdownViewer mri|MarkdownHyperlink.markdown-link">
-        <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
         <Setter Property="TextDecorations" Value="{x:Null}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-pre-text">
+        <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="3,0,0,0" />
+        <Setter Property="Padding" Value="12,4" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-note">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-tip">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-important">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-warning">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapWarningBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-alert-caution">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-alert-header">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-details">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:checked /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-details-label">
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 </Styles>

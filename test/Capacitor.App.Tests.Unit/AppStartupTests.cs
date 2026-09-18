@@ -44,7 +44,7 @@ public class AppStartupTests {
         var isVisible = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
-            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient());
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
             Dispatcher.UIThread.RunJobs(); // flush the deferred Loaded post (diagnostic parity with the smoke test)
 
             var visible = window.IsVisible;
@@ -53,6 +53,28 @@ public class AppStartupTests {
         });
 
         await Assert.That(isVisible).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_restores_the_remembered_window_placement() {
+        await new AppStateStore(Config.Root.Path("app-state.json"))
+            .UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888, WindowX = 120, WindowY = 80 });
+
+        var placement = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            Dispatcher.UIThread.RunJobs();
+            var result = (window.Width, window.Height, window.Position.X, window.Position.Y);
+            window.Close();
+            return result;
+        });
+
+        await Assert.That(placement.Width).IsEqualTo(1552);
+        await Assert.That(placement.Height).IsEqualTo(888);
+        await Assert.That(placement.X).IsEqualTo(120);
+        await Assert.That(placement.Y).IsEqualTo(80);
     }
 
     /// The service composition StartAsync builds once and shares between the window, the tray and
@@ -80,11 +102,11 @@ public class AppStartupTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
             var directory = new AgentDirectory(
                 service, remoteAgents, lane, new RepoIdentityResolver(_ => null), p => p,
-                localMachineId: null, appServerUrl: null);
+                localMachineId: null, appServerUrl: null, TimeProvider.System);
 
             var window = AppUnderTest.BuildAndShowMainWindow(
                 service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
-                new NeverLaunchClient(), directory: directory, remoteAgents: remoteAgents, lane: lane);
+                new NeverLaunchClient(), TimeProvider.System, directory: directory, remoteAgents: remoteAgents, lane: lane);
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
@@ -436,7 +458,7 @@ public class AppStartupTests {
     [Test]
     public async Task AwaitQuiescedAsync_returns_once_the_wait_completes() {
         var tcs = new TaskCompletionSource();
-        var task = AppUnderTest.AwaitQuiescedAsync(() => tcs.Task, TimeSpan.FromSeconds(30));
+        var task = AppUnderTest.AwaitQuiescedAsync(() => tcs.Task, TimeSpan.FromSeconds(30), TimeProvider.System);
 
         await Task.Delay(20);
         await Assert.That(task.IsCompleted).IsFalse();
@@ -450,7 +472,7 @@ public class AppStartupTests {
         var never = new TaskCompletionSource(); // deliberately never resolves
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        await AppUnderTest.AwaitQuiescedAsync(() => never.Task, TimeSpan.FromMilliseconds(50));
+        await AppUnderTest.AwaitQuiescedAsync(() => never.Task, TimeSpan.FromMilliseconds(50), TimeProvider.System);
 
         // Generous upper bound — this only needs to prove the cap fired, not measure it precisely.
         await Assert.That(sw.ElapsedMilliseconds).IsLessThan(5000);

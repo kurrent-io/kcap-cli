@@ -40,7 +40,7 @@ public class AgyTurnProcessTests {
         })!;
 
         using var observer = Process.GetProcessById(child.Id);
-        var turn = new AgyTurnProcess(child, NullLogger<AgyTurnProcess>.Instance);
+        var turn = new AgyTurnProcess(child, NullLogger<AgyTurnProcess>.Instance, TimeProvider.System);
 
         // The precondition, asserted rather than assumed: without a child that is genuinely still
         // running, disposal has nothing to settle and this test proves nothing.

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -17,11 +18,15 @@ public static class AuthFixtures {
     /// </summary>
     /// <param name="env">The environment overrides the refresh lanes resolve a server through. Pass
     /// one only when the test is about that resolution.</param>
+    /// <param name="time">The clock the store and its refresh lanes share. Pass a fake only when the
+    /// test asserts on expiry or on a refresh deadline.</param>
     public static TokenStore NewTokenStore(
-            ConfigRoot root, HttpMessageHandler? handler = null, ProfileOverrides? env = null) {
+            ConfigRoot root, HttpMessageHandler? handler = null, ProfileOverrides? env = null,
+            TimeProvider? time = null) {
         var factory = new PlainHttpClientFactory(handler);
+        var clock   = time ?? TimeProvider.System;
 
-        return new TokenStore(root, env ?? ProfileOverrides.None, factory, new WorkOSClient(factory));
+        return new TokenStore(root, env ?? ProfileOverrides.None, factory, new WorkOSClient(factory, clock), clock);
     }
 
     public static OnboardingFacade NewFacade(
@@ -34,15 +39,22 @@ public static class AuthFixtures {
             Func<CancellationToken, Task<WorkOSAuthResponse?>>?         workosLogin   = null,
             IBrowser?                                                   workosBrowser = null,
             string?                                                     workosApiBase = null,
-            IBrowserLauncher?                                           browser       = null) {
+            IBrowserLauncher?                                           browser       = null,
+            // A facade that is off unless a test hands one in, like every other collaborator
+            // defaulted here: a test that does not observe telemetry must not have to name it, and
+            // one that does gets an empty sink rather than a silent pass if it forgets.
+            CliTelemetry?                                               telemetry     = null,
+            TimeProvider?                                               time          = null) {
         var factory = new PlainHttpClientFactory(handler);
+        var clock   = time ?? TimeProvider.System;
 
         return new OnboardingFacade(
-                root, NewTokenStore(root), factory,
-                new AuthProxyClient(factory.CreateClient(CapacitorClients.Anonymous)),
-                new GitHubOAuthClient(factory), new WorkOSClient(factory),
+                root, NewTokenStore(root, time: clock), factory,
+                new AuthProxyClient(factory.CreateClient(CapacitorClients.Anonymous), clock),
+                new GitHubOAuthClient(factory), new WorkOSClient(factory, clock),
                 progress, browser ?? new RecordingBrowser(),
-                picker ?? Substitute.For<ITenantPicker>(), provisioner, beforeCommit) {
+                picker ?? Substitute.For<ITenantPicker>(), provisioner,
+                telemetry ?? CliTelemetry.Disabled(clock), AuthEndpoints.Defaults, clock, beforeCommit) {
             WorkOSOrglessLogin    = workosLogin,
             WorkOSBrowser         = workosBrowser,
             WorkOSApiBaseOverride = workosApiBase

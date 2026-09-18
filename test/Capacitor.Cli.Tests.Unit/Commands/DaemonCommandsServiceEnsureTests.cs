@@ -22,6 +22,8 @@ public class DaemonCommandsServiceEnsureTests {
         public ServiceQuery QueryResult { get; init; } =
             new(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
         public string Describe() => "fake";
+        // Never read: ListInstalled is empty, so doctor's directory audit is not reached.
+        public string UnitDirectory => "(fake)";
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
         public IReadOnlyList<string> ListInstalled() => [];
         public ServiceStatus Status(string serviceId) => new(ServiceState.NotInstalled, null);
@@ -38,7 +40,7 @@ public class DaemonCommandsServiceEnsureTests {
         var manager = new FakeManager {
             QueryResult = new ServiceQuery(LabelProbe.Unknown, false, ServiceState.NotInstalled, null, null)
         };
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home).Ensure(["--json"]);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System).Ensure(["--json"]);
         await Assert.That(exit).IsEqualTo(1);
     }
 
@@ -48,10 +50,10 @@ public class DaemonCommandsServiceEnsureTests {
             QueryResult = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/b/kcap-daemon", 42)
         };
         // Ensure reads the lock via ServiceTxnLock.IsHeld; hold it for real.
-        using var held = ServiceTxnLock.TryAcquire(Daemons.Store, "test-id", TimeSpan.FromSeconds(1));
+        using var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "test-id", TimeSpan.FromSeconds(1), TimeProvider.System);
         await Assert.That(held).IsNotNull();
 
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home).Ensure(["--json"]);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System).Ensure(["--json"]);
         await Assert.That(exit).IsEqualTo(1);
     }
 

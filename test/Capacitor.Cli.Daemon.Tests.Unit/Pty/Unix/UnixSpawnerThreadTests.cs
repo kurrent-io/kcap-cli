@@ -62,7 +62,7 @@ public class UnixSpawnerThreadTests {
         var rc = UnixPtyInterop.pty_preflight("/bin/sleep", ["sleep", "3", null], [null], execveatSupported, out var plan);
         await Assert.That(rc).IsEqualTo(0);
 
-        var result = spawner.SpawnOn(plan, [null], Directory.GetCurrentDirectory(), 40, 120, Environment.ProcessId, -1);
+        var result = spawner.SpawnOn(plan, [null], AppContext.BaseDirectory, 40, 120, Environment.ProcessId, -1);
         try {
             await Assert.That(result.Pid).IsGreaterThan(0);
             for (var i = 0; i < 5; i++) await Task.Run(() => { });

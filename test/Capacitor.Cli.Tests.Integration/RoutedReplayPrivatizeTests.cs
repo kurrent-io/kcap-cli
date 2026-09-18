@@ -5,6 +5,7 @@ using Capacitor.Cli.Harness.Gemini;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -129,10 +130,10 @@ public class RoutedReplayPrivatizeTests : IDisposable {
         StubVisibilityPut();
     }
 
-    Task<int> RunAntigravityImport(bool forcePrivate) => new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+    Task<int> RunAntigravityImport(bool forcePrivate) => new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
         filterCwd: null,
         minLines: 0,
-        sources: [new AntigravityImportSource(new(new(_agHome), ""))],
+        sources: [new AntigravityImportSource(new(new(_agHome), ""), TimeProvider.System)],
         scope: new ImportScope.All(),
         skipConfirmation: true,
         forcePrivate: forcePrivate
@@ -243,10 +244,10 @@ public class RoutedReplayPrivatizeTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(500));
         StubVisibilityPut();
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
             filterCwd: null,
             minLines: 0,
-            sources: [new GeminiImportSource(_geminiHome)],
+            sources: [new GeminiImportSource(_geminiHome, TimeProvider.System)],
             scope: new ImportScope.All(),
             skipConfirmation: true,
             forcePrivate: true

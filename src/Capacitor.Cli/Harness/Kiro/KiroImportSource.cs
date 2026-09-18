@@ -7,6 +7,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Kiro;
 
@@ -21,15 +22,16 @@ namespace Capacitor.Cli.Harness.Kiro;
 /// </summary>
 internal sealed class KiroImportSource : IImportSource {
     readonly string                                 _sessionsDir;
-    readonly Func<string, Task<RepositoryPayload?>> _repoDetector;
+    readonly TimeProvider                           _time;
 
     public KiroImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
-        Func<string, Task<RepositoryPayload?>>? repoDetector        = null
+        GitProviderRouter                        router,
+        TimeProvider                            time
     ) {
         _sessionsDir  = sessionsDir;
-        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false));
+        _time         = time;
     }
 
     static StringComparison PathComparison =>
@@ -128,8 +130,6 @@ internal sealed class KiroImportSource : IImportSource {
             CancellationToken                ct
         ) {
         var results     = new List<ImportCommand.SessionClassification>(sessions.Count);
-        var repoCache   = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var hasExcludes = ctx.ExcludedRepos is { Count: > 0 };
 
         foreach (var s in sessions) {
             var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
@@ -165,7 +165,7 @@ internal sealed class KiroImportSource : IImportSource {
 
             int? serverLastLine;
             try {
-                serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
+                serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, _time, ctx.BaseUrl, s.SessionId, ct);
             } catch {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: nonBlankCount,
                                                probeErrorReason: "watermark probe failed"));
@@ -174,20 +174,7 @@ internal sealed class KiroImportSource : IImportSource {
 
             meta.LastTimestamp ??= TryGetLastWriteUtc(transcriptPath);
 
-            string? repoKey = null;
-            if (hasExcludes && s.Cwd is { } cwd) {
-                if (!repoCache.TryGetValue(cwd, out repoKey)) {
-                    try {
-                        var repo = await _repoDetector(cwd);
-                        repoKey = repo is { Owner: { } o, RepoName: { } n } ? $"{o}/{n}" : null;
-                    } catch {
-                        repoKey = null;
-                    }
-                    repoCache[cwd] = repoKey;
-                }
-            }
 
-            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, repoKey, ctx);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -213,8 +200,6 @@ internal sealed class KiroImportSource : IImportSource {
                 Status          = status,
                 Vendor          = Vendor,
                 ResumeFromLine  = resumeFromLn,
-                ExcludedRepoKey = excludedRepoKey,
-                ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
                 SourceMeta      = s.SourceMeta,
             });
@@ -248,7 +233,7 @@ internal sealed class KiroImportSource : IImportSource {
         }
 
         var startOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-start/kiro",
+            ctx.HttpClient, _time, ctx.BaseUrl, "session-start/kiro",
             startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
@@ -285,6 +270,7 @@ internal sealed class KiroImportSource : IImportSource {
                 filePath:   sendPath,
                 agentId:    null,
                 startLine:  startLine,
+                time:       _time,
                 vendor:     Vendor,
                 progress:   ctx.Progress);
         } catch {
@@ -299,11 +285,11 @@ internal sealed class KiroImportSource : IImportSource {
         if (classification.SourceMeta!.TryGetValue("Title", out var titleObj)
          && titleObj is string title
          && !string.IsNullOrWhiteSpace(title)) {
-            await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, title, ct);
+            await PostSetTitleAsync(ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId, title, ct);
         }
 
         var endOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-end/kiro",
+            ctx.HttpClient, _time, ctx.BaseUrl, "session-end/kiro",
             BuildSessionEndPayload(lifecycleId, cwd, classification.Meta.LastTimestamp),
             ct);
         if (!endOk) return ImportOutcome.Failed;
@@ -341,18 +327,18 @@ internal sealed class KiroImportSource : IImportSource {
     }
 
     static async Task<bool> PostSyntheticHookAsync(
-        HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
+        HttpClient client, TimeProvider time, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
     ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
         }
     }
 
-    static async Task PostSetTitleAsync(HttpClient client, string baseUrl, string sessionId, string title, CancellationToken ct) {
+    static async Task PostSetTitleAsync(HttpClient client, TimeProvider time, string baseUrl, string sessionId, string title, CancellationToken ct) {
         if (title.Length > 120) title = title[..120];
 
         var payload = new JsonObject {
@@ -362,7 +348,7 @@ internal sealed class KiroImportSource : IImportSource {
 
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, ct: ct);
+            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, ct: ct);
         } catch {
             // Best effort.
         }
@@ -433,8 +419,8 @@ internal sealed class KiroImportSource : IImportSource {
         }
     }
 
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
-        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
+    static async Task<int?> FetchServerLastLineAsync(HttpClient http, TimeProvider time, string baseUrl, string sessionId, CancellationToken ct) {
+        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", time, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
@@ -445,27 +431,6 @@ internal sealed class KiroImportSource : IImportSource {
         return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
             ? ln.GetInt32()
             : null;
-    }
-
-    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
-        string? cwd, string? repoKey, ClassifyContext ctx
-    ) {
-        string? excludedRepoKey = null;
-        if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
-         && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
-            excludedRepoKey = repoKey;
-        }
-
-        string? excludedPathKey = null;
-        if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
-            foreach (var entry in paths) {
-                if (PathExclusion.IsExcluded(cwd, [entry], ctx.Home)) {
-                    excludedPathKey = PathExclusion.Normalize(entry, ctx.Home);
-                    break;
-                }
-            }
-        }
-        return (excludedRepoKey, excludedPathKey);
     }
 }
 

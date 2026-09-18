@@ -206,6 +206,7 @@ public class FlowsDriverSchemaConformanceTests {
         new(Home: new(home), Profiles: new ProfileConfig(), ResolvePluginPath: () => pluginRoot,
             Stdout: TextWriter.Null, Stderr: TextWriter.Null) {
             Harnesses = TestHarnesses.Under(new(home)),
+            Binaries  = TestBinaries.None,
             ResolveMcpBinaryPath = () => InjectedBinaryPath
         };
 
@@ -314,7 +315,7 @@ public class FlowsDriverSchemaConformanceTests {
             // rewriting the profile's network-access config.
             ? ["plugin", "install", arm.Flag, "--skip-codex-network-access"]
             : ["plugin", "install", arm.Flag, "--if-installed"];
-        var exit = await new PluginCommand(env).HandleAsync(argv);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(argv);
         if (exit != 0) throw new InvalidOperationException($"{arm.Name}: installer exited {exit}");
 
         var path = arm.ConfigPath(env);

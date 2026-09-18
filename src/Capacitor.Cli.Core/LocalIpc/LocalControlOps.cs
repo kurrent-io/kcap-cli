@@ -25,6 +25,7 @@ public interface ILocalControlOps {
     Task<ConsentAckDto>    ResolveConsentAsync(ConsentResolveDto resolve, CancellationToken ct);
     Task<PermissionAckDto> ResolvePermissionAsync(PermissionResolveDto resolve, CancellationToken ct);
     Task<SendTextResult>   SendTextAsync(string agentId, string text, CancellationToken ct);
+    Task<SendTextResult>   SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct);
     Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct);
 }
 
@@ -33,8 +34,8 @@ public interface ILocalControlOps {
 /// persistent connection. Mirrors the CLI's existing socket usage (AgentCommand.SendStopAsync,
 /// DaemonConsentCommand's GetPolicyAsync/PutPolicyAsync) so the app shares the same wire
 /// behavior without depending on CLI command code. See design spec §10.
-public sealed class LocalControlOps(DaemonStore store, string daemonName, TimeProvider? time = null) : ILocalControlOps {
-    readonly TimeProvider _time = time ?? TimeProvider.System;
+public sealed class LocalControlOps(DaemonStore store, string daemonName, TimeProvider time) : ILocalControlOps {
+    readonly TimeProvider _time = time;
 
     // Internal seams for tests (same pattern as LocalControlClient):
     internal TimeSpan ConnectTimeout      = TimeSpan.FromSeconds(5);
@@ -139,11 +140,18 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
 
     /// The ack lands only when the daemon's delivery settles, so this exchange has no reply
     /// timeout — the caller's own token is the only bound.
-    public async Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) {
-        var json = JsonSerializer.Serialize(new SendTextDto(agentId, text), InputIpcJsonContext.Default.SendTextDto);
+    public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) =>
+        ExchangeSendTextAsync(LocalFrame.InputJson(FrameType.SendText,
+            JsonSerializer.Serialize(new SendTextDto(agentId, text), InputIpcJsonContext.Default.SendTextDto)), ct);
+
+    public Task<SendTextResult> SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) =>
+        ExchangeSendTextAsync(LocalFrame.InputJson(FrameType.SendTextWithAttachments,
+            JsonSerializer.Serialize(new SendTextWithAttachmentsDto(agentId, text, [.. attachmentIds]), InputIpcJsonContext.Default.SendTextWithAttachmentsDto)), ct);
+
+    async Task<SendTextResult> ExchangeSendTextAsync(LocalFrame request, CancellationToken ct) {
         LocalFrame reply;
         try {
-            reply = await ExchangeAsync(LocalFrame.InputJson(FrameType.SendText, json), Timeout.InfiniteTimeSpan, ct);
+            reply = await ExchangeAsync(request, Timeout.InfiniteTimeSpan, ct);
         } catch (LocalControlOpsException ex) {
             return new SendTextResult(false, SendTextReasons.Transport, ex.Message, null);
         }

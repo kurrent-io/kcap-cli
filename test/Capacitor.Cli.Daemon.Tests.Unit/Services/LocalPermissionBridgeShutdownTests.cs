@@ -19,7 +19,7 @@ public class LocalPermissionBridgeShutdownTests {
         var broker = new PermissionPromptBroker();
         var tmp    = new TempDir();
         var log    = new PermissionDecisionLog(tmp.Path, NullLogger.Instance);
-        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, broker, log) {
+        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System, broker, log) {
             AttributeHandler = _ => new AttributedAgent("agent-1"),
         };
         server.AwaitScript = (_, ct) => new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);

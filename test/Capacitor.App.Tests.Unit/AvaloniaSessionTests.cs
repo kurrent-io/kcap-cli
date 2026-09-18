@@ -1,4 +1,6 @@
 using System.Reactive.Linq;
+using Avalonia;
+using Avalonia.Threading;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -8,6 +10,20 @@ public class AvaloniaSessionTests {
     public async Task Dispatch_runs_on_the_headless_session() {
         var answer = await AvaloniaSession.DispatchAsync(() => 42);
         await Assert.That(answer).IsEqualTo(42);
+    }
+
+    /// <summary>Per-test isolation rebuilds the application on every dispatch, and each rebuild
+    /// releases Dispatcher.UIThread before reclaiming it — a window any concurrent thread reading
+    /// that property takes for itself, after which building the application verifies access against
+    /// a thread it does not own. One application across the assembly leaves nothing to reclaim.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_application_and_its_dispatcher_outlive_a_single_dispatch() {
+        var first  = await AvaloniaSession.DispatchAsync(() => ((object?)Application.Current, (object)Dispatcher.UIThread));
+        var second = await AvaloniaSession.DispatchAsync(() => ((object?)Application.Current, (object)Dispatcher.UIThread));
+
+        await Assert.That(ReferenceEquals(first.Item1, second.Item1)).IsTrue();
+        await Assert.That(ReferenceEquals(first.Item2, second.Item2)).IsTrue();
     }
 
     [Test]

@@ -5,10 +5,13 @@ namespace Capacitor.Cli.Core.LocalIpc;
 
 /// JSON payloads for the permission control frames. snake_case on the wire; shared verbatim
 /// by the daemon, the CLI, and the desktop app. Every member is always emitted (nulls written).
+/// ServerRequestId is the server's id for the same request once the daemon's server leg holds
+/// one — null until then, and always null from a daemon that predates it — so a client hearing
+/// both lanes can pair the two copies without guessing.
 public sealed record PermissionPendingDto(
     string RequestId, string AgentId, string SessionId, string Vendor, string ToolName,
     JsonElement? ToolInput, JsonElement? Suggestions, bool ToolInputOmitted, bool SuggestionsOmitted,
-    string RequestedAt, string? ToolUseId = null);
+    string RequestedAt, string? ToolUseId = null, string? ServerRequestId = null);
 
 /// Decision: allow|deny|withdraw. A withdraw carries no answer: the app saw the tool's result in
 /// the transcript, so whoever prompted has already been answered elsewhere and the request is moot.

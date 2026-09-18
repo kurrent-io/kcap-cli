@@ -8,6 +8,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -65,9 +66,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class GeminiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -195,7 +196,7 @@ sealed class GeminiHookCommand(
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
@@ -261,13 +262,13 @@ sealed class GeminiHookCommand(
 
         // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
 
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = profiles.Effective;
 
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(cwd, excludedPaths, home)) return 0;
+        if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) return 0;
 
         return eventName switch {
             "SessionStart" => await HandleSessionStart(node, sessionId, cwd, activeProfile, spool,
@@ -320,11 +321,11 @@ sealed class GeminiHookCommand(
             forwarded["default_visibility"] = visibility;
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(config, forwarded.ToJsonString());
+        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -353,8 +354,10 @@ sealed class GeminiHookCommand(
         // parses hook stdout unconditionally, with the exit code only setting its own `success` flag.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
+            PlansNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Gemini, harnesses));
         result.Write(RenderSessionStartPayload(fragment, workItemsNudge));
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;
@@ -382,17 +385,17 @@ sealed class GeminiHookCommand(
             try {
                 var drained = await TimeBudget.RunCappedAsync(
                     async () => {
-                        await _watchers.KillWatcher(sessionId);
-                        await _watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "gemini");
+                        await watchers.KillWatcher(sessionId);
+                        await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "gemini");
                         // Gemini fires no subagent-stop hook, so the parent owns subagent
                         // teardown: kill each live child watcher, drain its tail, and finalize
                         // it (subagent-stop). Restart-safe — driven off the on-disk files,
                         // not an in-memory set. Shared with the watcher's parent-exit fallback
                         // so a crash that bypasses this hook still finalizes subagents.
-                        await new GeminiSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath);
+                        await new GeminiSubagentTeardown(profiles, http, watchers, clock.Time).DrainAsync(sessionId, transcriptPath);
                     },
                     PreHookDrainCap
-                );
+                , clock.Time);
 
                 if (!drained) {
                     await Console.Error.WriteLineAsync(
@@ -444,7 +447,7 @@ sealed class GeminiHookCommand(
 
         if (cwd is not null) forwarded["cwd"] = cwd;
 
-        using var cts = new CancellationTokenSource(NotificationPostBudget);
+        using var cts = new CancellationTokenSource(NotificationPostBudget, clock.Time);
         try {
             // The hook verb, so a lapse writes nothing to stderr: stay quiet and skip the doomed
             // POST rather than spend a per-turn line on it.
@@ -471,10 +474,9 @@ sealed class GeminiHookCommand(
         // one and resume appends to the same transcript.
         var skipTitle = source is "resume" or "clear";
 
-        // Task 6: awaited (was fire-and-forget `_ =`) so a spawn failure surfaces to the
-        // caller instead of being silently dropped, and the host process doesn't exit before the
-        // spawn completes.
-        await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+        // Awaited, not fire-and-forget: a dropped task hides a spawn failure from the caller, and
+        // lets the host process exit before the spawn completes.
+        await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: skipTitle, vendor: "gemini"
         );

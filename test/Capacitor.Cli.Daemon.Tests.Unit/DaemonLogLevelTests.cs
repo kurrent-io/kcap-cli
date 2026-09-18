@@ -40,7 +40,7 @@ public class DaemonLogLevelTests {
         using var tmp = new TempDir();
         var path = tmp.PathTo("kcap.log");
 
-        using (var provider = new RollingFileLoggerProvider(path, minLevel: LogLevel.Debug)) {
+        using (var provider = new RollingFileLoggerProvider(path, TimeProvider.System, minLevel: LogLevel.Debug)) {
             var logger = provider.CreateLogger("Test");
             logger.Log(LogLevel.Debug, "DaemonPing ok — 42 ms RTT");
         }
@@ -54,7 +54,7 @@ public class DaemonLogLevelTests {
         using var tmp = new TempDir();
         var path = tmp.PathTo("kcap.log");
 
-        using (var provider = new RollingFileLoggerProvider(path)) {
+        using (var provider = new RollingFileLoggerProvider(path, TimeProvider.System)) {
             var logger = provider.CreateLogger("Test");
             logger.Log(LogLevel.Debug, "should be dropped");
             logger.Log(LogLevel.Information, "should be kept");

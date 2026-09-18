@@ -25,12 +25,15 @@ Configuration:
   ignore <path>                    Exclude a path (and descendants) from session recording
   ignore --list                    List excluded paths in the active profile
   ignore --remove <path>           Remove a path from the exclusion list
-  remap <from> <to>                Rewrite a recorded transcript cwd prefix during import (renamed/moved repos)
+  allow <path>                     Capture only this path (and descendants); empty list allows all
+  allow --list                     List allowed paths in the active profile
+  allow --remove <path>            Remove a path from the allow list
+  remap <from> <to>                Rewrite a recorded transcript cwd during import; <from> takes one '*' segment
   remap --list                     List configured cwd remaps
   remap --remove <from>            Remove a cwd remap entry
 
 Harness setup nudges:
-  harness list                     Show which coding agents are installed and whether kcap is set up for each
+  harness list [--json]            Show which coding agents are installed and whether kcap is set up for each
   harness dismiss <vendor…>|--all  Stop nudging to set kcap up for an installed-but-unconfigured harness
   harness reset <vendor…>|--all    Offer a previously-dismissed harness again
 
@@ -83,6 +86,7 @@ MCP servers (stdio):
   mcp flows                          Start and manage review flows from agents
   mcp memory                         Team memory tools (search, get, save, update, rescope, archive)
   mcp workitems                      Declare/list a session's work-item attachments
+  mcp plans                          Declare a session's plan document and task list
   mcp analytics                      Governed SQL over org coding-agent analytics (schema + query)
   mcp artefacts                      Publish an HTML page from an agent and get back a link
 

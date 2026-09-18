@@ -104,21 +104,35 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public string? NameError => string.IsNullOrWhiteSpace(Name) || DaemonStore.Sanitize(Name) != Name
         ? "Use lowercase letters, numbers, dots, hyphens or underscores, with no surrounding spaces or repeated hyphens." : null;
-    public string? CapacityError => Capacity is not { } value || value < 1 || value > int.MaxValue || decimal.Truncate(value) != value
-        ? "Enter a whole number of at least 1." : null;
+    public string? CapacityError => Capacity is not { } value || value < 0 || value > int.MaxValue || decimal.Truncate(value) != value
+        ? "Enter a whole number (0 = unlimited)." : null;
     public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS."
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
         : !_startupSettled.IsCompletedSuccessfully ? "Waiting for daemon startup to finish…"
-        : Name == DaemonStore.Sanitize(_runningName) ? "This is already the daemon’s service id."
+        : Name == DaemonStore.Sanitize(_runningName) ? "The running daemon already uses this service ID. Change the name to rename it."
         : _status.State == AttachState.Connected && _snapshot?.Daemon.ActiveAgents > 0
             ? $"Wait for the {_snapshot.Daemon.ActiveAgents} active agents to finish before renaming."
             : !Idle ? "Waiting for the daemon’s current agent count…" : "Renaming restarts the daemon and relaunches this app.";
-    public string StatusLine => _status.State switch {
+
+    public string StatusLabel => _status.State switch {
+        AttachState.Connected when _snapshot is { Daemon.MaxAgents: 0 } snap =>
+            $"{snap.Daemon.ActiveAgents} · unlimited",
         AttachState.Connected when _snapshot is { } snap =>
-            $"Running as {snap.Daemon.Name}, {snap.Daemon.ActiveAgents} of {snap.Daemon.MaxAgents} agents",
-        AttachState.Unreachable => "Daemon not running. Changes apply when it starts.",
-        _ => "Connecting to daemon…",
+            $"{snap.Daemon.ActiveAgents} / {snap.Daemon.MaxAgents}",
+        AttachState.Unreachable => "Not running",
+        _ => "Connecting",
+    };
+
+    public bool StatusShowsAgents => _status.State == AttachState.Connected && _snapshot is not null;
+
+    public string StatusTip => _status.State switch {
+        AttachState.Connected when _snapshot is { } snap =>
+            snap.Daemon.MaxAgents == 0
+                ? $"Running as {snap.Daemon.Name}. No capacity limit."
+                : $"Running as {snap.Daemon.Name}.",
+        AttachState.Unreachable => "Changes apply when the daemon starts.",
+        _ => "Connecting to the daemon…",
     };
 
     public ReactiveCommand<Unit, Unit> SaveCommand { get; }
@@ -210,7 +224,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(NameError));
         this.RaisePropertyChanged(nameof(CapacityError));
         this.RaisePropertyChanged(nameof(RenameHint));
-        this.RaisePropertyChanged(nameof(StatusLine));
+        this.RaisePropertyChanged(nameof(StatusLabel));
+        this.RaisePropertyChanged(nameof(StatusShowsAgents));
+        this.RaisePropertyChanged(nameof(StatusTip));
     }
 
     public void Dispose() {

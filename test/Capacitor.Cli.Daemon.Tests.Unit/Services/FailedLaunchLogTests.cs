@@ -14,7 +14,7 @@ public class FailedLaunchLogTests {
     [Test]
     public async Task Persist_writes_a_retained_file_containing_the_output_and_reason() {
         using var dir = new TempDir();
-        var log = new FailedLaunchLog(dir.Path);
+        var log = new FailedLaunchLog(dir.Path, TimeProvider.System);
 
         var path = log.Persist("agent-1", Encoding.UTF8.GetBytes("WARNING: Bypass Permissions mode\n2. Yes, I accept\n"), "wedged on the consent dialog");
 
@@ -34,7 +34,7 @@ public class FailedLaunchLogTests {
     public async Task Persist_keeps_only_the_last_N_bytes_of_a_large_stream() {
         using var dir = new TempDir();
         // 8 KB cap; feed 20 KB where only the tail carries the smoking gun.
-        var log = new FailedLaunchLog(dir.Path, maxBytes: 8 * 1024);
+        var log = new FailedLaunchLog(dir.Path, TimeProvider.System, maxBytes: 8 * 1024);
 
         var head = new string('A', 20 * 1024);
         var payload = head + "TAIL-MARKER-2. Yes, I accept";
@@ -49,7 +49,7 @@ public class FailedLaunchLogTests {
     [Test]
     public async Task Persist_is_resilient_to_empty_output() {
         using var dir = new TempDir();
-        var log = new FailedLaunchLog(dir.Path);
+        var log = new FailedLaunchLog(dir.Path, TimeProvider.System);
 
         var path = log.Persist("empty", [], "process exited before any output");
 
@@ -65,7 +65,7 @@ public class FailedLaunchLogTests {
         if (OperatingSystem.IsWindows()) return;
 
         using var dir = new TempDir();
-        var log = new FailedLaunchLog(dir.Path);
+        var log = new FailedLaunchLog(dir.Path, TimeProvider.System);
 
         var path = log.Persist("agent-perms", Encoding.UTF8.GetBytes("secret PTY tail"), "wedged");
 
@@ -81,7 +81,7 @@ public class FailedLaunchLogTests {
     [Test]
     public async Task Persist_uses_a_path_safe_filename_for_a_hostile_agent_id() {
         using var dir = new TempDir();
-        var log = new FailedLaunchLog(dir.Path);
+        var log = new FailedLaunchLog(dir.Path, TimeProvider.System);
 
         // An agent id that crosses the SignalR wire unconstrained must never escape the dir.
         var path = log.Persist("../../etc/passwd", Encoding.UTF8.GetBytes("x"), "reason");

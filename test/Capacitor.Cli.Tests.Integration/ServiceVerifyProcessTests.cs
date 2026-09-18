@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Config;
 using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Services;
@@ -16,6 +17,11 @@ namespace Capacitor.Cli.Tests.Integration;
 // flock acquisition by wall clock — they cannot afford to race each other for a core.
 [NotInParallel(nameof(ServiceVerifyProcessTests))]
 public class ServiceVerifyProcessTests {
+    /// <summary>How long a spawned kcap gets to reach a lock state. Long because it is a real
+    /// AOT cold start doing launchctl work on a shared runner, and nothing here is timing the
+    /// binary — a short wait only turns contention into a failure.</summary>
+    static readonly TimeSpan LockWait = TimeSpan.FromSeconds(45);
+
     static (string Home, string Daemons, string Config) NewIsolatedEnv(TempDir tmp) {
         // Daemons itself is deliberately absent — --verify must create it, as on a first run — so only
         // its parent is made here.
@@ -113,6 +119,11 @@ public class ServiceVerifyProcessTests {
             }
         };
 
+        // The one kcap spawn that goes through a shell rather than KcapProcess, so it clears server
+        // selection itself — the grandchild resolves both at its own root.
+        psi.Environment.Remove(ProfileOverrides.UrlVar);
+        psi.Environment.Remove(ProfileOverrides.ProfileVar);
+
         using var shell = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start /bin/sh");
         int? orphanPid = null;
 
@@ -124,8 +135,10 @@ public class ServiceVerifyProcessTests {
             await Task.Delay(TimeSpan.FromMilliseconds(200));
 
             // Confirm the transaction actually took the lock before killing the parent — otherwise an
-            // unheld lock below would be vacuously true rather than evidence of a release.
-            var acquireDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            // unheld lock below would be vacuously true rather than evidence of a release. A deadline,
+            // not a latency claim: it waits on the same cold-start binary the release wait does, so it
+            // gets the same room.
+            var acquireDeadline = DateTime.UtcNow + LockWait;
             while (!LockHeld(daemons, serviceName) && DateTime.UtcNow < acquireDeadline)
                 await Task.Delay(TimeSpan.FromMilliseconds(100));
 
@@ -146,7 +159,7 @@ public class ServiceVerifyProcessTests {
             // releases the lock on its own — no parent left to reap it or notice it hung. Marker state
             // is diagnostic only, not asserted: a fast-fail path may leave no marker at all, while a
             // failure during rollback-restore may legitimately retain one — both are valid terminals.
-            var releaseDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
+            var releaseDeadline = DateTime.UtcNow + LockWait;
             var released = false;
             while (DateTime.UtcNow < releaseDeadline) {
                 if (!LockHeld(daemons, serviceName)) { released = true; break; }

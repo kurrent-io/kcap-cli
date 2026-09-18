@@ -30,6 +30,7 @@ public class DaemonStatusWiringTests {
     public async Task ServerConnection_resolved_via_DI_shares_the_one_registered_notifier() {
         var services = new ServiceCollection();
         services.AddSingleton(new DaemonConfig { Name = "wiring-test", ServerUrl = "http://127.0.0.1:1" });
+        services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(AuthFixtures.NewTokenStore(Config.Root));
@@ -92,6 +93,7 @@ public class DaemonStatusWiringTests {
             Store        = daemons.Store,
             WorktreeRoot = worktrees.PathTo("wt"),
         });
+        services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(Config.Root);
@@ -100,11 +102,13 @@ public class DaemonStatusWiringTests {
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));
         services.AddSingleton<ServerConnection>();
+        services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         services.AddSingleton<WorktreeManager>();
         services.AddSingleton<RepoMatcher>();
         services.AddSingleton<IPtyProcessFactory>(new NoopPtyProcessFactory());
         services.AddSingleton<IHttpClientFactory>(new NoopHttpClientFactory());
         services.AddSingleton<ICapacitorHttpClient>(new FixedCapacitorHttpClient());
+        services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         services.AddSingleton<LocalPermissionBridge>();
         services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentLauncher>>(
             new Dictionary<string, IHostedAgentLauncher>());
@@ -112,7 +116,7 @@ public class DaemonStatusWiringTests {
             new Dictionary<string, IHostedAgentRuntimeFactory>());
         services.AddSingleton<IHostApplicationLifetime>(new NoopHostLifetime());
         services.AddSingleton(sp => new LaunchConsentGate(
-            new LaunchConsentStore(daemons.Directory, NullLogger.Instance),
+            new LaunchConsentStore(daemons.Directory, NullLogger.Instance, TimeProvider.System),
             new LaunchConsentDecisionLog(daemons.Directory, NullLogger.Instance),
             prompter: null,
             TimeProvider.System,

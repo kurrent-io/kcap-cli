@@ -32,9 +32,10 @@ public class SessionRailViewModelTests {
         var remote = new FakeRemoteAgents();
         var directory = new AgentDirectory(
             service, remote, new FakeServerLane(), new RepoIdentityResolver(originUrl ?? (_ => null)),
-            resolveRepoRoot ?? Resolve, null, null);
+            resolveRepoRoot ?? Resolve, null, null, TimeProvider.System);
         var rail = new SessionRailViewModel(
-            directory, open ?? (_ => { }), openRemote ?? (_ => { }), resolveRepoRoot ?? Resolve);
+            directory, open ?? (_ => { }), openRemote ?? (_ => { }), TimeProvider.System,
+            resolveRepoRoot ?? Resolve);
         return (service, remote, rail);
     }
 
@@ -167,6 +168,24 @@ public class SessionRailViewModelTests {
                 await Assert.That(wt.IsExpanded).IsTrue();
                 await Assert.That(wt.HoldsSelected).IsTrue();
                 await Assert.That(wt.Sessions[0].IsSelected).IsTrue();
+            }
+        });
+    }
+
+    /// The launch auto-open lands while the row is still the daemon's pending entry.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task NotifySessionOpened_expands_the_worktree_of_a_pending_row() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (service, _, rail) = Build();
+            using (rail) {
+                service.Pending.AddOrUpdate(new PendingLaunchDto("p1", "claude", "/dev/alpha", null, DateTime.UtcNow, null));
+                rail.Repos[0].Worktrees[0].ToggleCommand.Execute().Subscribe();
+                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsFalse();
+
+                rail.NotifySessionOpened("p1");
+
+                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsTrue();
             }
         });
     }

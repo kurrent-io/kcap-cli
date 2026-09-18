@@ -18,7 +18,9 @@ public class ServerVersionCaptureHandlerTests {
     }
 
     static async Task SendThrough(string serverUrl, HttpResponseMessage response, ConfigRoot config) {
-        var capture = new ServerVersionCaptureHandler(serverUrl, config) { InnerHandler = new StubHandler(response) };
+        var capture = new ServerVersionCaptureHandler(serverUrl, config, TimeProvider.System) {
+            InnerHandler = new StubHandler(response)
+        };
         using var client = new HttpClient(capture);
         using var _ = await client.GetAsync(serverUrl);
     }

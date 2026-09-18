@@ -26,8 +26,9 @@ public static class LocalControlProbe {
     /// timeout. It bounds the hello dial+read AND the StatusSubscribe dial+read together, so a
     /// slow hello leaves correspondingly less time for the snapshot half.</param>
     public static async Task<ProbeResult> ProbeAsync(
-            DaemonStore store, string daemonName, TimeSpan timeout, CancellationToken ct = default) {
-        using var timeoutCts = new CancellationTokenSource(timeout);
+            DaemonStore store, string daemonName, TimeProvider time, TimeSpan timeout,
+            CancellationToken ct = default) {
+        using var timeoutCts = new CancellationTokenSource(timeout, time);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         var linked = linkedCts.Token;
 

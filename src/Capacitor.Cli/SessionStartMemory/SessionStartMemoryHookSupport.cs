@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.SessionStartMemory;
 
@@ -27,14 +28,16 @@ internal static class SessionStartMemoryHookSupport {
     /// without memory context on any authenticated deployment.</para>
     /// </summary>
     public static ISessionStartContextProvider CompositeProvider(
+            GitProviderRouter router,
             ConfigRoot config,
+            WorkingDirectory workdir,
             Func<CancellationToken, Task<HttpClient>> client,
             TimeProvider time,
             ISessionStartMemoryScopeResolver? scopeResolver = null) {
-        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(config, time);
+        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(router, config, workdir, time);
 
         var memory     = new SessionStartMemoryContextProvider(resolver, client, time);
-        var guidelines = new SessionStartGuidelinesLane(client);
+        var guidelines = new SessionStartGuidelinesLane(client, time);
         return new SessionStartCompositeContextProvider(resolver, memory, guidelines, time);
     }
 

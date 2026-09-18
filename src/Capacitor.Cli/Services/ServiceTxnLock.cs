@@ -28,24 +28,28 @@ sealed class ServiceTxnLock : IDisposable {
         }
     }
 
+    static readonly TimeSpan PollGap = TimeSpan.FromMilliseconds(100);
+
     /// <summary>
-    /// Blocks up to <paramref name="wait"/>; null on contention timeout. Lock file is created but NEVER deleted.
+    /// Waits up to <paramref name="wait"/>; null on contention timeout. Lock file is created but NEVER deleted.
     /// </summary>
-    public static ServiceTxnLock? TryAcquire(DaemonStore store, string daemonName, TimeSpan wait) {
+    /// <remarks>The gap between attempts is drawn from <paramref name="time"/>, like the deadline it is
+    /// measured against: a sleep on the wall clock under a caller's slower one would spin until the
+    /// deadline it can never reach.</remarks>
+    public static async Task<ServiceTxnLock?> TryAcquireAsync(
+            DaemonStore store, string daemonName, TimeSpan wait, TimeProvider time) {
         store.EnsureDirectory();
-        var path = store.ServiceLockPath(daemonName);
-        var deadline = DateTime.UtcNow.Add(wait);
+        var path     = store.ServiceLockPath(daemonName);
+        var deadline = time.GetUtcNow().Add(wait);
 
         while (true) {
             try {
                 var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                 return new ServiceTxnLock(stream);
             } catch (IOException) {
-                if (DateTime.UtcNow >= deadline) {
-                    return null;
-                }
+                if (time.GetUtcNow() >= deadline) return null;
 
-                System.Threading.Thread.Sleep(100);
+                await Task.Delay(PollGap, time).ConfigureAwait(false);
             }
         }
     }

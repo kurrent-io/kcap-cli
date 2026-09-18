@@ -28,6 +28,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>WatcherManager</c>, for the same decoupling reason).</para>
 /// </summary>
 internal sealed class SpoolDrainLoop {
+    readonly TimeProvider              _time;
     readonly ConfigRoot                _configRoot;
     readonly ICapacitorHttpClient      _http;
     readonly string                    _baseUrl;
@@ -48,11 +49,13 @@ internal sealed class SpoolDrainLoop {
             HookSpool            lifecycle,
             TranscriptSpool      transcript,
             ILogger              logger,
+            TimeProvider         time,
             Action<string>?      onWhatsDoneRequested = null
         ) {
+        _time                 = time;
         _configRoot           = configRoot;
         _http                 = http;
-        _markers              = new CursorMarkers(configRoot);
+        _markers              = new CursorMarkers(configRoot, time);
         _baseUrl              = baseUrl;
         _lifecycle            = lifecycle;
         _transcript           = transcript;
@@ -82,11 +85,12 @@ internal sealed class SpoolDrainLoop {
                     return;
                 }
 
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(Budget);
+                using var cap = new CancellationTokenSource(Budget, _time);
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
 
                 await LifecycleSpoolDrain.RunAsync(
-                    _markers, client, _baseUrl, _lifecycle, _transcript, currentSessionId: null, Budget, cts.Token,
+                    _markers, client, _baseUrl, _lifecycle, _transcript, currentSessionId: null, Budget, _time,
+                    cts.Token,
                     onWhatsDoneRequested: _onWhatsDoneRequested is null ? null : (sid, _) => _onWhatsDoneRequested(sid));
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {

@@ -25,7 +25,7 @@ public class LedgerHookTests {
         store.Write(new AgentPidRecord("gone", pid, id, PidIdentityKind.Present, "ReviewFlow", "codex",
             "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
 
-        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
         await reaper.ReapOnceAsync();
 
@@ -46,14 +46,14 @@ public class LedgerHookTests {
             "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
 
         // Simulate crash-after-append-before-delete: append, but skip the delete this pass.
-        var crashing = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var crashing = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => { ledger.Upsert(a, e, fr, role); throw new IOException("crash before delete"); });
         try { await crashing.ReapOnceAsync(); } catch { /* the reaper swallows per-record faults */ }
         await Assert.That(store.ReadAll()).IsNotEmpty();          // leftover source
         var gen = ledger.Snapshot().Single().Generation;
 
         // Restart: re-derive from the leftover source; Upsert collapses onto the committed entry.
-        var restarted = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var restarted = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
         await restarted.ReapOnceAsync();
         await Assert.That(store.ReadAll()).IsEmpty();             // leftover source now deleted
@@ -72,14 +72,14 @@ public class LedgerHookTests {
             "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
 
         // Crash before the append: the confirmed-gone branch throws before touching the ledger.
-        var crashing = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var crashing = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (_, _, _, _) => throw new IOException("crash before append"));
         try { await crashing.ReapOnceAsync(); } catch { /* per-record faults swallowed */ }
         await Assert.That(ledger.Snapshot()).IsEmpty();          // nothing committed
         await Assert.That(store.ReadAll()).IsNotEmpty();         // source persists
 
         // Next boot re-derives from the on-disk pre-append source shape (keyed (AgentId, OldEpoch)).
-        var restarted = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var restarted = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
         await restarted.ReapOnceAsync();
         var entry = ledger.Snapshot().Single();
@@ -90,7 +90,7 @@ public class LedgerHookTests {
 
     [Test]
     public async Task Quarantine_drain_returns_entries_and_confirmed_ones_are_emittable() {
-        var q = new AgentKillQuarantine(NullLogger.Instance);
+        var q = new AgentKillQuarantine(NullLogger.Instance, TimeProvider.System);
         using var dummy = DummyProcess.StartSleep(30);
         var id = ProcessIdentity.Capture(dummy.Pid)!;
         dummy.Kill(); dummy.WaitForExit(TimeSpan.FromSeconds(5)); // confirmed dead -> will drain
@@ -118,7 +118,7 @@ public class LedgerHookTests {
         var committed = ledger.Upsert("qr", "drain-epoch", "flow-1", "reviewer"); // drain appended
         // crash before DeletePidRecord → committed entry + leftover record
 
-        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
         await reaper.ReapOnceAsync();
         await Assert.That(store.ReadAll()).IsEmpty();
@@ -135,7 +135,7 @@ public class LedgerHookTests {
             "flow-1", "reviewer", "did", "drain-epoch", DateTimeOffset.UtcNow));
         await Assert.That(ledger.Snapshot()).IsEmpty(); // crash before append → record only
 
-        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
         await reaper.ReapOnceAsync();
         await Assert.That(ledger.Snapshot().Single().AgentId).IsEqualTo("qr");
@@ -156,7 +156,7 @@ public class LedgerHookTests {
         var committed = ledger.Upsert("sf", "stop-epoch", "flow-2", "reviewer"); // stop-fallback appended
         // crash before _pidRecords.Delete → committed entry + leftover record
 
-        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
         await reaper.ReapOnceAsync();
         await Assert.That(store.ReadAll()).IsEmpty();
@@ -173,7 +173,7 @@ public class LedgerHookTests {
             "flow-2", "reviewer", "did", "stop-epoch", DateTimeOffset.UtcNow));
         await Assert.That(ledger.Snapshot()).IsEmpty(); // crash before append
 
-        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance, TimeProvider.System,
             onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
         await reaper.ReapOnceAsync();
         await Assert.That(ledger.Snapshot().Single().AgentId).IsEqualTo("sf");

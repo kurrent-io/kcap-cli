@@ -57,7 +57,9 @@ public class BinaryProbeTests {
         var staged = await Stage(tmp.PathTo(Launchable("probe")));
 
         // A path with a directory component but no root resolves against the cwd, not the search path.
+#pragma warning disable RS0030 // the base Resolve() itself resolves against; naming it is the test
         var relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), staged);
+#pragma warning restore RS0030
         var resolved = BinaryProbe.Searching(null).Resolve(relative);
 
         await Assert.That(resolved).IsNotNull();
@@ -115,8 +117,7 @@ public class BinaryProbeTests {
         using var path = EnvScope.Exclusive("PATH", tmp.Path);
 
         await Assert.That(BinaryProbe.FromEnvironment().Resolve("envprobe")).IsEqualTo(staged, PathCasing);
-        await Assert.That(BinaryProbe.OnPath("envprobe")).IsTrue();
-        await Assert.That(BinaryProbe.OnPath($"kcap-absent-{Guid.NewGuid():N}")).IsFalse();
+        await Assert.That(BinaryProbe.FromEnvironment().Finds($"kcap-absent-{Guid.NewGuid():N}")).IsFalse();
     }
 
     // ── Unix launch rules ──

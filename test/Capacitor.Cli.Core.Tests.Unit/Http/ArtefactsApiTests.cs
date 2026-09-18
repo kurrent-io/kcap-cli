@@ -24,7 +24,7 @@ public class ArtefactsApiTests : IDisposable {
     ArtefactsApi Api() {
         var profiles = Resolutions.At(Url, Config.Root);
 
-        return new ArtefactsApi(new FixedCapacitorHttpClient(), new CapacitorServer(Url, Config.Root, profiles));
+        return new ArtefactsApi(new FixedCapacitorHttpClient(), new CapacitorServer(Url, Config.Root, profiles), TimeProvider.System);
     }
 
     static PublishArtefactBody Body() => new("Plan", "<p>x</p>", null, null, null, null);

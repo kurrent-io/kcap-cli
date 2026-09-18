@@ -4,6 +4,7 @@ using Capacitor.Cli.Harness.Cursor;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -78,7 +79,7 @@ public class CursorImportPrTests : IDisposable {
                 detectCalls++;
                 return Task.FromResult<RepositoryPayload?>(
                     new RepositoryPayload { Owner = "acme", RepoName = "widgets" });
-            });
+            }, router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var client = new HttpClient();
 
@@ -87,7 +88,7 @@ public class CursorImportPrTests : IDisposable {
 
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
         await Assert.That(classified.Count).IsEqualTo(2);
 

@@ -2,6 +2,10 @@
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <IsPackable>false</IsPackable>
+        <!-- The CLI publishes NativeAOT and references these models: the analyzers have to run
+             here, where a reflective serializer path would be introduced, not only there. -->
+        <IsAotCompatible>true</IsAotCompatible>
+        <IsTrimmable>true</IsTrimmable>
     </PropertyGroup>
     <ItemGroup>
         <InternalsVisibleTo Include="Capacitor.Remote.Models.Tests.Unit" />

@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class DaemonCommands(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries) {
+        HarnessRegistry harnesses, BinaryProbe binaries, TimeProvider time) {
     string LogPath { get; } = config.Path("daemon.log");
 
     /// <summary>The sibling capture for the daemon's raw stderr/stdout — where a detached start points
@@ -41,8 +41,8 @@ public sealed class DaemonCommands(
             "status"  => await Status(remaining),
             "logs"    => await Logs(),
             "doctor"  => await DoctorAsync(remaining),
-            "service" => await DaemonServiceCommands.DispatchAsync(store, config, profiles, home, remaining),
-            "shim"    => await DaemonShimCommands.DispatchAsync(remaining),
+            "service" => await DaemonServiceCommands.DispatchAsync(store, config, profiles, home, time, remaining),
+            "shim"    => await DaemonShimCommands.DispatchAsync(remaining, time),
             "consent" => await DaemonConsentCommand.HandleAsync(store, profiles, remaining),
             "reviewer" => await DaemonReviewerCommand.HandleAsync(store, profiles, binaries, remaining),
             _         => PrintUsage()
@@ -686,7 +686,7 @@ public sealed class DaemonCommands(
 
         var servingProbes = entries
             .Where(e => e.Entry is { } pe && DaemonPidProbe.IsOurDaemon(pe.Pid, pe.StartToken))
-            .ToDictionary(e => e.Name, e => HelloProbe.RunAsync(store, e.Name, ServingProbeTimeout));
+            .ToDictionary(e => e.Name, e => HelloProbe.RunAsync(store, e.Name, time, ServingProbeTimeout));
 
         await Task.WhenAll(servingProbes.Values);
 
@@ -982,7 +982,7 @@ public sealed class DaemonCommands(
 
     /// <summary>Service manager for this OS, or null if the OS is unsupported.</summary>
     IServiceManager? TryServiceManager() {
-        try { return ServiceManagerFactory.ForCurrentOs(config, home); }
+        try { return ServiceManagerFactory.ForCurrentOs(config, home, time); }
         catch (PlatformNotSupportedException) { return null; }
     }
 
@@ -1006,6 +1006,27 @@ public sealed class DaemonCommands(
             var note = bad ? "  ⚠ binary missing — re-run `kcap daemon service install`" : "";
             await Console.Out.WriteLineAsync($"  {sid,-20}  {st.State}{note}");
         }
+
+        await ReportUnitDirectoryExposure(Console.Out, manager.UnitDirectory);
+    }
+
+    /// <summary>Reports directories on the path to the unit directory that their group can write.
+    ///
+    /// <para>Advisory, not a failure: whether this matters depends on who else is in that group, which the
+    /// bits do not say — umask 002 against a user-private group produces it for a group of one, and that is
+    /// the common case on Debian and Ubuntu. Install refuses only the world-writable form, which no umask
+    /// produces. Reporting is what is left for the case a program cannot judge but an operator can.</para></summary>
+    internal static async Task ReportUnitDirectoryExposure(TextWriter output, string unitDirectory) {
+        if (DirectoryExposure.GrantingWrite(unitDirectory, UnixFileMode.GroupWrite) is not { Count: > 0 } shared)
+            return;
+
+        await output.WriteLineAsync("\n  ⚠ group-writable on the path to the unit directory:");
+
+        foreach (var d in shared) await output.WriteLineAsync($"      {d}");
+
+        await output.WriteLineAsync(
+            "    A member of those directories' group can replace the unit the daemon loads. Harmless when\n"
+          + "    the group is yours alone — `chmod g-w` them if it is shared with other accounts.");
     }
 
     internal static string DaemonNotFoundMessage() =>
@@ -1026,7 +1047,7 @@ public sealed class DaemonCommands(
         Console.Error.WriteLine("Options for start:");
         Console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");
         Console.Error.WriteLine("  --server-url <url>    Server URL");
-        Console.Error.WriteLine("  --max-agents <n>      Max concurrent hosted coding agents (default: 5)");
+        Console.Error.WriteLine("  --max-agents <n>      Max concurrent hosted coding agents (default: 5; 0 = unlimited)");
         Console.Error.WriteLine("  --log-file <path>     Log to file instead of console");
         Console.Error.WriteLine("  -d, --detach          Run in background (logs to file automatically)");
 

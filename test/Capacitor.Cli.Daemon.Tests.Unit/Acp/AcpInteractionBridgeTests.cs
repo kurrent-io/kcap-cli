@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 /// <see cref="AcpInteractionBridge"/> parses an inbound <c>session/request_permission</c>
 /// (spec-derived shape, NOT probe-confirmed — see <c>docs/acp-probe-findings.md</c>) or capability-
 /// gated <c>elicitation/create</c> server request, forwards it to an injected
-/// "ask the server" delegate (standing in for <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync"/>),
+/// "ask the server" delegate (standing in for <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync(Capacitor.Cli.Core.AcpInteractionRequest, System.Threading.CancellationToken)"/>),
 /// and maps the returned <see cref="AcpInteractionDecision"/> back to the ACP JSON-RPC result
 /// shape. Unit-tested against the delegate directly — no real SignalR connection involved.
 /// </summary>
@@ -53,7 +53,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
@@ -72,7 +72,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(
             ("allow-once", "allow_once"), ("no", "reject_once")));
@@ -91,7 +91,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "allow-always"]));
 
@@ -106,7 +106,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", "allow-once", null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(
             ("allow-once", "allow_once"), ("no", "reject_once")));
@@ -123,7 +123,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(
             ("no-a", "reject_always"), ("no-b", "reject_always")));
@@ -140,7 +140,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", "no", null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(
             ("no", "reject_always"), ("no", "reject_once")));
@@ -157,7 +157,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(
             ("same", "allow_once"), ("same", "reject_once")));
@@ -174,7 +174,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(
             ("never", "reject_always"), ("not-now", "reject_once")));
@@ -191,7 +191,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
@@ -206,7 +206,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => throw new InvalidOperationException("connection dropped"),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
@@ -233,7 +233,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromException<AcpInteractionDecision>(new OperationCanceledException("connection closing")),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
@@ -250,7 +250,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { called = true; return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", Params: null);
 
@@ -280,7 +280,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"} }""";
         var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
@@ -304,7 +304,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":null}""";
         var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
@@ -327,7 +327,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[null,{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]}""";
         var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
@@ -353,7 +353,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { Interlocked.Increment(ref routed); return Task.FromResult(new AcpInteractionDecision("answered", null, null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var json = $$"""{"sessionId":"{{AcpSessionId}}","message":"Proceed?"}""";
         var request = new AcpRequest(1, "elicitation/create", JsonDocument.Parse(json).RootElement.Clone());
@@ -382,7 +382,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { captured = req; return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         const string sessionIdFromParams = "session-from-params-only";
         var json = $$"""{"sessionId":"{{sessionIdFromParams}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]}""";
@@ -406,7 +406,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { called = true; return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var json = """{"sessionId":"","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]}""";
         var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
@@ -438,7 +438,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow_always", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
@@ -461,7 +461,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once"]));
 
@@ -485,7 +485,7 @@ public class AcpInteractionBridgeTests {
             // the human actually picked. Reordered relative to the wire order below on purpose.
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-second", "Allow", null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, TimeProvider.System);
 
         var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[{"optionId":"allow-first","name":"Allow","kind":"allow_once"},{"optionId":"allow-second","name":"Allow","kind":"allow_always"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]}""";
         var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
@@ -511,7 +511,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "does-not-exist", "Allow", null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
@@ -539,7 +539,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancelled", null, null, null, null, null)), // NOT the canonical "cancel"
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
@@ -555,7 +555,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "fs/read_text_file", Params: JsonDocument.Parse("{}").RootElement.Clone());
 
@@ -574,7 +574,7 @@ public class AcpInteractionBridgeTests {
                 return Task.FromResult(new AcpInteractionDecision("answered", "yes", "Yes", 0, null, null));
             },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var result = await bridge.HandleAsync(
             ElicitationRequest(FormParams("""{"type":"object","properties":{"proceed":{"type":"string","enum":["yes","no"]}}}""", "Proceed?")),
@@ -601,7 +601,7 @@ public class AcpInteractionBridgeTests {
                 return Task.FromResult(new AcpInteractionDecision("answered", null, null, null, "free text answer", null));
             },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var result = await bridge.HandleAsync(
             ElicitationRequest(FormParams("""{"type":"object","properties":{"name":{"type":"string"}}}""", "Describe the config")),
@@ -624,7 +624,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { Interlocked.Increment(ref routed); return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var result = await bridge.HandleAsync(
             ElicitationRequest(FormParams(""" "not-an-object" """.Trim(), "Proceed?")),
@@ -654,7 +654,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)),
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
         await bridge.HandleAsync(request, CancellationToken.None);
@@ -675,7 +675,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)),
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(("allow-once", "allow_once"), ("deny", "reject_once")));
         await bridge.HandleAsync(request, CancellationToken.None);
@@ -698,7 +698,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "some-other-id", "Allow", null, null, null)),
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
         var result  = await bridge.HandleAsync(request, CancellationToken.None);
@@ -719,7 +719,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)),
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
         await bridge.HandleAsync(request, CancellationToken.None);
@@ -735,7 +735,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", null, null, null, null, null)),
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
         await bridge.HandleAsync(request, CancellationToken.None);
@@ -752,7 +752,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", Params: null);
         await bridge.HandleAsync(request, CancellationToken.None);
@@ -766,7 +766,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("answered", "yes", "Yes", 0, null, null)),
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
 
         await bridge.HandleAsync(
             ElicitationRequest(FormParams("""{"type":"object","properties":{"proceed":{"type":"string","enum":["yes","no"]}}}""", "Proceed?")),
@@ -804,7 +804,7 @@ public class AcpInteractionBridgeTests {
             agentId: AgentId,
             logger: NullLogger.Instance,
             unattendedPolicy: AcpUnattendedInteractionPolicy.Fail,
-            unexpectedUnattendedInteraction: reaped.Add);
+            unexpectedUnattendedInteraction: reaped.Add, time: TimeProvider.System);
         var request = new AcpRequest(1, method, PermissionParamsWithOptions("[]"));
 
         var result = await bridge.HandleAsync(request, CancellationToken.None);
@@ -834,7 +834,7 @@ public class AcpInteractionBridgeTests {
             agentId: AgentId,
             logger: NullLogger.Instance,
             unattendedPolicy: AcpUnattendedInteractionPolicy.AllowlistedAutoApprove,
-            unexpectedUnattendedInteraction: r => reason = r);
+            unexpectedUnattendedInteraction: r => reason = r, time: TimeProvider.System);
 
         // Missing params is the simplest unadmittable frame — UnadmittableFrame's own logged `why`
         // is "session/request_permission had no params" (see the bridge's first UnadmittableFrame
@@ -858,7 +858,7 @@ public class AcpInteractionBridgeTests {
             agentId: AgentId,
             logger: NullLogger.Instance,
             unattendedPolicy: AcpUnattendedInteractionPolicy.Fail,
-            unexpectedUnattendedInteraction: r => reason = r);
+            unexpectedUnattendedInteraction: r => reason = r, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionParamsWithOptions("[]"));
         await bridge.HandleAsync(request, CancellationToken.None);
@@ -872,7 +872,7 @@ public class AcpInteractionBridgeTests {
             requestInteraction: (req, ct) => { Interlocked.Increment(ref calls); return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)); },
             agentId: AgentId,
             logger: logger ?? NullLogger.Instance,
-            unattendedPolicy: AcpUnattendedInteractionPolicy.AutoApprove);
+            unattendedPolicy: AcpUnattendedInteractionPolicy.AutoApprove, time: TimeProvider.System);
 
         return (bridge, () => Volatile.Read(ref calls));
     }
@@ -990,7 +990,7 @@ public class AcpInteractionBridgeTests {
             requestInteraction: (req, ct) => { throw new InvalidOperationException("must not be called"); },
             agentId: AgentId,
             logger: logger,
-            unattendedPolicy: AcpUnattendedInteractionPolicy.AutoApprove);
+            unattendedPolicy: AcpUnattendedInteractionPolicy.AutoApprove, time: TimeProvider.System);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionParamsWithOptions(
             """[{"optionId":"ao","name":"Allow once","kind":"allow_once"}]"""));
@@ -1021,7 +1021,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { Interlocked.Increment(ref routed); return Task.FromResult(decision); },
             agentId: AgentId,
-            logger: logger);
+            logger: logger, time: TimeProvider.System);
         return (bridge, () => Volatile.Read(ref routed), logger);
     }
 
@@ -1081,7 +1081,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { captured = req; return Task.FromResult(new AcpInteractionDecision("answered", "a", null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var result = await bridge.HandleAsync(
             ElicitationRequest(ElicitationFixtures.Params_BothSessionAndRequestId), CancellationToken.None);
@@ -1112,7 +1112,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { captured = req; return Task.FromResult(MultiDecision(["x", "y"])); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         await bridge.HandleAsync(ElicitationRequest(FormParams(MultiSelectBoundedSchema)), CancellationToken.None);
 
@@ -1196,7 +1196,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { captured = req; return Task.FromResult(new AcpInteractionDecision("answered", "a", null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         await bridge.HandleAsync(
             ElicitationRequest(FormParams("""{"type":"object","properties":{"choice":{"type":"string","title":"The title","description":"The description","enum":["a","b"]}}}""")),
@@ -1217,7 +1217,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { captured = req; return Task.FromResult(new AcpInteractionDecision("answered", "a", null, null, null, null)); },
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
 
         var message = new string('m', AcpInteractionBridge.MaxElicitationMessageCodeUnits);
         var title   = new string('t', 1000);
@@ -1280,7 +1280,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => throw new InvalidOperationException("boom"),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
         var result = await bridge.HandleAsync(
             ElicitationRequest(FormParams("""{"type":"object","properties":{"proceed":{"type":"string","enum":["yes"]}}}""")),
             CancellationToken.None);
@@ -1292,7 +1292,7 @@ public class AcpInteractionBridgeTests {
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => Task.FromCanceled<AcpInteractionDecision>(new CancellationToken(true)),
             agentId: AgentId,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, time: TimeProvider.System);
         var result = await bridge.HandleAsync(
             ElicitationRequest(FormParams("""{"type":"object","properties":{"proceed":{"type":"string","enum":["yes"]}}}""")),
             CancellationToken.None);
@@ -1358,7 +1358,7 @@ public class AcpInteractionBridgeTests {
             agentId: AgentId,
             logger: NullLogger.Instance,
             unattendedPolicy: AcpUnattendedInteractionPolicy.Fail,
-            unexpectedUnattendedInteraction: _ => { });
+            unexpectedUnattendedInteraction: _ => { }, time: TimeProvider.System);
 
         var result = await bridge.HandleAsync(
             ElicitationRequest(FormParams("""{"type":"object","properties":{"proceed":{"type":"string","enum":["yes"]}}}""", "Proceed?")),
@@ -1394,7 +1394,7 @@ public class AcpInteractionBridgeTests {
             logger: NullLogger.Instance,
             unattendedPolicy: AcpUnattendedInteractionPolicy.AllowlistedAutoApprove,
             unexpectedUnattendedInteraction: reaped.Add,
-            admittedToolIds: new HashSet<string>(StringComparer.Ordinal) { Admitted });
+            admittedToolIds: new HashSet<string>(StringComparer.Ordinal) { Admitted }, time: TimeProvider.System);
 
         return (bridge, reaped, () => routed);
     }

@@ -29,6 +29,12 @@
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "description": "Attach the current session to a work item (issue, PR, or a brand-new item) on the Capacitor server, and list the work items a session is attached to."
     },
+    "kcap-plans": {
+      "command": "kcap",
+      "args": ["mcp", "plans"],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "description": "Plan ledger — declare the plan, spec or design document this session works from (declare_plan_document), declare its task list (set_plan_tasks), record each task's status change (update_plan_task) and read the plan back after compaction (get_plan)."
+    },
     "kcap-artefacts": {
       "command": "kcap",
       "args": ["mcp", "artefacts"],

@@ -8,7 +8,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) {
+public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, CliTelemetry telemetry) {
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             await Console.Error.WriteLineAsync("Usage: kcap config <show|set|unset> [key] [value]");
@@ -127,12 +127,12 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
         TelemetryState.SetEnabled(enabled, config);
 
         // Belt-and-braces, not the primary defence: Program.cs's pre-Initialize check (see
-        // Program.cs, right before CliTelemetry.Initialize) already stops telemetry from ever
+        // Program.cs, right before the facade starts) already stops telemetry from ever
         // activating for a plain `config set telemetry off`, so there is normally nothing left to
         // discard by the time this runs. But KCAP_TELEMETRY=1 legitimately overrides a persisted
         // "off" (finding: env outranks config), so Initialize can still have come up live despite
         // the value being applied here — tear it down in that case too.
-        if (!enabled) CliTelemetry.DiscardAndDisable();
+        if (!enabled) telemetry.DiscardAndDisable();
 
         return true;
     }
@@ -140,7 +140,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
     /// <summary>
     /// Pure recognizer for the "telemetry" value vocabulary. Shared by <see cref="TryApplyTelemetry"/>
     /// (which throws on an unrecognized value — invalid input is this command's problem to report)
-    /// and Program.cs's pre-<c>CliTelemetry.Initialize</c> short-circuit (which must NOT throw: an
+    /// and Program.cs's pre-start short-circuit (which must NOT throw: an
     /// invalid value there is reported normally once the command actually dispatches). Returns
     /// null for anything unrecognized.
     /// </summary>
@@ -172,8 +172,12 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
             "disable_memory_index" => throw new ArgumentException($"Invalid value for disable_memory_index: '{value}'. Must be true or false."),
             "disable_coordination_notices" when bool.TryParse(value, out var b) => profile with { DisableCoordinationNotices = b },
             "disable_coordination_notices" => throw new ArgumentException($"Invalid value for disable_coordination_notices: '{value}'. Must be true or false."),
+            "disable_first_run_notice" when bool.TryParse(value, out var b) => profile with { DisableFirstRunNotice = b },
+            "disable_first_run_notice" => throw new ArgumentException($"Invalid value for disable_first_run_notice: '{value}'. Must be true or false."),
             "disable_workitems_nudge" when bool.TryParse(value, out var b) => profile with { DisableWorkItemsNudge = b },
             "disable_workitems_nudge" => throw new ArgumentException($"Invalid value for disable_workitems_nudge: '{value}'. Must be true or false."),
+            "disable_plans_nudge" when bool.TryParse(value, out var b) => profile with { DisablePlansNudge = b },
+            "disable_plans_nudge" => throw new ArgumentException($"Invalid value for disable_plans_nudge: '{value}'. Must be true or false."),
             "disable_harness_nudge" when bool.TryParse(value, out var b) => profile with { DisableHarnessNudge = b },
             "disable_harness_nudge" => throw new ArgumentException($"Invalid value for disable_harness_nudge: '{value}'. Must be true or false."),
             "use_provider_api_key" when bool.TryParse(value, out var b) => profile with { UseProviderApiKey = b },
@@ -181,6 +185,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
             "default_visibility" when value is "private" or "project" or "org_public" or "public" => profile with { DefaultVisibility = value },
             "default_visibility" => throw new ArgumentException("Invalid value. Must be: private, project, org_public, or public"),
             "excluded_repos" => profile with { ExcludedRepos = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) },
+            "allowed_repos"  => profile with { AllowedRepos  = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) },
             "flows.reviewer_vendor" when !string.IsNullOrWhiteSpace(value) =>
                 profile with { Flows = (profile.Flows ?? new FlowsSettings()) with { ReviewerVendor = ReviewerVendors.Normalize(value) } },
             "flows.reviewer_vendor" => throw new ArgumentException(
@@ -208,17 +213,19 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
         Console.Error.WriteLine("Keys:");
         Console.Error.WriteLine("  server_url                  Server URL");
         Console.Error.WriteLine("  daemon.name                 Daemon name");
-        Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents");
+        Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents (0 = unlimited)");
         Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
         Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
         Console.Error.WriteLine("  update_check                All kcap update nudging: stderr hint, server headers (banner/notification), in-agent nudge (true/false)");
         Console.Error.WriteLine("  default_visibility          Default session visibility (private, project, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_workitems_nudge     Skip injecting the work-items nudge at SessionStart (true/false)");
+        Console.Error.WriteLine("  disable_first_run_notice    Skip the one-shot notice in the first session after setup (true/false)");
         Console.Error.WriteLine("  disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_harness_nudge       Skip new-harness setup nudges (in-session + CLI stderr) (true/false)");
         Console.Error.WriteLine("  use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)");
         Console.Error.WriteLine("  excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)");
+        Console.Error.WriteLine("  allowed_repos               Capture only these repos, comma-separated; empty allows all");
         Console.Error.WriteLine("  flows.reviewer_vendor       Preferred review-flow reviewer vendor (used only when the definition names none)");
         Console.Error.WriteLine("  skills.auto_sync            Background skills refresh at Claude session start (true/false, default false)");
         Console.Error.WriteLine("  telemetry                   Anonymous CLI usage reporting, machine-wide (on/off)");

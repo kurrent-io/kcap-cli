@@ -28,8 +28,9 @@ static class HelloProbe {
     static readonly HelloProbeResult Unreachable            = new(false, null, null, null);
     static readonly HelloProbeResult ReachableNotWellFormed = new(false, null, null, null) { Reachable = true };
 
-    public static async Task<HelloProbeResult> RunAsync(DaemonStore store, string daemonName, TimeSpan timeout) {
-        using var cts = new CancellationTokenSource(timeout);
+    public static async Task<HelloProbeResult> RunAsync(
+            DaemonStore store, string daemonName, TimeProvider time, TimeSpan timeout) {
+        using var cts = new CancellationTokenSource(timeout, time);
 
         NetworkStream stream;
         try {

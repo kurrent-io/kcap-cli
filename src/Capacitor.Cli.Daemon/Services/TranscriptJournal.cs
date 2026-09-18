@@ -36,7 +36,7 @@ internal sealed class TranscriptJournal : IDisposable {
     public TranscriptJournal(
             string                   path,
             ILogger                  logger,
-            TimeProvider?            time            = null,
+            TimeProvider            time,
             Action<string, byte[]>?  append          = null,
             JournalPathLocks?        locks           = null,
             int                      capacity        = Capacity,
@@ -45,7 +45,7 @@ internal sealed class TranscriptJournal : IDisposable {
             Task?                    writerStartGate = null) {
         Path             = path;
         _logger          = logger;
-        _time            = time ?? TimeProvider.System;
+        _time            = time;
         _append          = append ?? AppendToFile;
         _locks           = locks ?? JournalPathLocks.Shared;
         _grace           = completeGrace ?? CompleteGrace;
@@ -55,8 +55,8 @@ internal sealed class TranscriptJournal : IDisposable {
             FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
     }
 
-    public static TranscriptJournal ForAgent(string stateDir, string agentId, ILogger logger) =>
-        new(System.IO.Path.Combine(stateDir, "transcripts", AgentFileNames.For(agentId) + ".jsonl"), logger);
+    public static TranscriptJournal ForAgent(string stateDir, string agentId, ILogger logger, TimeProvider time) =>
+        new(System.IO.Path.Combine(stateDir, "transcripts", AgentFileNames.For(agentId) + ".jsonl"), logger, time);
 
     public string Path { get; }
 
@@ -133,7 +133,9 @@ internal sealed class TranscriptJournal : IDisposable {
 
             // Wall-clock, not the injected TimeProvider: the grace bounds a shutdown against a hung
             // disk, and a caller's test clock advancing is not evidence the disk came back.
+#pragma warning disable RS0030
             if (await Task.WhenAny(_writer, Task.Delay(_grace)).ConfigureAwait(false) == _writer) {
+#pragma warning restore RS0030
                 Drained = true;
                 return true;
             }

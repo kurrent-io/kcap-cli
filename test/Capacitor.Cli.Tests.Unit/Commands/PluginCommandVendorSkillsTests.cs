@@ -20,16 +20,13 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// top a tree up, never create one. The npm postinstall runs it for every vendor on each
 /// `npm install -g`, so creating there would undo a deliberate `plugin remove --skills`.
 /// </remarks>
-// PATH is process-global: the install refuses unless `kcap` resolves through it, and every spawned
-// child inherits it.
-[NotInParallel]
 public class PluginCommandVendorSkillsTests {
     [Test]
     [MethodDataSource(nameof(Vendors))]
     public async Task fresh_install_writes_the_shared_agent_skills(Vendor vendor) {
         using var scope = new VendorScope(vendor);
 
-        var exit = await new PluginCommand(scope.Env).HandleAsync(vendor.InstallArgs(scope.Home));
+        var exit = await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(vendor.InstallArgs(scope.Home));
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -44,7 +41,7 @@ public class PluginCommandVendorSkillsTests {
     public async Task refresh_does_not_create_skills_for_a_vendor_never_installed(Vendor vendor) {
         using var scope = new VendorScope(vendor);
 
-        var exit = await new PluginCommand(scope.Env).HandleAsync(
+        var exit = await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             [.. vendor.InstallArgs(scope.Home), "--if-installed"]);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -60,11 +57,11 @@ public class PluginCommandVendorSkillsTests {
         using var scope = new VendorScope(vendor);
 
         // Install for real, then remove the skills the way a user would.
-        await new PluginCommand(scope.Env).HandleAsync(vendor.InstallArgs(scope.Home));
-        await new PluginCommand(scope.Env).HandleAsync(["plugin", "remove", "--skills"]);
+        await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(vendor.InstallArgs(scope.Home));
+        await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove", "--skills"]);
         await Assert.That(AgentsSkillsInstaller.IsInstalled(scope.Env.Agents.UserSkillsDir)).IsFalse();
 
-        var exit = await new PluginCommand(scope.Env).HandleAsync(
+        var exit = await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             [.. vendor.InstallArgs(scope.Home), "--if-installed"]);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -79,7 +76,7 @@ public class PluginCommandVendorSkillsTests {
     public async Task fresh_install_kiro_writes_its_own_skills_tree_not_the_shared_one() {
         using var scope = new VendorScope(Vendor.Kiro);
 
-        await new PluginCommand(scope.Env).HandleAsync(["plugin", "install", "--kiro"]);
+        await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         // Kiro reads ~/.kiro/skills; writing the shared tree instead would be silently useless to it.
         await Assert.That(AgentsSkillsInstaller.IsInstalled(scope.Env.Harnesses.Of<KiroHarness>().Paths.SkillsDir)).IsTrue();
@@ -90,7 +87,7 @@ public class PluginCommandVendorSkillsTests {
     public async Task fresh_install_antigravity_writes_its_own_skills_tree_not_the_shared_one() {
         using var scope = new VendorScope(Vendor.Antigravity);
 
-        await new PluginCommand(scope.Env).HandleAsync(["plugin", "install", "--antigravity"]);
+        await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--antigravity"]);
 
         await Assert.That(AgentsSkillsInstaller.IsInstalled(scope.Env.Harnesses.Of<AntigravityHarness>().Paths.SkillsDir)).IsTrue();
         await Assert.That(Directory.Exists(scope.Env.Agents.UserSkillsDir)).IsFalse();
@@ -101,7 +98,7 @@ public class PluginCommandVendorSkillsTests {
     public async Task the_skip_flag_declines_the_shared_skills(Vendor vendor) {
         using var scope = new VendorScope(vendor);
 
-        var exit = await new PluginCommand(scope.Env).HandleAsync(
+        var exit = await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             [.. vendor.InstallArgs(scope.Home), $"--skip-{vendor.Flag}-skills"]);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -115,14 +112,14 @@ public class PluginCommandVendorSkillsTests {
     public async Task install_sweeps_legacy_codex_skills_even_when_the_tree_is_already_current() {
         using var scope = new VendorScope(Vendor.Cursor);
 
-        await new PluginCommand(scope.Env).HandleAsync(Vendor.Cursor.InstallArgs(scope.Home));
+        await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(Vendor.Cursor.InstallArgs(scope.Home));
         await Assert.That(AgentsSkillsInstaller.IsCurrent(scope.Env.Agents.UserSkillsDir)).IsTrue();
 
         // A pre-migration machine still carrying the old Codex-only copy.
         var legacy = Path.Combine(scope.Env.Harnesses.Of<CodexHarness>().Paths.SkillsDir, "kcap-recap");
         Directory.CreateDirectory(legacy);
 
-        await new PluginCommand(scope.Env).HandleAsync(Vendor.Cursor.InstallArgs(scope.Home));
+        await new PluginCommand(scope.Env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(Vendor.Cursor.InstallArgs(scope.Home));
 
         await Assert.That(Directory.Exists(legacy))
                     .IsFalse()
@@ -163,28 +160,20 @@ public class PluginCommandVendorSkillsTests {
     }
 
     /// <summary>
-    /// A fake home with the vendor's own env vars cleared, a resolvable `kcap` on PATH, and a
-    /// <see cref="PluginEnvironment"/> pointed at the shipped skills tree.
+    /// A fake home with the vendor's own env vars cleared, a resolvable `kcap` on the registry's own
+    /// search path, and a <see cref="PluginEnvironment"/> pointed at the shipped skills tree.
     /// </summary>
     sealed class VendorScope : IDisposable {
-        readonly TempHome    _home;
-        readonly TempDir         _binDir;
-        readonly List<EnvScope>  _envScopes = [];
+        readonly TempHome _home;
+        readonly TempDir  _binDir;
 
         public VendorScope(Vendor vendor) {
             _home   = new TempHome();
             _binDir = new TempDir();
 
             // The fresh path refuses to install unless `kcap` resolves — it is what the hooks it
-            // writes will invoke. Both names, because the Windows leg matches on PATHEXT.
-            foreach (var name in new[] { "kcap", "kcap.exe" }) {
-                var path = _binDir.CreateFile(name);
-                if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-            }
-
-            _envScopes.Add(EnvScope.Exclusive(
-                "PATH", _binDir.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH")));
+            // writes will invoke.
+            var binaries = TestBinaries.Searching(_binDir, "kcap");
 
             Env = new PluginEnvironment(
                 Home:     new(_home.Path),
@@ -195,7 +184,8 @@ public class PluginCommandVendorSkillsTests {
                 Stdout:            TextWriter.Null,
                 Stderr:            TextWriter.Null
             ) {
-                Harnesses = TestHarnesses.Under(new(_home.Path)),
+                Harnesses = TestHarnesses.Under(new(_home.Path), binaries),
+                Binaries  = binaries,
                 ResolveMcpBinaryPath = () => Path.Combine(_binDir.Path, "kcap")
             };
         }
@@ -204,7 +194,6 @@ public class PluginCommandVendorSkillsTests {
         public PluginEnvironment Env  { get; }
 
         public void Dispose() {
-            foreach (var scope in _envScopes) scope.Dispose();
             _binDir.Dispose();
             _home.Dispose();
         }

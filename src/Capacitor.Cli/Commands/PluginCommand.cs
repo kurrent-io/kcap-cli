@@ -14,11 +14,10 @@ using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
-using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class PluginCommand(PluginEnvironment env) {
+public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdir) {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
     const string CodexHookCommand   = "kcap hook --codex";
@@ -31,6 +30,10 @@ public sealed class PluginCommand(PluginEnvironment env) {
     // killing the hook before the user approves or denies.
     const int PermissionRequestTimeout = 86400;
     const int DefaultHookTimeout       = 30;
+
+    /// <summary>Whether the bare <c>kcap</c> those commands invoke resolves on the same search path
+    /// the vendors were found on — a hook writing a command this cannot find never fires.</summary>
+    bool KcapOnPath => env.Binaries.Finds("kcap");
 
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
@@ -98,7 +101,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
+            ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook.
@@ -158,7 +161,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
+            ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         if (!File.Exists(settingsPath)) {
@@ -329,7 +332,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
+            ? Path.Combine(workdir.Path, ".codex", "hooks.json")
             : codex.UserHooksJson;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook and
@@ -507,7 +510,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
+            ? Path.Combine(workdir.Path, ".codex", "hooks.json")
             : codex.UserHooksJson;
 
         var hooksRemoved = false;
@@ -697,7 +700,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
             // find it. Skip the precheck on the postinstall (--if-installed) path so
             // an in-flight npm install doesn't fail just because the new symlink
             // isn't on the child process's PATH yet.
-            case false when !BinaryProbe.OnPath("kcap"):
+            case false when !KcapOnPath:
                 await env.Stderr.WriteLineAsync(
                     "Cannot install Cursor hooks: 'kcap' is not on PATH. "
                   + "Re-install kcap via npm: npm install -g @kurrent/kcap"
@@ -876,7 +879,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         // Fresh install needs kcap on PATH: both extensions shell out to the bare
         // `kcap` command (ingest → `kcap hook --pi`; bridge → `kcap mcp <name>`), so
         // pi must find kcap on PATH. Skipped on the postinstall (--if-installed) path.
-        if (!refreshOnly && !BinaryProbe.OnPath("kcap")) {
+        if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the Pi extension: 'kcap' is not on PATH. "
               + "Re-install kcap via npm: npm install -g @kurrent/kcap"
@@ -1030,7 +1033,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // Fresh install needs kcap on PATH: the plugin shells out to the bare `kcap hook --opencode`
         // command, so OpenCode must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !BinaryProbe.OnPath("kcap")) {
+        if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
               + "Re-install kcap via npm: npm install -g @kurrent/kcap"
@@ -1182,7 +1185,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // Fresh install needs kcap on PATH: hooks.json runs the bare `kcap hook --antigravity`
         // command. Skipped on the --if-installed (postinstall) refresh path.
-        if (!refreshOnly && !BinaryProbe.OnPath("kcap")) {
+        if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
               + "Re-install kcap via npm: npm install -g @kurrent/kcap"
@@ -1412,7 +1415,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // Fresh install needs kcap on PATH: kcap.json writes the bare `kcap hook --copilot` command,
         // so Copilot must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !BinaryProbe.OnPath("kcap")) {
+        if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Copilot hooks: 'kcap' is not on PATH. "
               + "Re-install kcap via npm: npm install -g @kurrent/kcap"
@@ -1640,7 +1643,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         }
 
         // Fresh install needs kcap on PATH: the agent + the MCP servers run the bare `kcap` command.
-        if (!refreshOnly && !BinaryProbe.OnPath("kcap")) {
+        if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Kiro hooks: 'kcap' is not on PATH. "
               + "Re-install kcap via npm: npm install -g @kurrent/kcap"
@@ -1997,7 +2000,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // Fresh install needs kcap on PATH: settings.json writes the bare `kcap hook --gemini`
         // command, so Gemini must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !BinaryProbe.OnPath("kcap")) {
+        if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Gemini hooks: 'kcap' is not on PATH. "
               + "Re-install kcap via npm: npm install -g @kurrent/kcap"

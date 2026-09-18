@@ -1,18 +1,21 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Curation;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
-class CurateCommand(ConfigRoot config, IRepositoriesApi repositories) {
+class CurateCommand(
+        ConfigRoot config, IRepositoriesApi repositories, GitProviderRouter router,
+        WorkingDirectory workdir, TimeProvider time) {
     /// <summary>One page is all this command reads; hitting it exactly is what the warning below
     /// reports, so the request and the check must name the same number.</summary>
     const int PageLimit = 100;
 
     public async Task<int> HandleApply(bool dryRun, bool yes) {
-        var cwd = Environment.CurrentDirectory;
+        var cwd = workdir.Path;
 
-        // 1. Authoritative repo-root gate (never AppConfig.RepoRoot).
+        // 1. Authoritative repo-root gate: the tree itself, never the fallback RepoRootOf applies.
         var repoRoot = GitRepository.FindRoot(cwd);
         if (repoRoot is null) {
             await Console.Error.WriteLineAsync("Not inside a git repository — run `kcap curate apply` from a repo.");
@@ -20,7 +23,7 @@ class CurateCommand(ConfigRoot config, IRepositoriesApi repositories) {
         }
 
         // 2. Identify the repo for the server key.
-        var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time);
         if (repo?.Owner is null || repo.RepoName is null) {
             await Console.Error.WriteLineAsync("Could not determine the repo's owner/name from its git remote.");
             return 1;

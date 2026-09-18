@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Claude;
 
@@ -13,33 +14,33 @@ public class ClaudeImportSourceTests {
 
     [Test]
     public async Task vendor_is_claude() {
-        var src = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects);
+        var src = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.Vendor).IsEqualTo(HarnessId.Claude);
     }
 
     [Test]
     public async Task supports_title_generation() {
-        var src = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects);
+        var src = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.SupportsTitleGeneration).IsTrue();
     }
 
     [Test]
     public async Task is_available_when_projects_dir_exists() {
         using var tmp = new TempDir();
-        var src = new ClaudeImportSource(Config.Root, tmp.Path);
+        var src = new ClaudeImportSource(Config.Root, tmp.Path, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.IsAvailable).IsTrue();
     }
 
     [Test]
     public async Task is_unavailable_when_projects_dir_missing() {
         using var missingDir = TempDir.WithPathTo("kcap-claude-source-missing", out var missing);
-        var src     = new ClaudeImportSource(Config.Root, missing);
+        var src     = new ClaudeImportSource(Config.Root, missing, router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.IsAvailable).IsFalse();
     }
 
     [Test]
     public async Task import_session_async_throws_not_implemented() {
-        var src = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects);
+        var src = new ClaudeImportSource(Config.Root, new ClaudePaths(Home, null).Projects, router: new GitProviderRouter(), time: TimeProvider.System);
         var classification = new ImportCommand.SessionClassification {
             SessionId  = "abc",
             FilePath   = "/tmp/none",

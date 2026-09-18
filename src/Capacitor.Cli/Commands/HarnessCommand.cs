@@ -10,14 +10,21 @@ namespace Capacitor.Cli.Commands;
 /// nudge; <c>reset</c> undoes a dismissal. All three run their own detection pass and neither read
 /// nor claim the shared 6-hour evaluation throttle (the nudge surfaces' concern, not the commands').
 /// </summary>
-public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses) {
+public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses, TimeProvider time) {
     public Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) { PrintUsage(); return Task.FromResult(1); }
 
-        var store = new HarnessOfferStore(config);
+        var store = new HarnessOfferStore(config, time);
+
+        // Refused rather than ignored: a caller expecting JSON would get a line of prose back from a
+        // subcommand that has already written to the ledger.
+        if (args.Contains("--json") && args[1] != "list") {
+            Console.Error.WriteLine("--json only applies to `kcap harness list`.");
+            return Task.FromResult(1);
+        }
 
         return Task.FromResult(args[1] switch {
-            "list"                    => List(harnesses, store),
+            "list"                    => List(args, harnesses, store),
             "dismiss"                 => Dismiss(args, harnesses, store),
             "reset"                   => Reset(args, store),
             "--help" or "-h" or "help" => Help(),
@@ -25,8 +32,14 @@ public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses)
         });
     }
 
-    static int List(HarnessRegistry harnesses, HarnessOfferStore store) {
+    static int List(string[] args, HarnessRegistry harnesses, HarnessOfferStore store) {
         var ledger = store.Load();
+
+        if (args.Contains("--json")) {
+            Console.WriteLine(HarnessListRender.Render(harnesses, ledger));
+            return 0;
+        }
+
         Console.WriteLine($"  {"Harness",-14}{"Installed",-11}{"kcap wired",-12}Dismissed");
         foreach (var h in harnesses) {
             var isDismissed = ledger.Entry(h.Id) is { Declined: true };
@@ -36,7 +49,7 @@ public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses)
         return 0;
     }
 
-    static int Dismiss(string[] args, HarnessRegistry harnesses, HarnessOfferStore store) {
+    int Dismiss(string[] args, HarnessRegistry harnesses, HarnessOfferStore store) {
         var rest = args.Skip(2).ToArray();
         List<IHarness> targets;
 
@@ -64,7 +77,7 @@ public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses)
             }
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = time.GetUtcNow();
         if (!store.Update(l => l.WithDismissed(targets.Select(t => t.Id), now))) {
             Console.Error.WriteLine("kcap: could not persist the dismissal (failed to write the offer ledger).");
             return 1;
@@ -118,7 +131,7 @@ public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses)
 
     static void PrintUsage() {
         Console.Error.WriteLine("Usage: kcap harness <list|dismiss|reset>");
-        Console.Error.WriteLine("  list                     show detected / kcap-wired / dismissed state per harness");
+        Console.Error.WriteLine("  list [--json]            show detected / kcap-wired / dismissed state per harness");
         Console.Error.WriteLine("  dismiss <vendor…>|--all  stop nudging to set kcap up for a harness");
         Console.Error.WriteLine("  reset <vendor…>|--all    offer a previously-dismissed harness again");
     }

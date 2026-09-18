@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Layout;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
@@ -33,9 +34,33 @@ public class SettingsWindowSmokeTests {
             var save = window.FindControl<Button>("SaveButton")!;
             var rename = window.FindControl<Button>("RenameButton")!;
             await Assert.That(name.Text).IsEqualTo("daemon-a");
+            await Assert.That(name.Classes.Contains("kcapField")).IsTrue();
             await Assert.That(capacity.Value).IsEqualTo(5m);
+            await Assert.That(capacity.Classes.Contains("kcapField")).IsTrue();
+            await Assert.That(capacity.ShowButtonSpinner).IsFalse();
+            await Assert.That(window.FindControl<TextBlock>("DaemonTitleText")!.LetterSpacing).IsEqualTo(-0.3);
+            await Assert.That(save.Classes.Contains("kcapPrimary")).IsTrue();
+            await Assert.That(rename.Classes.Contains("kcapPrimary")).IsTrue();
             await Assert.That(save.IsEffectivelyEnabled).IsFalse();
-            await Assert.That(window.FindControl<TextBlock>("StatusText")!.Text!).Contains("2 of 5 agents");
+            await Assert.That(window.FindControl<TextBlock>("StatusText")!.Text).IsEqualTo("2 / 5");
+            await Assert.That(ToolTip.GetTip(window.FindControl<Border>("StatusChip")!)!.ToString()!).Contains("Running as daemon-a");
+            await Assert.That(ToolTip.GetTip(rename)).IsEqualTo(vm.RenameHint);
+            await Assert.That(ToolTip.GetShowOnDisabled(rename)).IsTrue();
+            await Assert.That(rename.HorizontalAlignment).IsEqualTo(HorizontalAlignment.Left);
+            await Assert.That(save.HorizontalAlignment).IsEqualTo(HorizontalAlignment.Left);
+            await Assert.That(window.FindControl<TextBlock>("StatusCaptionText")!.IsVisible).IsTrue();
+            await Assert.That(window.FindControl<TextBlock>("StatusCaptionText")!.Text).IsEqualTo("Agents");
+            var nameError = window.FindControl<TextBlock>("NameErrorText")!;
+            await Assert.That(nameError.Classes.Contains("kcapHint")).IsTrue();
+            await Assert.That(nameError.LetterSpacing).IsEqualTo(0.2);
+            await Assert.That(window.FindControl<TextBlock>("CapacityErrorText")!.LetterSpacing).IsEqualTo(0.2);
+            await Assert.That(window.FindControl<TextBlock>("MessageText")!.LetterSpacing).IsEqualTo(0.2);
+            var title = window.FindControl<TextBlock>("DaemonTitleText")!;
+            var chip = window.FindControl<Border>("StatusChip")!;
+            await Assert.That(title.VerticalAlignment).IsEqualTo(VerticalAlignment.Center);
+            await Assert.That(chip.VerticalAlignment).IsEqualTo(VerticalAlignment.Center);
+            await Assert.That(Math.Abs((title.Bounds.Y + title.Bounds.Height / 2) - (chip.Bounds.Y + chip.Bounds.Height / 2)))
+                .IsLessThan(1.5);
             name.Text = "new-name";
             capacity.Value = 8;
             Dispatcher.UIThread.RunJobs();
@@ -46,7 +71,9 @@ public class SettingsWindowSmokeTests {
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
             Dispatcher.UIThread.RunJobs();
             await Assert.That(rename.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(window.Title).IsEqualTo("Kurrent Capacitor — Settings");
             await Assert.That(window.Bounds.Width).IsEqualTo(540d);
+            await Assert.That(window.Bounds.Height).IsEqualTo(580d);
             await Assert.That(capacity.Bounds.Height).IsGreaterThan(0d);
         } finally { window.Close(); }
     });

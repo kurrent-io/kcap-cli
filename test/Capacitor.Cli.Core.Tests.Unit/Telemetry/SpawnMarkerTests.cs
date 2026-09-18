@@ -1,73 +1,72 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
 
-[NotInParallel(nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink))]
 public class SpawnMarkerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    /// <summary>
+    /// Reading the marker consumes it, so these mutate the real environment — the only place it
+    /// lives. Bare, because a concurrent peer spawning a child would inherit whatever is set.
+    /// </summary>
     [Test]
-    public async Task Consume_removes_marker_and_reports_presence() {
-        CliTelemetry.Reset();
-        var env = new Dictionary<string, string?> { [CliTelemetry.SpawnNoTelemetryVar] = "1" };
-        var suppressed = CliTelemetry.ConsumeSpawnMarker(k => env.GetValueOrDefault(k), k => env.Remove(k));
+    [NotInParallel]
+    public async Task The_marker_is_read_once_and_removed_from_the_environment() {
+        using var marker = EnvScope.Exclusive(TelemetryStartup.SpawnNoTelemetryVar, "1");
 
-        await Assert.That(suppressed).IsTrue();
-        await Assert.That(env.ContainsKey(CliTelemetry.SpawnNoTelemetryVar)).IsFalse();
+        var startup = TelemetryStartup.FromEnvironment("login", serverUrl: null, AuthEndpoints.DefaultSignupUrl);
+
+        await Assert.That(startup.Suppressed).IsTrue();
+        await Assert.That(Environment.GetEnvironmentVariable(TelemetryStartup.SpawnNoTelemetryVar)).IsNull()
+            .Because("nothing this process spawns may observe it");
     }
 
     [Test]
-    public async Task Consume_without_marker_is_inert() {
-        CliTelemetry.Reset();
-        var env = new Dictionary<string, string?>();
-        var suppressed = CliTelemetry.ConsumeSpawnMarker(k => env.GetValueOrDefault(k), k => env.Remove(k));
+    [NotInParallel]
+    public async Task No_marker_suppresses_nothing() {
+        using var marker = EnvScope.Exclusive(TelemetryStartup.SpawnNoTelemetryVar, null);
 
-        await Assert.That(suppressed).IsFalse();
+        await Assert.That(TelemetryStartup.FromEnvironment("login", serverUrl: null, AuthEndpoints.DefaultSignupUrl).Suppressed).IsFalse();
+    }
+
+    /// <summary>The marker is ours; the opt-out is the user's, and consuming one must not touch the other.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task Consuming_the_marker_leaves_the_users_own_KCAP_TELEMETRY_alone() {
+        using var marker = EnvScope.Exclusive(TelemetryStartup.SpawnNoTelemetryVar, "1");
+        using var choice = EnvScope.Exclusive("KCAP_TELEMETRY", "1");
+
+        TelemetryStartup.FromEnvironment("login", serverUrl: null, AuthEndpoints.DefaultSignupUrl);
+
+        await Assert.That(Environment.GetEnvironmentVariable("KCAP_TELEMETRY")).IsEqualTo("1");
     }
 
     [Test]
-    public async Task Marker_does_not_touch_users_own_KCAP_TELEMETRY() {
-        CliTelemetry.Reset();
-        var env = new Dictionary<string, string?> {
-            [CliTelemetry.SpawnNoTelemetryVar] = "1",
-            ["KCAP_TELEMETRY"] = "1",
-        };
-        CliTelemetry.ConsumeSpawnMarker(k => env.GetValueOrDefault(k), k => env.Remove(k));
+    public async Task A_suppressed_startup_yields_a_facade_that_captures_nothing() {
+        var probe = TelemetryProbe.Start("login", Config.Root, suppressed: true);
 
-        await Assert.That(env["KCAP_TELEMETRY"]).IsEqualTo("1");
+        probe.Funnel.Started(hasExistingProfile: false, serverUrlProvided: false, noPrompt: false);
+
+        await Assert.That(probe.Telemetry.Enabled).IsFalse();
+        await Assert.That(probe.Events).IsEmpty();
     }
 
+    /// <summary>
+    /// The marker is gone from the environment once read, so a second facade in the same process
+    /// cannot re-take the decision — inheriting the value is the only way it survives, which is what
+    /// an MCP server does when it re-derives its own under the "mcp-server" pseudo-command.
+    /// </summary>
     [Test]
-    public async Task Initialize_with_suppressed_true_keeps_telemetry_disabled() {
-        CliTelemetry.Reset();
-        CliTelemetry.TestSink = new();
+    public async Task Suppression_travels_to_a_second_facade_in_the_same_process() {
+        var startup = new TelemetryStartup("mcp", ServerUrl: null, AuthEndpoints.DefaultSignupUrl,
+                                    Suppressed: true, Debug: false);
 
-        CliTelemetry.Initialize("login", null, false, Config.Root, suppressed: true);
+        var probe = TelemetryProbe.Start(startup with { Command = "mcp-server" }, Config.Root);
 
-        await Assert.That(CliTelemetry.Enabled).IsFalse();
-        await Assert.That(CliTelemetry.TestSink).Count().IsEqualTo(0);
-    }
+        probe.Telemetry.Capture("mcp_tool_called", []);
 
-    [Test]
-    public async Task Suppression_is_sticky_across_multiple_initialize_calls() {
-        CliTelemetry.Reset();
-        CliTelemetry.TestSink = new();
-
-        // First init: consume marker and suppress
-        var env = new Dictionary<string, string?> { [CliTelemetry.SpawnNoTelemetryVar] = "1" };
-        var consumed = CliTelemetry.ConsumeSpawnMarker(k => env.GetValueOrDefault(k), k => env.Remove(k));
-        await Assert.That(consumed).IsTrue();
-
-        // First initialize call with suppression
-        CliTelemetry.Initialize("mcp", null, false, Config.Root, suppressed: true);
-        await Assert.That(CliTelemetry.Enabled).IsFalse();
-
-        // Second initialize call WITHOUT suppressed parameter (like MCP handlers do)
-        // This mimics McpWorkItemsServer.cs:34 calling Initialize("mcp-server", baseUrl, loggedIn)
-        CliTelemetry.Initialize("mcp-server", null, false, Config.Root);
-
-        // Telemetry must still be suppressed (sticky suppression prevents re-enabling)
-        await Assert.That(CliTelemetry.Enabled).IsFalse();
-        await Assert.That(CliTelemetry.TestSink).Count().IsEqualTo(0);
+        await Assert.That(probe.Telemetry.Enabled).IsFalse();
+        await Assert.That(probe.Events).IsEmpty();
     }
 }

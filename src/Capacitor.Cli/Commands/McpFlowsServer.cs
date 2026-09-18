@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -11,11 +10,13 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
 class McpFlowsServer(
-        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http) {
+        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http,
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
     public async Task<int> RunAsync(string? driverArg = null) {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
@@ -25,22 +26,28 @@ class McpFlowsServer(
         // session id and the working directory come from the same resolution, so a flow can never be
         // attributed to one session while being reviewed in another session's checkout.
         var requester    = HarnessRequesterContext.Resolve();
-        var cwd          = requester.ProjectDir ?? Directory.GetCurrentDirectory();
+        var cwd          = requester.ProjectDir ?? workdir.Path;
         var repoRoot     = GitRepository.FindRoot(cwd);
         // Prefer the `--driver` stamp from this server's own registration (deterministic for the JSON
         // harnesses); fall back to env inference for Claude/Codex, whose registrations are unstamped.
         var driverVendor = DriverVendor.Infer(driverArg);
         var tools        = BuildToolsList();
 
-        var repository = new CwdRepository(config, cwd);
+        var repository = new CwdRepository(config, cwd, router, time);
 
-        // MCP servers are long-lived and denylisted under the top-level "mcp" command
-        // (CommandEvents.Denylisted) — re-initialise under the reportable pseudo-command
-        // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
-        // disk must never block the server from starting.
+        // Best-effort, and recorded even when the read throws: a stale token on disk must never
+        // block the server from starting, and an absent property is a different value in a funnel
+        // from a false one — "could not tell" belongs with "not logged in", not with a gap.
         var loggedIn = false;
         try { loggedIn = await store.LoadForProfileAsync(profiles.Name) is not null; } catch { }
-        CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
+
+        // MCP servers are long-lived and denylisted under the top-level "mcp" command
+        // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
+        // "mcp-server" is what lets per-tool-call events leave at all.
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
+        telemetry.AddSharedProperty("logged_in", loggedIn);
+
+        await using var mcp = new McpTelemetry(telemetry);
 
         // Validate the server_url shape once, locally (pure string check — no network, token,
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
@@ -75,6 +82,7 @@ class McpFlowsServer(
 
                 return await HandleToolCallAsync(
                     callId, callRequest, client, baseUrl, cwd, repoRoot, await repository.GetAsync(),
+                    clock: new FlowRetryClock(time),
                     requestingSessionId: requester.SessionId, driverVendor: driverVendor,
                     reviewerVendorPreference: () => LoadReviewerVendorPreferenceAsync());
             } catch (Exception ex) {
@@ -88,7 +96,7 @@ class McpFlowsServer(
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -97,7 +105,7 @@ class McpFlowsServer(
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                McpTelemetry.ToolCalled("kcap-flows", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-flows", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -244,7 +252,7 @@ class McpFlowsServer(
                 var postBody = await postResponse.Content.ReadAsStringAsync();
 
                 if (postResponse.StatusCode == HttpStatusCode.Unauthorized)
-                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), isError: true);
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
                 // Catalog-start protocol-v2 skew seam (404 means an old server, before any run
                 // started) plus an explicit-vendor echo check once the route matched.
@@ -258,7 +266,7 @@ class McpFlowsServer(
                     if (CheckReviewerModelResult(toolName, postResponse.StatusCode, postResponse.IsSuccessStatusCode, postBody, out var modelRunIdToClose) is { } modelCheck) {
                         // Only the 2xx-missing-ack case salvages a run id; the skew cases start nothing.
                         if (modelRunIdToClose is not null)
-                            await BestEffortCloseAsync(client, apiRoot, modelRunIdToClose);
+                            await BestEffortCloseAsync(client, apiRoot, modelRunIdToClose, time);
 
                         return BuildToolResult(id, modelCheck.Message, modelCheck.IsError);
                     }
@@ -269,7 +277,7 @@ class McpFlowsServer(
                     // A mismatch salvages + defensively closes the run and returns the error.
                     if (CheckVendorOverrideResult(toolName, requestedVendor, postResponse.StatusCode, postResponse.IsSuccessStatusCode, postBody, out var modelVendorRunIdToClose) is { } modelVendorCheck) {
                         if (modelVendorRunIdToClose is not null)
-                            await BestEffortCloseAsync(client, apiRoot, modelVendorRunIdToClose);
+                            await BestEffortCloseAsync(client, apiRoot, modelVendorRunIdToClose, time);
 
                         return BuildToolResult(id, modelVendorCheck.Message, modelVendorCheck.IsError);
                     }
@@ -280,7 +288,7 @@ class McpFlowsServer(
                     // the 404 case never has one) — close it defensively rather than leave a
                     // wrongly-vendored reviewer running unattended.
                     if (flowRunIdToClose is not null)
-                        await BestEffortCloseAsync(client, apiRoot, flowRunIdToClose);
+                        await BestEffortCloseAsync(client, apiRoot, flowRunIdToClose, time);
 
                     return BuildToolResult(id, vendorCheck.Message, vendorCheck.IsError);
                 }
@@ -336,11 +344,11 @@ class McpFlowsServer(
                     // send already had its go) is an auth problem, not a vendor one — say so, rather
                     // than printing a raw HTTP 401 the caller would read as a flow rejection.
                     if (retryResponse.StatusCode == HttpStatusCode.Unauthorized)
-                        return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), isError: true);
+                        return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
                     if (CheckVendorOverrideResult(toolName, preference, retryResponse.StatusCode, retryResponse.IsSuccessStatusCode, retryBody, out var retryRunIdToClose) is { } retryVendorCheck) {
                         if (retryRunIdToClose is not null)
-                            await BestEffortCloseAsync(client, apiRoot, retryRunIdToClose);
+                            await BestEffortCloseAsync(client, apiRoot, retryRunIdToClose, time);
 
                         return BuildToolResult(id, retryVendorCheck.Message, retryVendorCheck.IsError);
                     }
@@ -408,7 +416,7 @@ class McpFlowsServer(
                 using var daemonsResp = await client.GetAsync(apiRoot + "/api/daemons");
 
                 if (daemonsResp.StatusCode == HttpStatusCode.Unauthorized)
-                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), isError: true);
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
                 ReviewerVendorsResult result;
                 if (!daemonsResp.IsSuccessStatusCode) {
@@ -433,7 +441,7 @@ class McpFlowsServer(
             var body = await httpResponse.Content.ReadAsStringAsync();
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), isError: true);
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
             }
 
             if (!httpResponse.IsSuccessStatusCode) {
@@ -979,9 +987,10 @@ class McpFlowsServer(
     /// unbounded close would wedge the single-threaded stdio MCP loop and the error would never be
     /// delivered. Swallows every failure (incl. the timeout); the run still surfaces in the Flows
     /// tab / stale-reviewer sweep either way.</summary>
-    static async Task BestEffortCloseAsync(HttpClient client, string apiRoot, string flowRunId) {
+    static async Task BestEffortCloseAsync(
+            HttpClient client, string apiRoot, string flowRunId, TimeProvider time) {
         try {
-            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
             using var closeResponse = await client.PostAsync(
                 $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}/close", null, closeCts.Token);
         } catch {
@@ -1416,7 +1425,7 @@ class McpFlowsServer(
                 }
 
                 if (resp.StatusCode == HttpStatusCode.Unauthorized)
-                    return new(await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), true);
+                    return new(await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
 
                 // Fix #4: non-transient 4xx (e.g. 400, 403, 409 budget_unverifiable) fail
                 // immediately — coded bodies surface via FormatFlowStartError like the POST path.
@@ -1526,7 +1535,7 @@ class McpFlowsServer(
 
             using (resp) {
                 if (resp.StatusCode == HttpStatusCode.Unauthorized)
-                    return new(await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), true);
+                    return new(await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
 
                 var statusCode = (int)resp.StatusCode;
                 if (statusCode is >= 400 and < 500) {

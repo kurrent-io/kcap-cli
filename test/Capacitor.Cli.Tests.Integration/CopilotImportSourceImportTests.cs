@@ -5,6 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core.Harness.Copilot;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -50,7 +51,7 @@ public class CopilotImportSourceImportTests : IDisposable {
 
     [Test]
     public async Task ImportSession_AlreadyLoaded_replay_is_a_no_op_suppressed_by_the_vendor_neutral_gate() {
-        var root = WriteSession();
+        WriteSession();
 
         // Server already covers every importable line → AlreadyLoaded.
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
@@ -62,14 +63,14 @@ public class CopilotImportSourceImportTests : IDisposable {
 
         using var client = new HttpClient();
         var source = new CopilotImportSource(Config.Root, CopilotLayout,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+            new GitProviderRouter(), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);
 
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 

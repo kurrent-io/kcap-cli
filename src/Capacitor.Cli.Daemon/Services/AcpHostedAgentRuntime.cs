@@ -623,9 +623,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             AcpConnection                                                                  connection,
             IAcpProcess                                                                    process,
             ILogger                                                                        logger,
+            TimeProvider                                                                   time,
             string                                                                         agentId = "",
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>?   requestInteraction = null,
-            TimeProvider?                                                                  timeProvider = null,
             int?                                                                           transcriptCapacity = null,
             int?                                                                           pendingTurnsCapacity = null,
             bool                                                                           debugFrames = false,
@@ -654,7 +654,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _onDisposed        = onDisposed;
         _reconnect     = reconnect;
         _logger        = logger;
-        _timeProvider  = timeProvider ?? TimeProvider.System;
+        _timeProvider  = time;
         _agentId       = agentId;
         _debugFrames   = debugFrames;
         _vendor        = vendor;
@@ -683,6 +683,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 requestInteraction,
                 agentId,
                 logger,
+                time,
                 unattendedInteractionPolicy,
                 HandleUnexpectedUnattendedInteraction,
                 admittedToolIds,
@@ -1071,9 +1072,17 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 ct)
             .ConfigureAwait(false);
 
+        // Default launch (nothing requested): no selection ran, so report the vendor's CURRENT model
+        // from the handshake — the same "show the running model" the desktop rail gets from Pi. Only
+        // when nothing was requested, so a requested-but-unmatched model still reports null (the
+        // signal EmitModelFallbackNote and registration rely on).
+        if (_resolvedModel is null && string.IsNullOrWhiteSpace(requestedModel))
+            _resolvedModel = AcpSessionModelList.ExtractCurrentModel(sessionNewResult);
+
         // Handshake is now fully complete (initialize + session/new + best-effort model selection) —
         // one consolidated Info log carrying the negotiated protocol version, loadSession, and the
-        // resolved model (null if none was requested/matched).
+        // resolved model (the applied selection, the handshake's current model for a no-request
+        // launch, or null when a requested model did not match or no current marker was published).
         LogHandshakeOk(_agentId, _negotiatedProtocolVersion, _negotiatedCapabilities.LoadSession, _resolvedModel);
 
         // A dropped model is only knowable after session/new publishes the vendor's list, so nothing
@@ -1895,10 +1904,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     /// <summary>
-    /// A real timestamp for every envelope this runtime emits (Seq itself stays a <c>0</c> placeholder
-    /// — the forwarder assigns the real monotonic seq on dequeue). Uses <see cref="_timeProvider"/>
-    /// (defaults to <see cref="TimeProvider.System"/>, overridable in tests for determinism) rather
-    /// than <see cref="DateTimeOffset.UtcNow"/> directly.
+    /// A real timestamp for every envelope this runtime emits, off this runtime's own
+    /// <see cref="_timeProvider"/> so a faked clock reaches the envelopes too. Seq itself stays a
+    /// <c>0</c> placeholder — the forwarder assigns the real monotonic seq on dequeue.
     /// </summary>
     string NowIso() => _timeProvider.GetUtcNow().ToString("O");
 
@@ -1979,7 +1987,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             // Best-effort, bounded: the owner's own finally disposes any candidate it still holds; a
             // stuck owner must never hang dispose.
             try {
-                await _ownerTask.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                await _ownerTask.WaitAsync(TimeSpan.FromSeconds(3), _timeProvider).ConfigureAwait(false);
             } catch {
                 // Best-effort.
             }
@@ -1990,7 +1998,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             // turn's partial buffer (see FlushOpenRun) before the worker loop observes the cancellation
             // and returns. This is just a bounded wait for that to actually happen.
             try {
-                await _turnWorkerTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                await _turnWorkerTask.WaitAsync(TimeSpan.FromSeconds(5), _timeProvider).ConfigureAwait(false);
             } catch {
                 // Best-effort — a stuck turn worker must never hang dispose.
             }
@@ -2037,7 +2045,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // unconditional for every vendor, and a future/test IAcpProcess whose TerminateAsync
                 // ignores its own timeout must not be able to wedge disposal outright. A reap that
                 // won't settle is a "didn't confirm" signal, not a reason to hang teardown.
-                await reap.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                await reap.WaitAsync(TimeSpan.FromSeconds(5), _timeProvider).ConfigureAwait(false);
             } catch (Exception ex) {
                 // The reap's OWN outcome is already logged; this is a SEPARATE, symmetric Debug
                 // line for the bound itself (matching the exit-confirmation wait below, which also
@@ -2058,7 +2066,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // test doubles return a task completing only on an explicit exit signal — so relying
                 // on the parameter hung every suite that disposes a fake.
                 await installed.Process.WaitForExitAsync(TimeSpan.FromSeconds(5))
-                                       .WaitAsync(TimeSpan.FromSeconds(5))
+                                       .WaitAsync(TimeSpan.FromSeconds(5), _timeProvider)
                                        .ConfigureAwait(false);
             } catch (Exception ex) {
                 _logger.LogDebug(ex, "ACP: could not confirm child exit before post-dispose cleanup.");

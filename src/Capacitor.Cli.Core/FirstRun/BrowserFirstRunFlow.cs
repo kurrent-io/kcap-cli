@@ -18,12 +18,12 @@ public sealed class BrowserFirstRunFlow(
         IFirstRunFlowChannel     channel,
         IFirstRunFlowProgress    progress,
         IBrowserLauncher         launcher,
-        TimeProvider?            clock     = null,
+        TimeProvider            clock,
         IKeyWatcher?             keys      = null,
         IFirstRunMachineActions? actions   = null,
         IFirstRunImportLane?     importing = null,
         IFirstRunInterrupts?     interrupts = null) {
-    readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    readonly TimeProvider _clock = clock;
     readonly IKeyWatcher  _keys  = keys ?? ConsoleKeyWatcher.Instance;
 
     readonly IFirstRunInterrupts _interrupts = interrupts ?? FirstRunInterruptRelinquish.Process;

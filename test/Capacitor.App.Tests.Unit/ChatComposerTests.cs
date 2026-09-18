@@ -20,7 +20,7 @@ public class ChatComposerTests {
         var opener = new RecordingOpener();
         var terminal = new TerminalTabViewModel("a1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
         var chat = new ChatTabViewModel(
-            "a1", daemon, new TerminalChatInput(terminal), TranscriptChat.For("claude"), opener, time, new FakePermissionService());
+            "a1", daemon, new TerminalChatInput(terminal, "a1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), opener, time, new FakePermissionService(), new SessionSubagents(time));
         daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude", "codex"]));
         daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo", model: "claude-opus-5") with { Status = "Running" });
         // The Avalonia scheduler always posts, even when the caller is already on the UI thread,
@@ -52,6 +52,36 @@ public class ChatComposerTests {
             await Assert.That(chat.ComposerText).IsEqualTo("second");
             await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
             await Assert.That(client.SentInput).Count().IsEqualTo(2);
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// Pins what a code block's "run it" does: the text goes down the composer's own send path, so
+    /// the prompt is queued, recorded and cleared exactly as a typed one is.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_a_code_block_sends_its_text_through_the_composer() {
+        await RunOnUiAsync(async () => {
+            var (_, _, _, chat, client, _) = await BuildAttachedAsync();
+            await chat.RunCodeCommand.Execute("! kcap agent ls");
+            await Assert.That(client.SentInput[0]).IsEquivalentTo(TerminalInputEncoder.Paste("! kcap agent ls"));
+            await Assert.That(chat.ComposerText).IsEqualTo("");
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// Pins the gate: a channel that cannot take text cannot be made to take it through a code
+    /// block either.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_a_code_block_is_refused_once_the_session_has_ended() {
+        await RunOnUiAsync(async () => {
+            var (daemon, _, _, chat, client, _) = await BuildAttachedAsync();
+            await Assert.That(await chat.RunCodeCommand.CanExecute.FirstAsync()).IsTrue();
+
+            daemon.Agents.Remove("a1");
+            await Assert.That(await chat.RunCodeCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(client.SentInput).IsEmpty();
             await chat.TeardownAsync();
         });
     }
@@ -109,10 +139,9 @@ public class ChatComposerTests {
             await Assert.That(chat.StatusText).IsEqualTo("Running");
             await Assert.That(chat.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running"));
 
-            // A finished turn keeps the running dot: the process is live, it is the user's move.
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { AwaitingInput = true });
             await Assert.That(chat.StatusText).IsEqualTo("Waiting for input");
-            await Assert.That(chat.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running"));
+            await Assert.That(chat.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running", true));
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { Status = "Failed" });
             await Assert.That(chat.StatusText).IsEqualTo("Failed");
@@ -150,8 +179,8 @@ public class ChatComposerTests {
             var time = new FakeTimeProvider();
             var terminal = new TerminalTabViewModel("r1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
             var chat = new ChatTabViewModel(
-                "r1", daemon, new TerminalChatInput(terminal), TranscriptChat.For("claude"), new RecordingOpener(), time,
-                new FakePermissionService());
+                "r1", daemon, new TerminalChatInput(terminal, "r1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), new RecordingOpener(), time,
+                new FakePermissionService(), new SessionSubagents(time));
             daemon.Agents.AddOrUpdate(
                 Agent("r1", "claude", hasTerminal: true, kind: "review-flow") with { FlowRunId = "f1", FlowRole = "reviewer" });
             await (terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);

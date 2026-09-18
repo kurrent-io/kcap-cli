@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class AgentKillQuarantineTests {
     [Test]
     public async Task Add_counts_and_snapshot_carries_flow_identity() {
-        var q = new AgentKillQuarantine(NullLogger.Instance);
+        var q = new AgentKillQuarantine(NullLogger.Instance, TimeProvider.System);
         var created = DateTimeOffset.UtcNow;
 
         q.Add(new AgentKillQuarantine.Entry("q1", 4242, "ident", "ReviewFlow", created, "flow-9", "reviewer"));
@@ -31,7 +31,7 @@ public class AgentKillQuarantineTests {
     // a Snapshot and scanning it.
     [Test]
     public async Task IsQuarantined_answers_by_id() {
-        var q = new AgentKillQuarantine(NullLogger.Instance);
+        var q = new AgentKillQuarantine(NullLogger.Instance, TimeProvider.System);
 
         q.Add(new AgentKillQuarantine.Entry("q1", 1, "ident", "ReviewFlow", DateTimeOffset.UtcNow, null, null));
 
@@ -42,7 +42,7 @@ public class AgentKillQuarantineTests {
 
     [Test]
     public async Task Add_is_idempotent_per_agent_id() {
-        var q = new AgentKillQuarantine(NullLogger.Instance);
+        var q = new AgentKillQuarantine(NullLogger.Instance, TimeProvider.System);
 
         q.Add(new AgentKillQuarantine.Entry("dup", 1, "a", "ReviewFlow", DateTimeOffset.UtcNow, null, null));
         q.Add(new AgentKillQuarantine.Entry("dup", 2, "b", "ReviewFlow", DateTimeOffset.UtcNow, null, null));
@@ -58,7 +58,7 @@ public class AgentKillQuarantineTests {
         var identity = ProcessIdentity.Capture(dummy.Pid);
         await Assert.That(identity).IsNotNull();
 
-        var q = new AgentKillQuarantine(NullLogger.Instance);
+        var q = new AgentKillQuarantine(NullLogger.Instance, TimeProvider.System);
         q.Add(new AgentKillQuarantine.Entry(
             "q1", dummy.Pid, identity!, "ReviewFlow", DateTimeOffset.UtcNow, null, null));
 
@@ -86,7 +86,7 @@ public class AgentKillQuarantineTests {
         dummy.Kill();
         dummy.WaitForExit(TimeSpan.FromSeconds(5));
 
-        var q = new AgentKillQuarantine(NullLogger.Instance);
+        var q = new AgentKillQuarantine(NullLogger.Instance, TimeProvider.System);
         q.Add(new AgentKillQuarantine.Entry("gone", dummy.Pid, identity, "ReviewFlow", DateTimeOffset.UtcNow, null, null));
 
         await q.RetryAllAsync(CancellationToken.None);

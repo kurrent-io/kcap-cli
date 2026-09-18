@@ -51,7 +51,7 @@ public class PiRpcProcessTests {
     public async Task Written_line_is_echoed_back_through_ReadLinesAsync() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/cat as a real long-lived RPC-shaped child; Pi hosting is POSIX-only anyway.");
 
-        await using var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance);
+        await using var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
 
         await proc.WriteLineAsync("""{"type":"prompt","id":"req-1"}""", CancellationToken.None);
 
@@ -71,7 +71,7 @@ public class PiRpcProcessTests {
     public async Task Concurrent_writers_never_interleave_partial_lines() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/cat as a real long-lived RPC-shaped child; Pi hosting is POSIX-only anyway.");
 
-        await using var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance);
+        await using var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
 
         var lineA = new string('a', 20_000);
         var lineB = new string('b', 20_000);
@@ -101,7 +101,7 @@ public class PiRpcProcessTests {
     public async Task DisposeAsync_is_idempotent() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/cat as a real long-lived RPC-shaped child; Pi hosting is POSIX-only anyway.");
 
-        var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance);
+        var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
 
         await proc.DisposeAsync();
         await proc.DisposeAsync();
@@ -113,7 +113,7 @@ public class PiRpcProcessTests {
     public async Task TerminateAsync_is_safe_after_dispose() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/cat as a real long-lived RPC-shaped child; Pi hosting is POSIX-only anyway.");
 
-        var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance);
+        var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
 
         await proc.DisposeAsync();
         await proc.TerminateAsync();
@@ -127,7 +127,7 @@ public class PiRpcProcessTests {
 
         var child = StartCat();
         using var observer = Process.GetProcessById(child.Id);
-        var proc = new PiRpcProcess(child, NullLogger<PiRpcProcess>.Instance);
+        var proc = new PiRpcProcess(child, NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
 
         await Assert.That(proc.HasExited).IsFalse();
 
@@ -148,7 +148,7 @@ public class PiRpcProcessTests {
     public async Task WaitForExitAsync_returns_after_kill() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/cat as a real long-lived RPC-shaped child; Pi hosting is POSIX-only anyway.");
 
-        var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance);
+        var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
 
         await proc.TerminateAsync();
         await proc.WaitForExitAsync(TimeSpan.FromSeconds(5));
@@ -181,7 +181,7 @@ public class PiRpcProcessTests {
     public async Task DisposeAsync_racing_a_writer_queued_behind_a_blocked_write_never_hangs() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/sh as a real long-lived, non-reading child; Pi hosting is POSIX-only anyway.");
 
-        var proc = new PiRpcProcess(StartNonReadingChild(), NullLogger<PiRpcProcess>.Instance);
+        var proc = new PiRpcProcess(StartNonReadingChild(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
 
         // Bigger than any OS pipe buffer this test could plausibly run against (typically 16-64KB
         // on macOS/Linux) — large enough that A is still mid-flush, holding the gate, when B tries

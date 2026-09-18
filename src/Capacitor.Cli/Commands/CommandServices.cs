@@ -5,7 +5,9 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -17,15 +19,26 @@ public static class CommandServices {
     /// does not pay for it.
     /// </summary>
     public static IServiceCollection AddCapacitorCli(
-            this IServiceCollection services, ConfigRoot config, UserHome home, DaemonStore daemons,
-            ProfileContext profiles, ProfileOverrides env, MachineAuth machine, HookClock clock,
-            string? baseUrl) {
+            this IServiceCollection services, ConfigRoot config, UserHome home, WorkingDirectory workdir, DaemonStore daemons,
+            ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
+            AuthEndpoints endpoints, HookClock clock, string? baseUrl,
+            TelemetryStartup telemetryStartup) {
         services
-            .AddCapacitorContext(config, home, daemons, profiles)
+            .AddCapacitorContext(config, home, workdir, daemons, profiles)
             .AddCapacitorCommands();
 
+        services.AddSingleton(endpoints);
         services.AddSingleton(clock);
+        // The hook's own clock, not a second one: every deadline a command measures has to share the
+        // provider the budget was anchored on, or a faked one moves only half of them.
+        services.AddSingleton(clock.Time);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
+        services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
+        services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
+        services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
+
+        // Singleton deliberately: per-resolution routers would each start with an empty memo.
+        services.AddSingleton<GitProviderRouter>();
 
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.
@@ -36,10 +49,29 @@ public static class CommandServices {
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
-                sp.GetRequiredService<HarnessRegistry>()));
+                sp.GetRequiredService<HarnessRegistry>(),
+                sp.GetRequiredService<BinaryProbe>()));
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
         services.AddCapacitorHttp(env, machine);
+        services.AddCapacitorTelemetry(config, telemetryStartup);
+
+        return services;
+    }
+
+    /// <summary>
+    /// The telemetry facade and the funnel it owns, so a command asks for the narrower one when the
+    /// funnel is all it uses. Both resolve the same facade.
+    ///
+    /// <para>Resolving one has no side effects — no console, no once-per-device marker consumed:
+    /// the privacy notice belongs to <c>CliTelemetry.Announce</c>, which Program.cs calls at the
+    /// point a run should show it.</para>
+    /// </summary>
+    public static IServiceCollection AddCapacitorTelemetry(
+            this IServiceCollection services, ConfigRoot config, TelemetryStartup startup) {
+        services.AddSingleton(startup);
+        services.AddSingleton(sp => CliTelemetry.Start(startup, config, sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => sp.GetRequiredService<CliTelemetry>().Funnel);
 
         return services;
     }
@@ -49,6 +81,9 @@ public static class CommandServices {
     /// dispatches one, and holding them would keep a command's own state alive past its verb.
     /// </summary>
     public static IServiceCollection AddCapacitorCommands(this IServiceCollection services) {
+        // Shared by every hook lane and carrying no per-run state, unlike the commands below.
+        services.AddSingleton<WatcherManager>();
+
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
@@ -60,6 +95,7 @@ public static class CommandServices {
         services.AddTransient<FeedbackCommand>();
         services.AddTransient<HarnessCommand>();
         services.AddTransient<IgnoreCommand>();
+        services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
@@ -73,6 +109,9 @@ public static class CommandServices {
         services.AddTransient<ReviewCommand>();
         services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
+        services.AddSingleton<ChosenServerHttp>();
+        services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
+        services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
@@ -80,6 +119,7 @@ public static class CommandServices {
         services.AddTransient<McpMemoryServer>();
         services.AddTransient<McpSessionsServer>();
         services.AddTransient<McpWorkItemsServer>();
+        services.AddTransient<McpPlansServer>();
         services.AddTransient<McpAnalyticsServer>();
         services.AddTransient<McpArtefactsServer>();
         services.AddTransient<McpReviewServer>();

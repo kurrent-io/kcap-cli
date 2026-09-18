@@ -26,7 +26,7 @@ public class DaemonShimCommandsTests {
             Func<string, CancellationToken, Task<ShimResult>>? install = null,
             Func<string, ShimPreflight>? preflight = null, bool isMacOs = false) {
         using var capture = ConsoleOutput.StartFullCapture();
-        var exit = await DaemonShimCommands.Ensure(args, resolveTarget: () => target,
+        var exit = await DaemonShimCommands.Ensure(args, TimeProvider.System, resolveTarget: () => target,
             probe: new FakeProbe(onPath), install: install, preflight: preflight, isMacOs: isMacOs);
         var text = capture.GetCapturedOutput() + capture.GetCapturedError();
         ShimEnsureJson? json = null;
@@ -312,7 +312,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Dispatch_unknown_verb_prints_usage() {
-        var exit = await DaemonShimCommands.DispatchAsync(["bogus"]);
+        var exit = await DaemonShimCommands.DispatchAsync(["bogus"], TimeProvider.System);
         await Assert.That(exit).IsEqualTo(1);
     }
 
@@ -327,6 +327,7 @@ public class DaemonShimCommandsTests {
         using var capture = ConsoleOutput.StartFullCapture();
 
         var result = await DaemonShimCommands.EvaluateAsync(
+            TimeProvider.System,
             resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(true), isMacOs: true);
 
         await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.AlreadyOnPath);
@@ -336,6 +337,7 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task EvaluateAsync_refuses_off_macOS_with_the_platform_row() {
         var result = await DaemonShimCommands.EvaluateAsync(
+            TimeProvider.System,
             resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(false), isMacOs: false);
 
         await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Refused);
@@ -346,6 +348,7 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task EvaluateAsync_refuses_an_unknown_probe_rather_than_installing() {
         var result = await DaemonShimCommands.EvaluateAsync(
+            TimeProvider.System,
             resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(null), isMacOs: true,
             install: (_, _) => throw new InvalidOperationException("must not install on an unknown probe"));
 
@@ -390,7 +393,7 @@ public class DaemonShimCommandsTests {
     /// </summary>
     [Test]
     public async Task The_flow_host_advertises_only_the_capability_it_can_perform_mid_flow() {
-        await Assert.That(new SetupMachineActions().Capabilities).IsEquivalentTo(
+        await Assert.That(new SetupMachineActions(TimeProvider.System).Capabilities).IsEquivalentTo(
             new[] { FirstRunMachineCapabilities.PathShim });
     }
 
@@ -399,7 +402,7 @@ public class DaemonShimCommandsTests {
         // The loop filters on Capabilities, so reaching here is a programming error rather than a
         // server sending something new — which is why it throws instead of reporting an outcome.
         await Assert.That(async () =>
-                await new SetupMachineActions().PerformAsync("reboot_the_laptop", CancellationToken.None))
+                await new SetupMachineActions(TimeProvider.System).PerformAsync("reboot_the_laptop", CancellationToken.None))
             .Throws<ArgumentOutOfRangeException>();
     }
 }

@@ -88,7 +88,7 @@ public class AntigravityActivityClockTests {
 
         await using var rt = new AntigravityHostedAgentRuntime(
             spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, timeProvider: TimeProvider.System);
         rt.ActivityClock = clock;
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
@@ -116,7 +116,7 @@ public class AntigravityActivityClockTests {
 
         await using var rt = new AntigravityHostedAgentRuntime(
             spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, timeProvider: TimeProvider.System);
         rt.ActivityClock = clock;
 
         _ = rt.SendUserInputAsync("hello");

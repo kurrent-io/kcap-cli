@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Capacitor.App;
 
@@ -20,6 +21,7 @@ public static class AppHttpServices {
             this IServiceCollection services, ConfigRoot config, ProfileOverrides env) {
         services.AddSingleton(config);
         services.AddSingleton(env);
+        services.TryAddSingleton(TimeProvider.System);
         services.AddCapacitorForeignClients();
         services.AddSingleton<TokenStore>();
 

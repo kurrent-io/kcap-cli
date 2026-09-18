@@ -1,11 +1,15 @@
 using System.Collections.Specialized;
 using System.Globalization;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -13,6 +17,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
@@ -36,6 +41,9 @@ public class ChatTabViewSmokeTests {
     static readonly TimeSpan CrDelay = TimeSpan.FromMilliseconds(150);
     const string ReadCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/repo/x/src/a.cs"}}]}}""";
     const string ReadResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}}""";
+    const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+    const string AgentLaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
+    const string AgentFinishLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}}""";
 
     static string CallLine(int n) => ToolCallLine.Replace("\"t1\"", $"\"t{n}\"");
     static string ResultLine(int n) => ToolResultLine.Replace("\"t1\"", $"\"t{n}\"");
@@ -44,7 +52,7 @@ public class ChatTabViewSmokeTests {
         .Where(c => c.Name == "ToolCallRow" && c.DataContext is ToolCallItem).ToList();
     static Button Summary(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("toolSummary"));
     static Button? SummaryOrNull(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Classes.Contains("toolSummary"));
-    static ToolGroupItem OnlyGroup(Host host) => (ToolGroupItem)host.Chat.Items.Single();
+    static ToolGroupItem OnlyGroup(Host host) => host.Chat.Items.OfType<ToolGroupItem>().Single();
 
     /// A synthetic pointer event hit-tests the compositor's last committed scene, which layout alone
     /// does not refresh: a control shown since the last frame is invisible to the click until the
@@ -84,12 +92,14 @@ public class ChatTabViewSmokeTests {
 
     sealed class Host {
         bool _shown;
+        readonly ReplaySubject<AgentPresence> _presence = new(1);
 
         public FakeDaemonClientService Daemon { get; } = new();
         public FakeTimeProvider Time { get; } = new();
         public FakeTerminalAttachClientFactory Attach { get; } = new();
         public RecordingOpener Opener { get; } = new();
         public FakePermissionService Permissions { get; } = new();
+        public SessionSubagents Subagents { get; }
         public TerminalTabViewModel Terminal { get; }
         public ChatTabViewModel Chat { get; }
         public ChatTabView View { get; }
@@ -102,9 +112,10 @@ public class ChatTabViewSmokeTests {
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
         public Host(bool show = true) {
+            Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, new TerminalChatInput(Terminal), TranscriptChat.For("claude"), Opener, Time, Permissions);
+                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Subagents);
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;
@@ -121,6 +132,14 @@ public class ChatTabViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             if (_shown) Window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
+        }
+
+        /// The rest of what the composer needs before it takes attachments: a daemon advertising
+        /// the capability, over a session working in its own worktree.
+        public void AllowAttachments() {
+            Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/2"]));
+            _presence.OnNext(new AgentPresence(Agent("a1", "claude", hasTerminal: true, workLocation: WorkLocationText.Owned), false));
+            Settle();
         }
 
         /// A loaded transcript over a read-write attached terminal — the one state in which the
@@ -145,6 +164,22 @@ public class ChatTabViewSmokeTests {
         public void PressEnter(RawInputModifiers modifiers) {
             Window.KeyPressQwerty(PhysicalKey.Enter, modifiers);
             Dispatcher.UIThread.RunJobs();
+        }
+
+        public void Press(PhysicalKey key) {
+            Window.KeyPressQwerty(key, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        /// Types, sends with Enter and lets the CR go out, so the next send is accepted.
+        public async Task SendAsync(params string[] lines) {
+            for (var i = 0; i < lines.Length; i++) {
+                if (i > 0) PressEnter(RawInputModifiers.Shift);
+                Type(lines[i]);
+            }
+            PressEnter(RawInputModifiers.None);
+            Time.Advance(CrDelay);
+            await Terminal.PendingDeliveryForTesting!;
         }
 
         public async Task LoadAsync(string path) {
@@ -339,7 +374,6 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("tools.jsonl",
                 [ToolCallLine, ToolResultLine, ToolCallLine.Replace("t1", "t2"), ToolErrorLine.Replace("t1", "t2")]));
-            OnlyGroup(host).Toggle();
             host.Settle();
 
             await Assert.That(OnlyGroup(host).Calls.Select(i => i.Outcome))
@@ -423,6 +457,101 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// Pins the arrow keys' contract: ↑ in an empty composer recalls the last sent prompt, ↑ inside
+    /// a multi-line recall climbs to the first line before stepping older, ↓ past the newest
+    /// restores the empty box, and neither key touches a draft the user typed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Up_recalls_sent_prompts_and_down_returns_to_the_empty_draft() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall.jsonl", UserLine));
+            await host.SendAsync("first");
+            await host.SendAsync("top", "bottom");
+            var multi = "top" + Environment.NewLine + "bottom";
+            await Assert.That(host.Composer.Text ?? "").IsEqualTo("");
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(multi);
+            await Assert.That(host.Composer.CaretIndex).IsEqualTo(multi.Length);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(multi);
+            await Assert.That(host.Composer.CaretIndex).IsLessThanOrEqualTo(3);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("first");
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("first");
+
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Composer.Text).IsEqualTo(multi);
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Composer.Text ?? "").IsEqualTo("");
+
+            host.Type("typing");
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("typing");
+            await host.CloseAsync();
+        });
+    }
+
+    /// A selection makes ↑/↓ the TextBox's own collapse-and-move, so a recall must not replace
+    /// the text underneath it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Arrow_keys_over_a_selection_leave_the_recalled_text_alone() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall-selection.jsonl", UserLine));
+            await host.SendAsync("first");
+            await host.SendAsync("second");
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+            host.Composer.SelectionStart = 0;
+            host.Composer.SelectionEnd = 3;
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+
+            host.Composer.SelectionStart = 6;
+            host.Composer.SelectionEnd = 2;
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+            await host.CloseAsync();
+        });
+    }
+
+    /// The composer wraps, so a long prompt with no newline still has rows above the caret: ↑ from
+    /// its end climbs those rows first and recalls the older prompt only from the top one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Up_climbs_the_wrapped_rows_of_a_recall_before_stepping_older() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall-wrap.jsonl", UserLine));
+            await host.SendAsync("first");
+            var wrapped = string.Join(' ', Enumerable.Repeat("wrapped", 60));
+            await host.SendAsync(wrapped);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(wrapped);
+            await Assert.That(host.Composer.GetLineCount()).IsGreaterThan(1);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(wrapped);
+            await Assert.That(host.Composer.CaretIndex).IsLessThan(wrapped.Length);
+
+            var presses = 1;
+            while (host.Composer.Text == wrapped && presses < 20) {
+                host.Press(PhysicalKey.ArrowUp);
+                presses++;
+            }
+            await Assert.That(host.Composer.Text).IsEqualTo("first");
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins the other half of the key contract: Shift+Enter stays the TextBox's own newline and
     /// sends nothing.
     [Test]
@@ -470,6 +599,27 @@ public class ChatTabViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(host.Composer.Bounds.Width).IsGreaterThan(host.View.Bounds.Width - 100);
+            await host.CloseAsync();
+        });
+    }
+
+    /// Typed composer copy shares the chat body's line box (15 / 24) plus a hair of tracking,
+    /// not Fluent's tight default metrics. The presenter is what paints the glyphs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Composer_text_uses_the_chat_body_line_box() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Type("hello");
+            host.Window.UpdateLayout();
+            var presenter = host.Composer.GetVisualDescendants().OfType<TextPresenter>().Single();
+            await Assert.That(host.Composer.FontSize).IsEqualTo(15);
+            await Assert.That(host.Composer.LineHeight).IsEqualTo(24);
+            await Assert.That(host.Composer.LetterSpacing).IsEqualTo(0.2);
+            await Assert.That(host.Composer.MinHeight).IsEqualTo(44);
+            await Assert.That(presenter.FontSize).IsEqualTo(15);
+            await Assert.That(presenter.LineHeight).IsEqualTo(24);
+            await Assert.That(presenter.LetterSpacing).IsEqualTo(0.2);
             await host.CloseAsync();
         });
     }
@@ -532,6 +682,31 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_bubbles_carry_a_kind_chip() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("chips.jsonl", [
+                """{"type":"user","message":{"role":"user","content":"hello"}}""",
+                """{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}""",
+                """{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<summary>Agent finished</summary>\n<result>\nAll good.\n</result>\n</task-notification>"}}""",
+            ]));
+            host.Settle();
+            var chips = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible)
+                .Select(t => t.Text)
+                .ToList();
+            await Assert.That(chips).Contains("You");
+            await Assert.That(chips).Contains(host.Chat.AssistantTitle);
+            await Assert.That(chips).Contains("Note");
+            var you = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "You");
+            await Assert.That(you.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins the fold: settled calls become one summary line, live calls stay as rows, and a click
     /// on the summary reveals every call and hides them again.
     [Test]
@@ -549,11 +724,16 @@ public class ChatTabViewSmokeTests {
                 .Contains("Searched files, read a file · ls -la");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Running);
+            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
+            await Assert.That(card.Classes.Contains("folded")).IsTrue();
+            await Assert.That(card.Margin.Bottom).IsEqualTo(10);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsTrue();
             await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(3);
+            await Assert.That(card.Classes.Contains("folded")).IsFalse();
+            await Assert.That(card.Margin.Bottom).IsEqualTo(22);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsFalse();
@@ -596,19 +776,28 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A failed group opens so the row error pills are in view; the summary header has none.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_failed_call_inside_a_multi_call_group_marks_the_summary() {
+    public async Task A_failed_call_inside_a_multi_call_group_opens_the_group() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("fail.jsonl", [
                 ToolCallLine, ToolErrorLine, ReadCallLine, ReadResultLine,
             ]));
+            var group = OnlyGroup(host);
+            await Assert.That(group.HasFailure).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
             var summary = Summary(host.View);
             await Assert.That(summary.IsVisible).IsTrue();
-            var failPill = summary.GetVisualDescendants().OfType<Border>()
-                .Single(b => b.Classes.Contains("toolStatus") && b.IsVisible);
-            await Assert.That(failPill.Background).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapDangerBrush"));
+            await Assert.That(summary.GetVisualDescendants().OfType<Border>()
+                .Count(b => b.Classes.Contains("toolStatus") && b.IsVisible)).IsEqualTo(0);
+            var pills = ToolRows(host.View)
+                .Select(row => row.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolStatus") && b.IsVisible))
+                .ToList();
+            await Assert.That(pills).Count().IsEqualTo(2);
+            await Assert.That(pills[0].Background).IsSameReferenceAs(Brush(isError: true));
+            await Assert.That(pills[1].Background).IsSameReferenceAs(Brush(isError: false));
             await host.CloseAsync();
         });
     }
@@ -682,9 +871,9 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// Expanding keeps the viewport: the click is the reader's gesture and it lands above the
-    /// bottom, so following stops until the reader returns to the bottom, when the next append
-    /// follows again.
+    /// Expanding keeps the clicked header in place: the click is the reader's gesture and it
+    /// lands above the bottom, so following stops until the reader returns to the bottom, when
+    /// the next append follows again.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Expanding_the_trailing_group_keeps_the_offset_and_returning_to_the_bottom_resumes_following() {
@@ -695,13 +884,15 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("expand.jsonl", lines.ToArray());
             await host.LoadAsync(path);
             await Assert.That(host.AtBottom()).IsTrue();
-            var before = host.Scroll.Offset.Y;
+            var summary = Summary(host.View);
+            var beforeY = SummaryViewportY(host, summary);
 
-            Click(host, Summary(host.View));
+            Click(host, summary);
             host.Window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             await Assert.That(((ToolGroupItem)host.Chat.Items[^1]).IsExpanded).IsTrue();
-            await Assert.That(host.Scroll.Offset.Y).IsEqualTo(before);
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - beforeY)).IsLessThan(2);
             await Assert.That(host.AtBottom()).IsFalse();
 
             host.Scroll.ScrollToEnd();
@@ -711,6 +902,54 @@ public class ChatTabViewSmokeTests {
             host.Window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             await Assert.That(host.AtBottom()).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
+    static double SummaryViewportY(Host host, Button summary) =>
+        summary.TranslatePoint(new Point(0, 0), host.Scroll)?.Y
+        ?? throw new InvalidOperationException("the summary is not in the scroll viewer");
+
+    /// A row that changes height makes the virtualizing panel drop its anchor and re-place every
+    /// row from the average size, which jumps the reader off the bubble they just toggled.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Expanding_and_collapsing_a_group_keeps_its_header_where_it_was() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var lines = new List<string>(Enumerable.Repeat(UserLine, 40));
+            for (var i = 1; i <= 30; i++) { lines.Add(CallLine(i)); lines.Add(ResultLine(i)); }
+            lines.AddRange(Enumerable.Repeat(UserLine, 40));
+            await host.LoadAsync(Tmp.CreateFile("mid.jsonl", lines.ToArray()));
+
+            WheelUp(host);
+            host.Settle();
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var group = host.Chat.Items.OfType<ToolGroupItem>().Single();
+            items.ScrollIntoView(group);
+            host.Settle();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var summary = Summary(host.View);
+            var before = SummaryViewportY(host, summary);
+            await Assert.That(before).IsGreaterThan(0);
+            await Assert.That(before).IsLessThan(host.Scroll.Viewport.Height);
+
+            Click(host, summary);
+            host.Window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(group.IsExpanded).IsTrue();
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - before)).IsLessThan(2);
+
+            Click(host, summary);
+            host.Window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(group.IsExpanded).IsFalse();
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - before)).IsLessThan(2);
             await host.CloseAsync();
         });
     }
@@ -728,9 +967,10 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("race.jsonl", lines.ToArray());
             await host.LoadAsync(path);
             await Assert.That(host.AtBottom()).IsTrue();
-            var before = host.Scroll.Offset.Y;
+            var summary = Summary(host.View);
+            var beforeY = SummaryViewportY(host, summary);
 
-            var origin = PresentAndLocate(host, Summary(host.View));
+            var origin = PresentAndLocate(host, summary);
             host.Window.MouseDown(origin, MouseButton.Left);
             host.Window.MouseUp(origin, MouseButton.Left);
             File.AppendAllLines(path, Enumerable.Repeat(UserLine, 5));
@@ -742,7 +982,8 @@ public class ChatTabViewSmokeTests {
 
             await Assert.That(((ToolGroupItem)host.Chat.Items[^6]).IsExpanded).IsTrue();
             await Assert.That(host.Chat.Items).Count().IsEqualTo(66);
-            await Assert.That(host.Scroll.Offset.Y).IsEqualTo(before);
+            summary = Summary(host.View);
+            await Assert.That(Math.Abs(SummaryViewportY(host, summary) - beforeY)).IsLessThan(2);
 
             host.Scroll.ScrollToEnd();
             host.Window.UpdateLayout();
@@ -826,23 +1067,23 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Card_renders_with_its_buttons_and_the_row_collapses_when_empty() {
+    public async Task Card_renders_with_its_buttons_and_leaves_the_list_when_empty() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            var row = host.View.FindControl<Border>("NeedsYouRow")!;
-            await Assert.That(row.IsVisible).IsFalse();
+            await Assert.That(host.View.FindControl<Border>("NeedsYouRow")).IsNull();
+            await Assert.That(host.Chat.Items.OfType<PendingCardItem>().Any()).IsFalse();
 
             host.Permissions.Add(PermissionEntries.Entry("r1", "a1", toolName: "Bash"));
-            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 1, what: "the card");
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
             Dispatcher.UIThread.RunJobs();
-            await Assert.That(row.IsVisible).IsTrue();
-            var buttons = row.GetVisualDescendants().OfType<Button>().Select(b => b.Content?.ToString() ?? "").ToArray();
+            var list = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var buttons = list.GetVisualDescendants().OfType<Button>().Select(b => b.Content?.ToString() ?? "").ToArray();
             await Assert.That(buttons).IsEquivalentTo(new[] { "Deny", "Allow always", "Allow" });
 
             host.Permissions.Remove("r1");
-            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 0, what: "cleared");
+            await WaitUntilAsync(() => !host.Chat.Items.OfType<PendingCardItem>().Any(), what: "cleared");
             Dispatcher.UIThread.RunJobs();
-            await Assert.That(row.IsVisible).IsFalse();
+            await Assert.That(list.GetVisualDescendants().OfType<Button>().Any(b => b.Content is "Allow")).IsFalse();
         });
     }
 
@@ -865,7 +1106,115 @@ public class ChatTabViewSmokeTests {
             var otherBoxes = host.View.GetVisualDescendants().OfType<TextBox>()
                 .Where(t => t.PlaceholderText == "Other…").ToList();
             await Assert.That(otherBoxes.Count).IsEqualTo(1);
+            await Assert.That(otherBoxes[0].Classes.Contains("kcapField")).IsTrue();
             await Assert.That(host.View.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Pick")).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_header_paints_like_the_tool_kind_chip() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]));
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"declare this","header":"Missing tools","options":[{"label":"A"}]}]}"""));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var chips = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible).ToList();
+            var kind = chips.Single(t => t.Text == "Question");
+            var header = chips.Single(t => t.Text == "Missing tools");
+            await Assert.That(header.FontSize).IsEqualTo(kind.FontSize);
+            await Assert.That(header.FontWeight).IsEqualTo(kind.FontWeight);
+            await Assert.That(header.Foreground).IsSameReferenceAs(kind.Foreground);
+
+            var question = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Classes.Contains("prompt") && t.Text == "declare this");
+            await Assert.That(header.FontSize).IsNotEqualTo(question.FontSize);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_card_packs_against_the_tool_group_it_follows() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]));
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"declare this","header":"Missing tools","options":[{"label":"A"}]}]}"""));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var group = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
+            var card = host.View.GetVisualDescendants().OfType<ContentControl>().Single(c => c.Classes.Contains("pendingCard"));
+            await Assert.That(group.Classes.Contains("packsWithCard")).IsTrue();
+            await Assert.That(card.Classes.Contains("packsWithPrevious")).IsTrue();
+            await Assert.That(group.Margin.Bottom).IsEqualTo(4);
+            await Assert.That(card.Margin.Top).IsEqualTo(4);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_card_after_prose_keeps_the_paragraph_gap() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("prose.jsonl", [UserLine]));
+            host.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var card = host.View.GetVisualDescendants().OfType<ContentControl>().Single(c => c.Classes.Contains("pendingCard"));
+            await Assert.That(card.Classes.Contains("packsWithPrevious")).IsFalse();
+            await Assert.That(card.Margin.Top).IsEqualTo(8);
+            await host.CloseAsync();
+        });
+    }
+
+    /// The Other field is a real input in the virtualizing list: a click must keep caret focus
+    /// through layout (follow-tail must not recycle the row), and its outline is the field token,
+    /// never the status green.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Other_keeps_focus_on_click_and_uses_the_field_border_not_status_green() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("tall.jsonl", Enumerable.Repeat(UserLine, 40).ToArray()));
+            host.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var other = host.View.GetVisualDescendants().OfType<TextBox>().Single(t => t.PlaceholderText == "Other…");
+            Click(host, other);
+            host.Settle();
+            await Assert.That(other.IsFocused).IsTrue();
+
+            host.Window.KeyTextInput("mine");
+            Dispatcher.UIThread.RunJobs();
+            host.Settle();
+            await Assert.That(other.IsFocused).IsTrue();
+            await Assert.That(other.Text).IsEqualTo("mine");
+            await Assert.That(((QuestionGroupViewModel)other.DataContext!).OtherText).IsEqualTo("mine");
+
+            var ring = other.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "PART_BorderElement");
+            var field = (IBrush)Application.Current!.FindResource("KcapBorderBrush")!;
+            var status = (IBrush)Application.Current!.FindResource("KcapSuccessBrush")!;
+            await Assert.That(ring.BorderBrush).IsSameReferenceAs(field);
+            await Assert.That(ring.BorderBrush).IsNotSameReferenceAs(status);
+            await Assert.That(ring.BorderThickness).IsEqualTo(new Thickness(1));
+
+            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "QuestionCard");
+            await Assert.That(card.BorderBrush).IsSameReferenceAs(field);
+            await Assert.That(card.BorderBrush).IsNotSameReferenceAs(status);
+            await host.CloseAsync();
         });
     }
     static Button Option(Host host, string label) => host.View.GetVisualDescendants().OfType<Button>()
@@ -1001,6 +1350,141 @@ public class ChatTabViewSmokeTests {
             host.Settle();
 
             await Assert.That(host.AtBottom()).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
+    /// The chip strip's whole wiring: it is collapsed with an empty tray, a staged file renders a
+    /// chip carrying its name and size, and the chip's own button takes that file back out.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Staged_chips_render_and_a_chip_removes_its_own_file() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("chips.jsonl", UserLine));
+            var strip = host.View.FindControl<AttachmentChipStrip>("ChipStrip")!;
+            await Assert.That(strip.IsVisible).IsFalse();
+
+            host.Chat.Tray.AddAll([
+                new StagedAttachment("a.png", "image/png", new byte[] { 1, 2, 3 }),
+                new StagedAttachment("notes.txt", "text/plain", new byte[2048])]);
+            host.Settle();
+
+            await Assert.That(strip.IsVisible).IsTrue();
+            await Assert.That(Chips(host).Select(c => c.FileName)).IsEquivalentTo(["a.png", "notes.txt"], CollectionOrdering.Matching);
+            await Assert.That(Chips(host).Select(c => c.SizeLabel)).IsEquivalentTo(["3 B", "2 KB"], CollectionOrdering.Matching);
+
+            var remove = strip.GetVisualDescendants().OfType<Button>().First(b => b.Name == "ChipRemove");
+            Click(host, remove);
+
+            await Assert.That(host.Chat.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["notes.txt"]);
+            await Assert.That(Chips(host).Select(c => c.FileName)).IsEquivalentTo(["notes.txt"]);
+            await host.CloseAsync();
+        });
+    }
+
+    static List<StagedAttachmentViewModel> Chips(Host host) => host.View.GetVisualDescendants()
+        .OfType<TextBlock>().Where(t => t.Name == "ChipName").Select(t => (StagedAttachmentViewModel)t.DataContext!).ToList();
+
+    /// The hint the button carries exists only while the button is disabled, which is exactly when
+    /// a tooltip is suppressed by default — and it arrives after the view is built, so the binding
+    /// has to follow the channel rather than whatever the gate said at construction.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_attach_button_carries_its_hint_while_disabled() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("attach-hint.jsonl", UserLine));
+            var button = host.View.FindControl<Button>("AttachButton")!;
+            await Assert.That(ToolTip.GetShowOnDisabled(button)).IsTrue();
+
+            host.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/2"]));
+            host.Settle();
+            await Assert.That(button.IsEnabled).IsFalse();
+            await Assert.That(ToolTip.GetTip(button)).IsEqualTo("attachments aren't available for an in-place session");
+
+            host.AllowAttachments();
+
+            await Assert.That(button.IsEnabled).IsTrue();
+            await Assert.That(ToolTip.GetTip(button)).IsNull();
+            await host.CloseAsync();
+        });
+    }
+
+    /// The view's half of the intake: a file dropped on the composer card reaches the tab's tray,
+    /// and a text paste goes in through the TextBox exactly once.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_drop_on_the_composer_stages_the_file_and_a_text_paste_lands_once() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("intake.jsonl", UserLine));
+            host.AllowAttachments();
+            await Assert.That(host.Chat.Attachments.CanAttach).IsTrue();
+
+            var card = host.View.FindControl<Border>("ComposerCard")!;
+            var resting = card.BorderBrush;
+            await Assert.That(resting).IsNotNull();
+            var transfer = new DataTransfer();
+            var item = new DataTransferItem();
+            item.SetFile(FakeStorageFile.Of("dropped.png", new byte[] { 1, 2, 3, 4 }));
+            transfer.Add(item);
+
+            card.RaiseEvent(new DragEventArgs(DragDrop.DragOverEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            host.Settle();
+            // The highlight is a class the card's own style answers; a local brush on the card
+            // would outrank it and the drag would look the same as no drag.
+            await Assert.That(card.Classes.Contains("dragOver")).IsTrue();
+            await Assert.That(card.BorderBrush).IsNotSameReferenceAs(resting);
+
+            card.RaiseEvent(new DragEventArgs(DragDrop.DropEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            await (host.View.PendingIntakeForTesting ?? Task.CompletedTask);
+            host.Settle();
+
+            await Assert.That(host.Chat.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["dropped.png"]);
+            await Assert.That(card.Classes.Contains("dragOver")).IsFalse();
+            await Assert.That(card.BorderBrush).IsSameReferenceAs(resting);
+
+            await TopLevel.GetTopLevel(host.Composer)!.Clipboard!.SetDataAsync(new FakeAsyncDataTransfer(text: "pasted text"));
+            host.Composer.Focus();
+            Dispatcher.UIThread.RunJobs();
+            host.Composer.RaiseEvent(new RoutedEventArgs(TextBox.PastingFromClipboardEvent));
+            await (host.View.PendingIntakeForTesting ?? Task.CompletedTask);
+            host.Settle();
+
+            await Assert.That(host.Composer.Text).IsEqualTo("pasted text");
+            await Assert.That(host.Chat.ComposerText).IsEqualTo("pasted text");
+            await Assert.That(host.Chat.Tray.Count).IsEqualTo(1);
+            await host.CloseAsync();
+        });
+    }
+
+    /// The banner sits in its own row between the activity note and the queue banner, names the
+    /// one run with its pulsing dot while it lasts, and leaves with the finish.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_subagents_banner_is_hidden_at_zero_and_names_the_run_above_the_queue_banner() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var banner = host.View.FindControl<Border>("SubagentsBanner")!;
+            var queued = host.View.FindControl<Border>("QueuedMessagesBanner")!;
+            var note = host.View.FindControl<StackPanel>("ChatActivityNote")!;
+            await Assert.That(banner.IsVisible).IsFalse();
+            await Assert.That(Grid.GetRow(note)).IsLessThan(Grid.GetRow(banner));
+            await Assert.That(Grid.GetRow(banner)).IsLessThan(Grid.GetRow(queued));
+            await Assert.That(Grid.GetRow(queued)).IsLessThan(Grid.GetRow(host.View.FindControl<Border>("ComposerCard")!));
+
+            var path = Tmp.CreateFile("sub.jsonl", [AgentCallLine, AgentLaunchLine]);
+            await host.LoadAsync(path);
+            await Assert.That(banner.IsVisible).IsTrue();
+            var shown = banner.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            await Assert.That(shown).Contains("Explore");
+            await Assert.That(shown.Any(t => t!.StartsWith("running in background · ", StringComparison.Ordinal))).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<Border>().Any(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsTrue();
+            await Assert.That(queued.IsVisible).IsFalse();
+
+            await host.AppendLinesAndTickAsync(path, AgentFinishLine);
+            await Assert.That(banner.IsVisible).IsFalse();
             await host.CloseAsync();
         });
     }

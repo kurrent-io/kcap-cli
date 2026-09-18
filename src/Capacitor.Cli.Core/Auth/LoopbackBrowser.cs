@@ -38,6 +38,7 @@ namespace Capacitor.Cli.Core.Auth;
 /// </param>
 public sealed class LoopbackBrowser(
         IBrowserLauncher    launcher,
+        TimeProvider        time,
         IAuthProgress?      progress    = null,
         string?             hint        = null,
         ILoopbackJoin?      join        = null) : IBrowser, IDisposable {
@@ -79,16 +80,15 @@ public sealed class LoopbackBrowser(
             // browser on this machine, and there isn't one. Five minutes of listening ends in the same
             // place, having offered a URL that leads to a connection refused.
             //
-            // INSIDE the try, unlike the version this merged with: the listener is already bound, so a
-            // throw that escapes before the try would keep the port for the life of the process. Harmless
-            // in a CLI that is about to exit, a real leak in the desktop app, which outlives the flow.
+            // INSIDE the try: the listener is already bound, so a throw escaping before it holds the port
+            // for the life of the process — harmless in a CLI about to exit, a real leak in the desktop app.
             if (!_launcher.TryOpen(options.StartUrl)) throw new BrowserLaunchException();
 
             _progress.BrowserOpening(options.StartUrl);
             if (hint is not null) _progress.Notice(hint);
 
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(options.Timeout);
+            using var timeout = new CancellationTokenSource(options.Timeout, time);
+            using var cts     = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
 
             HttpListenerContext context;
 
@@ -165,7 +165,7 @@ public sealed class LoopbackBrowser(
         if (listener is null) return;
 
         try {
-            using var cts = new CancellationTokenSource(DrainCap);
+            using var cts = new CancellationTokenSource(DrainCap, time);
 
             while (true) {
                 var getContext = listener.GetContextAsync();

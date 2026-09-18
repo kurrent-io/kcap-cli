@@ -57,16 +57,16 @@ public class AgentStatusSnapshotTests {
         };
 
         // The consent store and its decision log share this daemon's per-name state root, as DaemonRunner wires them.
-        var store       = new LaunchConsentStore(config.Store.StateDirectory(config.Name), NullLogger.Instance);
+        var store       = new LaunchConsentStore(config.Store.StateDirectory(config.Name), NullLogger.Instance, TimeProvider.System);
         var broker      = new LaunchConsentBroker();
         var decisionLog = new LaunchConsentDecisionLog(config.Store.StateDirectory(config.Name), NullLogger.Instance);
         var gate        = new LaunchConsentGate(store, decisionLog, broker, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
 
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
-        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance);
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
-        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance);
+        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
+        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
         var notifier         = new DaemonStatusNotifier();
 
         var orchestrator = new AgentOrchestrator(
@@ -75,7 +75,7 @@ public class AgentStatusSnapshotTests {
             tokens,
             permissionBridge, new Dictionary<string, IHostedAgentLauncher>(),
             new Dictionary<string, IHostedAgentRuntimeFactory>(), new NoopHostLifetime(),
-            NullLogger<AgentOrchestrator>.Instance, gate, statusNotifier: notifier);
+            NullLogger<AgentOrchestrator>.Instance, gate, TimeProvider.System, statusNotifier: notifier);
 
         return new Fixture(orchestrator, notifier, daemons);
     }
@@ -151,6 +151,25 @@ public class AgentStatusSnapshotTests {
 
             await Assert.That(byId["blank-model"].Model).IsNull();
             await Assert.That(byId["real-model"].Model).IsEqualTo("gpt-5-codex");
+        } finally {
+            await fixture.CleanupAsync();
+        }
+    }
+
+    /// <summary>A model learned after launch (Codex resolves it post-handshake from its config) is
+    /// written through <c>SetResolvedModel</c>, and the next snapshot re-reads it — so a local Codex
+    /// row's model chip fills in without a re-registration.</summary>
+    [Test]
+    public async Task SetResolvedModel_updates_the_model_the_snapshot_reports() {
+        var fixture = Build();
+        var orch    = fixture.Orchestrator;
+        try {
+            var agent = orch.SeedAgentForTest("codex-default", model: null);
+            await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "codex-default").Model).IsNull();
+
+            orch.SetResolvedModel(agent, "gpt-5-codex");
+
+            await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "codex-default").Model).IsEqualTo("gpt-5-codex");
         } finally {
             await fixture.CleanupAsync();
         }
@@ -445,10 +464,13 @@ public class AgentStatusSnapshotTests {
     public async Task Envelope_sourced_agent_reports_envelopes_format_canonical_session_id_and_journal_path() {
         var f = Build();
         try {
-            var journal = TranscriptJournal.ForAgent(f.Daemons.Store.StateDirectory("status-snapshot-test"), "acp-1", NullLogger.Instance);
+            var journal = TranscriptJournal.ForAgent(f.Daemons.Store.StateDirectory("status-snapshot-test"), "acp-1", NullLogger.Instance, TimeProvider.System);
             journal.Open("/w", "m");
             var runtime = new FakeAcpRuntime { AcpSessionId = "8BC7255F-2453-4EFD-A733-0AF4B6AE9F20" };
             f.Orchestrator.RegisterAgentForTest(new AgentInstance("acp-1", "p", "m", null, "/repo", "cursor", runtime, new WorktreeInfo("/repo", "b", "/w"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
                 SessionId = SessionIds.Canonical(runtime.AcpSessionId), TranscriptPath = journal.Path, Journal = journal });
 
             var row = f.Orchestrator.SnapshotAgentsForStatus().Single();
@@ -465,7 +487,11 @@ public class AgentStatusSnapshotTests {
         var f = Build();
         try {
             f.Orchestrator.RegisterAgentForTest(new AgentInstance("pty-1", "p", "m", null, "/repo", "claude",
-                new PtyHostedAgentRuntime("claude", NoopPtyProcess.Instance), new WorktreeInfo("/repo", "b", "/w"), new CancellationTokenSource()));
+                new PtyHostedAgentRuntime("claude", NoopPtyProcess.Instance, TimeProvider.System), new WorktreeInfo("/repo", "b", "/w"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
 
             var row = f.Orchestrator.SnapshotAgentsForStatus().Single();
 
@@ -481,6 +507,9 @@ public class AgentStatusSnapshotTests {
         try {
             var runtime = new FakeAcpRuntime { AcpSessionId = "sess-1" };
             f.Orchestrator.RegisterAgentForTest(new AgentInstance("acp-2", "p", "m", null, "/repo", "cursor", runtime, new WorktreeInfo("/repo", "b", "/w"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
                 SessionId = SessionIds.Canonical(runtime.AcpSessionId) });
             await Assert.That(f.Orchestrator.SnapshotAgentsForStatus().Single().SessionId).IsEqualTo("sess-1");
         } finally { await f.CleanupAsync(); }

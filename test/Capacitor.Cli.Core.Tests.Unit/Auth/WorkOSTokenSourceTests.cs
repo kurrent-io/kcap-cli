@@ -1,5 +1,6 @@
 using System.Text;
 using Capacitor.Cli.Core.Auth;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
@@ -24,7 +25,7 @@ public class WorkOSTokenSourceTests {
         var src = new WorkOSTokenSource(expiring, "rt1",
             refresh: (_, _) => { calls++; return Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { AccessToken = freshTok, RefreshToken = "rt2" }); },
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         var token = await src.GetAsync(CancellationToken.None);
 
@@ -40,7 +41,7 @@ public class WorkOSTokenSourceTests {
 
         var src = new WorkOSTokenSource(valid, "rt1",
             refresh: (_, _) => { calls++; return Task.FromResult<WorkOSAuthResponse?>(null); },
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         var token = await src.GetAsync(CancellationToken.None);
 
@@ -55,7 +56,7 @@ public class WorkOSTokenSourceTests {
 
         var src = new WorkOSTokenSource(expiring, "rt1",
             refresh: (_, _) => Task.FromResult<WorkOSAuthResponse?>(null), // refresh failed
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         var token = await src.GetAsync(CancellationToken.None);
 
@@ -79,7 +80,7 @@ public class WorkOSTokenSourceTests {
 
                 return Task.FromResult<WorkOSAuthResponse?>(r);
             },
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         await src.GetAsync(CancellationToken.None); // rt1 -> rt2 (token still near expiry)
         await src.GetAsync(CancellationToken.None); // rt2 -> rt3
@@ -98,7 +99,7 @@ public class WorkOSTokenSourceTests {
         var src = new WorkOSTokenSource(expiring, "rt1",
             refresh: (_, _) => Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { AccessToken = fresh, RefreshToken = "rt2" }),
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         // WorkOS rotates refresh tokens (single-use), so callers that later re-use the refresh
         // token (the final org-switch) must read the rotated value, not the login-time one.
@@ -116,7 +117,7 @@ public class WorkOSTokenSourceTests {
         // next status call still carries this token (and surfaces the eventual 401) instead of crashing.
         var src = new WorkOSTokenSource(expiring, "rt1",
             refresh: (_, _) => Task.FromException<WorkOSAuthResponse?>(new HttpRequestException("network down")),
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         var token = await src.GetAsync(CancellationToken.None);
 
@@ -132,7 +133,7 @@ public class WorkOSTokenSourceTests {
 
         var src = new WorkOSTokenSource(expiring, "rt1",
             refresh: (_, ct) => Task.FromException<WorkOSAuthResponse?>(new OperationCanceledException(ct)),
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         var cancelled = false;
         try { await src.GetAsync(cts.Token); }
@@ -149,7 +150,7 @@ public class WorkOSTokenSourceTests {
 
         var src = new WorkOSTokenSource(expiring, refreshToken: null,
             refresh: (_, _) => { calls++; return Task.FromResult<WorkOSAuthResponse?>(null); },
-            now: () => now, margin: TimeSpan.FromSeconds(60));
+            time: new FakeTimeProvider(now), margin: TimeSpan.FromSeconds(60));
 
         var token = await src.GetAsync(CancellationToken.None);
 

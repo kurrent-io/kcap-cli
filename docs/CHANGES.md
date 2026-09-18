@@ -6,6 +6,438 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The restart setup asks for now carries its own message
+
+Hooks, skills and MCP servers are read when an agent session starts, so the session that runs setup
+has none of them: it is not recorded, and it cannot run the guided tour. Setup says so in the
+terminal, which works for someone watching it and is the weakest link the moment a tool did the
+install — one line at the end of a long transcript, which it has to remember to pass on.
+
+So the next session says it instead. Setup leaves a one-shot marker, and the next session to start
+with hooks in place carries a SessionStart fragment saying kcap is wired in, and offering the tour.
+That session is the one that can say it: the fragment is delivered by the hook whose presence is the
+thing being announced.
+
+It claims no more than that. Setup arms the marker on every run that installs hooks, a re-run on a
+machine recorded for months included, so the fragment says setup completed before this session
+started and never that this is the first wired session. Whether this particular session reaches the
+server is a separate question with its own notice — a rejected token already says so — and a
+fragment asserting "you are being recorded" would be the line contradicting it. The tour is offered
+only where the MCP servers it reads through are registered, the same call setup's own Next-steps box
+makes.
+
+Resolving takes the marker, so it is resolved only where the output is going to be delivered —
+OpenCode's older-plugin gate discards this stdout, and outside that gate the one notice would be
+spent on a session that never showed it. The marker is claimed under the config lock, so several
+agents started at once deliver it once between them rather than each — a bare delete races, and a
+rename only picks a single winner where the filesystem makes renaming atomic, which is not the same
+on every platform. The claim never waits for the lock: it runs on the SessionStart hook path, where
+the budget belongs to session capture. A session with no marker waiting returns on a file probe and
+never takes the lock, which is every session but one per setup; the probe is repeated under the
+lock, and that one decides. Opting out with `disable_first_run_notice` suppresses the fragment
+without consuming the marker, so turning the notice back on before the next session still delivers
+it. It is armed only when setup actually installed something — with nothing wired up there is
+nothing to announce.
+
+## The desktop chat shows a session's subagents
+
+A Claude session's subagents are read off the transcript alone: an `Agent` or `Task` call starts a
+row, a result whose `toolUseResult.status` is `async_launched` marks it background and binds the
+agent id, a task-notification or a `TaskStop` result ends it. The evidence is the same on both
+lanes because the leaf writes the root `toolUseResult` of a single-result line into the
+`claude_code` extension as `tool_use_result` — the key and content kcap-server's normalizer already
+persists — so sessions the server ingested earlier list their subagents as well. On a line with
+several results the object names none of them and is written on none.
+
+The facts ride a third member of `ChatProjectionResult`, beside the rows, rather than on the wire
+envelope: `AcpEventEnvelope` is mirrored on the server with a per-field compat guard, and a display
+fact only the desktop reads has no business there. The side-band also keeps "which tool names spawn
+a subagent" in the vendor's rules, so Codex or Gemini can join without an app-side table. A
+task-notification is recognised by `origin_kind` or by its opening tag, because the server's events
+carry no `origin_kind`; the same predicate serves the row filter, the input echo and the signal.
+
+The tracker ends a row on transcript evidence only. Without a terminal result, a notification or a
+`TaskStop` result the row runs until the session ends — the web's 15-minute quiet reaper is not
+copied, since it would also end a quiet subagent that is still working. Session end is a view over
+the rows, not a transition: a running row presents as stopped with no duration while the lane says
+nothing more will arrive, a real finish in the final drain still settles it, and a remote row that
+comes back turns the presentation off again. A repeated notification for an earlier execution never
+ends a later launch of the same agent id: a known call id decides alone, and an agent-id-only finish
+dated before the row started belongs to an earlier execution.
+
+## The pull request reader renders GitHub-flavoured markdown
+
+Review bots write their findings almost entirely in HTML, and the reader showed the markup as
+text. A Markdig `DocumentProcessed` pass (`Capacitor.App.GitHubHtml`) rewrites the HTML the reader
+understands into standard Markdig nodes — formatting tags to emphasis, `<a>` to links, `<img>` to
+image links labelled with their alt text, `<br>` to hard breaks — so MarkView's renderers and the
+app's link policy apply unchanged; only `<details>` and `<pre>` have node types of their own. Chat
+is untouched: `MarkdownView.Flavor` selects the pipeline, and only the reader opts in. Unmatched
+or rejected HTML renders as its source, all or nothing per HTML block; comments inside converted
+content vanish, as on github.com.
+
+Three library facts shaped the design. MarkView builds its selection index once per render and
+never checks visibility, so a collapsed details section renders its header and nothing else, and
+a toggle re-renders the view. MarkView dispatches a click only for a hyperlink that is a direct
+inline of its text block, so the pass hoists links above their emphasis instead of owning
+hit-testing — every Avalonia route from a point to text geometry is quadratic in a line's runs.
+Markdig's renderer throws past 128 nested containers after parsing has returned, so synthesized
+nesting is budgeted at 100 before anything mutates, and normalisation runs before anything
+measures a height.
+
+## Discovery can report without choosing
+
+The workspaces an account belongs to only exist on the far side of a sign-in, and `setup` learns them
+in the middle of a run it then carries through to completion. A tool that has to ask someone which
+workspace to use has nowhere to stand: the choice has to be made before the only command that could
+inform it.
+
+`kcap setup --discover` signs in, reports what it found, and stops. It reaches the rows through the
+proxy directly rather than through the normal discovery flow, because that flow cannot be talked out
+of choosing: a sole workspace is auto-selected before any picker is consulted, so a declining picker
+would configure the machine for exactly the case a report is most needed, and an account with no
+workspace would fail rather than answer. Publishing is a separate step this route never reaches, and
+no provisioner is passed, so nothing is written and nothing is created.
+
+`can_create` is the lane's answer rather than a count. Only the hosted lane provisions; a GitHub-App
+account gets a workspace by having the app installed on an org, so telling it that it may create one
+would be a dead end. It is not a promise either: a workspace this account already asked for and that
+is still being made is only learned by the create call itself, and a report must not make that call.
+
+What `--discover` takes beside itself is a closed set, not a list of what to refuse. A workspace
+argument answers the question discovery exists to ask, and any other option configures something in
+a run that configures nothing, so both are refused by name. A list of refusals would have to know
+every flag that takes a value, or read `--plugin-scope user` as a workspace called "user".
+
+`kcap login --discover` keeps its own meaning — force discovery, pick, and save — so the same word
+reports on one command and configures on the other. Each help text points at the other.
+
+Under `--json` the sign-in narrates itself on stderr. The user still has to see the URL and the code
+they are approving, and the document still has to be the only thing on stdout, so the progress sink
+takes the stream to write to rather than assuming stdout.
+
+## The harness list answers a machine as well as a person
+
+A tool setting kcap up for someone has to ask which coding agents to record, and the honest option
+list is the one this machine can actually produce. `kcap harness list` already knows it, so `--json`
+emits the same report as one document on stdout and nothing else, the contract `kcap import
+--discover --json` set.
+
+Every harness this build knows is listed, present or not, so a consumer can tell "unsupported" from
+"not installed here" without carrying its own vendor list and going stale the day a vendor is added.
+The two detection signals stay apart rather than being ORed the way the nudge inventory folds them:
+a caller offering someone a choice can then say which signal it saw, and one that only wants "is it
+here" ORs them itself. `--json` is refused on `dismiss` and `reset` rather than ignored, because
+ignoring it would hand a caller expecting JSON a line of prose on a subcommand that writes.
+
+## A code block carries its own copy, and runs itself when it is a command
+
+An agent that wants a command run asks for it in a fenced block, and a reader who cannot lift the
+text out of that block cannot comply. Hovering one now reveals Copy, and Run it when the block's
+text begins with a bang — the bang being what makes the line a command rather than prose, so it is
+the whole condition. Run sends the text verbatim, bang included, through the composer's own send
+path rather than straight at the channel, which is what keeps a block's prompt queued, recalled and
+cleared exactly as a typed one is. Whatever draft was sitting in the composer is replaced: putting
+it in the prompt is the point.
+
+The strip wraps the block MarkView's own renderer wrote instead of replacing that renderer, so
+syntax highlighting and its theme switch stay with the package across an upgrade. A block reads the
+run command as it is built and the document is built again when that command arrives, because the
+binding carrying it lands after the first render — a view that never gets one, the pull request
+reader, offers copy alone.
+
+## A prompt answered in the terminal is retired by the daemon
+
+A hosted Claude session's permission prompt (an `AskUserQuestion` included) reaches the daemon
+through the parked `PermissionRequest` hook, and an answer given in the session's own terminal is
+invisible to it: the hook stays parked, the broker keeps the request pending, the server's copy
+stays open, and every app view but the one chat tab that tails that transcript keeps its badge.
+The daemon now hears the answer's consequences from hooks it already runs, over one new loopback
+route, `tool-settled`, beside `input-wait`. `PostToolUse` and `PostToolUseFailure` name the
+finished tool by its id, which retires exactly that prompt. The main agent's `Stop` names nothing,
+which retires every prompt of the turn: a terminal *deny* runs no tool, so no tool event reports
+it, and `PermissionDenied` fires only for auto mode. `SubagentStop` names the subagent, because a
+background subagent's prompt legitimately outlives the parent's turn and the turn backstop must
+not answer it; for that scoping the permission hook now forwards its own `agent_id` as
+`subagent_id`, held on the broker's entry and never on the wire. Every hosted agent posts on the
+one shared token, so a notice retires only what its own session registered under the agent it
+names, and the route admits that token alone: an unattended reviewer has no prompt a human could
+have answered. All three settle through the
+withdraw path the chat tab already used, outcome `withdrawn`, source `tool_settled`, so the parked
+hook gets its deny, the server leg closes the request and every subscriber sees Resolved; the tab's
+own correlation stays as a fast path the broker dedups. The two tool events are async in the
+manifest and end in the hook before any server work: the server has no route for them and the
+transcript watcher already carries the result, so a session nobody hosts spends a process spawn
+and nothing else. An older daemon answers the route with 404 and the relay drops it silently.
+Codex PTY prompts are untouched: their permission hook carries no tool id.
+
+## One remap rule covers a family of deleted worktrees
+
+A `from` may carry one `*` standing as a whole path segment, and the cwd's remainder past that
+segment is preserved. The literal form could not express this at all: a prefix rewrite keeps the
+tail, so `~/dev/repo/worktrees` -> `~/dev/repo` turns `.../worktrees/ai-1` into `~/dev/repo/ai-1`,
+which is equally missing, and only an exact `cwd == from` hit uses `to` verbatim. That made it one
+entry per dead worktree, growing every time a tree was cleaned up.
+
+One segment, never `**`. A greedy wildcard is ambiguous about where the preserved tail starts, and
+every layout seen so far is one segment deep. A pattern whose `*` is not a whole segment is refused
+when it is typed and skipped when it is read back, so a hand-edited config cannot turn one into a
+substring match.
+
+Precedence is the length of the cwd the rule consumed, not the length of the pattern, so a wildcard
+beats a shorter literal that it reaches past. A literal wins a tie against a wildcard of equal
+reach, which is what keeps one path overridable out of a family it otherwise belongs to.
+
+Rules stay unconditional, as literal ones already were: they rewrite whether or not the original
+path still exists. That is harmless for a worktree pattern, since a live worktree rewritten to its
+project root resolves to the same repository, but it is a sharper edge than a literal `from` the
+user knows is gone, so `--help` and the README say so.
+
+`WorktreePathResolver` is untouched. The dot form (`<project>/.<dotseg>/worktrees/<slug>`) stays
+automatic because tooling invents those paths and no user would think to remap them; a `worktrees/`
+directory the user configured carries no dot segment, and declaring it is fair.
+
+Discovery is the other half: a wildcard nobody finds saves nobody, and an under-scoped import is
+quiet for months. The missing-cwd report groups dead siblings by their parent and prints the rule
+instead of the paths when it sees more than one under a directory whose own parent is a checkout
+root. That root test is what makes the suggestion honest — it names the repository the sessions
+belong to. Worktrees kept outside the project can't be grouped this way, since the directory above
+them is not a repository and only the user knows the mapping.
+
+## A session's loose ends are declared, and bounded by the server
+
+`declare_loose_end` posts one concrete piece of unfinished work — a missing test, a TODO left in the
+code, a follow-up — to `/api/loose-ends/declare`, and the CLI validates its shape only: present, a
+string, not blank. The 12-500 character bound and the refusal of none-class text are the server's, so
+a caller who trips one reads a coded 400 naming the real reason rather than a client-side guess that
+drifts as those rules move, and the tool never refuses text the server would take. `session_id`
+resolves through the same path as the other session-scoped tools here — the running harness's own
+session first, the ambient variables behind it — so an agent that omits it records against the
+session it is actually in. The tool lives on the work-items server because that is where an agent
+already declares what its session is doing, but a loose end is the user's ledger entry, not a work
+item, and nothing here turns one into the other. A server that does not serve the route answers 404
+and the tool surfaces `Error: HTTP 404`: the client half is inert until the route is there, never
+broken.
+
+## Support from the desktop rides the feedback lane
+
+The desktop app has no web view, so the Plain chat widget the web app uses cannot embed; instead a
+native "Send feedback" window posts through the same `POST /api/feedback` lane `kcap feedback` uses.
+Three things are deliberate. The message the server receives is the reporter's text plus one trailer
+line naming the client and daemon, because the lane's context has no slot for the daemon and the
+server caps the context fields — the hint under the form discloses the trailer and counts it
+against the 8000-character cap. A pressed Send binds the report into a snapshot with its
+`client_request_id`; an unchanged retry re-sends the snapshot, any edit mints a new id, and three
+duplicate cases are accepted rather than solved (an unchanged retry after Plain accepted but the
+tenant answered non-success, a changed retry after an ambiguous failure, a quit mid-call). The
+report entries follow one oracle — a resolved server URL — evaluated before the main window is
+shown, while Documentation stays reachable without a server; on Windows and Linux the rail-footer
+flyout is the only entry, since those builds draw no menu bar. `context.source = "desktop"` reaches
+the tenant server and stops there; the trailer is what support reads.
+
+## A PR opened from another checkout is linked to the session
+
+The session's PR list is fed by one probe, `gh pr view` in the launch cwd, which can only ever
+see the PR of that checkout's branch. An agent that makes its own worktree — of another
+repository or of the same one — and opens a PR there left the list empty. The Claude session
+watcher now collects the roots of every checkout the agent *mutated* outside its launch cwd,
+probes each on the 60s refresh and once more on the final drain, and posts any GitHub PR it finds
+to the session's pull-requests endpoint, which dedupes and never repoints the primary repository.
+Mutation paths only: a checkout the agent merely read must not have whatever PR its branch
+happens to carry attached. The collector reads raw transcript lines ahead of the threshold
+buffer, so a mutation in a session's first lines registers and an oversized Write is not lost to
+redaction. The PR is linked under the repository its URL names rather than the checkout's origin,
+because in a fork checkout `gh pr view` resolves the base repository's PR while origin names the
+fork. Only GitHub, because the endpoint rebuilds the remote URL from owner and repo on github.com,
+so another host would hash to the wrong repository. Each pass runs under one budget that bounds
+every probe and post, abandoning a probe still running when the pass is cancelled; it touches the
+watcher heartbeat before each probe and is capped at half the staleness threshold, since the loop
+awaits it inline and a stale heartbeat gets a healthy watcher reaped by the next hook. Passes
+rotate their starting root so a slow checkout cannot shadow the ones behind it every minute. The
+final pass shares the shutdown deadline, measured from the stop request rather than from the loop
+noticing it, with the final-line wait and drain, since the watcher is killed five seconds after it
+is told to stop. A session that never crosses the transcript threshold is still discarded whole,
+PR links included: it sends no transcript and no session-end either.
+
+## A launch shows in the rail before the daemon publishes it
+
+A hosted runtime's agent instance exists only once its handshake ends, which for an ACP vendor can
+take many seconds per stage, and the workspace the launch auto-opened was a blank shell until then.
+The daemon now lists its in-flight launches, with the runtime's latest stage, in the local status
+snapshot it already pushes, and the app adds its own placeholder row the moment the server accepts
+the request, so the gap is covered from both ends. Both render as one pending row keyed by the
+agent id: the daemon's entry hides the placeholder, and a published row on the local lane retires
+both — a same-id row on the remote lane is a different agent. A pending row never settles the launch — only a published row clears the failure tracking,
+or a late `LaunchFailed` would be lost — and a launch failure removes the placeholder, with a
+ten-minute expiry behind it for a failure notice that never arrives.
+
+## The rail colours a worktree's branch glyph by its pull request
+
+The rail knows nothing of pull requests on its own: PR state was read only for the open workspace,
+per session, behind the access window that masks the reader. A tone cache reads every listed
+session's links and overviews on a slow cadence and reduces each to one tone, keeping the
+overview's own denial semantics — a denied read clears the tone, a transient miss keeps the last
+one. A worktree shows the strongest tone across its sessions, ordered by how much the state needs
+the user, and the card's lifecycle and checks labels share the same vocabulary so the two never
+disagree. "Merge conflicts" waits on the server: the overview carries no mergeability field yet,
+so the client reads an optional `mergeable` that is null until the server sends it.
+
+## A triple click selects the line, not the whole box
+
+Avalonia's `TextBox` and `SelectableTextBlock` answer the third click with `SelectAll` in their own
+class handler on the bubbling route. One application-wide handler on the tunnel route selects the
+logical line under the pointer and marks the press handled before that handler runs. Markdown
+bodies are outside its reach: MarkView's selection layer is internal and takes no click count.
+
+## Desktop prompts carry attachments
+
+The launcher's goal box and the session composer stage files and send ids, never bytes. The
+server's temp attachment store is the one byte path on every lane, because it is the only
+mechanism that already ships bytes to a daemon on another machine, its size cap is enforced
+server-side, and the bytes' lifetime there is already someone else's problem. Ids are what travel
+onward in receipts, in the pending-launch entries and in the last-sent reference, so a staged
+file's bytes live in one tray and leave with its chip.
+
+Where the daemon writes a fetched file follows the agent's containment rather than the vendor. An
+agent that can already write anywhere the daemon can gets `<worktree>/.attached/`, which is the one
+place a workspace-confined file tool is sure to read. A write-contained runtime — Codex under
+seatbelt or landlock — would instead be handed a write its own sandbox forbids, so its default-kind
+launches land in a per-agent directory under the daemon's state directory, outside every cwd, named
+absolutely in the trailer. Each runtime factory answers one question: can this process be running,
+write-contained, while a fetch for it happens? A worktree placement over a borrowed cwd is refused
+outright — the follow-up is dropped and a launch carrying ids fails — because the user's own
+checkout is never written to and no attachment is dropped without a word.
+
+A chat send that carries attachments rides a new frame, `SendTextWithAttachments` (24), behind
+`input/2`, which an older daemon's codec rejects before routing. A trailing `attachment_ids` on the
+existing text payload was rejected for the opposite behaviour: an older decoder ignores an unknown
+member, so the text would arrive, the files would vanish, and nothing would say so — and a
+capability check on the status connection does not cover the one-shot socket a send opens.
+
+A fetch is fail-closed and published atomically. Files stream into a pending directory and one
+same-filesystem rename publishes the batch, so the agent sees all of it or none of it; the batch
+stays revocable until the runtime's write commits, and every exit between the fetch and that write
+rolls it back, leaving nothing where the agent looks for attachments. A launch whose attachments
+cannot be fetched fails rather than delivering the text alone: a user who attached a file meant the
+file, and the text without it means something else.
+
+One downgrade gap is accepted. The affordance is gated before the send — `input/2` from the local
+daemon's hello, the advertised daemon version for a remote machine — so "+" disables with
+"attachments need the daemon updated" instead of failing after the fact. But the server dispatches a
+launch after that check and enforces no daemon version, so an operator who downgrades their own
+daemon inside a window of seconds gets a pre-change daemon's best-effort delivery; that is the only
+case where an attached file is dropped silently. Because a launch is merely accepted when the hub
+returns, its draft is retained for ten minutes — the server's own byte TTL — and restored when a
+delayed failure can be correlated back to it. The web path changes with all of this, deliberately:
+default-kind Codex files move to the daemon store, every fetch lands in one directory per batch, a
+missing attachment fails the send with the generic rejection the web already renders rather than
+sending text without it, and an in-place non-Codex agent is refused instead of getting `.attached/`
+inside the user's checkout.
+
+The remote workspace's composer carries text alone: its channel declares no attachment support, so
+"+" disables with "attachments to a session on another machine are not supported yet" and a send
+that somehow carries ids is refused before the hub is called. When that lane lands, its channel is
+the server's `SendUserInput(agentId, text, attachmentIds)` and the tray, uploader and Home's version
+gate apply unchanged.
+
+## Plans are declared from the CLI
+
+A plan document is read by the CLI, not sent for the server to fetch: the server keys a document
+on its repo-relative path and the workspace root exactly as discovery keys a written file, so the
+tool sends the path relative to the git top level and only attaches content at or under the
+server's 256 KB transport cap; above it the document is declared by hash alone and the tool result
+says so. A path is refused before it is read when it, or any link between the repository root and
+it, resolves outside the root: the server rejects such a path as well, but only once the content
+has reached it. `update_plan_task` resolves the session's current plan before it posts when no `plan_id` is
+given, because the update route answers with the task alone and every result has to name the plan
+it acted on. The SessionStart nudge for Claude reads the installed plugin's `.mcp.json` rather than
+assuming the bundled copy: a plugin installed before `kcap-plans` existed carries no such server,
+and a nudge toward a tool the session lacks is worse than none.
+
+## A running daemon follows repos.json
+
+`kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and
+after its own launches, so a repo added from a terminal reached the launch dialog only after a daemon
+restart. The daemon now polls a content hash of the file and re-sends its repo paths through the
+existing `DaemonUpdateRepoPaths` hub method when the file differs from the one the last send read.
+Polling rather than a control-socket nudge from the CLI: the file has several writers (the CLI, the
+desktop app, the daemon's own launch path, a hand edit), and every one of them is covered without any
+of them knowing whether a daemon is running. Content rather than size and mtime, because re-adding a
+known path rewrites the file at the same length and two such writes inside the filesystem's timestamp
+resolution would read as one. The comparison is against the fingerprint recorded by the last
+successful send, not against a baseline the watcher primes at start, which closes the window between
+registration reading the file and the watcher starting, and makes a failed send retry on the next
+tick by construction. Registration and the update share one lock across snapshot-and-send: the server
+runs one client's invocations in parallel, so two overlapping sends could otherwise land in the
+opposite order to the fingerprints they record. The interval is 3 s — one hash of one small file —
+so the repo is listed by the time the user has switched from the terminal to the browser.
+
+## Work-items tools take the session from the running harness
+
+An MCP stdio server is spawned once, at harness startup, from the launching process's environment.
+`KCAP_SESSION_ID` never reaches it in Claude Code: the session-start hook exports it into the file
+Claude Code applies to Bash tool calls only, so a tool call that omits `session_id` failed in every
+hooked Claude session, with an error telling the user to do what they were already doing. And when
+the variable is present, it was exported by whichever shell launched the harness, so a session
+started from another session's shell would attach its work to the parent. The workitems server
+therefore resolves an omitted `session_id` through `HarnessRequesterContext`, as the flows server
+already did: the running harness's own `CLAUDE_CODE_SESSION_ID` wins, and the ambient
+`KCAP_SESSION_ID` / `CODEX_THREAD_ID` lookup remains the fallback for harnesses that export no
+per-process id. The tests inject the environment rather than set it, because the suite itself runs
+under a harness that exports these variables.
+
+## A PR is found under the name its branch was pushed as
+
+An argument-free `gh pr view` looks for the branch git would push to. Under the default
+`push.default=simple`, a branch whose upstream has another name has no push destination, so gh
+queries the local name and never finds a PR opened from a branch pushed with an explicit refspec —
+retrying every minute changes nothing. On a miss, detection asks for the tracked remote branch by
+name, pinned to the session's repository with `--repo`, and takes only a same-repository head of
+exactly that name. It does not guess: an upstream on another repository's remote, the remote's
+default branch, or a remote whose default is unknown yields no fallback, because a branch cut from
+`origin/main` tracks `main` without being its PR. Every probe draws on the one provider deadline the
+normal lookup already had.
+## Vendor probes run on dedicated threads
+
+A startup probe pass overlaps N vendor `--version` probes so they cost one budget rather than the
+sum, but each probe blocks its thread on `WaitForExit` for up to its whole budget, and the thread
+pool is not told about that kind of block. Queued on the pool, the probes start only as the pool
+grows, about one thread a second once it is saturated, and the pass serializes again. Every probe
+therefore runs on its own long-running thread. The test that pins this saturates the pool first
+with the same silent kind of wait; a `Task.Wait` there would be compensated by the pool and prove
+nothing.
+
+## The application menu keeps its exported Settings item
+
+Avalonia's macOS exporter captures the application menu after initialization and observes its
+items, but does not observe replacement of the application's menu property. The app therefore
+keeps one menu for its lifetime and enables its existing Settings item when a profile is ready.
+Replacing the menu at that point leaves macOS showing the disabled startup item even though
+Settings works from the tray. The regression test retains that startup item through composition
+and checks both its enabled state and its action.
+
+## The npm wrapper waits for its platform packages
+
+`npm publish` returns while the registry is still processing a tarball, and a platform package carrying
+two native binaries took about ten minutes to become installable. A wrapper visible in that window
+installs without its binary, silently: npm skips an optional dependency it cannot resolve or download.
+The release now polls every platform package until it resolves and its tarball answers before
+publishing the wrapper, and the desktop
+publish reuses that poll before comparing its binaries with npm's. Every poll and every install the
+launcher runs passes `--prefer-online`, because npm serves a cached packument for five minutes and a
+plain retry re-reads the same miss.
+
+## `kcap update` stops at the server's version
+
+The update hint caps its target at the connected server's version on the stable channel, but
+`kcap update` followed the dist-tag, so the hint had to print a pinned `npm install` instead of the
+command users know. `kcap update --check` now resolves the same capped advisory and reports the
+server's version as `install_tag`; the launcher already installs whatever tag it is handed, so a
+launcher from any release follows the pin. A CLI at its server's version reads as up to date even
+when npm has newer. The cached server version changes only on an authenticated response, so
+`kcap update` sends one read-only probe before capping; without a credential it keeps the cached
+value.
+
 ## Desktop Settings use the profile and the mutation lane
 
 The Settings window edits the profile bound to the app's daemon graph and refuses a profile whose
@@ -225,6 +657,58 @@ route a launch nowhere the user intended. Ownership is re-verified at launch tim
 from the picker's own filtered list: `ReactiveCommand.Execute()` does not gate itself on
 `CanExecute`, so a selection whose daemon was reassigned to another owner between selection and
 launch is refused inside `StartAsync` itself, not left to the affordance alone.
+
+## Desktop shell: remote control — stop, permission and question cards
+
+A remote session's prompts are answerable in the app, a remote agent can be stopped, and a local
+ACP-hosted agent's questions (which never reach the local socket) render for the first time. Three
+invariants hold it together.
+
+**A pending request is answered only on the lane that delivered it.** A local-socket item carries
+the daemon's request id and settles over the socket; a server-lane item carries the server's id and
+settles over the permission-response route. The two ids are allocated independently and each
+transport rejects the other's, so `PermissionService` never cross-submits, whatever the agent row's
+origin says — an ACP question on a local agent is a server-lane item and goes over HTTP.
+
+**Dedup is by proven correlation, and it fails open.** The daemon publishes its local↔server mapping
+as `server_request_id` on the local permission wire, re-broadcasting the pending item when the
+server leg learns the id. A server-lane copy is shadowed only by a live local item claiming that
+exact id; no claim — an older daemon, a lost local subscription, the daemon's server-only path —
+leaves the server copy standing. The correlation update mutates the local item in place and
+refreshes it, so the card, its draft and an in-flight submit survive. A local settlement retires the
+claimed twin: the daemon has answered the hook, so the server copy is moot even when the relay
+fails.
+
+**Attention is a per-session set of request ids, never a boolean.** The org-wide pending ping names
+no request, so it marks the session dirty and a headless reconciliation of the session's stream
+fills the set; the dirty mark outlives disconnects and fetch failures until a reconciliation
+completes. A response removes one id, a response naming an id the set never held re-reconciles, and
+every reconnect re-reconciles what is dirty or non-empty. Cold-start pips for a prompt raised before
+the lane connected in a session never opened still need the server's pending-interrupts seed; until
+it lands, remote attention covers prompts raised while the lane is up plus whatever opening the
+session discovers.
+
+## Desktop shell: remote workspace — chat and read-only terminal
+
+A session on another machine opens as a workspace: its transcript as chat, a composer, and for a
+PTY harness a read-only terminal, all over the server. Three rules hold it together.
+
+**One chat pane, two feeds.** The chat reads rows through a feed seam: locally a tail of the
+transcript file, remotely a seed from the session detail route followed by a live tail of the
+session's stream from the position the seed ended at. Every access establishment restarts the
+tail from the last position seen and the seed is fetched only until one lands, so a reconnect
+resumes rather than replays rows under the user. Server events reach the same envelope mapping
+and vendor rules the file path applies, so the two paths cannot disagree about a row.
+
+**Authorization is the server's word, never inferred from silence.** The seed fetch and the stream
+subscribe both refuse loudly; the terminal subscribe, which the server refuses with silence, is
+attempted only once the session's access lease reads Established. An empty terminal after that is
+"no output yet", and a lane loss keeps the rows it already has.
+
+**A reported viewport is released, and (0,0) is never sent.** The server folds every viewer's size
+into the PTY's clamp until told otherwise, so a viewer that stops driving releases its size, and
+each establishment subscribes onto a fresh surface so the replay never stacks on old scrollback.
+Keystrokes cross only as the daemon's seven special keys; everything else stays local.
 
 ## A vendor update under a running daemon is re-advertised
 

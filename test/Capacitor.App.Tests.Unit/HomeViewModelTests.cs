@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
@@ -14,6 +15,8 @@ namespace Capacitor.App.Tests.Unit;
 /// here runs inside AvaloniaSession.WithImmediateRxScheduler and carries
 /// [NotInParallel("AvaloniaSession")] — see MainWindowViewModelTests' identical header comment.
 public class HomeViewModelTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     /// The daemon mints agent ids as Guid("N") — 32 hex digits — and a Started outcome carrying
     /// anything else is the "launched but unopenable" case (spec §3), so every launch fixture here
     /// uses real-shaped ids.
@@ -41,7 +44,30 @@ public class HomeViewModelTests {
         store = new AppStateStore(statePath);
         var daemon = new FakeDaemonClientService();
         Connect(daemon);
-        return new HomeViewModel(daemon, store, launch, Known());
+        return new HomeViewModel(daemon, store, launch, Known(), TimeProvider.System);
+    }
+
+    /// The launcher's model list prefers the server catalog per vendor and falls back to the
+    /// curated list where the server offers none — so an empty or unreachable catalog never blocks
+    /// a launch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Model_choices_prefer_the_server_catalog_and_fall_back_to_the_curated_list() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var catalog = new Dictionary<string, IReadOnlyList<ModelChoice>>(StringComparer.OrdinalIgnoreCase) {
+                ["gemini"] = [new("gemini-3-pro", "Gemini 3 Pro")],
+            };
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                modelCatalog: Observable.Return<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>(catalog));
+
+            await Assert.That(vm.ModelChoicesFor("gemini").Select(m => m.Slug)).Contains("gemini-3-pro");
+            await Assert.That(vm.ModelChoicesFor("claude").Select(m => m.Slug)).Contains("claude-opus-5");
+            await Assert.That(vm.ModelChoicesFor("cursor")).IsEmpty();
+        });
     }
 
     /// Repo keys compare the way the filesystem does — so the SAME repository reached under
@@ -250,7 +276,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.ChooseHarnessAsync("codex");
@@ -276,7 +302,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/Alpha");
             await vm.ChooseHarnessAsync("codex");
@@ -301,7 +327,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                () => Task.FromResult(new[] { "/repo/kcap-cli/" }));
+                () => Task.FromResult(new[] { "/repo/kcap-cli/" }), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/kcap-cli");
             daemon.Agents.AddOrUpdate(Agent("x", "/repo/kcap-cli/"));
@@ -320,7 +346,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             var empty = await vm.ListRepositoriesAsync();
             await Assert.That(empty.Count).IsEqualTo(1);
@@ -344,7 +370,7 @@ public class HomeViewModelTests {
             // GetSortedPathsAsync is last-used first — index 0 is the most recent.
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                Known("/repo/newer", "/repo/older"));
+                Known("/repo/newer", "/repo/older"), TimeProvider.System);
 
             await vm.EnsureDefaultRepositoryAsync();
 
@@ -367,7 +393,7 @@ public class HomeViewModelTests {
                 async () => {
                     await release.Task;
                     return ["/repo/default"];
-                });
+                }, TimeProvider.System);
 
             var ensure = vm.EnsureDefaultRepositoryAsync();
             await vm.SelectRepositoryAsync("/repo/user-picked");
@@ -384,7 +410,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.Agents.AddOrUpdate(Agent("x", null));
 
@@ -403,7 +429,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/fresh");
 
@@ -420,7 +446,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.Agents.AddOrUpdate(Agent("x", "/x/bravo"));
             daemon.Agents.AddOrUpdate(Agent("y", "/y/alpha"));
@@ -440,7 +466,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.Agents.AddOrUpdate(Agent("x", "/repo/a/.claude/worktrees/leafy"));
 
@@ -461,7 +487,7 @@ public class HomeViewModelTests {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             using var vm = new HomeViewModel(
                 new FakeDaemonClientService(), new AppStateStore(path), new RecordingLaunchClient(),
-                Known("/repo/recorded"));
+                Known("/repo/recorded"), TimeProvider.System);
 
             var repos = await vm.ListRepositoriesAsync();
 
@@ -478,7 +504,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                Known("/repo/alpha", "/repo/beta"));
+                Known("/repo/alpha", "/repo/beta"), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/Alpha");
             await vm.ChooseHarnessAsync("codex");
@@ -504,7 +530,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             // Before any snapshot: capability unknown, so everything is offered.
             var piBefore = vm.Harnesses.Single(h => h.Vendor == "pi").Available;
@@ -528,7 +554,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
             await vm.SelectRepositoryAsync("/repo/a");
 
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
@@ -547,7 +573,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             Connect(daemon);
             await vm.SelectRepositoryAsync("/repo/a");
@@ -577,7 +603,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), laneStatus: lane.Status);
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System, laneStatus: lane.Status);
 
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "not running", null));
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
@@ -592,32 +618,182 @@ public class HomeViewModelTests {
         });
     }
 
-    /// Local availability alone can never settle "awaiting" when the local daemon sits behind a
-    /// DIFFERENT server than this app's own lane — only a terminal lane outcome can, here forced
-    /// by keeping local availability pinned at ServerDisconnected for the whole test.
+    /// The app lane can report Connected while the daemon's connection word is still
+    /// "disconnected" — tokens landed, the daemon has not caught up. That is still sign-in
+    /// catch-up: Sign in would restart a flow that already succeeded. Only a SignedOut park
+    /// (or the daemon becoming Ready / down) settles the finishing notice.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task LaneOutcomeSettlesAwaitingWhenLocalAvailabilityNeverRecovers() {
+    public async Task LaneConnectedDoesNotAskToSignInWhileDaemonIsStillCatchingUp() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), laneStatus: lane.Status);
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             vm.NotifySignInCompleted();
             await Assert.That(vm.SignInVisible).IsFalse();
             await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.FinishingSignInNotice);
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
-            // Local availability never recovered (still "disconnected") — only the lane's own
-            // Connected outcome could have cleared awaiting, which the notice now reflects.
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.FinishingSignInNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected"));
+            await Assert.That(vm.ConnectionNotice).IsNull();
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task LaneSignedOutAfterSignInShowsSignInAgain() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            vm.NotifySignInCompleted();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+
             await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
+            await Assert.That(vm.BannerBusy).IsFalse();
+        });
+    }
+
+    /// First paint after wizard auth never calls NotifySignInCompleted — Home is constructed
+    /// afterwards. A live app lane plus a daemon still saying "disconnected" is catch-up, not
+    /// "sign in again".
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ALiveAppLaneTreatsDaemonDisconnectAsConnecting() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "HTTP://LOCALHOST:9999/");
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
+                serverUrl: "https://other.example", connection: "disconnected"));
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
+        });
+    }
+
+    [Test]
+    [Arguments(ServerLaneState.Connecting, "https://app.example", "https://other.example")]
+    [Arguments(ServerLaneState.Retrying, "https://app.example", "https://other.example")]
+    [Arguments(ServerLaneState.Connected, "https://app.example", "https://other.example")]
+    [Arguments(ServerLaneState.Connected, null, "https://other.example")]
+    [Arguments(ServerLaneState.Connected, "https://app.example", "")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task AnUnrelatedAppLaneDoesNotMaskTheLocalServerDisconnection(
+            ServerLaneState laneState, string? appServerUrl, string daemonServerUrl) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: appServerUrl);
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
+                serverUrl: daemonServerUrl, connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(laneState));
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            vm.NotifySignInCompleted();
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.BannerBusy).IsFalse();
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BannerBusyFollowsTheVisibleMessageAndSelectedMachine(bool afterSignIn) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            Connect(daemon, "disconnected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+            if (afterSignIn) vm.NotifySignInCompleted();
+
+            using var startMessage = new BehaviorSubject<string?>(null);
+            using var start = ReactiveCommand.Create(() => { });
+            using var retry = ReactiveCommand.Create(() => { });
+            vm.AttachDaemonRecovery(start, retry, Observable.Return(false), Observable.Return(true), startMessage);
+            await Assert.That(vm.BannerBusy).IsTrue();
+
+            const string failure = "Daemon start did not finish. Press Retry.";
+            startMessage.OnNext(failure);
+            await Assert.That(vm.BannerMessage).IsEqualTo(failure);
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await Assert.That(vm.BannerMessage).IsEqualTo(
+                afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.BannerBusy).IsTrue();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(vm.BannerMessage).IsNull();
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
+            await Assert.That(vm.BannerMessage).IsEqualTo(failure);
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            startMessage.OnNext(null);
+            await Assert.That(vm.BannerMessage).IsEqualTo(
+                afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.BannerBusy).IsTrue();
         });
     }
 
@@ -627,7 +803,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "not running", null));
 
@@ -657,7 +833,7 @@ public class HomeViewModelTests {
             ]);
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
@@ -670,10 +846,13 @@ public class HomeViewModelTests {
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
             await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
@@ -689,7 +868,9 @@ public class HomeViewModelTests {
     [Arguments("daemon down", "kcap too old", "kcap too old")]
     [Arguments(null, "kcap too old", "kcap too old")]
     [Arguments("daemon down", "", "daemon down")]
-    public async Task BannerMessage_prefers_a_start_message_over_the_connection_notice(
+    [Arguments(HomeViewModel.SignInExpiredNotice, "Reconnecting…", HomeViewModel.SignInExpiredNotice)]
+    [Arguments(HomeViewModel.SignInExpiredNotice, "kcap too old", HomeViewModel.SignInExpiredNotice)]
+    public async Task BannerMessage_prefers_a_start_message_except_when_sign_in_is_expired(
             string? notice, string? startMessage, string? expected) {
         await Assert.That(HomeViewModel.BannerMessageFor(notice, startMessage)).IsEqualTo(expected);
     }
@@ -703,7 +884,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient();
             var signInRequests = 0;
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), requestSignIn: () => signInRequests++);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, requestSignIn: () => signInRequests++);
             Connect(daemon);
             await vm.SelectRepositoryAsync("/repo/a");
             launch.Next = new LaunchOutcome(
@@ -729,9 +910,10 @@ public class HomeViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task After_sign_in_a_disconnected_server_shows_finishing_not_sign_in_again() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                appServerUrl: "http://localhost:9999");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
@@ -787,7 +969,7 @@ public class HomeViewModelTests {
                 new DaemonInfo { Name = daemon.DaemonName, OwnerUserId = "u1", MachineId = "m1", Connected = true },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), localMachineId: "m1");
 
             var options = await vm.ListMachinesAsync();
@@ -811,7 +993,7 @@ public class HomeViewModelTests {
             remote.DaemonsSubject.OnNext([new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true }]);
             // No viewerId supplied — the ctor default never guesses ownership.
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), daemons: remote.Daemons);
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System, daemons: remote.Daemons);
 
             var options = await vm.ListMachinesAsync();
 
@@ -837,7 +1019,7 @@ public class HomeViewModelTests {
                 },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("work", isLocal: false);
@@ -865,7 +1047,7 @@ public class HomeViewModelTests {
                 },
             ]);
             using var vm = new HomeViewModel(
-                daemon, store, new RecordingLaunchClient(), Known(),
+                daemon, store, new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -906,7 +1088,7 @@ public class HomeViewModelTests {
             var lane = new FakeServerLane();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -933,7 +1115,7 @@ public class HomeViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             var opened = new List<(string AgentId, int Generation)>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 openSessionIfCurrent: (id, generation) => opened.Add((id, generation)),
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
@@ -954,7 +1136,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient();
             var opened = new List<(string AgentId, int Generation)>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 openSessionIfCurrent: (id, generation) => opened.Add((id, generation)));
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -962,6 +1144,129 @@ public class HomeViewModelTests {
 
             await Assert.That(opened.Count).IsEqualTo(1);
             await Assert.That(opened[0].AgentId).IsEqualTo(LaunchedId);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ALocalLaunchAddsAPlaceholderRowForTheAcceptedId() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient();
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            vm.Goal = "Fix the flaky test\nand more";
+            await vm.StartCommand.Execute();
+
+            await Assert.That(directory.Placeholders).Count().IsEqualTo(1);
+            var placeholder = directory.Placeholders[0];
+            await Assert.That(placeholder.Id).IsEqualTo(LaunchedId);
+            await Assert.That(placeholder.Vendor).IsEqualTo(vm.SelectedVendor);
+            await Assert.That(placeholder.RepoPath).IsEqualTo("/repo/a");
+            await Assert.That(placeholder.Title).IsEqualTo("Fix the flaky test");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteLaunchAddsNoPlaceholder() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            var launch = new RecordingLaunchClient();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
+            ]);
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status, directory: directory);
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+
+            await Assert.That(directory.Placeholders).IsEmpty();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ALaunchFailureRemovesThePlaceholder() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures, directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            failures.OnNext(new LaunchFailure("agent-9", "boom"));
+
+            await Assert.That(directory.RemovedPlaceholders).Contains("agent-9");
+        });
+    }
+
+    /// Same-id rows on different lanes are different agents, so a remote row can neither stand in
+    /// for a local launch's placeholder nor settle its failure tracking.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteRowWithTheSameIdDoesNotSettleALocalLaunch() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "agent-9", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RepoOwner = "o", RepoName = "r",
+            }));
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures, directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await Assert.That(directory.Placeholders.Select(p => p.Id)).Contains("agent-9");
+
+            failures.OnNext(new LaunchFailure("agent-9", "launch_denied_by_owner: default"));
+            await Assert.That(vm.StartError).Contains("consent policy denied");
+        });
+    }
+
+    /// The pending row is the launch's own stand-in, so its arrival proves nothing: a failure
+    /// after it must still render, and only a real agent row settles the launch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task APendingRowDoesNotConfirmTheLaunch() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures, directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("agent-9", "claude", "/repo/a", null, DateTime.UtcNow, "spawned"), new RepoIdentity("path:/repo/a", "a")));
+            failures.OnNext(new LaunchFailure("agent-9", "launch_denied_by_owner: default"));
+
+            await Assert.That(vm.StartError).Contains("consent policy denied");
         });
     }
 
@@ -979,7 +1284,7 @@ public class HomeViewModelTests {
                 new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1013,11 +1318,14 @@ public class HomeViewModelTests {
             var lane = new FakeServerLane();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
@@ -1036,7 +1344,7 @@ public class HomeViewModelTests {
             var remote = new FakeRemoteAgents();
             remote.DaemonsSubject.OnNext([new DaemonInfo { Name = "work-mac", OwnerUserId = "u2", Connected = true }]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
             await vm.SelectRepositoryAsync("/repo/a");
 
@@ -1065,7 +1373,7 @@ public class HomeViewModelTests {
             var lane = new FakeServerLane();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1104,7 +1412,7 @@ public class HomeViewModelTests {
                 },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known("/repo/local"),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known("/repo/local"), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1155,7 +1463,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
             var failures = new Subject<LaunchFailure>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1177,7 +1485,7 @@ public class HomeViewModelTests {
                 Failures = failures, AgentId = "agent-9", Reason = "launch_denied_by_owner: default",
             };
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1196,7 +1504,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
             var failures = new Subject<LaunchFailure>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1217,9 +1525,9 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1245,7 +1553,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, dashed, null) };
             var failures = new Subject<LaunchFailure>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1269,9 +1577,9 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1307,9 +1615,9 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1335,9 +1643,9 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1378,9 +1686,9 @@ public class HomeViewModelTests {
             };
             using var directory = new AgentDirectory(
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                p => p, null, null);
+                p => p, null, null, TimeProvider.System);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1405,6 +1713,14 @@ public class HomeViewModelTests {
         }
 
         public IObservable<bool> RemoteStale => Observable.Return(false);
+        public IObservable<bool> LocalDaemonOnAppServer => Observable.Return(true);
+
+        public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
+            Observable.Return((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);
+        public string? VendorOfSession(string sessionId) => null;
+        public bool IsProvenLocalTwin(string agentId) => false;
+        public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) { }
+        public void RemovePlaceholder(string agentId) { }
 
         public void Add(string agentId) => _source.AddOrUpdate(
             AgentRow.FromLocal(Agent(agentId, "/repo/a"), new RepoIdentity("path:/repo/a", "repo")));
@@ -1444,7 +1760,7 @@ public class HomeViewModelTests {
                 Directory = directory, Failures = failures, AgentId = "agent-9",
             };
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1471,7 +1787,7 @@ public class HomeViewModelTests {
             ]);
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
             using var startMessage = new BehaviorSubject<string?>(startMessageText);
             vm.AttachDaemonRecovery(

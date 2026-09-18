@@ -16,7 +16,7 @@ public static partial class CommandEvents {
     // resurrect the directory it just deleted.
     static readonly HashSet<string> Denylisted = new(StringComparer.Ordinal) {
         "hook", "watch", "mcp", "permission-request", "generate-whats-done",
-        "set-title", "copilot-finalize", "cursor-verify-appendonly",
+        "set-title", "copilot-finalize", "cursor-verify-appendonly", "refresh-token",
 
         // `Program.cs` already skips the post-command update check for `uninstall`, with a
         // comment explaining why: any write into the config directory after `Directory.Delete`
@@ -39,10 +39,10 @@ public static partial class CommandEvents {
         "--help", "-h", "help", "--version", "-v",
         "errors", "recap", "sessions", "validate-plan", "eval", "login", "logout", "whoami",
         "daemon", "agent", "setup", "plugin", "profile", "use", "status", "config",
-        "ignore", "remap", "repos", "projects", "project", "update", "review", "mcp",
+        "ignore", "allow", "remap", "repos", "projects", "project", "update", "review", "mcp",
         "curate", "cleanup", "uninstall", "disable", "hide", "import", "watch",
         "copilot-finalize", "set-title", "hook", "cursor", "cursor-verify-appendonly",
-        "generate-whats-done", "permission-request", "feedback",
+        "generate-whats-done", "permission-request", "feedback", "refresh-token",
         "artefact",
     };
 

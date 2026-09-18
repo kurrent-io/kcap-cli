@@ -180,7 +180,7 @@ public class AntigravityReviewerReapingTests {
                     FakeTurn.NeverEnds, AntigravityRuntimeFakes.FixedConversationId,
                     pid: Environment.ProcessId)),
                 logger: NullLogger.Instance,
-                agentId: ctx.AgentId);
+                agentId: ctx.AgentId, timeProvider: TimeProvider.System);
 
             LastRuntime = runtime;
 

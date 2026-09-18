@@ -134,6 +134,14 @@ class WatchState {
     public RepoEvidenceScanner<RepositoryPayload>? EvidenceScanner        { get; set; }
     public bool                                    RepositoryFromEvidence { get; set; }
 
+    // Claude session watcher only: checkouts the agent mutated outside its launch cwd, each
+    // probed for a PR the cwd probe cannot see. A PR joins LinkedPullRequests only once the
+    // server accepted it, so a failed post retries on the next pass.
+    public SecondaryRepoRoots?                                  SecondaryRoots     { get; set; }
+    public HashSet<(string Owner, string RepoName, int Number)> LinkedPullRequests { get; } = [];
+    public DateTimeOffset                                       LastSecondaryProbe { get; set; }
+    public string?                                              NextSecondaryRoot  { get; set; }
+
     public bool               InitialTitleSent   { get; set; }
     public bool               TitleGenerated     { get; set; }
     public int                TitleAttempts      { get; set; }
@@ -150,15 +158,15 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
-    // Task 7: set by the shutdown final drain (isFinalDrain) when it held back an
-    // unterminated/unparseable final line rather than consuming it. RunWatch reads it right after
-    // the final drain to flag the session needs-import (never drop a truncated tail).
+    // Set by the shutdown final drain when it held back an unterminated/unparseable final line
+    // rather than consuming it, so RunWatch can flag the session needs-import and never drop a
+    // truncated tail.
     public bool FinalDrainHeldIncompleteLine { get; set; }
 
-    // Last wall-clock time new transcript content was observed on the rollout file.
-    // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
-    // Initialized when the watcher starts; updated in DrainNewLines on new lines.
-    public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
+    // Last time new transcript content was observed on the rollout file, driving the Codex
+    // idle-timeout fallback (see WatchCommand.ShouldEndOnIdle). Set when the watcher starts and
+    // advanced in DrainNewLines, so a zero value means the watcher has not started yet.
+    public DateTimeOffset LastActivityAt { get; set; }
 
     // idle-clock freeze while disconnected. DisconnectedSince is set when the SignalR
     // connection drops and cleared when it returns; AccumulatedDisconnected sums the disconnected
@@ -943,6 +951,7 @@ public sealed record PlanArtifactsResponseDto {
     [JsonPropertyName("primary")]     public PlanArtifactDto? Primary { get; init; }
     [JsonPropertyName("artifacts")]   public List<PlanArtifactDto> Artifacts { get; init; } = [];
     [JsonPropertyName("diagnostics")] public List<string> Diagnostics { get; init; } = [];
+    [JsonPropertyName("ledger")]      public Plans.PlanLedgerDto? Ledger { get; init; }
 }
 
 public sealed record CurationApplyItem {
@@ -963,6 +972,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(RepoSessionsResponse))]
 [JsonSerializable(typeof(PlanArtifactDto))]
 [JsonSerializable(typeof(PlanArtifactsResponseDto))]
+[JsonSerializable(typeof(Plans.PlanLedgerDto))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]

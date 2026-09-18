@@ -4,6 +4,7 @@ using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
@@ -20,19 +21,11 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 /// every event, so a marker persisted by another surface or an older build is still read.
 /// See docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md (D2a).
 /// </para>
-/// <para>
-/// [NotInParallel] — and deliberately UNKEYED, matching CursorWatcherSpawnTests. The marker
-/// paths here are per-test GUIDs and would be safe on their own, but the tests that drive the
-/// dispatcher install <see cref="WatcherManager.SpawnOverrideForTesting"/>, which is
-/// process-wide and is also mutated from other classes. Observed, not assumed: without this the
-/// two known-risk tests pass individually and fail when the class runs together.
-/// </para>
 /// </summary>
-[NotInParallel]
 public class CursorSubagentStaleStateTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -95,8 +88,7 @@ public class CursorSubagentStaleStateTests {
         var childFile = tmp.PathTo($"{child}.jsonl");
         await File.WriteAllTextAsync(childFile, """{"role":"assistant","message":{"content":[]}}""" + "\n");
 
-        var spawned = new List<string>();
-        WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
         try {
             CursorLiveSubagentLinker.SaveLink(Config.Root, child, parent, "task");
             // Deliberately NO MarkSubagentStartAcked.
@@ -109,9 +101,9 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(tmp.PathTo("spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
-            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(
+            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 client,
                 new StringReader($$"""{"hook_event_name":"afterAgentThought","session_id":"{{child}}","generation_id":"g","text":"t","transcript_path":"{{childFile.Replace(@"\", @"\\")}}"}"""),
                 spool);
@@ -121,13 +113,12 @@ public class CursorSubagentStaleStateTests {
             // ...and so is the agent-routed transcript backfill. This is the assertion the gate
             // owns: without it the backfill runs even though SubagentStarted was never appended.
             await Assert.That(routes.Any(r => r.StartsWith("/hooks/transcript", StringComparison.Ordinal))).IsFalse();
-            await Assert.That(spawned).IsEmpty();
+            await Assert.That(spawner.Keys).IsEmpty();
 
             // Fail-closed AND SILENT: nothing is logged, surfaced or marked at the moment of the
             // loss. Recovery is `kcap import --cursor` plus the adoption sweep.
             await Assert.That(Markers.HasSubagentStartAck(child)).IsFalse();
         } finally {
-            WatcherManager.SpawnOverrideForTesting = null;
             TryDeleteMarker(child);
         }
     }
@@ -152,8 +143,7 @@ public class CursorSubagentStaleStateTests {
         using var tmp = new TempDir();
         var (parent, child, childPath) = SeedLinkedPair(tmp, "characterize the successful start");
 
-        var spawned = new List<string>();
-        WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
         var blocker = MarkerPath(child);
         try {
             BlockMarkerWrite(blocker);
@@ -166,14 +156,14 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(tmp.PathTo("spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
             // Drive the REAL CALLER, not the divert directly. That matters: the leading remedy
             // changes the caller (make SaveLink report success and fail open before the start is
             // posted), so a test that bypassed it by calling HandleSubagentChildEventAsync would
             // keep passing after the remedy landed — defeating the whole point of a
             // characterization test.
-            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(
+            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 client,
                 new StringReader($$"""{"hook_event_name":"sessionStart","session_id":"{{child}}","transcript_path":"{{childPath.Replace(@"\", @"\\")}}"}"""),
                 spool);
@@ -185,9 +175,8 @@ public class CursorSubagentStaleStateTests {
             await Assert.That(CursorLiveSubagentLinker.TryLoadLink(Config.Root, child)).IsNull();
             await Assert.That(routes).Contains("/hooks/subagent-start");
             await Assert.That(Markers.HasSubagentStartAck(child)).IsTrue();
-            await Assert.That(spawned).Contains($"{parent}-{child}");
+            await Assert.That(spawner.Keys).Contains($"{parent}-{child}");
         } finally {
-            WatcherManager.SpawnOverrideForTesting = null;
             UnblockMarkerWrite(blocker);
             TryDeleteMarker(child);
         }
@@ -198,8 +187,7 @@ public class CursorSubagentStaleStateTests {
         using var tmp = new TempDir();
         var (parent, child, childPath) = SeedLinkedPair(tmp, "characterize the spooled start");
 
-        var spawned = new List<string>();
-        WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
         var blocker = MarkerPath(child);
         try {
             BlockMarkerWrite(blocker);
@@ -219,16 +207,16 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(tmp.PathTo("spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
             // Again through the REAL CALLER — see the note in the test above.
-            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(
+            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 client,
                 new StringReader($$"""{"hook_event_name":"sessionStart","session_id":"{{child}}","transcript_path":"{{childPath.Replace(@"\", @"\\")}}"}"""),
                 spool);
 
             await Assert.That(spool.HasBacklog(child)).IsTrue();
-            await Assert.That(spawned).IsEmpty();
+            await Assert.That(spawner.Keys).IsEmpty();
             await Assert.That(CursorLiveSubagentLinker.TryLoadLink(Config.Root, child)).IsNull();
 
             // Next hook: the drain delivers the spooled start and spawns the agent-scoped
@@ -236,17 +224,16 @@ public class CursorSubagentStaleStateTests {
             // ordinary top-level route. THE FINDING: two watchers now tail the SAME transcript,
             // one under the parent and one as the child's own session.
             routes.Clear();
-            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(
+            await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 client,
                 new StringReader($$"""{"hook_event_name":"afterAgentResponse","session_id":"{{child}}","transcript_path":"{{childPath.Replace(@"\", @"\\")}}"}"""),
                 spool);
 
-            await Assert.That(spawned).Contains($"{parent}-{child}");   // under the parent
-            await Assert.That(spawned).Contains(child);                 // ...and as its own session
+            await Assert.That(spawner.Keys).Contains($"{parent}-{child}");   // under the parent
+            await Assert.That(spawner.Keys).Contains(child);                 // ...and as its own session
             await Assert.That(routes).Contains("/hooks/agent-response/cursor");
             await Assert.That(CursorLiveSubagentLinker.TryLoadLink(Config.Root, child)).IsNull();
         } finally {
-            WatcherManager.SpawnOverrideForTesting = null;
             UnblockMarkerWrite(blocker);
             TryDeleteMarker(child);
         }

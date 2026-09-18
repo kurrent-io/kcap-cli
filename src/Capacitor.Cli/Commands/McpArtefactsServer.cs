@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -22,7 +21,8 @@ namespace Capacitor.Cli.Commands;
 /// worse than a narrow one: reading, versioning history and takedown all live in the web UI, which
 /// is where a person is when they need them.</para>
 /// </summary>
-sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
+sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
+        TelemetryStartup startup, TimeProvider time) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     public async Task<int> RunAsync() {
@@ -30,13 +30,17 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         var tools = BuildToolsList();
 
-        // MCP servers are long-lived and denylisted under the top-level "mcp" command
-        // (CommandEvents.Denylisted) — re-initialise under the reportable pseudo-command
-        // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
-        // disk must never block the server from starting.
+        // Best-effort, and recorded even when the read throws: a stale token on disk must never
+        // block the server from starting.
         var loggedIn = false;
         try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
-        CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
+
+        // MCP servers are long-lived and denylisted under the top-level "mcp" command; the
+        // reportable pseudo-command "mcp-server" is what lets per-tool-call events leave.
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
+        telemetry.AddSharedProperty("logged_in", loggedIn);
+
+        await using var mcp = new McpTelemetry(telemetry);
 
         // Validate the server_url shape once, locally (pure string check — no network, token,
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
@@ -69,7 +73,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -78,7 +82,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                McpTelemetry.ToolCalled("kcap-artefacts", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-artefacts", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -179,7 +183,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 // The long poll. Its own client timeout, well past the server's own ceiling, so the
                 // wait ends because the SERVER decided it had — never because this side gave up
                 // first and left the agent unable to tell a timeout from a lost answer.
-                "await_artefact_responses" => await WaitAsync(client, baseUrl, arguments),
+                "await_artefact_responses" => await WaitAsync(client, baseUrl, arguments, time),
 
                 "get_artefact_results" => await client.GetAsync(
                     $"{ArtefactUrl(baseUrl, arguments, "results")}{VersionQuery(arguments)}"),
@@ -193,7 +197,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             var body = await httpResponse.Content.ReadAsStringAsync();
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl), isError: true);
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
             // Forbidden and NotFound are named rather than shown as a bare status: the server keeps
@@ -279,7 +283,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     // where they would drift.
     internal static JsonObject BuildPublishBody(JsonObject? args, string html) {
         var body = new JsonObject {
-            ["title"] = McpWorkItemsServer.RequireString(args, "title"),
+            ["title"] = McpToolArguments.RequireString(args, "title"),
             ["html"]  = html
         };
 
@@ -308,7 +312,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     }
 
     internal static JsonObject BuildVisibilityBody(JsonObject? args) {
-        var body = new JsonObject { ["visibility"] = McpWorkItemsServer.RequireString(args, "visibility") };
+        var body = new JsonObject { ["visibility"] = McpToolArguments.RequireString(args, "visibility") };
 
         if (ReadGrants(args) is { } grants) body["grants"] = grants;
 
@@ -334,8 +338,8 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (element is not JsonObject grant)
                 throw new ArgumentException("'grants' must contain only objects with grant_type and grantee_id.");
 
-            var type = McpWorkItemsServer.RequireString(grant, "grant_type");
-            var id   = McpWorkItemsServer.RequireString(grant, "grantee_id");
+            var type = McpToolArguments.RequireString(grant, "grant_type");
+            var id   = McpToolArguments.RequireString(grant, "grantee_id");
 
             // The name is display only and an agent has no directory to look one up in; the id is
             // the honest stand-in, and the server replaces it with the real name when it knows one.
@@ -387,7 +391,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// <summary>Builds an artefact-scoped URL from a REQUIRED id. There is no ambient artefact to
     /// fall back to, and a default here would change the audience of the wrong page.</summary>
     internal static string ArtefactUrl(string baseUrl, JsonObject? args, string suffix) {
-        var id = McpWorkItemsServer.RequireString(args, "artefact_id");
+        var id = McpToolArguments.RequireString(args, "artefact_id");
 
         // Escaping alone leaves "." and ".." to walk out of the route.
         if (id is "." or ".." || id.Contains('/') || id.Contains('\\'))
@@ -406,17 +410,17 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// cannot distinguish from a broken server. The client budget is therefore deliberately longer
     /// than anything the server will hold.</para>
     /// </summary>
-    static async Task<HttpResponseMessage> WaitAsync(HttpClient client, string baseUrl, JsonObject? args) {
+    static async Task<HttpResponseMessage> WaitAsync(HttpClient client, string baseUrl, JsonObject? args, TimeProvider time) {
         var url = new StringBuilder(ArtefactUrl(baseUrl, args, "responses/wait"));
 
         url.Append(VersionQuery(args).Length == 0 ? '?' : '&').Append("min_respondents=")
-           .Append(McpWorkItemsServer.TryReadInt(args, "min_respondents", out var min) ? min : 1);
+           .Append(McpToolArguments.TryReadInt(args, "min_respondents", out var min) ? min : 1);
 
         if (VersionQuery(args) is { Length: > 0 } version) url.Append('&').Append(version.TrimStart('?'));
 
-        if (McpWorkItemsServer.TryReadInt(args, "timeout_s", out var timeout)) url.Append("&timeout_s=").Append(timeout);
+        if (McpToolArguments.TryReadInt(args, "timeout_s", out var timeout)) url.Append("&timeout_s=").Append(timeout);
 
-        using var budget = new CancellationTokenSource(ClientWaitBudget);
+        using var budget = new CancellationTokenSource(ClientWaitBudget, time);
 
         return await client.GetAsync(url.ToString(), budget.Token);
     }
@@ -426,10 +430,10 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     static readonly TimeSpan ClientWaitBudget = TimeSpan.FromMinutes(30);
 
     static string VersionQuery(JsonObject? args) =>
-        McpWorkItemsServer.TryReadInt(args, "version", out var version) ? $"?version={version}" : "";
+        McpToolArguments.TryReadInt(args, "version", out var version) ? $"?version={version}" : "";
 
     internal static JsonObject BuildCloseBody(JsonObject? args) {
-        if (!McpWorkItemsServer.TryReadInt(args, "version", out var version))
+        if (!McpToolArguments.TryReadInt(args, "version", out var version))
             throw new ArgumentException("'version' is required.");
 
         var body = new JsonObject { ["version"] = version };

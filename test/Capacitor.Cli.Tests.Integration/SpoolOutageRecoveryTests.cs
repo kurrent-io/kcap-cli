@@ -5,6 +5,7 @@ using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -65,15 +66,44 @@ public class SpoolOutageRecoveryTests : IDisposable {
         }
         """;
 
-    HookSpool MakeSpool() => new(_spoolDir);
+    HookSpool MakeSpool() => new(_spoolDir, time: TimeProvider.System);
 
     // HandleCore takes a pre-built HttpClient so we bypass auth entirely.
+    ClaudeHookCommand MakeCommand() =>
+        new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+
     Task<int> Invoke(HttpClient client, string payload) =>
-        new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient())
-            .HandleCore(client, AuthStatus.Ok, MakeSpool(), new StringReader(payload));
+        MakeCommand().HandleCore(client, AuthStatus.Ok, MakeSpool(), new StringReader(payload));
 
     IEnumerable<string> SpoolFiles =>
         Directory.Exists(_spoolDir) ? Directory.EnumerateFiles(_spoolDir) : [];
+
+    /// The hook's own drain is budget-bounded, so a loaded runner can legitimately stop it
+    /// mid-entry and leave the remainder spooled for the next hook — which is exactly what
+    /// production does. Top it up by draining the spool directly through the PRODUCTION poster
+    /// (`ClaudeHookCommand.ClaudePoster`), so the generate_whats_done side effect is genuinely
+    /// traversed rather than replaced by a status-only stand-in.
+    ///
+    /// This is what makes the helper honestly bounded: the poster posts with `PostOnceAsync` (a
+    /// single attempt on its own short budget), so there is no 30s retry layer — as there would be
+    /// if we re-invoked the whole hook and hit its trailing /hooks/stop. Each pass is capped by the
+    /// remaining deadline and the loop stops once it is non-positive.
+    async Task DrainSpoolToEmpty() {
+        var spool = MakeSpool();
+        var deadline = TimeSpan.FromSeconds(20);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        using var client = new HttpClient();
+        while (SpoolFiles.Any()) {
+            var remaining = deadline - sw.Elapsed;
+            if (remaining <= TimeSpan.Zero) break;
+            // Clamp the poster's per-attempt bound to the remaining deadline too — DrainAllAsync
+            // only checks expiry before an entry and cannot cancel an in-flight poster, so a fixed
+            // 2s attempt started near the deadline would otherwise overrun the helper.
+            var perAttempt = TimeSpan.FromMilliseconds(Math.Min(2000, remaining.TotalMilliseconds));
+            var poster = MakeCommand().ClaudePoster(client, perAttempt);
+            await spool.DrainAllAsync(Sid, poster, remaining, CancellationToken.None);
+        }
+    }
 
     // ---------------------------------------------------------------------------
     // Tests
@@ -122,6 +152,10 @@ public class SpoolOutageRecoveryTests : IDisposable {
         var exitUp = await Invoke(clientUp, StopPayload());
 
         await Assert.That(exitUp).IsEqualTo(0);
+
+        // Top up the hook's budget-bounded drain before inspecting anything — the first hook can
+        // exhaust its budget before it even reaches the entry under load.
+        await DrainSpoolToEmpty();
 
         // Server must have received the replayed session-end POST.
         var replayedRequests = _server.FindLogEntries(
@@ -173,6 +207,10 @@ public class SpoolOutageRecoveryTests : IDisposable {
         var exit = await Invoke(client, StopPayload());
 
         await Assert.That(exit).IsEqualTo(0);
+
+        // Top up the hook's budget-bounded drain before inspecting anything — the first hook can
+        // exhaust its budget before it even reaches the entry under load.
+        await DrainSpoolToEmpty();
 
         // Server must have received the replayed session-end POST.
         var replayedRequests = _server.FindLogEntries(

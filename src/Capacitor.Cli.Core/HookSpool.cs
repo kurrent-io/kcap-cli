@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -25,7 +24,7 @@ public enum DrainOutcome {
 /// a separate AOT exe) can share the ordered-drain primitives without either
 /// project referencing the other's exe as a library.</para>
 /// </summary>
-public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.DefaultCapBytes) {
+public sealed partial class HookSpool(string spoolDir, TimeProvider time, int capBytes = HookSpool.DefaultCapBytes) {
     public const int DefaultCapBytes = 1_048_576; // 1 MB per session file
 
     /// <summary>
@@ -50,7 +49,8 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory, or a vendor's legacy location.</summary>
-    public HookSpool(ConfigRoot config, int capBytes = DefaultCapBytes) : this(config.Path(DirName), capBytes) { }
+    public HookSpool(ConfigRoot config, TimeProvider time, int capBytes = DefaultCapBytes)
+        : this(config.Path(DirName), time, capBytes) { }
 
     static readonly Regex SafeSessionId  = SafeSessionIdRegex();
     static readonly Regex LegacyGuidKey = LegacyGuidKeyRegex();
@@ -142,8 +142,8 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
             TimeSpan                                  budget,
             CancellationToken                         ct) {
         if (!Directory.Exists(spoolDir)) return;
-        var sw = Stopwatch.StartNew();
-        bool Expired() => sw.Elapsed >= budget;
+        var started = time.GetTimestamp();
+        bool Expired() => time.GetElapsedTime(started) >= budget;
 
         foreach (var sid in OrderedSessionIds(currentSessionId)) {
             if (Expired() || ct.IsCancellationRequested) return;
@@ -398,7 +398,7 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     public void ReapOlderThan(TimeSpan age) {
         try {
             if (!Directory.Exists(spoolDir)) return;
-            var cutoff = DateTime.UtcNow - age;
+            var cutoff = (time.GetUtcNow() - age).UtcDateTime;
             foreach (var file in Directory.EnumerateFiles(spoolDir)) {
                 try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); } catch { }
             }

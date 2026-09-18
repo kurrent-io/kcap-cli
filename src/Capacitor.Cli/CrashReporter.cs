@@ -21,7 +21,7 @@ internal static class CrashReporter {
     // directly by UpdateNotice.IsHumanFacing — the same population never gets the
     // exit-time update notice either, since nobody reads their stderr.
     internal static readonly HashSet<string> FailOpenCommands = new(StringComparer.Ordinal) {
-        "hook", "generate-whats-done", "set-title", "copilot-finalize", "report-version",
+        "hook", "generate-whats-done", "set-title", "copilot-finalize", "report-version", "refresh-token",
     };
 
     /// <summary>True for agent-spawned commands that must fail open (exit 0) on a crash.</summary>
@@ -53,7 +53,7 @@ internal static class CrashReporter {
     /// and write a single stderr line. Never throws — it runs while the process is
     /// already failing, possibly with a closed stderr pipe (detached process).
     /// </summary>
-    public static void Record(ConfigRoot config, string? command, Exception ex) {
+    public static void Record(ConfigRoot config, string? command, Exception ex, TimeProvider time) {
         string? writtenPath = null;
         try {
             var path = config.Path("crash.log");
@@ -62,7 +62,7 @@ internal static class CrashReporter {
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             TrimIfLarge(path);
-            File.AppendAllText(path, FormatEntry(command, ex, DateTimeOffset.UtcNow));
+            File.AppendAllText(path, FormatEntry(command, ex, time.GetUtcNow()));
             writtenPath = path;
         } catch {
             // Disk full, permissions — nothing useful to do while crashing.

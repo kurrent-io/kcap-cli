@@ -35,7 +35,7 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task SendUserInput_wraps_text_in_a_bracketed_paste_then_carriage_return() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("claude", pty, approvalsDisabled: true);
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: true);
 
         await runtime.SendUserInputAsync("hello world");
 
@@ -51,7 +51,7 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task RequestGracefulStop_writes_exit_then_carriage_return() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("claude", pty, approvalsDisabled: true);
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: true);
 
         await runtime.RequestGracefulStopAsync();
 
@@ -66,7 +66,7 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task SendSpecialKey_translates_via_SpecialKeyMap() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("claude", pty);
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System);
 
         // SpecialKeyMap.ToBytes recognizes PascalCase keys: Escape/Tab/Enter/CtrlC/ArrowUp/
         // ArrowDown/ShiftTab. "Enter" maps to [0x0d].
@@ -80,7 +80,7 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task SendSpecialKey_unknown_key_writes_nothing() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("claude", pty);
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System);
 
         await runtime.SendSpecialKeyAsync("definitely-not-a-key");
 
@@ -90,7 +90,7 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task SendRawInput_writes_bytes_verbatim() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("claude", pty);
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System);
         var data    = new byte[] { 1, 2, 3 };
 
         await runtime.SendRawInputAsync(data);
@@ -105,7 +105,7 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task Resize_forwards_to_pty() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("codex", pty);
+        var runtime = new PtyHostedAgentRuntime("codex", pty, TimeProvider.System);
 
         runtime.Resize(100, 30);
 
@@ -114,7 +114,7 @@ public class PtyHostedAgentRuntimeTests {
 
     [Test]
     public async Task Vendor_and_pid_are_exposed_from_the_wrapped_pty() {
-        var runtime = new PtyHostedAgentRuntime("codex", new RecordingPty());
+        var runtime = new PtyHostedAgentRuntime("codex", new RecordingPty(), TimeProvider.System);
 
         await Assert.That(runtime.Vendor).IsEqualTo("codex");
         await Assert.That(runtime.Pid).IsEqualTo(4321);
@@ -125,7 +125,7 @@ public class PtyHostedAgentRuntimeTests {
         // The ~2.4s submit schedule can outlive the reviewer: HasExited becomes true right after
         // the paste write (before any CR) → the guard must short-circuit, sending zero CRs.
         var pty     = new ClosablePty(exitedAfter: writes => writes >= 1);
-        var runtime = new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true);
+        var runtime = new PtyHostedAgentRuntime("codex", pty, TimeProvider.System, approvalsDisabled: true);
 
         await runtime.SendUserInputAsync("hi");
 
@@ -139,7 +139,7 @@ public class PtyHostedAgentRuntimeTests {
         // the CR write throws a pipe-closed IOException. SendUserInputAsync must NOT propagate it
         // (a benign post-exit write) and must send no further CRs (GitHub #349, Qodo finding #2).
         var pty     = new ClosablePty(throwOnCrIndex: 0);
-        var runtime = new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true);
+        var runtime = new PtyHostedAgentRuntime("codex", pty, TimeProvider.System, approvalsDisabled: true);
 
         await runtime.SendUserInputAsync("hi");   // must complete without throwing
 
@@ -152,13 +152,82 @@ public class PtyHostedAgentRuntimeTests {
         // Interactive session (approvals enabled → a prompt is possible): submit with ONE CR so a
         // stray Enter can't accept a live approval dialog — never the multi-CR spray (Qodo review).
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: false);
+        var runtime = new PtyHostedAgentRuntime("codex", pty, TimeProvider.System, approvalsDisabled: false);
 
         await runtime.SendUserInputAsync("hello");
 
         await Assert.That(pty.StringWrites.Count).IsEqualTo(2);   // paste + exactly one CR
         await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello\x1b[201~");
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
+    }
+
+    /// <summary>The graceful stop reaches its "/exit" write while a delivery is parked mid-write —
+    /// the state a child that stopped draining its stdin puts every writer in. The parked delivery
+    /// holds the input lane until the terminate that follows this stop, so a stop that waited on the
+    /// lane unboundedly could never be the thing that got there.</summary>
+    [Test]
+    public async Task RequestGracefulStop_writes_exit_while_a_parked_delivery_holds_the_lane() {
+        var pty     = new ParkingPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        var delivery = runtime.SendUserInputAsync("round 1");
+        await pty.FirstWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var bound = PtyHostedAgentRuntime.GracefulStopLaneWait + TimeSpan.FromSeconds(3);
+        await runtime.RequestGracefulStopAsync().WaitAsync(bound);
+
+        await Assert.That(pty.Writes).Contains("/exit");
+        await Assert.That(delivery.IsCompleted).IsFalse();   // still parked; the lane was never freed
+
+        pty.ReleaseFirstWrite();
+        await delivery.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    // Fake PTY whose first write parks until released, modelling a child that has stopped reading
+    // its stdin. Later writes go through, so the stop's own "/exit" is observable.
+    sealed class ParkingPty : IPtyProcess {
+        readonly TaskCompletionSource _entered  = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly Lock                 _gate     = new();
+        readonly List<string>         _writes   = [];
+        int _writeCount;
+
+        public Task FirstWriteEntered => _entered.Task;
+        public void ReleaseFirstWrite() => _released.TrySetResult();
+
+        public IReadOnlyList<string> Writes { get { lock (_gate) return [.. _writes]; } }
+
+        public int  Pid       => 77;
+        public bool HasExited => false;
+        public int? ExitCode  => null;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   timeout = null) => Task.CompletedTask;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public async Task WriteAsync(string input) {
+            bool first;
+
+            lock (_gate) {
+                _writes.Add(input);
+                first = _writeCount++ == 0;
+            }
+
+            if (!first) return;
+
+            _entered.TrySetResult();
+            await _released.Task;
+        }
+
+        public Task WriteAsync(byte[] data) => WriteAsync(System.Text.Encoding.UTF8.GetString(data));
+        public void Resize(ushort cols, ushort rows) { }
+        public void SendInterrupt() { }
     }
 
     // Fake PTY that can report HasExited as a function of writes-so-far, and/or throw a

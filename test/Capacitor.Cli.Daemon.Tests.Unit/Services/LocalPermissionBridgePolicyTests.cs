@@ -40,7 +40,7 @@ public class LocalPermissionBridgePolicyTests {
 
         public Harness(PolicySnapshot? snapshot) {
             Log    = new PermissionDecisionLog(Tmp.Path, NullLogger.Instance);
-            Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, Broker, Log) {
+            Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System, Broker, Log) {
                 AttributeHandler = _ => new AttributedAgent("agent-1", snapshot),
             };
         }
@@ -195,7 +195,7 @@ public class LocalPermissionBridgePolicyTests {
 sealed class PolicyServerConnection() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
         UnusedTokenStore.Create(),
-        NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance) {
+        NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
     readonly List<object> _runEvents = [];
     int _beginCount;
 

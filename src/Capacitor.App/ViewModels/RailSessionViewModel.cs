@@ -15,13 +15,21 @@ namespace Capacitor.App.ViewModels;
 /// point-in-time snapshot (SessionCardViewModel precedent).
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Id { get; }
-    public string Primary { get; }
-    public string Sub { get; }
+    /// Null when the row has no title, in which case the chips line stands alone as the row.
+    public string? Primary { get; }
+    public bool HasTitle { get; }
+    public string Vendor { get; }
+    public bool HasVendor { get; }
+    public string? Model { get; }
+    public bool HasModel { get; }
+    public string Meta { get; }
     public IBrush StatusDot { get; }
     public string Tooltip { get; }
     /// The daemon name badge for a remote row; null for a local one.
     public string? MachineBadge { get; }
     public bool IsRemote { get; }
+    /// A launch the daemon has not published yet: Meta carries its stage instead of an age.
+    public bool IsStarting { get; }
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     internal DateTime CreatedAt { get; }
@@ -32,28 +40,40 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _needsYou;
     public bool NeedsYou => _needsYou.Value;
 
-    readonly ObservableAsPropertyHelper<string> _statusBadge;
-    public string StatusBadge => _statusBadge.Value;
+    readonly ObservableAsPropertyHelper<bool> _isStale;
+    /// A remote row greys out while the lane is stale; a local row is never stale.
+    public bool IsStale => _isStale.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
+    /// The badge is a clock for a finished turn; a failure or a pending permission takes "!" instead.
+    public bool ShowsIdleBadge => _showsIdleBadge.Value;
 
     readonly CompositeDisposable _disposables = new();
 
     public RailSessionViewModel(
             AgentRow row, IObservable<string?> selectedAgentId,
-            IObservable<IReadOnlySet<string>> agentsWithPending,
-            Action<string> openLocal, Action<string> openRemoteInWeb) {
+            IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
+            Action<string> openLocal, Action<string> openRemote, TimeProvider time) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
-        var kindLine = row.Kind == "agent" ? row.Vendor : $"{row.Vendor} · {row.Kind}";
-        var vendorLine = row.WorkLocation == WorkLocationText.Borrowed ? $"{kindLine} · borrowed" : kindLine;
-        var age = UptimeFormat.Format(DateTime.UtcNow - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
+        var kindExtra = row.Kind == "agent" ? null : row.Kind;
+        var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
+        var age = UptimeFormat.Format(
+            time.GetUtcNow().UtcDateTime - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
 
-        Primary = row.Title ?? vendorLine;
-        Sub = row.Title is null
-            ? Join(row.Model, age)
-            : Join(vendorLine, row.Model, age);
-        StatusDot = SessionStatusDots.For(row.Status);
-        Tooltip = Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
-            row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
+        Primary = string.IsNullOrEmpty(row.Title) ? null : row.Title;
+        HasTitle = Primary is not null;
+        Vendor = row.Vendor;
+        HasVendor = !string.IsNullOrEmpty(row.Vendor);
+        Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
+        HasModel = Model is not null;
+        IsStarting = row.Origin == AgentOrigin.Pending;
+        Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age);
+        StatusDot = SessionStatusDots.For(row);
+        Tooltip = IsStarting
+            ? Join(row.Id, "Starting", LaunchStages.Label(row.LaunchStage))
+            : Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
+                row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
         MachineBadge = row.MachineBadge;
         IsRemote = row.Origin == AgentOrigin.Remote;
 
@@ -65,13 +85,16 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
             .DisposeWith(_disposables);
-        _statusBadge = agentsWithPending.Select(set => row.Status == "Failed" || set.Contains(row.Id)
-                ? "!" : SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
-            .ToProperty(this, x => x.StatusBadge, initialValue: SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
+        _showsIdleBadge = agentsWithPending.Select(set =>
+                SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed" && !set.Contains(row.Id))
+            .ToProperty(this, x => x.ShowsIdleBadge, initialValue: SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed")
             .DisposeWith(_disposables);
 
-        // Remote rows are read-only in-app; opening deep-links to the web.
-        OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemoteInWeb : openLocal)(row.Id));
+        _isStale = (IsRemote ? remoteStale : Observable.Return(false))
+            .ToProperty(this, x => x.IsStale, initialValue: false)
+            .DisposeWith(_disposables);
+
+        OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemote : openLocal)(row.Id));
         _disposables.Add(OpenCommand);
     }
 

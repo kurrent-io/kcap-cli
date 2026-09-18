@@ -516,7 +516,20 @@ static partial class ProcessHelpers {
     /// is found on the chain (or <paramref name="vendor"/> is null/empty), preserving
     /// prior behaviour for Codex and any vendor whose process isn't named after it.
     /// </summary>
-    public static int? GetCodingAgentPid(string? vendor) {
+    public static int? GetCodingAgentPid(string? vendor) => GetCodingAgentPid(vendor, allowFallback: true);
+
+    /// <summary>
+    /// As <see cref="GetCodingAgentPid(string?)"/>, but with <paramref name="allowFallback"/>
+    /// false the legacy process-group/parent heuristic is skipped and an unresolved agent
+    /// returns null.
+    /// </summary>
+    /// <remarks>
+    /// The watcher's staged recovery runs after the hook that spawned it has died, so the
+    /// watcher has been reparented — the heuristic there resolves <c>systemd --user</c> (or
+    /// init), never the agent. Re-arming the watchdog on an immortal PID is worse than not
+    /// re-arming: the agent's death can no longer be observed at all.
+    /// </remarks>
+    public static int? GetCodingAgentPid(string? vendor, bool allowFallback) {
         if (OperatingSystem.IsWindows()) {
             // Walk the ppid ancestry by process name to skip the transient per-hook
             // executor. GetParentPidWindows() alone returns that executor, which has
@@ -534,7 +547,7 @@ static partial class ProcessHelpers {
                 return winAgentPid;
             }
 
-            return startPid;
+            return allowFallback ? startPid : null;
         }
 
         // Walk the ancestry for any named vendor. The match is by the vendor's process
@@ -544,6 +557,10 @@ static partial class ProcessHelpers {
         if (!string.IsNullOrEmpty(vendor)
          && ResolveCodingAgentPid(getppid_native(), vendor, GetProcessInfo) is { } agentPid) {
             return agentPid;
+        }
+
+        if (!allowFallback) {
+            return null;
         }
 
         // Fall back to getppid for the degenerate cases: pgid <= 1 means no
@@ -559,7 +576,7 @@ static partial class ProcessHelpers {
     /// the PID of the nearest ancestor whose executable name identifies the coding
     /// agent for <paramref name="vendor"/> ("claude"/"codex"), or null if none is
     /// found within <paramref name="maxHops"/>. Pure: the process table is supplied
-    /// via <paramref name="lookup"/> (pid → (ppid, comm)) so it is unit-testable
+    /// via <paramref name="lookup"/> (pid → (ppid, names)) so it is unit-testable
     /// with synthetic ancestries and shared across platforms.
     /// </summary>
     /// <remarks>
@@ -571,10 +588,10 @@ static partial class ProcessHelpers {
     /// time the watcher checked it, and the parent-PID watchdog silently never started.
     /// </remarks>
     internal static int? ResolveCodingAgentPid(
-            int                                 startPid,
-            string                              vendor,
-            Func<int, (int ppid, string comm)?> lookup,
-            int                                 maxHops = 16
+            int                                                startPid,
+            string                                             vendor,
+            Func<int, (int ppid, IReadOnlyList<string> names)?> lookup,
+            int                                                maxHops = 16
         ) {
         var pid = startPid;
 
@@ -583,7 +600,7 @@ static partial class ProcessHelpers {
                 return null;
             }
 
-            if (MatchesAgentName(info.comm, vendor)) {
+            if (info.names.Any(name => MatchesAgentName(name, vendor))) {
                 return pid;
             }
 
@@ -594,14 +611,20 @@ static partial class ProcessHelpers {
     }
 
     /// <summary>
-    /// Returns <c>(ppid, comm)</c> for an arbitrary live PID, or null if the process
+    /// Returns <c>(ppid, names)</c> for an arbitrary live PID, or null if the process
     /// can't be inspected (gone, access denied, or unsupported platform). Feeds the
     /// ancestry walk in <see cref="ResolveCodingAgentPid"/> on every platform — the
     /// Windows implementation reads the parent PID via
     /// <c>NtQueryInformationProcess</c> and the image name via
     /// <c>QueryFullProcessImageName</c>.
     /// </summary>
-    public static (int ppid, string comm)? GetProcessInfo(int pid) {
+    /// <remarks>
+    /// Several names, not one, because no single source is authoritative: a node-based agent
+    /// prctl/setproctitles its comm to its version string, and a native install's exec path is
+    /// <c>…/claude/versions/&lt;version&gt;</c>, so either can read as a version rather than the
+    /// agent. Every source a platform can offer goes in, and the walk matches on any of them.
+    /// </remarks>
+    public static (int ppid, IReadOnlyList<string> names)? GetProcessInfo(int pid) {
         if (pid <= 0) {
             return null;
         }
@@ -613,7 +636,41 @@ static partial class ProcessHelpers {
         return OperatingSystem.IsMacOS() ? GetProcessInfoMac(pid) : GetProcessInfoLinux(pid);
     }
 
-    static unsafe (int ppid, string comm)? GetProcessInfoWindows(int pid) {
+    /// <summary>
+    /// Appends <paramref name="name"/> to <paramref name="names"/> unless it is empty or
+    /// already present. Preserves source order, so the most trustworthy name is tried first.
+    /// </summary>
+    static void AddName(List<string> names, string? name) {
+        if (!string.IsNullOrEmpty(name) && !names.Contains(name, StringComparer.Ordinal)) {
+            names.Add(name);
+        }
+    }
+
+    /// <summary>
+    /// The names by which <paramref name="execPath"/> could identify its agent: the basename,
+    /// plus the directory above a <c>versions/</c> segment. Claude Code's native installer
+    /// writes <c>~/.local/share/claude/versions/&lt;version&gt;</c>, where the basename is the
+    /// version and only the grandparent names the agent.
+    /// </summary>
+    internal static IEnumerable<string> ExecutableNameCandidates(string? execPath) {
+        if (string.IsNullOrEmpty(execPath)) {
+            yield break;
+        }
+
+        var parts = execPath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+
+        if (parts.Length == 0) {
+            yield break;
+        }
+
+        yield return parts[^1];
+
+        if (parts.Length >= 3 && parts[^2].Equals("versions", StringComparison.OrdinalIgnoreCase)) {
+            yield return parts[^3];
+        }
+    }
+
+    static unsafe (int ppid, IReadOnlyList<string> names)? GetProcessInfoWindows(int pid) {
         var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
 
         if (handle == 0) {
@@ -628,14 +685,18 @@ static partial class ProcessHelpers {
                 return null;
             }
 
-            var ppid = (int)pbi.InheritedFromUniqueProcessId;
+            var ppid  = (int)pbi.InheritedFromUniqueProcessId;
+            var names = new List<string>(2);
 
-            // comm is the full image path; MatchesAgentName takes the basename. An empty
-            // string on failure still lets the ancestry walk continue past this node (it
+            // No name on failure still lets the ancestry walk continue past this node (it
             // just won't match here) — but if it's the agent's own path that fails to read,
             // resolution falls back to the immediate parent and the watchdog can mis-arm,
             // so QueryImageName grows the buffer rather than giving up on long paths.
-            return (ppid, QueryImageName(handle) ?? "");
+            foreach (var candidate in ExecutableNameCandidates(QueryImageName(handle))) {
+                AddName(names, candidate);
+            }
+
+            return (ppid, names);
         } finally {
             CloseHandle(handle);
         }
@@ -671,7 +732,7 @@ static partial class ProcessHelpers {
         }
     }
 
-    static unsafe (int ppid, string comm)? GetProcessInfoMac(int pid) {
+    static unsafe (int ppid, IReadOnlyList<string> names)? GetProcessInfoMac(int pid) {
         Span<byte> buf = stackalloc byte[ProcBsdInfoSize];
         buf.Clear();
 
@@ -689,23 +750,24 @@ static partial class ProcessHelpers {
 
         var ppid = BitConverter.ToInt32(buf.Slice(ProcBsdInfoPpid, sizeof(int)));
 
-        // Take the name from the executable path, NOT proc_bsdinfo's name fields: a
-        // node-based agent (Claude Code) calls setproctitle with its version string,
-        // which overwrites BOTH pbi_comm and pbi_name (they read "2.1.196", never
-        // "claude"), so the ancestry walk would miss the durable agent and the
-        // parent-PID watchdog would fall back to the transient hook process-group
-        // leader — killing the watcher mid-session. The kernel's recorded exec path
-        // is unaffected by a title change. Fall back to pbi_name only when the exec
-        // path is unreadable (e.g. a zombie or a permission-restricted process).
-        var comm = ReadExecPathMac(pid);
+        // The exec path leads proc_bsdinfo's name fields: a node-based agent (Claude Code)
+        // calls setproctitle with its version string, which overwrites BOTH pbi_comm and
+        // pbi_name (they read "2.1.196", never "claude"), and the kernel's recorded exec
+        // path is unaffected by a title change. pbi_name still goes in behind it — a
+        // versioned-install exec path is a version string too, so neither source alone
+        // identifies the agent on every layout.
+        var names = new List<string>(3);
 
-        if (string.IsNullOrEmpty(comm)) {
-            var nameSpan = buf.Slice(ProcBsdInfoName, 32);
-            var nul      = nameSpan.IndexOf((byte)0);
-            comm = Encoding.UTF8.GetString(nul >= 0 ? nameSpan[..nul] : nameSpan);
+        foreach (var candidate in ExecutableNameCandidates(ReadExecPathMac(pid))) {
+            AddName(names, candidate);
         }
 
-        return (ppid, comm);
+        var nameSpan = buf.Slice(ProcBsdInfoName, 32);
+        var nul      = nameSpan.IndexOf((byte)0);
+
+        AddName(names, Encoding.UTF8.GetString(nul >= 0 ? nameSpan[..nul] : nameSpan));
+
+        return (ppid, names);
     }
 
     /// <summary>
@@ -758,7 +820,7 @@ static partial class ProcessHelpers {
         return path.IsEmpty ? null : Encoding.UTF8.GetString(path);
     }
 
-    static (int ppid, string comm)? GetProcessInfoLinux(int pid) {
+    static (int ppid, IReadOnlyList<string> names)? GetProcessInfoLinux(int pid) {
         string stat;
 
         try {
@@ -784,26 +846,44 @@ static partial class ProcessHelpers {
             return null;
         }
 
-        // Prefer the executable basename from /proc/<pid>/exe over the stat comm for the
-        // same reason as macOS (see GetProcessInfoMac): node's process.title support
-        // prctl(PR_SET_NAME)s the stat comm to the agent's version string, so a node-
-        // based agent's stat comm reads "2.1.196" rather than "claude". The /exe symlink
-        // is maintained by the kernel and a title change can't touch it. Falls back to
-        // the stat comm when the link is unreadable (kernel threads, permissions), so
-        // this can only improve resolution, never regress it. Note: when the agent is
-        // launched as `node <script>` (rather than a packaged binary) the link resolves
-        // to "node"; that case still relies on the legacy fallback.
-        string comm = statComm;
+        // argv[0] leads: it reads "claude" for both a daemon-hosted and a terminal agent,
+        // where the other two sources can each be a version string — node's process.title
+        // support prctl(PR_SET_NAME)s the stat comm, and a native install's exec path is
+        // …/claude/versions/<version>. All three go in; the walk matches on any.
+        var names = new List<string>(4);
 
-        try {
-            if (File.ResolveLinkTarget($"/proc/{pid}/exe", returnFinalTarget: false)?.Name is { Length: > 0 } exeName) {
-                comm = exeName;
-            }
-        } catch {
-            // Best effort — keep the stat comm.
+        foreach (var candidate in ExecutableNameCandidates(ReadArgv0Linux(pid))) {
+            AddName(names, candidate);
         }
 
-        return (ppid, comm);
+        try {
+            var exe = File.ResolveLinkTarget($"/proc/{pid}/exe", returnFinalTarget: false)?.FullName;
+
+            foreach (var candidate in ExecutableNameCandidates(exe)) {
+                AddName(names, candidate);
+            }
+        } catch {
+            // Best effort — unreadable for kernel threads and across permission boundaries.
+        }
+
+        AddName(names, statComm);
+
+        return (ppid, names);
+    }
+
+    /// <summary>
+    /// Reads <c>argv[0]</c> from <c>/proc/&lt;pid&gt;/cmdline</c>, or null when it is
+    /// unreadable or empty (kernel threads have no cmdline).
+    /// </summary>
+    static string? ReadArgv0Linux(int pid) {
+        try {
+            var cmdline = File.ReadAllText($"/proc/{pid}/cmdline");
+            var nul     = cmdline.IndexOf('\0');
+
+            return (nul >= 0 ? cmdline[..nul] : cmdline) is { Length: > 0 } argv0 ? argv0 : null;
+        } catch {
+            return null;
+        }
     }
 
     /// <summary>

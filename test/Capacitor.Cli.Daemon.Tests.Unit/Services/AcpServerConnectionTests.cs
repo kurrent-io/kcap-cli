@@ -27,7 +27,7 @@ public class AcpServerConnectionTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
-    ) {
+    , TimeProvider.System) {
         public bool Ready { get; set; }
 
         internal override bool IsReady => Ready;

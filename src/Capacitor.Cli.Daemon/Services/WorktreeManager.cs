@@ -32,11 +32,12 @@ public record WorktreeInfo(
     public static WorktreeInfo Borrowed(string cwd) => new(cwd, "", cwd, IsStandalone: false);
 }
 
-public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManager> logger) {
+public partial class WorktreeManager(
+        DaemonConfig config, ILogger<WorktreeManager> logger, ISnapshotBarrier barrier, TimeProvider time) {
     /// <summary>Excluded from a borrowed snapshot. The vendor MCP config paths are folded in from the one
-    /// list, rather than restated: this used to name <c>.mcp.json</c> and <c>.cursor/mcp.json</c> only, so
-    /// <c>.kiro/settings/mcp.json</c> — the file measured to get a command executed at session setup —
-    /// survived into a launched borrowed snapshot. Two lists of the same thing is how that happened.
+    /// list, rather than restated. A second list drifts from the first: one naming only <c>.mcp.json</c>
+    /// and <c>.cursor/mcp.json</c> lets <c>.kiro/settings/mcp.json</c> — which gets a command executed at
+    /// session setup — survive into a launched borrowed snapshot.
     ///
     /// <para><b>Known cost, and it cuts the wrong way.</b> An excluded file is not in the snapshot, so a
     /// borrowed reviewer cannot SEE it — including when the change under review is the file itself. A pull
@@ -95,8 +96,9 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     /// <para>Internal rather than private so the serialisation itself is testable: the race it prevents
     /// is too narrow to reproduce on demand, so the guard is pinned directly instead of through a flaky
     /// end-to-end repro.</para></summary>
-    internal static async Task WithWorktreeMetadataGate(string repoPath, Func<Task> mutate) {
-        var gate = WorktreeMetadataGates.GetOrAdd(await ResolveGateKeyAsync(repoPath), static _ => new SemaphoreSlim(1, 1));
+    internal static async Task WithWorktreeMetadataGate(string repoPath, TimeProvider time, Func<Task> mutate) {
+        var gate = WorktreeMetadataGates.GetOrAdd(
+            await ResolveGateKeyAsync(repoPath, time), static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync();
 
         try {
@@ -122,7 +124,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     /// entry would then hand two callers on one repository different gates — the failure this whole
     /// change exists to prevent. The cost of not caching is one extra local <c>rev-parse</c> per gated
     /// operation, alongside the <c>worktree</c> command it guards.</remarks>
-    static async Task<string> ResolveGateKeyAsync(string repoPath) {
+    static async Task<string> ResolveGateKeyAsync(string repoPath, TimeProvider time) {
         try {
             // NOT sourceReadOnly: that sets GIT_CONFIG_NOSYSTEM=1, so a repository trusted only through
             // a SYSTEM-scoped safe.directory would fail this probe while the mutation it guards
@@ -133,14 +135,14 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             // --path-format=absolute needs git 2.31+; on older git this exits non-zero and we resolve
             // the (possibly relative) plain form against the checkout instead.
             var absolute = await RunGitCaptureResult(
-                repoPath, GitTimeout, sourceReadOnly: false, [],
+                repoPath, GitTimeout, time, sourceReadOnly: false, config: [],
                 "rev-parse", "--path-format=absolute", "--git-common-dir");
 
             if (absolute.ExitCode == 0 && absolute.Stdout.Trim() is { Length: > 0 } fromAbsolute)
                 return NormalizePathKey(fromAbsolute);
 
             var plain = await RunGitCaptureResult(
-                repoPath, GitTimeout, sourceReadOnly: false, [], "rev-parse", "--git-common-dir");
+                repoPath, GitTimeout, time, sourceReadOnly: false, config: [], "rev-parse", "--git-common-dir");
 
             if (plain.ExitCode == 0 && plain.Stdout.Trim() is { Length: > 0 } fromPlain)
                 return NormalizePathKey(Path.IsPathRooted(fromPlain) ? fromPlain : Path.Combine(repoPath, fromPlain));
@@ -227,7 +229,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // context that actually decides which drivers load. A source-context inventory would add no
         // containment and could reject a safe launch, since a source-only conditional include can define a
         // driver the target never sees.
-        if (await IsGitRepoWithCommits(repoPath)) {
+        if (await IsGitRepoWithCommits(repoPath, time)) {
             // Created HERE rather than in a shared prologue. The standalone branch below must validate the
             // destination chain BEFORE anything is created — a pre-existing `.capacitor` or `worktrees`
             // symlink is FOLLOWED by this call, so a check placed after the branch decision would run once
@@ -248,10 +250,11 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
                 // (both spellings, so the old gc.auto era is covered too). A config override rather than
                 // --no-auto-maintenance: that flag needs a newer git than the override transport does.
                 await RunGit(repoPath, FetchTimeout,
+                    time,
                     [new("maintenance.auto", "false"), new("gc.auto", "0")],
                     "fetch", "origin", $"{baseRef}:{fetchedRef}");
-                await WithWorktreeMetadataGate(repoPath, () =>
-                    RunGit(repoPath, GitTimeout, noHooks,
+                await WithWorktreeMetadataGate(repoPath, time, () =>
+                    RunGit(repoPath, GitTimeout, time, noHooks,
                         "worktree", "add", "--no-checkout", "-B", branch, worktreePath, fetchedRef));
                 var fetched = new WorktreeInfo(worktreePath, branch, repoPath, FetchedRef: fetchedRef);
                 await StripOrRollBackAsync(fetched);
@@ -259,8 +262,8 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
                 return fetched;
             }
 
-            await WithWorktreeMetadataGate(repoPath, () =>
-                RunGit(repoPath, GitTimeout, noHooks,
+            await WithWorktreeMetadataGate(repoPath, time, () =>
+                RunGit(repoPath, GitTimeout, time, noHooks,
                     "worktree", "add", "--no-checkout", worktreePath, "-b", branch));
             var linked = new WorktreeInfo(worktreePath, branch, repoPath);
             await StripOrRollBackAsync(linked);
@@ -306,10 +309,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // everywhere, so the claim file supplies the exclusion the directory create cannot.
         var claimPath = Path.Combine(worktreeRoot, ClaimPrefix + name);
 
-        // Test barrier: lets two callers rendezvous in the window where BOTH still see the destination
-        // absent. Without it a concurrency test can pass by running the callers sequentially, where the
-        // second is refused by the occupied-destination check and the claim's atomicity is never exercised.
-        SnapshotPreClaimHook?.Invoke().GetAwaiter().GetResult();
+        // A rendezvous in the window where BOTH callers still see the destination absent. Without it a
+        // concurrency test can pass by running them sequentially, where the second is refused by the
+        // occupied-destination check and the claim's atomicity is never exercised.
+        await barrier.ReachedAsync(SnapshotPoint.PreClaim);
 
         try {
             using (new FileStream(claimPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
@@ -325,11 +328,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // closes: that method's own unwinding completes BEFORE the catch below deletes the tree, so a new
         // same-name call could claim, create, and then be deleted by this call's delayed rollback.
         try {
-            // Test barrier: holds the winner after the claim FILE exists but before the destination does,
-            // so a second caller's acquisition is decided purely by the claim's existence. Without this the
-            // handle's own FileShare.None can do the excluding instead, and a weakened FileMode goes
-            // undetected.
-            SnapshotPostClaimHook?.Invoke().GetAwaiter().GetResult();
+            // Holds the winner after the claim FILE exists but before the destination does, so a second
+            // caller's acquisition is decided purely by the claim's existence. Without this the handle's
+            // own FileShare.None can do the excluding instead, and a weakened FileMode goes undetected.
+            await barrier.ReachedAsync(SnapshotPoint.PostClaim);
 
             // Absent, not merely "not a link". An existing ordinary directory would be silently adopted:
             // the snapshot would overlay a tree we never created, the rollback would then delete it
@@ -345,9 +347,9 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             } catch {
                 // Only the successful claimant reaches here, so this delete is ownership-gated.
                 try { DeleteTreeNoFollow(worktreePath); } catch { /* keep the original failure */ }
-                // Test barrier, INSIDE the claim's protected region and after the delete: this is the exact
-                // window in which a same-name caller must still be excluded.
-                SnapshotRollbackHook?.Invoke().GetAwaiter().GetResult();
+                // INSIDE the claim's protected region and after the delete: the exact window in which a
+                // same-name caller must still be excluded.
+                await barrier.ReachedAsync(SnapshotPoint.Rollback);
                 throw;
             }
         } finally {
@@ -381,29 +383,6 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         }
     }
 
-    /// <summary>Test-only injected failure point. The claim-ownership tests need a DETERMINISTIC rollback
-    /// window: a wall-clock race would be flaky and, worse, could pass by luck.</summary>
-    internal static string? SnapshotFailurePoint;
-
-    /// <summary>Runs inside the claimant's rollback, after the tree is deleted and before the claim is
-    /// released — the window a same-name caller must still be excluded from.</summary>
-    internal static Func<Task>? SnapshotRollbackHook;
-
-    /// <summary>Runs immediately before the claim is attempted, while the destination is still absent.
-    /// Test-only, so two callers can be made to genuinely overlap.</summary>
-    internal static Func<Task>? SnapshotPreClaimHook;
-
-    /// <summary>Runs after the claim file exists but before the destination is created. Test-only: lets a
-    /// second caller attempt acquisition at the one moment when only the claim's EXISTENCE can exclude it.
-    /// </summary>
-    internal static Func<Task>? SnapshotPostClaimHook;
-
-    static void FailHereIfRequested(string point) {
-        if (SnapshotFailurePoint != point) return;
-
-        throw new InvalidOperationException("injected_standalone_failure");
-    }
-
     async Task<WorktreeInfo> BuildStandaloneSnapshotAsync(string repoPath, string worktreePath) {
         // Unique per invocation and created CreateNew, so a collision is detected rather than silently
         // shared, a hostile source cannot plant one that suppresses real content, and a marker orphaned by
@@ -416,7 +395,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             using (new FileStream(markerPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
 
             CopySnapshotTree(repoPath, worktreePath, markerName);
-            FailHereIfRequested(nameof(CopySnapshotTree));
+            await barrier.ReachedAsync(SnapshotPoint.TreeCopied);
         } finally {
             // Cleanup failure logs nothing and fails nothing: the snapshot is already built and correct.
             try { File.Delete(markerPath); } catch { /* best effort */ }
@@ -426,18 +405,19 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // either — a later `git checkout` inside the tree would otherwise restore it.
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
-        await RunGit(worktreePath, GitTimeout, noHooks, "init");
+        await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
         // Inventoried and logged here, not at the source: `add -A` in this worktree is where the standalone
         // path's filters resolve. Round 6 removed the source-level logging as dead, and this call was
         // applying overrides inline — silently disabling LFS against a README that promises the opposite.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
-        await RunGit(worktreePath, GitTimeout, [.. noHooks, .. standaloneOverrides], "add", "-A");
+        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. standaloneOverrides], "add", "-A");
         // Identity supplied explicitly. This is the daemon's OWN bookkeeping commit, not the user's work,
         // so it must not depend on the host having git identity configured — a machine without a global
         // user.email fails with "Author identity unknown". Found while the broken copy was temporarily
         // repaired and this line became reachable for the first time; that repair was reverted then and has
         // landed now, so this is live rather than speculative.
         await RunGit(worktreePath, GitTimeout,
+            time,
             [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
             "commit", "-m", "Initial snapshot");
 
@@ -502,7 +482,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             await CheckoutInTargetContextAsync(created.Path);
             StripWorkspaceMcpConfig(created.Path);
         } catch {
-            try { await RemoveAsync(created); } catch { /* keep the original failure */ }
+            try { await RemoveAsync(created, time); } catch { /* keep the original failure */ }
             throw;
         }
     }
@@ -524,7 +504,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // `reset --hard HEAD`, not `checkout -- .`: --no-checkout leaves the INDEX unpopulated too, so a
         // pathspec matches nothing. This is the step that materialises the tree, and therefore the step
         // the overrides have to guard.
-        await RunGit(worktreePath, GitTimeout, [.. noHooks, .. overrides], "reset", "--hard", "HEAD");
+        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. overrides], "reset", "--hard", "HEAD");
     }
 
     /// <summary>
@@ -537,7 +517,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     /// a fourth path cannot repeat it.</para>
     /// </summary>
     async Task<GitConfigOverride[]> FilterOverridesForAsync(string gitContextPath) {
-        var overrides = await BranchFilterOverridesAsync(gitContextPath);
+        var overrides = await BranchFilterOverridesAsync(gitContextPath, time);
         LogDisabledFilters(overrides, gitContextPath);
 
         return overrides;
@@ -597,7 +577,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     public static string VendorStateRootFor(string snapshotRoot) =>
         snapshotRoot.TrimEnd(Path.DirectorySeparatorChar) + VendorStateSuffix;
 
-    public static async Task RemoveAsync(WorktreeInfo worktree, bool deleteBranch = true) {
+    public static async Task RemoveAsync(WorktreeInfo worktree, TimeProvider time, bool deleteBranch = true) {
         if (worktree.IsStandalone) {
             var root = worktree.SnapshotRoot ?? worktree.Path;
 
@@ -619,16 +599,16 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // enumerates them. That read is best-effort here, so a concurrent add could make it fail
         // silently and leak the branch. One gate acquisition covers both. (As with the add, the exact
         // interleaving that breaks is hypothesis; git takes no lock, so we serialise our own access.)
-        await WithWorktreeMetadataGate(worktree.SourceRepo, async () => {
-            await RunGit(worktree.SourceRepo, GitTimeout, "worktree", "remove", worktree.Path, "--force");
+        await WithWorktreeMetadataGate(worktree.SourceRepo, time, async () => {
+            await RunGit(worktree.SourceRepo, GitTimeout, time, "worktree", "remove", worktree.Path, "--force");
 
             if (deleteBranch && !string.IsNullOrEmpty(worktree.Branch)) {
-                await RunGitBestEffort(worktree.SourceRepo, "branch", "-D", worktree.Branch);
+                await RunGitBestEffort(worktree.SourceRepo, time, "branch", "-D", worktree.Branch);
             }
         });
 
         if (!string.IsNullOrEmpty(worktree.FetchedRef)) {
-            await RunGitBestEffort(worktree.SourceRepo, "update-ref", "-d", worktree.FetchedRef);
+            await RunGitBestEffort(worktree.SourceRepo, time, "update-ref", "-d", worktree.FetchedRef);
         }
     }
 
@@ -655,7 +635,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             throw new InvalidOperationException("borrowed_snapshot_cwd_outside_source");
         if (!Directory.Exists(cwd))
             throw new InvalidOperationException("borrowed_snapshot_cwd_missing");
-        var gitRelativeCwd = await ReadGitRelativeCwdAsync(source, cwd, ct);
+        var gitRelativeCwd = await ReadGitRelativeCwdAsync(source, cwd, time, ct);
         var root = Path.GetFullPath(Path.Combine(config.WorktreeRoot, "borrowed-snapshots"));
         EnsureSeparateRoots(source, root);
         CreateOwnerOnlyDirectory(root);
@@ -721,7 +701,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         if (!Directory.Exists(cwd))
             throw new InvalidOperationException("borrowed_snapshot_cwd_missing");
 
-        var gitRelativeCwd = await ReadGitRelativeCwdAsync(source, cwd, ct);
+        var gitRelativeCwd = await ReadGitRelativeCwdAsync(source, cwd, time, ct);
         _ = await SyncFromSourceCoreAsync(
             sourceRepoRoot, targetWorktreePath, gitRelativeCwd,
             excludePaths, reviewContextRoot: null, ct);
@@ -809,24 +789,25 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         var bundle = Path.Combine(parent, ".bundle-" + Guid.NewGuid().ToString("N") + ".git");
         BorrowedReviewContextGeneration? generation = null;
         try {
-            var sourceHead = (await RunGitCapture(source, GitTimeout, true, "rev-parse", "HEAD")).Trim();
-            var initialIndex = await RunGitCaptureBytes(source, GitTimeout, true, ct,
+            var sourceHead = (await RunGitCapture(source, GitTimeout, time, true, "rev-parse", "HEAD")).Trim();
+            var initialIndex = await RunGitCaptureBytes(source, GitTimeout, time, true, ct,
                 "ls-files", "--stage", "-z");
-            await RunGit(source, GitTimeout, sourceReadOnly: true, "bundle", "create", bundle, "HEAD");
-            if (await GitConfigBoolAsync(source, "core.sparseCheckout"))
+            await RunGit(source, GitTimeout, time, sourceReadOnly: true, "bundle", "create", bundle, "HEAD");
+            if (await GitConfigBoolAsync(source, "core.sparseCheckout", time))
                 throw new InvalidOperationException("borrowed_snapshot_sparse_checkout_unsupported");
 
-            await RunGit(parent, GitTimeout, "clone", "--no-hardlinks", "--no-checkout", "--", bundle, destination);
+            await RunGit(parent, GitTimeout, time, "clone", "--no-hardlinks", "--no-checkout", "--", bundle, destination);
             // Same guard as `worktree add`: this checkout materialises branch content, so a relative
             // core.hooksPath would run the branch's post-checkout here too. Missed when the guard was
             // added — it went on the worktree paths only.
             await RunGit(destination, GitTimeout,
+                time,
                 [.. NoBranchHooks(), .. await FilterOverridesForAsync(destination)],
                 "checkout", "--detach", "HEAD");
-            var clonedHead = (await RunGitCapture(destination, GitTimeout, false, "rev-parse", "HEAD")).Trim();
+            var clonedHead = (await RunGitCapture(destination, GitTimeout, time, false, "rev-parse", "HEAD")).Trim();
             if (!string.Equals(sourceHead, clonedHead, StringComparison.Ordinal)) throw new SourceChangedException();
-            await RunGitBestEffort(destination, "remote", "remove", "origin");
-            await RunGitBestEffort(destination, "reflog", "expire", "--expire=now", "--all");
+            await RunGitBestEffort(destination, time, "remote", "remove", "origin");
+            await RunGitBestEffort(destination, time, "reflog", "expire", "--expire=now", "--all");
             var fetchHead = Path.Combine(destination, ".git", "FETCH_HEAD");
             if (File.Exists(fetchHead)) File.Delete(fetchHead);
             // Probed on the ACTUAL destination, never on its parent or the configured worktree root: case
@@ -837,25 +818,25 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
             if (reviewContextRoot is not null)
                 generation = await CreateReviewContextGenerationAsync(
-                    source, reviewContextRoot, sourceHead, initialIndex, caseSensitive, plan, ct);
+                    time, source, reviewContextRoot, sourceHead, initialIndex, caseSensitive, plan, ct);
 
             // Submodules snapshot as plain content: borrowing shows the developer's checked-out
             // files, not the pinned commit. Their .git is never copied — it is a gitlink into the
             // superproject's .git/modules, which this snapshot does not have.
             var submodulePrefixes = ReadSubmodulePrefixes(initialIndex);
 
-            var manifest = await ReadSourceManifestAsync(source, plan, caseSensitive, submodulePrefixes, ct);
-            await ApplyReservedIndexPolicyAsync(destination, plan, caseSensitive, ct);
+            var manifest = await ReadSourceManifestAsync(source, plan, caseSensitive, submodulePrefixes, time, ct);
+            await ApplyReservedIndexPolicyAsync(destination, plan, caseSensitive, time, ct);
             await CopyManifestAsync(source, destination, manifest, ct);
             RemoveFilesOutsideManifest(destination, manifest.Keys, caseSensitive, ct);
             VerifyIndependentGit(destination, source);
             await VerifyDestinationManifestAsync(destination, manifest, ct);
 
-            var finalHead = (await RunGitCapture(source, GitTimeout, true, "rev-parse", "HEAD")).Trim();
-            var finalIndex = await RunGitCaptureBytes(source, GitTimeout, true, ct,
+            var finalHead = (await RunGitCapture(source, GitTimeout, time, true, "rev-parse", "HEAD")).Trim();
+            var finalIndex = await RunGitCaptureBytes(source, GitTimeout, time, true, ct,
                 "ls-files", "--stage", "-z");
             var finalManifest = await ReadSourceManifestAsync(
-                source, plan, caseSensitive, submodulePrefixes, ct);
+                source, plan, caseSensitive, submodulePrefixes, time, ct);
             if (!string.Equals(sourceHead, finalHead, StringComparison.Ordinal) ||
                 !initialIndex.AsSpan().SequenceEqual(finalIndex) ||
                 !ManifestsEqual(manifest, finalManifest))
@@ -894,8 +875,8 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     /// symlink and capacity guards as a superproject path — a submodule is not a second, weaker
     /// lane.</summary>
     static async Task<List<byte[]>> RunLsFilesPrefixedAsync(
-            string repoDir, byte[] prefix, string[] args, CancellationToken ct) {
-        var stdout  = await RunGitCaptureBytes(repoDir, GitTimeout, true, ct, args);
+            string repoDir, byte[] prefix, string[] args, TimeProvider time, CancellationToken ct) {
+        var stdout  = await RunGitCaptureBytes(repoDir, GitTimeout, time, true, ct, args);
         var records = new List<byte[]>();
 
         foreach (var record in SplitNulRecords(stdout)) {
@@ -916,12 +897,12 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
     static async Task<Dictionary<string, SnapshotFile>> ReadSourceManifestAsync(
             string source, SnapshotExclusionPlan plan, bool caseSensitive,
-            IReadOnlyList<byte[]> submodulePrefixes, CancellationToken ct) {
+            IReadOnlyList<byte[]> submodulePrefixes, TimeProvider time, CancellationToken ct) {
         string[] trackedArgs = ["ls-files", "-co", "--exclude-standard", "-z"];
         string[] deletedArgs = ["ls-files", "--deleted", "-z"];
 
-        var stdoutRecords  = await RunLsFilesPrefixedAsync(source, [], trackedArgs, ct);
-        var deletedRecords = await RunLsFilesPrefixedAsync(source, [], deletedArgs, ct);
+        var stdoutRecords  = await RunLsFilesPrefixedAsync(source, [], trackedArgs, time, ct);
+        var deletedRecords = await RunLsFilesPrefixedAsync(source, [], deletedArgs, time, ct);
 
         foreach (var prefix in submodulePrefixes) {
             // Decoded HERE rather than in the loop below, so it needs the loop's coded error too —
@@ -950,13 +931,13 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
             // Nested submodules are NOT walked. Failing is deliberate: a silently incomplete snapshot
             // is invisible to the reviewer, who would report on source it never saw.
-            var subIndex = await RunGitCaptureBytes(subDir, GitTimeout, true, ct, "ls-files", "--stage", "-z");
+            var subIndex = await RunGitCaptureBytes(subDir, GitTimeout, time, true, ct, "ls-files", "--stage", "-z");
             if (ReadSubmodulePrefixes(subIndex).Count > 0)
                 throw new InvalidOperationException(
                     $"borrowed_snapshot_nested_submodules_unsupported: {subRel}");
 
-            stdoutRecords.AddRange(await RunLsFilesPrefixedAsync(subDir, prefix, trackedArgs, ct));
-            deletedRecords.AddRange(await RunLsFilesPrefixedAsync(subDir, prefix, deletedArgs, ct));
+            stdoutRecords.AddRange(await RunLsFilesPrefixedAsync(subDir, prefix, trackedArgs, time, ct));
+            deletedRecords.AddRange(await RunLsFilesPrefixedAsync(subDir, prefix, deletedArgs, time, ct));
         }
         // A stage-only addition has no working-tree bytes to mirror. Skip those exact raw paths
         // before decoding so an unrelated, absent non-UTF8 index entry cannot interfere with the
@@ -1109,7 +1090,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             protectedTarget, protectedStaging, protectedSegments, protectedIndex + 1);
     }
 
-    static void DeleteTreeNoFollow(string path) {
+    internal static void DeleteTreeNoFollow(string path) {
         // Path.Exists, not File.Exists || Directory.Exists: both of those FOLLOW, so a DANGLING symlink
         // reports absent and this returned early, leaving the link behind. Its parent then failed to
         // delete — and under the fail-closed config strip that turned a branch committing one dangling
@@ -1352,8 +1333,9 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     /// name entries git will accept — and the case decision is made once, by the shared classifier.</para>
     /// </summary>
     static async Task ApplyReservedIndexPolicyAsync(
-            string destination, SnapshotExclusionPlan plan, bool caseSensitive, CancellationToken ct) {
-        var indexListing = await RunGitCaptureBytes(destination, GitTimeout, false, ct, "ls-files", "-z");
+            string destination, SnapshotExclusionPlan plan, bool caseSensitive, TimeProvider time,
+            CancellationToken ct) {
+        var indexListing = await RunGitCaptureBytes(destination, GitTimeout, time, false, ct, "ls-files", "-z");
         var targets = new List<string>();
         foreach (var record in SplitNulRecords(indexListing)) {
             ct.ThrowIfCancellationRequested();
@@ -1374,7 +1356,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
         if (targets.Count > 0)
             await RunGitWithNulStdinAsync(
-                destination, GitTimeout, targets, ct, "update-index", "--skip-worktree", "-z", "--stdin");
+                destination, GitTimeout, time, targets, ct, "update-index", "--skip-worktree", "-z", "--stdin");
 
         Directory.CreateDirectory(Path.Combine(destination, ".git", "info"));
         File.AppendAllText(Path.Combine(destination, ".git", "info", "exclude"), "\n.attached/\n");
@@ -1485,11 +1467,11 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     /// <see cref="RunGitCaptureResult"/> for why the wait matters.</summary>
     static readonly TimeSpan KillGrace = TimeSpan.FromSeconds(5);
 
-    static async Task<bool> IsGitRepoWithCommits(string path) {
+    static async Task<bool> IsGitRepoWithCommits(string path, TimeProvider time) {
         try {
             var       psi  = NewGitPsi(path, ["rev-parse", "HEAD"]);
             using var proc = Process.Start(psi)!;
-            using var cts  = new CancellationTokenSource(GitTimeout);
+            using var cts  = new CancellationTokenSource(GitTimeout, time);
 
             try {
                 await proc.WaitForExitAsync(cts.Token);
@@ -1505,32 +1487,36 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         } catch { return false; }
     }
 
-    static Task RunGit(string cwd, TimeSpan timeout, params string[] args) =>
-        RunGit(cwd, timeout, sourceReadOnly: false, [], args);
+    static Task RunGit(string cwd, TimeSpan timeout, TimeProvider time, params string[] args) =>
+        RunGit(cwd, timeout, time, sourceReadOnly: false, [], args);
 
-    static Task RunGit(string cwd, TimeSpan timeout, bool sourceReadOnly, params string[] args) =>
-        RunGit(cwd, timeout, sourceReadOnly, [], args);
+    static Task RunGit(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, params string[] args) =>
+        RunGit(cwd, timeout, time, sourceReadOnly, [], args);
 
-    static Task RunGit(string cwd, TimeSpan timeout, GitConfigOverride[] config, params string[] args) =>
-        RunGit(cwd, timeout, sourceReadOnly: false, config, args);
+    static Task RunGit(
+            string cwd, TimeSpan timeout, TimeProvider time, GitConfigOverride[] config,
+            params string[] args) =>
+        RunGit(cwd, timeout, time, sourceReadOnly: false, config, args);
 
     static async Task RunGit(
-            string cwd, TimeSpan timeout, bool sourceReadOnly, GitConfigOverride[] config,
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
             params string[] args) {
-        var result = await RunGitCaptureResult(cwd, timeout, sourceReadOnly, config, args);
+        var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, args);
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
     }
 
-    static async Task<string> RunGitCapture(string cwd, TimeSpan timeout, bool sourceReadOnly, params string[] args) {
-        var result = await RunGitCaptureResult(cwd, timeout, sourceReadOnly, [], args);
+    static async Task<string> RunGitCapture(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, params string[] args) {
+        var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, [], args);
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
         return result.Stdout;
     }
 
-    static async Task<bool> GitConfigBoolAsync(string cwd, string key) {
-        var result = await RunGitCaptureResult(cwd, GitTimeout, true, [], "config", "--bool", "--get", key);
+    static async Task<bool> GitConfigBoolAsync(string cwd, string key, TimeProvider time) {
+        var result = await RunGitCaptureResult(cwd, GitTimeout, time, true, [], "config", "--bool", "--get", key);
         if (result.ExitCode == 1) return false; // key is absent
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"git config --bool --get {key} failed: {result.Stderr}");
@@ -1538,11 +1524,11 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     }
 
     internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResult(
-            string cwd, TimeSpan timeout, bool sourceReadOnly, GitConfigOverride[] config,
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
             params string[] args) {
-        await ProveConfigTransportIfCarryingAsync(cwd, sourceReadOnly, config);
+        await ProveConfigTransportIfCarryingAsync(cwd, time, sourceReadOnly, config);
 
-        return await RunGitCaptureResultUnproven(cwd, timeout, sourceReadOnly, config, args);
+        return await RunGitCaptureResultUnproven(cwd, timeout, time, sourceReadOnly, config, args);
     }
 
     /// <summary>
@@ -1565,18 +1551,18 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     /// transport cannot be used for these reads either — that git already cannot create a worktree.</para>
     /// </summary>
     static Task ProveConfigTransportIfCarryingAsync(
-            string cwd, bool sourceReadOnly, GitConfigOverride[] config) =>
-        sourceReadOnly || config.Length > 0 ? ProveConfigTransportAsync(cwd) : Task.CompletedTask;
+            string cwd, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config) =>
+        sourceReadOnly || config.Length > 0 ? ProveConfigTransportAsync(cwd, time) : Task.CompletedTask;
 
     /// <summary>Runs git WITHOUT proving the transport first. Only the probe itself may use this — it is
     /// what the gate above is measuring, so routing it through the gate would deadlock on the
     /// non-reentrant semaphore.</summary>
     static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResultUnproven(
-            string cwd, TimeSpan timeout, bool sourceReadOnly, GitConfigOverride[] config,
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
             params string[] args) {
         var psi = NewGitPsi(cwd, args, sourceReadOnly, config);
         using var proc = Process.Start(psi)!;
-        using var cts = new CancellationTokenSource(timeout);
+        using var cts = new CancellationTokenSource(timeout, time);
 
         // Read BYTES and decode them here. `StandardOutputEncoding` sets the encoding but does NOT turn
         // off BOM detection: .NET builds the redirected reader with detectEncodingFromByteOrderMarks
@@ -1602,7 +1588,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             // worktree metadata gate, whose whole point is that no other git touches this repo's
             // metadata while we are inside it — and a killed-but-still-running git would escape it
             // the moment the gate releases. Bounded, so an unkillable process can't wedge us here.
-            try { await proc.WaitForExitAsync(CancellationToken.None).WaitAsync(KillGrace); } catch {
+            try { await proc.WaitForExitAsync(CancellationToken.None).WaitAsync(KillGrace, time); } catch {
                 /* exited, or refused to die within the grace — nothing further we can do */
             }
 
@@ -1625,8 +1611,8 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     static readonly UTF8Encoding GitOutputEncoding =
         new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
 
-    static async Task RunGitBestEffort(string cwd, params string[] args) {
-        try { await RunGit(cwd, GitTimeout, args); } catch {
+    static async Task RunGitBestEffort(string cwd, TimeProvider time, params string[] args) {
+        try { await RunGit(cwd, GitTimeout, time, args); } catch {
             /* best-effort */
         }
     }

@@ -54,7 +54,7 @@ public class CodexAppServerHostedAgentRuntimeTests {
             emitEnvelopeTranscript: emitEnvelopes, deferFirstTurn: deferFirstTurn,
             agentId: requestInteraction is null ? null : "agent-1",
             requestInteraction: requestInteraction,
-            approvalTimeout: TimeSpan.FromSeconds(5));
+            approvalTimeout: TimeSpan.FromSeconds(5), timeProvider: TimeProvider.System);
         return (runtime, seeds, i => fakes[i]);
     }
 
@@ -533,7 +533,11 @@ public class CodexAppServerHostedAgentRuntimeTests {
         var (runtime, _, _) = Build(_ => new FakeCodexAppServer(), Launch());
         var agent = new AgentInstance(
             "a1", null, null, null, "/r", "codex", runtime,
-            new WorktreeInfo("/r", "", "/r", IsStandalone: true), new CancellationTokenSource());
+            new WorktreeInfo("/r", "", "/r", IsStandalone: true), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
 
         await Assert.That(agent.RuntimeTransport).IsEqualTo(CodexTransportDecision.AppServer);
         await runtime.DisposeAsync();

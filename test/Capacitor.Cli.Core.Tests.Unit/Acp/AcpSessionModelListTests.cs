@@ -186,4 +186,40 @@ public class AcpSessionModelListTests {
 
         await Assert.That(AcpModelResolver.Resolve(requested, models)).IsEqualTo(expected);
     }
+
+    /// The current/default model marker — read only as a default-launch fallback so the desktop
+    /// rail shows the running model even when nothing was requested. Both shapes carry it.
+    [Test]
+    public async Task ExtractCurrentModel_reads_the_models_object_current_id() {
+        await Assert.That(AcpSessionModelList.ExtractCurrentModel(Result(ModelsResult)))
+            .IsEqualTo("claude-sonnet-4-5[thinking=true]");
+    }
+
+    [Test]
+    public async Task ExtractCurrentModel_reads_the_configOptions_current_value() {
+        await Assert.That(AcpSessionModelList.ExtractCurrentModel(Result(OpenCodeResult)))
+            .IsEqualTo("opencode/big-pickle");
+    }
+
+    /// Same precedence as Extract: the standardized `models` shape wins over a `configOptions` mirror.
+    [Test]
+    public async Task ExtractCurrentModel_prefers_the_models_object_over_configOptions() {
+        var both = Result("""
+            { "sessionId": "s",
+              "models": { "currentModelId": "from-models" },
+              "configOptions": [ { "id": "model", "currentValue": "from-config",
+                                   "options": [ { "value": "from-config", "name": "c" } ] } ] }
+            """);
+
+        await Assert.That(AcpSessionModelList.ExtractCurrentModel(both)).IsEqualTo("from-models");
+    }
+
+    [Test]
+    [Arguments("""{ "sessionId": "s" }""")]
+    [Arguments("""{ "sessionId": "s", "models": { "availableModels": [] } }""")]
+    [Arguments("""{ "sessionId": "s", "configOptions": [ { "id": "mode", "currentValue": "build" } ] }""")]
+    [Arguments("""[ "not", "an", "object" ]""")]
+    public async Task ExtractCurrentModel_yields_null_when_no_current_marker(string json) {
+        await Assert.That(AcpSessionModelList.ExtractCurrentModel(Result(json))).IsNull();
+    }
 }

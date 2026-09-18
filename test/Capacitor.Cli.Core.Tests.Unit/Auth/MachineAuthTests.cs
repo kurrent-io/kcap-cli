@@ -27,7 +27,7 @@ public class MachineAuthTests : IDisposable {
 
     // The mint goes over an unconfigured client, which is what the production WorkOS lane resolves to
     // against a stub: no credential of ours, no observation headers.
-    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory(), TimeProvider.System);
 
     public void Dispose() => _server.Stop();
 
@@ -79,7 +79,7 @@ public class MachineAuthTests : IDisposable {
                 .WithBody("""{"access_token":"tok_after_hop","expires_in":3600}"""));
 
         using var sp     = Container(Runner);
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
 
         var result = await minter.GetTokenAsync(
             sp.GetRequiredService<WorkOSClient>(), new MachineCredential("client_01ABC", "sekrit"),
@@ -156,7 +156,7 @@ public class MachineAuthTests : IDisposable {
     public async Task Minting_posts_client_credentials_form_and_returns_the_token() {
         StubToken("tok_minted");
 
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), rejectedToken: null, CancellationToken.None);
 
@@ -185,7 +185,7 @@ public class MachineAuthTests : IDisposable {
 
         var credential = new MachineCredential("client_01ABC", "sekrit");
 
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
 
         await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
         var second = await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
@@ -208,7 +208,7 @@ public class MachineAuthTests : IDisposable {
 
         // Shared across every call below: the cache and the gate this test exercises are both
         // per-instance, so a fresh minter per call would prove nothing about either.
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
 
         await minter.GetTokenAsync(Workos, warm, null, CancellationToken.None);
 
@@ -216,7 +216,7 @@ public class MachineAuthTests : IDisposable {
         var release = new TaskCompletionSource();
 
         using var handler  = new BlockingMint(entered, release.Task);
-        var       blocking = new WorkOSClient(new PlainHttpClientFactory(handler));
+        var       blocking = new WorkOSClient(new PlainHttpClientFactory(handler), TimeProvider.System);
 
         // A second client id cannot be served from the cache, so this call reaches the mint and parks
         // there, holding the gate for as long as the test wants it held.
@@ -247,7 +247,7 @@ public class MachineAuthTests : IDisposable {
 
         var credential = new MachineCredential("client_01ABC", "sekrit");
 
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
         var       first  = await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
 
         await Assert.That(first.Token).IsEqualTo("tok_first");
@@ -271,7 +271,7 @@ public class MachineAuthTests : IDisposable {
                 // A hostile/naive endpoint reflecting the request back at us.
                 .WithBody("{\"error\":\"unauthorized\",\"echo\":\"client_secret=hunter2-the-secret\"}"));
 
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "hunter2-the-secret"), null, CancellationToken.None);
 
@@ -289,7 +289,7 @@ public class MachineAuthTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json").WithBody("{\"expires_in\":3600}"));
 
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -367,7 +367,7 @@ public class MachineAuthTests : IDisposable {
     [Test]
     public async Task A_plaintext_non_loopback_token_url_is_refused_without_sending_the_credential() {
         using var minter = new MachineTokenProvider(
-            new MachineAuth(null, null, "http://evil.example.com/oauth2/token"));
+            new MachineAuth(null, null, "http://evil.example.com/oauth2/token"), TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -387,7 +387,7 @@ public class MachineAuthTests : IDisposable {
     [Arguments("ftp://127.0.0.1/oauth2/token")]
     [Arguments("ws://localhost/oauth2/token")]
     public async Task An_odd_scheme_loopback_token_url_is_refused(string url) {
-        using var minter = new MachineTokenProvider(new MachineAuth(null, null, url));
+        using var minter = new MachineTokenProvider(new MachineAuth(null, null, url), TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -401,7 +401,7 @@ public class MachineAuthTests : IDisposable {
     public async Task A_loopback_http_token_url_is_allowed_so_stubs_stay_testable() {
         StubToken("tok_loopback");
 
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -410,7 +410,7 @@ public class MachineAuthTests : IDisposable {
 
     [Test]
     public async Task A_malformed_token_url_is_refused() {
-        using var minter = new MachineTokenProvider(new MachineAuth(null, null, "not-a-url"));
+        using var minter = new MachineTokenProvider(new MachineAuth(null, null, "not-a-url"), TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -426,7 +426,7 @@ public class MachineAuthTests : IDisposable {
     public async Task A_different_credential_does_not_receive_the_cached_token() {
         StubToken("tok_for_A");
 
-        using var minter = new MachineTokenProvider(StubEndpoint);
+        using var minter = new MachineTokenProvider(StubEndpoint, TimeProvider.System);
         var       a      = await minter.GetTokenAsync(Workos, new MachineCredential("client_A", "s"), null, CancellationToken.None);
 
         await Assert.That(a.Token).IsEqualTo("tok_for_A");
@@ -497,7 +497,7 @@ public class MachineAuthTests : IDisposable {
         // Loopback so the scheme check admits it and we reach the mint, which then fails (nothing
         // listening on that path) and builds the Problem string containing the URL.
         using var minter = new MachineTokenProvider(
-            new MachineAuth(null, null, "http://id:supersecret@127.0.0.1:1/oauth2/token"));
+            new MachineAuth(null, null, "http://id:supersecret@127.0.0.1:1/oauth2/token"), TimeProvider.System);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 

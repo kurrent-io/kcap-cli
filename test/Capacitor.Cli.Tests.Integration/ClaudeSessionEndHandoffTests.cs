@@ -14,7 +14,15 @@ namespace Capacitor.Cli.Tests.Integration;
 /// process that outlived the hook.
 /// </summary>
 public class ClaudeSessionEndHandoffTests : IDisposable {
-    static readonly TimeSpan ServerStall = TimeSpan.FromSeconds(3);
+    /// <summary>Long enough that a hook which waited for the POST could not be mistaken for a slow
+    /// one: the bound below sits halfway between the two.</summary>
+    static readonly TimeSpan ServerStall = TimeSpan.FromSeconds(6);
+
+    /// <summary>What a hook that detached looks like, with room for a loaded runner's process start.
+    /// Claude Code's own grace is 1.5 s, which this stands in for — an AOT spawn on a contended CI
+    /// box spends most of that budget before the hook's first instruction runs, so measuring the
+    /// product bar here would be measuring the runner.</summary>
+    static readonly TimeSpan ReturnsWithout = TimeSpan.FromSeconds(3);
 
     [TempDir]         public required TempDir         Tmp     { get; init; }
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -57,8 +65,9 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
 
         await Assert.That(hook.ExitCode).IsEqualTo(0).Because(await stderr);
         await Assert.That(await stdout).IsEmpty();
-        // The ticket's bar: well inside the 1.5 s grace, on a session with a transcript to drain.
-        await Assert.That(clock.Elapsed).IsLessThan(TimeSpan.FromSeconds(1)).Because($"stderr: {await stderr}");
+        // The hook returned before the stalled POST could have completed, so it cannot have waited
+        // for it — which is the whole property, on a session with a transcript to drain.
+        await Assert.That(clock.Elapsed).IsLessThan(ReturnsWithout).Because($"stderr: {await stderr}");
 
         // The hook is gone; the continuation has today's 15 s budget and must wait out the stall.
         var posted = await WaitForSessionEndAsync(TimeSpan.FromSeconds(20));

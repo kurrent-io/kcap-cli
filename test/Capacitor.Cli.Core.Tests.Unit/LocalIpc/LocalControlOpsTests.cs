@@ -166,7 +166,7 @@ public class LocalControlOpsTests {
         using var daemons = new TempDaemonStore();
         const string name = "ops";
         await using var server = new ScriptedOpsServer(daemons.Store.SocketPath(name), scripts);
-        var ops = new LocalControlOps(daemons.Store, name) {
+        var ops = new LocalControlOps(daemons.Store, name, TimeProvider.System) {
             ConnectTimeout = TimeSpan.FromSeconds(2),
             ReplyTimeout = TimeSpan.FromSeconds(2),
             StopReplyTimeout = TimeSpan.FromSeconds(2),
@@ -278,7 +278,7 @@ public class LocalControlOpsTests {
     [Test]
     public async Task Stop_empty_agent_id_throws_before_connecting() {
         using var daemons = new TempDaemonStore();
-        var ops = new LocalControlOps(daemons.Store, "nonexistent");
+        var ops = new LocalControlOps(daemons.Store, "nonexistent", TimeProvider.System);
         await Assert.ThrowsAsync<ArgumentException>(
             async () => await ops.StopAgentAsync("", false, CancellationToken.None));
     }
@@ -610,7 +610,7 @@ public class LocalControlOpsTests {
 
         using var daemons = new TempDaemonStore();
 
-        var ops = new LocalControlOps(daemons.Store, "none") { ConnectTimeout = TimeSpan.FromSeconds(2) };
+        var ops = new LocalControlOps(daemons.Store, "none", TimeProvider.System) { ConnectTimeout = TimeSpan.FromSeconds(2) };
         var ex = await Assert.ThrowsAsync<LocalControlOpsException>(
             async () => await ops.StopAgentAsync("a1", false, CancellationToken.None));
         await Assert.That(ex!.Reason).IsEqualTo("daemon_unreachable");
@@ -706,6 +706,39 @@ public class LocalControlOpsTests {
             cts.Cancel();
             await Assert.That(async () => await pending).Throws<OperationCanceledException>();
             await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        });
+    }
+
+    // ---- SendTextWithAttachmentsAsync ----
+
+    static ConnScript SendTextWithAttachmentsAckThen(string json, Action<string>? capture = null) => async (_, s, ct) => {
+        var f = await FrameCodec.ReadAsync(s, ct);
+        if (f?.Type == FrameType.SendTextWithAttachments) {
+            capture?.Invoke(f.Text);
+            await FrameCodec.WriteAsync(s, LocalFrame.InputJson(FrameType.SendTextAck, json), ct);
+        }
+    };
+
+    [Test]
+    public async Task Send_text_with_attachments_sends_frame_24_with_ids_and_reads_the_ack() {
+        if (OperatingSystem.IsWindows()) return;
+        string? sent = null;
+        await WithOpsAsync([SendTextWithAttachmentsAckThen("""{"ok":true,"reason":null,"error":null,"outcome":"delivered"}""", j => sent = j)], async ops => {
+            var result = await ops.SendTextWithAttachmentsAsync("a1", "hi", ["0123456789abcdef0123456789abcdef"], CancellationToken.None);
+            await Assert.That(result.Ok).IsTrue();
+            await Assert.That(result.Outcome).IsEqualTo(SendTextOutcomes.Delivered);
+            await Assert.That(sent).IsEqualTo("""{"agent_id":"a1","text":"hi","attachment_ids":["0123456789abcdef0123456789abcdef"]}""");
+        });
+    }
+
+    [Test]
+    public async Task Send_text_with_attachments_maps_eof_to_transport() {
+        if (OperatingSystem.IsWindows()) return;
+        await WithOpsAsync([Eof()], async ops => {
+            var result = await ops.SendTextWithAttachmentsAsync("a1", "hi", ["0123456789abcdef0123456789abcdef"], CancellationToken.None);
+            await Assert.That(result.Ok).IsFalse();
+            await Assert.That(result.Reason).IsEqualTo(SendTextReasons.Transport);
+            await Assert.That(result.Outcome).IsNull();
         });
     }
 }

@@ -62,7 +62,7 @@ public class HelloProbeTests {
             new HelloReplyDto(1, "9.9.9", "probed-daemon", []), HelloIpcJsonContext.Default.HelloReplyDto);
 
         await WithServerAsync(ReplyWith(LocalFrame.HelloJson(FrameType.HelloReply, replyJson)), async name => {
-            var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeSpan.FromSeconds(5));
+            var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeProvider.System, TimeSpan.FromSeconds(5));
 
             await Assert.That(result.WellFormed).IsTrue();
             await Assert.That(result.Reachable).IsTrue();
@@ -77,7 +77,7 @@ public class HelloProbeTests {
         Skip.When(OperatingSystem.IsWindows(), "Unix-domain socket path");
 
         // Short name: macOS allows 104 bytes of socket path and $TMPDIR takes 49.
-        var result = await HelloProbe.RunAsync(Daemons.Store, "no-such-daemon", TimeSpan.FromSeconds(2));
+        var result = await HelloProbe.RunAsync(Daemons.Store, "no-such-daemon", TimeProvider.System, TimeSpan.FromSeconds(2));
 
         await Assert.That(result.Reachable).IsFalse();   // nothing to connect to → still starting
         await Assert.That(result.WellFormed).IsFalse();
@@ -91,7 +91,7 @@ public class HelloProbeTests {
         Skip.When(OperatingSystem.IsWindows(), "Unix-domain socket path");
 
         await WithServerAsync(ReplyWith(LocalFrame.Error("nope")), async name => {
-            var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeSpan.FromSeconds(5));
+            var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeProvider.System, TimeSpan.FromSeconds(5));
 
             await Assert.That(result.Reachable).IsTrue();    // the connection opened → serving
             await Assert.That(result.WellFormed).IsFalse();
@@ -106,7 +106,7 @@ public class HelloProbeTests {
         // frame without a reply. Reachability, not a well-formed Hello, is the serving signal — a
         // CLI-only update that read WellFormed here reported an already-serving old daemon as starting.
         await WithServerAsync(ReadThenClose, async name => {
-            var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeSpan.FromSeconds(5));
+            var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeProvider.System, TimeSpan.FromSeconds(5));
 
             await Assert.That(result.Reachable).IsTrue();
             await Assert.That(result.WellFormed).IsFalse();

@@ -61,12 +61,24 @@ public class GitRepoHermeticityTests {
             .IsEmpty();
     }
 
+    /// <summary>Auto maintenance and auto gc are ON by git's own defaults, so an empty global config
+    /// leaves them running inside every fixture repo: one writes a lock file under a tree a test is
+    /// comparing, the other detaches and outlives the TempDir holding the repository it ran in.</summary>
+    [Test]
+    public async Task Git_runs_no_maintenance_of_its_own_in_a_fixture_repo() {
+        using var repo = GitRepo.Create();
+
+        await Assert.That(repo.Try("config", "--get", "gc.auto").Text.Trim()).IsEqualTo("0");
+        await Assert.That(repo.Try("config", "--get", "maintenance.auto").Text.Trim()).IsEqualTo("false");
+        await Assert.That(repo.Try("config", "--get", "gc.autoDetach").Text.Trim()).IsEqualTo("false");
+    }
+
     /// <summary>The pin is exported, not merely honoured by the fixture's own invocations — this is
     /// what makes the production code's git children hermetic too.</summary>
     [Test]
     public async Task The_config_pin_is_exported_to_every_child() {
         await Assert.That(Environment.GetEnvironmentVariable("GIT_CONFIG_GLOBAL"))
-            .IsEqualTo(GitConfigGlobalSetup.EmptyGlobalConfig);
+            .IsEqualTo(GitConfigGlobalSetup.PinnedGlobalConfig);
         await Assert.That(Environment.GetEnvironmentVariable("GIT_CONFIG_NOSYSTEM")).IsEqualTo("1");
         await Assert.That(Environment.GetEnvironmentVariable("GIT_TERMINAL_PROMPT")).IsEqualTo("0");
         // Command scope outranks the global file, so an inherited count would bypass the empty one.

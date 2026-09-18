@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -30,7 +29,16 @@ public sealed class ConPtyProcess : IPtyProcess {
     // process would close the last handle and have the OS kill the test host.
     internal IntPtr JobHandleForTests => _jobHandle.DangerousGetHandle();
 
-    ConPtyProcess(IntPtr hPC, IntPtr hProcess, IntPtr hOutputPipe, FileStream outputStream, FileStream inputStream, SafeFileHandle jobHandle) {
+    static readonly TimeSpan ReadPollGap    = TimeSpan.FromMilliseconds(10);
+    static readonly TimeSpan ExitPollGap    = TimeSpan.FromMilliseconds(100);
+    static readonly TimeSpan ExitConfirmGap = TimeSpan.FromMilliseconds(50);
+
+    readonly TimeProvider _time;
+
+    ConPtyProcess(
+            IntPtr hPC, IntPtr hProcess, IntPtr hOutputPipe, FileStream outputStream, FileStream inputStream,
+            SafeFileHandle jobHandle, TimeProvider time) {
+        _time         = time;
         _hPC          = hPC;
         _hProcess     = hProcess;
         _hOutputPipe  = hOutputPipe;
@@ -149,6 +157,7 @@ public sealed class ConPtyProcess : IPtyProcess {
             string                      command,
             string[]                    args,
             string                      cwd,
+            TimeProvider                time,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
             ushort                      rows     = 40
@@ -363,7 +372,8 @@ public sealed class ConPtyProcess : IPtyProcess {
                     outputStream = new FileStream(outputSafeHandle, FileAccess.Read, bufferSize: 4096, isAsync: false);
                     inputStream  = new FileStream(inputSafeHandle, FileAccess.Write, bufferSize: 4096, isAsync: false);
 
-                    var process = new ConPtyProcess(hPC, pi.hProcess, outputPipeRaw, outputStream, inputStream, jobHandle) { Pid = pi.dwProcessId };
+                    var process = new ConPtyProcess(
+                        hPC, pi.hProcess, outputPipeRaw, outputStream, inputStream, jobHandle, time) { Pid = pi.dwProcessId };
                     committed = true; // hPC + both pipe ends now owned by `process` / its streams
                     return process;
                 } catch {
@@ -373,9 +383,13 @@ public sealed class ConPtyProcess : IPtyProcess {
                     // ambiguous "maybe spawned".
                     TerminateJobObject(hJob, 1);
 
+                    // Wall-clock on both sides: the poll gap is a synchronous sleep no provider can
+                    // advance, so a deadline read from an injected clock would never expire.
+#pragma warning disable RS0030
                     var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
 
                     while (DateTime.UtcNow < deadline) {
+#pragma warning restore RS0030
                         if (GetExitCodeProcess(pi.hProcess, out var code) && code != STILL_ACTIVE) break;
                         Thread.Sleep(50);
                     }
@@ -463,7 +477,7 @@ public sealed class ConPtyProcess : IPtyProcess {
                     }
                 }
 
-                try { await Task.Delay(10, linked.Token); } catch (OperationCanceledException) { yield break; }
+                try { await Task.Delay(ReadPollGap, _time, linked.Token); } catch (OperationCanceledException) { yield break; }
             }
         }
     }
@@ -509,12 +523,12 @@ public sealed class ConPtyProcess : IPtyProcess {
 
         SendInterrupt();
 
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        var deadline = _time.GetUtcNow().UtcDateTime + (timeout ?? TimeSpan.FromSeconds(5));
 
-        while (!HasExited && DateTime.UtcNow < deadline) {
+        while (!HasExited && _time.GetUtcNow().UtcDateTime < deadline) {
             CheckExited();
             if (!HasExited) {
-                await Task.Delay(100);
+                await Task.Delay(ExitPollGap, _time);
             }
         }
 
@@ -529,14 +543,14 @@ public sealed class ConPtyProcess : IPtyProcess {
             return;
         }
 
-        var sw = Stopwatch.StartNew();
-        var limit = timeout ?? TimeSpan.FromSeconds(5);
+        var started = _time.GetTimestamp();
+        var limit   = timeout ?? TimeSpan.FromSeconds(5);
 
-        while (!HasExited && sw.Elapsed < limit) {
+        while (!HasExited && _time.GetElapsedTime(started) < limit) {
             CheckExited();
 
             if (!HasExited) {
-                await Task.Delay(50);
+                await Task.Delay(ExitConfirmGap, _time);
             }
         }
     }
@@ -611,7 +625,7 @@ public sealed class ConPtyProcess : IPtyProcess {
     }
 }
 
-public class WinPtyProcessFactory : IPtyProcessFactory {
+public class WinPtyProcessFactory(TimeProvider time) : IPtyProcessFactory {
     public IPtyProcess Spawn(
             string                      command,
             string[]                    args,
@@ -620,5 +634,5 @@ public class WinPtyProcessFactory : IPtyProcessFactory {
             ushort                      cols     = 120,
             ushort                      rows     = 40
         )
-        => ConPtyProcess.Spawn(command, args, cwd, extraEnv, cols, rows);
+        => ConPtyProcess.Spawn(command, args, cwd, time, extraEnv, cols, rows);
 }

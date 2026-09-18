@@ -13,8 +13,6 @@ using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
 
-using Capacitor.Cli.Core.Http;
-
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
@@ -34,7 +32,8 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 public sealed class UninstallCommand(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers,
+        WorkingDirectory workdir, TimeProvider time) {
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
@@ -43,11 +42,11 @@ public sealed class UninstallCommand(
         string? projectRoot = null;
 
         if (includeProject) {
-            projectRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+            projectRoot = GitRepository.FindRoot(workdir.Path);
 
             if (projectRoot is null) {
                 await Console.Error.WriteLineAsync(
-                    $"--project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+                    $"--project requires a git working tree, but '{workdir.Path}' is not inside one.");
                 await Console.Error.WriteLineAsync(
                     "Re-run from inside your repo, or drop --project to only remove user-level configuration.");
 
@@ -107,7 +106,7 @@ public sealed class UninstallCommand(
         // (launchctl bootout / systemctl disable --now), after which the plain
         // `daemon stop --yes` below mops up any non-service daemons.
         try {
-            var services = ServiceManagerFactory.ForCurrentOs(config, home);
+            var services = ServiceManagerFactory.ForCurrentOs(config, home, time);
             foreach (var id in services.ListInstalled()) {
                 if (services.Uninstall(id, out var error)) {
                     await Console.Out.WriteLineAsync($"  • Removed daemon service '{id}' ({services.Describe()})");
@@ -124,14 +123,14 @@ public sealed class UninstallCommand(
         // about to delete. --yes silences the multi-daemon confirmation so this
         // works non-interactively. A non-zero exit code means at least one
         // daemon couldn't be stopped; we leave the config dir alone in that case.
-        if (await new DaemonCommands(store, config, profiles, home, harnesses, binaries)
+        if (await new DaemonCommands(store, config, profiles, home, harnesses, binaries, time)
                 .HandleAsync(["daemon", "stop", "--yes"]) != 0) hadFailures = true;
 
         // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
-        if (await new CleanupCommand(config, profiles, http).HandleCleanup() != 0) hadFailures = true;
+        if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
 
-        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses);
-        var pluginCommand = new PluginCommand(env);
+        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries);
+        var pluginCommand = new PluginCommand(env, workdir);
 
         // User-level agent integrations. Each remove command is idempotent and
         // no-ops if the target file doesn't exist, so it's safe to call all of

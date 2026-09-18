@@ -73,6 +73,57 @@ public static class AcpSessionModelList {
         }
     }
 
+    /// <summary>
+    /// The vendor's CURRENT/default model marker from a <c>session/new</c> result — <c>models.
+    /// currentModelId</c> (precedence, same reason as <see cref="Extract"/>) or the <c>configOptions</c>
+    /// <c>model</c> entry's <c>currentValue</c> — or null when neither shape publishes one. Read only
+    /// as a default-launch fallback (nothing was requested), never to claim a requested model was
+    /// applied. Total: a shape it cannot read contributes nothing.
+    /// </summary>
+    public static string? ExtractCurrentModel(JsonElement sessionNewResult) {
+        if (sessionNewResult.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return CurrentFromModelsObject(sessionNewResult) ?? CurrentFromConfigOptions(sessionNewResult);
+    }
+
+    static string? CurrentFromModelsObject(JsonElement result) {
+        if (!result.TryGetProperty("models", out var models))
+            return null;
+
+        try {
+            var id = JsonSerializer
+                .Deserialize(models.GetRawText(), CapacitorJsonContext.Default.SessionModelsInfo)
+                ?.CurrentModelId;
+            return string.IsNullOrWhiteSpace(id) ? null : id;
+        } catch (JsonException) {
+            return null;
+        }
+    }
+
+    static string? CurrentFromConfigOptions(JsonElement result) {
+        if (!result.TryGetProperty("configOptions", out var options) ||
+            options.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var element in options.EnumerateArray()) {
+            SessionConfigOptionDto? option;
+            try {
+                option = JsonSerializer.Deserialize(
+                    element.GetRawText(), CapacitorJsonContext.Default.SessionConfigOptionDto);
+            } catch (JsonException) {
+                continue;
+            }
+
+            if (!string.Equals(option?.Id, ModelConfigId, StringComparison.Ordinal))
+                continue;
+
+            return string.IsNullOrWhiteSpace(option!.CurrentValue) ? null : option.CurrentValue;
+        }
+
+        return null;
+    }
+
     static IReadOnlyList<AvailableModelDto> FromConfigOptions(JsonElement result) {
         if (!result.TryGetProperty("configOptions", out var options) ||
             options.ValueKind != JsonValueKind.Array)

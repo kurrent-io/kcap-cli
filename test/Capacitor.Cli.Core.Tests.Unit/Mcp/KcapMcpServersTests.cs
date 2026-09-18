@@ -4,23 +4,23 @@ namespace Capacitor.Cli.Core.Tests.Unit.Mcp;
 
 public class KcapMcpServersTests {
     [Test]
-    public async Task All_contains_the_seven_canonical_servers() {
+    public async Task All_contains_the_eight_canonical_servers() {
         var names = KcapMcpServers.All.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-artefacts", "kcap-analytics" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics" });
     }
 
     [Test]
     public async Task ForCodex_is_the_full_set_including_workitems() {
         // kcap-workitems is now registered on every harness, so the Codex subset is All.
         var names = KcapMcpServers.ForCodex.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-artefacts", "kcap-analytics" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics" });
     }
 
     [Test]
     public async Task ForCursor_is_the_full_set_including_workitems() {
         // every non-Claude JSON harness now receives kcap-workitems too.
         var names = KcapMcpServers.ForCursor.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-artefacts", "kcap-analytics" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics" });
     }
 
     [Test]
@@ -53,7 +53,7 @@ public class KcapMcpServersTests {
     [Test]
     public async Task Review_is_the_only_non_repo_scoped_server() {
         var repoScoped = KcapMcpServers.All.Where(s => s.NeedsProjectCwd).Select(s => s.Name).ToArray();
-        await Assert.That(repoScoped).IsEquivalentTo(new[] { "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-artefacts", "kcap-analytics" });
+        await Assert.That(repoScoped).IsEquivalentTo(new[] { "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics" });
     }
 
     [Test]

@@ -25,7 +25,7 @@ public class AgentHookPosterTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // The poster targets the resolution's URL, so the stub server's is what the resolution names.
-    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient());
+    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), TimeProvider.System);
 
     public void Dispose() => _server.Stop();
 
@@ -143,7 +143,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_on_auth_lapse_spools_and_returns_Spooled() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.Expired)), "session-start/kiro", """{"session_id":"x"}""",
             "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro");
@@ -152,12 +152,54 @@ public class AgentHookPosterTests : IDisposable {
         await Assert.That(spool.HasBacklog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).IsTrue();
     }
 
+    /// <summary>The no-spool path is bounded the same way: past the cap it reports the lapse outcome
+    /// its callers already exit cleanly on, instead of holding the hook until its host kills it.</summary>
+    [Test]
+    public async Task Post_reports_AuthLapsed_when_auth_outlives_its_cap() {
+        _server.Given(Request.Create().WithPath("/hooks/session-end/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        var never     = new TaskCompletionSource<AuthAttempt>();
+        var sw        = System.Diagnostics.Stopwatch.StartNew();
+        var handedOff = false;
+
+        var outcome = await Poster.PostAsync(
+            () => never.Task, "session-end/pi", "{}", "pi-hook",
+            authCap: TimeSpan.FromMilliseconds(100), onAuthAbandoned: () => handedOff = true);
+
+        await Assert.That(outcome).IsEqualTo(HookPostOutcome.AuthLapsed);
+        await Assert.That(handedOff).IsTrue();
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/pi").UsingPost()).Count).IsEqualTo(0);
+    }
+
+    /// <summary>Client creation can wait on the cross-process refresh lock for longer than any host
+    /// lets a hook live. Past the cap the payload is spooled and the caller proceeds, rather than the
+    /// hook being killed on its way to that same spool.</summary>
+    [Test]
+    public async Task PostOrSpool_spools_when_auth_outlives_its_cap() {
+        using var tmp = new TempDir();
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
+        var never     = new TaskCompletionSource<AuthAttempt>();
+        var sw        = System.Diagnostics.Stopwatch.StartNew();
+        var handedOff = false;
+
+        var outcome = await Poster.PostOrSpoolAsync(
+            () => never.Task, "session-start/kiro", """{"session_id":"x"}""",
+            "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro",
+            authCap: TimeSpan.FromMilliseconds(100), onAuthAbandoned: () => handedOff = true);
+
+        await Assert.That(outcome).IsEqualTo(HookPostOutcome.Spooled);
+        await Assert.That(handedOff).IsTrue();
+        await Assert.That(spool.HasBacklog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).IsTrue();
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
     /// <summary>A server-rejected credential is repaired by <c>kcap login</c>, so the payload is kept
     /// for the drain that follows the login instead of being lost with the turn that hit the 401.</summary>
     [Test]
     public async Task PostOrSpool_on_401_spools_and_returns_Spooled() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.Unauthorized);
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(handler), AuthStatus.Ok)), "session-start/kiro", """{"session_id":"x"}""",
@@ -172,7 +214,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_on_a_payload_rejecting_4xx_returns_Failed_and_spools_nothing() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.BadRequest);
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(handler), AuthStatus.Ok)), "session-start/kiro", """{"session_id":"x"}""",
@@ -187,7 +229,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test, NotInParallel]
     public async Task PostOrSpool_on_401_still_names_kcap_login_on_stderr() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.Unauthorized);
         using var capture = ConsoleOutput.StartErrorCapture("\n");
 
@@ -202,7 +244,7 @@ public class AgentHookPosterTests : IDisposable {
     [Test]
     public async Task PostOrSpool_on_success_returns_Posted_and_spools_nothing() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         using var handler = new StubHandler(System.Net.HttpStatusCode.OK); // 200
         var outcome = await Poster.PostOrSpoolAsync(
             () => Task.FromResult(new AuthAttempt(new HttpClient(handler), AuthStatus.Ok, null, null)), "session-start/kiro", """{"session_id":"x"}""",

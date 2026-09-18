@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -10,6 +9,7 @@ using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -18,7 +18,8 @@ namespace Capacitor.Cli.Commands;
 /// the agent fetches the schema document, writes SQL, and self-repairs from the server's
 /// rejection reasons. Structure cloned from McpMemoryServer.
 /// </summary>
-sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
+sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     internal const string NotSupportedMessage =
@@ -36,16 +37,22 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
-        var repository = new CwdRepository(config, Directory.GetCurrentDirectory());
+        var repository = new CwdRepository(config, workdir.Path, router, time);
         var tools      = BuildToolsList();
 
-        // MCP servers are long-lived and denylisted under the top-level "mcp" command
-        // (CommandEvents.Denylisted) — re-initialise under the reportable pseudo-command
-        // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
-        // disk must never block the server from starting.
+        // Best-effort, and recorded even when the read throws: a stale token on disk must never
+        // block the server from starting, and an absent property is a different value in a funnel
+        // from a false one — "could not tell" belongs with "not logged in", not with a gap.
         var loggedIn = false;
         try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
-        CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
+
+        // MCP servers are long-lived and denylisted under the top-level "mcp" command
+        // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
+        // "mcp-server" is what lets per-tool-call events leave at all.
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config, time);
+        telemetry.AddSharedProperty("logged_in", loggedIn);
+
+        await using var mcp = new McpTelemetry(telemetry);
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
@@ -70,7 +77,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
         async Task<string> TimedDispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            var start = Stopwatch.GetTimestamp();
+            var start = time.GetTimestamp();
             var tool  = McpTelemetry.SafeToolName(callRequest);
             var ok    = false;
 
@@ -79,7 +86,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                McpTelemetry.ToolCalled("kcap-analytics", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-analytics", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -178,7 +185,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
             // read — resolved here so MapResponse stays a pure, unit-testable mapper (its own
             // 401 arm remains as the fallback wording).
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl), isError: true);
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
             return BuildToolResult(id, MapResponse(toolName, httpResponse.StatusCode, body, out var isError), isError);

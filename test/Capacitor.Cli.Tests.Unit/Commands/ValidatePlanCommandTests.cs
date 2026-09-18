@@ -31,7 +31,7 @@ public class ValidatePlanCommandTests : IDisposable {
     public void Dispose() => _server.Stop();
 
     ISessionsApi Api() =>
-        new SessionsApi(new FixedCapacitorHttpClient(), new CapacitorServer(_server.Url!, Config.Root, Resolutions.At(_server.Url!, Config.Root)));
+        new SessionsApi(new FixedCapacitorHttpClient(), new CapacitorServer(_server.Url!, Config.Root, Resolutions.At(_server.Url!, Config.Root)), TimeProvider.System);
 
     static async Task<string> CaptureStdoutAsync(Func<Task> action) {
         using var capture = ConsoleOutput.StartCapture();
@@ -45,6 +45,162 @@ public class ValidatePlanCommandTests : IDisposable {
           {"type":"whats_done","session_id":null,"agent_id":null,"agent_type":null,"content":"Implemented Foo.","file_path":null,"timestamp":"2026-07-01T00:05:00Z"}{{extraEntries}}
         ]
         """;
+
+    static string ArtifactJson(string id, string kind, string source, string content, string contentState = "ok") => $$"""
+        {
+          "artifact_id": "{{id}}", "kind": "{{kind}}", "title": "{{id}}", "source": "{{source}}",
+          "session_id": "{{SessionId}}", "content": {{(contentState == "unavailable" ? "null" : $"\"{content}\"")}}, "content_state": "{{contentState}}",
+          "is_complete": true, "is_confirmed": true, "is_truncated": false, "content_hash": "h-{{id}}",
+          "version": 1, "discovered_at": "2026-07-01T00:00:00Z", "confidence": "high", "reason": "r",
+          "is_primary": false
+        }
+        """;
+
+    void StubArtifacts(string body) =>
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(body));
+
+    void StubRecap() =>
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
+
+    [Test, NotInParallel]
+    public async Task Ledger_renders_a_tasks_section_with_ordinal_status_title_and_source() {
+        StubArtifacts($$"""
+            {
+              "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}},
+              "artifacts": [],
+              "diagnostics": [],
+              "ledger": {
+                "plan_id": "p1",
+                "tasks": [
+                  {"task_id":"t1","ordinal":1,"title":"Add DTOs","status":"completed","note":null,"source":"mcp","status_partial":false},
+                  {"task_id":"t2","ordinal":2,"title":"Wire server","status":"in_progress","note":"halfway","source":"mcp","status_partial":true}
+                ],
+                "completed": 1, "total": 2, "total_known": true, "is_complete": true, "withheld_contributions": 0
+              }
+            }
+            """);
+        StubRecap();
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).Contains("## Tasks");
+        await Assert.That(stdout).Contains("1 of 2 completed");
+        await Assert.That(stdout).Contains("1. [completed] Add DTOs (mcp)");
+        await Assert.That(stdout).Contains("2. [in_progress] Wire server (mcp) (status partial)");
+        await Assert.That(stdout).Contains("note: halfway");
+        // Tasks sit between the plan and what's done.
+        await Assert.That(stdout.IndexOf("## Plan", StringComparison.Ordinal)).IsLessThan(stdout.IndexOf("## Tasks", StringComparison.Ordinal));
+        await Assert.That(stdout.IndexOf("## Tasks", StringComparison.Ordinal)).IsLessThan(stdout.IndexOf("## What's Done", StringComparison.Ordinal));
+        await Assert.That(stdout).Contains("Tasks section");
+    }
+
+    [Test, NotInParallel]
+    public async Task Ledger_with_unknown_total_and_withheld_rows_says_so() {
+        StubArtifacts($$"""
+            {
+              "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}},
+              "artifacts": [], "diagnostics": [],
+              "ledger": { "plan_id": "p1",
+                "tasks": [{"task_id":"t1","ordinal":1,"title":"Only","status":"pending","note":null,"source":"mcp","status_partial":false}],
+                "completed": 0, "total": 1, "total_known": false, "is_complete": false, "withheld_contributions": 2 }
+            }
+            """);
+        StubRecap();
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).Contains("0 completed, total unknown");
+        await Assert.That(stdout).Contains("[tasks incomplete: 2 contribution(s) from sessions you cannot see were withheld]");
+    }
+
+    [Test, NotInParallel]
+    public async Task Task_only_ledger_without_a_document_is_a_plan() {
+        // set_plan_tasks without declare_plan_document: no artifact, but a checklist to validate.
+        StubArtifacts("""
+            {
+              "primary": null, "artifacts": [], "diagnostics": [],
+              "ledger": { "plan_id": "p1",
+                "tasks": [{"task_id":"t1","ordinal":1,"title":"Only","status":"completed","note":null,"source":"mcp","status_partial":false}],
+                "completed": 1, "total": 1, "total_known": true, "is_complete": true, "withheld_contributions": 0 }
+            }
+            """);
+        StubRecap();
+
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).DoesNotContain("No plan found");
+        await Assert.That(stdout).Contains("No plan document; only a task list was declared.");
+        await Assert.That(stdout).Contains("1. [completed] Only (mcp)");
+        await Assert.That(stdout).Contains("## What's Done");
+        await Assert.That(exitCode).IsEqualTo(0);
+    }
+
+    [Test, NotInParallel]
+    public async Task Fully_withheld_ledger_still_reports_the_incomplete_checklist() {
+        StubArtifacts($$"""
+            {
+              "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}},
+              "artifacts": [], "diagnostics": [],
+              "ledger": { "plan_id": "p1", "tasks": [],
+                "completed": 0, "total": 0, "total_known": false, "is_complete": false, "withheld_contributions": 3 }
+            }
+            """);
+        StubRecap();
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).Contains("## Tasks");
+        await Assert.That(stdout).Contains("[tasks incomplete: 3 contribution(s) from sessions you cannot see were withheld]");
+        // No visible task, so the checklist instruction does not apply.
+        await Assert.That(stdout).DoesNotContain("Tasks section");
+    }
+
+    [Test, NotInParallel]
+    public async Task No_ledger_renders_no_tasks_section() {
+        StubArtifacts($$"""{ "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}}, "artifacts": [], "diagnostics": [] }""");
+        StubRecap();
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).DoesNotContain("## Tasks");
+        await Assert.That(stdout).DoesNotContain("Tasks section");
+    }
+
+    [Test, NotInParallel]
+    public async Task Declared_plan_document_leads_the_plan_section_over_the_primary() {
+        StubArtifacts($$"""
+            {
+              "primary": {{ArtifactJson("art-native", "plan", "native_plan", "NATIVE PLAN")}},
+              "artifacts": [{{ArtifactJson("art-native", "plan", "native_plan", "NATIVE PLAN")}}, {{ArtifactJson("art-declared", "plan", "declared", "DECLARED PLAN")}}],
+              "diagnostics": []
+            }
+            """);
+        StubRecap();
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout.IndexOf("DECLARED PLAN", StringComparison.Ordinal)).IsLessThan(stdout.IndexOf("NATIVE PLAN", StringComparison.Ordinal));
+        // Both still render, once each.
+        await Assert.That(stdout.Split("NATIVE PLAN").Length - 1).IsEqualTo(1);
+        await Assert.That(stdout.Split("DECLARED PLAN").Length - 1).IsEqualTo(1);
+    }
+
+    [Test, NotInParallel]
+    public async Task Unavailable_declared_plan_exits_2_like_an_unavailable_primary() {
+        StubArtifacts($$"""
+            { "primary": {{ArtifactJson("art-native", "plan", "native_plan", "NATIVE PLAN")}},
+              "artifacts": [{{ArtifactJson("art-declared", "plan", "declared", "", contentState: "unavailable")}}], "diagnostics": [] }
+            """);
+        StubRecap();
+
+        var exitCode = -1;
+        await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(exitCode).IsEqualTo(2);
+    }
 
     [Test, NotInParallel]
     public async Task Primary_artifact_renders_under_plan_and_recap_supplies_work_and_whats_done() {

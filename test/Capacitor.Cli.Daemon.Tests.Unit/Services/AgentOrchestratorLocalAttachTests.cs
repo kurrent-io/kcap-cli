@@ -24,14 +24,14 @@ public class AgentOrchestratorLocalAttachTests {
     sealed class NoopRestartStrategy : IRestartStrategy { public RestartOutcome Restart() => RestartOutcome.NoOp; }
 
     static RestartCoordinator TestCoordinator(DaemonStore store) =>
-        RestartCoordinator.ForTest(store, "test", "test", new NoopRestartStrategy());
+        RestartCoordinator.ForTest(store, "test", "test", new NoopRestartStrategy(), TimeProvider.System);
 
     // Consent: a fresh, throwaway consent store/broker pair — these pre-existing LocalControlServer
     // tests don't exercise consent at all, so the wiring only needs to satisfy the ctor.
     static LaunchConsentIpc TestConsentIpc(DaemonConfig config, string stateDir) {
         return new LaunchConsentIpc(
             new LaunchConsentBroker(),
-            new LaunchConsentStore(stateDir, NullLogger.Instance),
+            new LaunchConsentStore(stateDir, NullLogger.Instance, TimeProvider.System),
             config,
             NullLogger<LaunchConsentIpc>.Instance);
     }
@@ -41,7 +41,7 @@ public class AgentOrchestratorLocalAttachTests {
     // back for disposal — these pre-existing LocalControlServer tests don't exercise StatusSubscribe
     // at all, so the wiring only needs to satisfy the ctor.
     static DaemonStatusIpc TestStatusIpc(DaemonConfig config, AgentOrchestrator orch, ServerConnection connection) =>
-        new(config, orch, connection, new DaemonStatusNotifier());
+        new(config, orch, connection, new DaemonStatusNotifier(), TimeProvider.System);
 
     // A throwaway broker: these LocalControlServer tests never exercise permission prompts.
     static PermissionIpc TestPermissionIpc() =>
@@ -105,8 +105,11 @@ public class AgentOrchestratorLocalAttachTests {
         // the Work=BorrowedCwd guard must prevent that.
         var agent = new AgentInstance(
             "local-1", null, "", null, repoPath, "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(repoPath, "", repoPath, IsStandalone: true), new CancellationTokenSource()
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(repoPath, "", repoPath, IsStandalone: true), new CancellationTokenSource()
         ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = true,
             Work      = WorkLocation.BorrowedCwd
         };
@@ -122,21 +125,27 @@ public class AgentOrchestratorLocalAttachTests {
     [Test]
     public async Task Owned_worktree_cleanup_still_removes_it() {
         using var tmp = new TempDir();
+        string worktree = tmp.CreateDir("worktree");
 
         var server = new CaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance(
-            "owned-1", null, "", null, tmp.Path, "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(tmp.Path, "", tmp.Path, IsStandalone: true), new CancellationTokenSource()
+            "owned-1", null, "", null, worktree, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktree, "", worktree, IsStandalone: true), new CancellationTokenSource()
         ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             Work = WorkLocation.OwnedWorktree
         };
 
         orch.RegisterAgentForTest(agent);
         await orch.CleanupAgentForTest("owned-1");
 
-        await Assert.That(Directory.Exists(tmp.Path)).IsFalse();
+        await Assert.That(Directory.Exists(worktree)).IsFalse();
+        // Scoped to the worktree: the cleanup owns what it was handed, not the tree above it.
+        await Assert.That(Directory.Exists(tmp.Path)).IsTrue();
     }
 
     [Test]
@@ -195,7 +204,10 @@ public class AgentOrchestratorLocalAttachTests {
         var privServer = new TripwireServerConnection();
         await using var privOrch = AgentOrchestratorHarness.BuildOrchestrator(privServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var privAgent = new AgentInstance("priv-1", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow, IsPrivate = true };
         privOrch.RegisterAgentForTest(privAgent);
 
         await privOrch.RunDiscoveryForTest(privAgent, _ => ("sid", "/p.jsonl"));
@@ -206,7 +218,10 @@ public class AgentOrchestratorLocalAttachTests {
         var pubServer = new TripwireServerConnection();
         await using var pubOrch = AgentOrchestratorHarness.BuildOrchestrator(pubServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var pubAgent = new AgentInstance("pub-1", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow, IsPrivate = false };
         pubOrch.RegisterAgentForTest(pubAgent);
 
         await pubOrch.RunDiscoveryForTest(pubAgent, _ => ("sid2", "/q.jsonl"));
@@ -222,7 +237,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var pub = new AgentInstance("pub-1", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow, IsPrivate = false };
         await orch.RegisterAgentForTestAsync(pub);
         await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
 
@@ -236,7 +254,10 @@ public class AgentOrchestratorLocalAttachTests {
         var privServer = new TripwireServerConnection();
         await using var privOrch = AgentOrchestratorHarness.BuildOrchestrator(privServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var priv = new AgentInstance("priv-1", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow, IsPrivate = true };
         await privOrch.RegisterAgentForTestAsync(priv);
         await Assert.That(privServer.Calls.Count).IsEqualTo(0);
     }
@@ -250,8 +271,11 @@ public class AgentOrchestratorLocalAttachTests {
 
         await orch.RegisterAgentForTestAsync(
             new AgentInstance("pub-1", null, "", null, "/r", "claude",
-                new PtyHostedAgentRuntime("claude", new StubPtyProcess()),
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System),
                 new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
                 PolicySnapshot = new PolicySnapshot("snap-1", [], true, ["repo policy unreadable"])
             });
 
@@ -328,7 +352,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("reg-1", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = false, Status = "Running", CurrentCols = 73, CurrentRows = 19
         });
 
@@ -343,7 +370,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-2", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         orch.RegisterAgentForTest(agent);
@@ -362,7 +392,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-3", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         // A local client reports 80×24; the web viewer wants 120×40.
@@ -383,7 +416,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-4", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = false, Status = "Running", CurrentCols = 200, CurrentRows = 50
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(200, 50);
@@ -402,7 +438,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-5", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = false, Status = "Running", CurrentCols = 150, CurrentRows = 40
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(150, 40);
@@ -426,7 +465,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-6", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = false, Status = "Running", CurrentCols = 120, CurrentRows = 40
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(120, 40);
@@ -447,7 +489,10 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("priv-2", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             IsPrivate = true, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         orch.RegisterAgentForTest(agent);
@@ -497,9 +542,15 @@ public class AgentOrchestratorLocalAttachTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("pub-1", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow, IsPrivate = false, Status = "Running" });
         orch.RegisterAgentForTest(new AgentInstance("priv-1", null, "", null, "/r", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true, Status = "Running" });
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow, IsPrivate = true, Status = "Running" });
 
         var ids = server.GetLiveAgentIds!();
 
@@ -525,14 +576,19 @@ public class AgentOrchestratorLocalAttachTests {
     [Arguments("cursor")]
     public async Task Attach_to_a_runtime_with_no_terminal_is_refused_by_name(string vendor) {
         using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
         var server = new CaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var runtime = new NoRawInputRuntime(vendor);
         var agent = new AgentInstance(
-            "hosted-1", null, "", null, worktree.Path, vendor,
-            runtime, new WorktreeInfo(worktree.Path, "", worktree.Path, IsStandalone: true), new CancellationTokenSource()
-        );
+            "hosted-1", null, "", null, worktreePath, vendor,
+            runtime, new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
         orch.RegisterAgentForTest(agent);
 
         // A client that sends nothing and never closes: if the handler attached instead of refusing,
@@ -563,6 +619,7 @@ public class AgentOrchestratorLocalAttachTests {
     [Test]
     public async Task Attach_to_a_terminal_runtime_that_rejects_raw_input_gets_an_error_frame_instead_of_crashing() {
         using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
         var server = new CaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
@@ -571,9 +628,13 @@ public class AgentOrchestratorLocalAttachTests {
         // disagree.
         var runtime = new NoRawInputRuntime("claude", emitsTerminalOutput: true);
         var agent = new AgentInstance(
-            "pty-1", null, "", null, worktree.Path, "claude",
-            runtime, new WorktreeInfo(worktree.Path, "", worktree.Path, IsStandalone: true), new CancellationTokenSource()
-        );
+            "pty-1", null, "", null, worktreePath, "claude",
+            runtime, new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
         orch.RegisterAgentForTest(agent);
 
         // Client sends one Stdin frame, then nothing (stream ends) — mirrors `kcap agent attach`
@@ -678,6 +739,9 @@ public class AgentOrchestratorLocalAttachTests {
                 "agy-xyz", null, "", null, "/tmp/repo", "antigravity",
                 new NoRawInputRuntime("antigravity"), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
             ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
                 Work = WorkLocation.OwnedWorktree, Status = "Running"
             });
 
@@ -722,8 +786,11 @@ public class AgentOrchestratorLocalAttachTests {
             orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
                 "agent-xyz", null, "", null, "/tmp/repo", "claude",
-                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
             ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
                 IsPrivate = true, Work = WorkLocation.BorrowedCwd, Status = "Running"
             });
 
@@ -962,27 +1029,6 @@ public class AgentOrchestratorLocalAttachTests {
         try { await spawnTask.WaitAsync(TimeSpan.FromSeconds(10)); } catch (OperationCanceledException) { }
     }
 
-    sealed class DuplexTestStream(Stream readSide, Stream writeSide) : Stream {
-        /// <summary>The daemon's write side, for tests that need to inspect frames it sent.</summary>
-        public Stream WrittenStream => writeSide;
-
-        public override int Read(byte[] b, int o, int c) => readSide.Read(b, o, c);
-        public override ValueTask<int> ReadAsync(Memory<byte> b, CancellationToken ct = default) => readSide.ReadAsync(b, ct);
-        public override void Write(byte[] b, int o, int c) => writeSide.Write(b, o, c);
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> b, CancellationToken ct = default) => writeSide.WriteAsync(b, ct);
-        public override void Flush() => writeSide.Flush();
-        public override Task FlushAsync(CancellationToken ct) => writeSide.FlushAsync(ct);
-        public override bool CanRead => true; public override bool CanWrite => true; public override bool CanSeek => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position { get => 0; set { } }
-        public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
-        public override void SetLength(long v) => throw new NotSupportedException();
-        protected override void Dispose(bool disposing) {
-            if (disposing) { readSide.Dispose(); writeSide.Dispose(); }
-            base.Dispose(disposing);
-        }
-    }
-
     /// A no-op local sink used only as a stable key to seed AgentInstance.ClientDims in resize
     /// tests (the real socket attach loop isn't needed to exercise the min-clamp).
     sealed class FakeTerminalSink : ITerminalSink {
@@ -997,7 +1043,7 @@ public class AgentOrchestratorLocalAttachTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
-    ) {
+    , TimeProvider.System) {
         public ConcurrentBag<string> Calls { get; } = [];
         /// The run-event payloads themselves, for a test asserting WHICH events an agent produced
         /// rather than only that the method ran.

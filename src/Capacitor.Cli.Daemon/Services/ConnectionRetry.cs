@@ -42,6 +42,7 @@ internal static class ConnectionRetry {
             Func<Task>             invoke,
             Func<bool>             isReady,
             TimeSpan               pollInterval,
+            TimeProvider           time,
             Action<int>            onRetry,
             CancellationToken      ct,
             Func<Exception, bool>? isRetriableServerError = null,
@@ -50,6 +51,7 @@ internal static class ConnectionRetry {
             async () => { await invoke(); return null; },
             isReady,
             pollInterval,
+            time,
             onRetry,
             ct,
             isRetriableServerError,
@@ -60,6 +62,7 @@ internal static class ConnectionRetry {
             Func<Task<T>>      invoke,
             Func<bool>         isReady,
             TimeSpan           pollInterval,
+            TimeProvider       time,
             Action<int>        onRetry,
             CancellationToken  ct,
             Func<Exception, bool>? isRetriableServerError = null,
@@ -75,7 +78,7 @@ internal static class ConnectionRetry {
             // Gating all attempts on readiness (not just post-failure retries)
             // closes that race.
             while (!ct.IsCancellationRequested && !isReady())
-                await Task.Delay(pollInterval, ct);
+                await Task.Delay(pollInterval, time, ct);
 
             ct.ThrowIfCancellationRequested();
 
@@ -86,14 +89,14 @@ internal static class ConnectionRetry {
 
                 // Brief delay before looping back to the readiness wait, so the
                 // loop can never spin hot even if isReady() flips true instantly.
-                await Task.Delay(pollInterval, ct);
+                await Task.Delay(pollInterval, time, ct);
             } catch (Exception ex) when (!ct.IsCancellationRequested
                                       && isRetriableServerError is not null
                                       && serverErrorRetries < maxServerErrorRetries
                                       && isRetriableServerError(ex)) {
                 serverErrorRetries++;
                 onRetry(attempt);
-                await Task.Delay(pollInterval, ct);
+                await Task.Delay(pollInterval, time, ct);
             }
         }
     }

@@ -20,7 +20,7 @@ public sealed class UppercaseConverter : IValueConverter {
 /// Activity row outcome badge: the same Connected/Disrupted greens and reds as the status dots,
 /// so "allowed" matches a live session indicator rather than a darker Material green.
 /// ActivityRow stays a plain record (no Avalonia types) — color lives here for the same
-/// UI-thread-affinity reason MainWindowViewModel.DotBrush documents.
+/// UI-thread-affinity reason MainWindowViewModel.Paint documents.
 public sealed class OutcomeBrushConverter : IValueConverter {
     public static readonly OutcomeBrushConverter Instance = new();
 
@@ -38,6 +38,18 @@ public sealed class BoolToOpacityConverter : IValueConverter {
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is true ? 1.0 : 0.0;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// A stale remote rail row stays visible, just dimmed — unlike BoolToOpacityConverter above
+/// (fully transparent when false), so it cannot be reused inverted.
+public sealed class StaleOpacityConverter : IValueConverter {
+    public static readonly StaleOpacityConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is true ? 0.55 : 1.0;
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

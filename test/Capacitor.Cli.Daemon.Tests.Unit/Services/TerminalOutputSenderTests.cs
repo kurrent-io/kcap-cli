@@ -31,6 +31,7 @@ public class TerminalOutputSenderTests {
             },
             isConnected: () => true,
             NullLogger.Instance,
+            TimeProvider.System,
             retryDelay: FastRetry
         );
 
@@ -64,6 +65,7 @@ public class TerminalOutputSenderTests {
             (_, _, _) => Task.CompletedTask,
             isConnected: () => false,
             NullLogger.Instance,
+            TimeProvider.System,
             capacity: 2
         );
 
@@ -90,6 +92,7 @@ public class TerminalOutputSenderTests {
             },
             isConnected: () => false, // transport down — failures must be held and retried, not dropped
             NullLogger.Instance,
+            TimeProvider.System,
             retryDelay: FastRetry
         );
 
@@ -134,6 +137,7 @@ public class TerminalOutputSenderTests {
             },
             isConnected: () => true,
             NullLogger.Instance,
+            TimeProvider.System,
             capacity: 1,
             retryDelay: FastRetry
         );
@@ -179,6 +183,7 @@ public class TerminalOutputSenderTests {
             },
             isConnected: () => true,
             NullLogger.Instance,
+            TimeProvider.System,
             retryDelay: FastRetry,
             maxConnectedAttempts: 5
         );
@@ -216,6 +221,7 @@ public class TerminalOutputSenderTests {
             },
             isConnected: () => true,
             NullLogger.Instance,
+            TimeProvider.System,
             retryDelay: FastRetry,
             maxConnectedAttempts: 3
         );
@@ -244,6 +250,7 @@ public class TerminalOutputSenderTests {
             (_, _, _) => throw new InvalidOperationException("connection is not active"),
             isConnected: () => false, // held (not dropped), so the loop is genuinely stuck until cancelled
             NullLogger.Instance,
+            TimeProvider.System,
             retryDelay: FastRetry
         );
 

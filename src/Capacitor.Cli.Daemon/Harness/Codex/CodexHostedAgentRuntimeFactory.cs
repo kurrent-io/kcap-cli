@@ -27,6 +27,7 @@ namespace Capacitor.Cli.Daemon.Harness.Codex;
 /// advertised policy and the transport used are one fact.</para>
 /// </summary>
 internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactory {
+    readonly TimeProvider _time;
     readonly CodexLauncher               _launcher;
     readonly IHostedAgentRuntimeFactory  _pty;
     readonly DaemonConfig                _config;
@@ -43,14 +44,16 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// approvals; reviewers (approvalPolicy:never) never build an approval bridge regardless.</param>
     public CodexHostedAgentRuntimeFactory(
             CodexLauncher launcher, IHostedAgentRuntimeFactory ptyDelegate, DaemonConfig config,
-            ILoggerFactory loggerFactory, CodexAppServerSpawnFactory? spawnFactory = null,
+            ILoggerFactory loggerFactory, TimeProvider time, CodexAppServerSpawnFactory? spawnFactory = null,
             ServerConnection? connection = null) {
+        _time          = time;
         _launcher      = launcher;
         _pty           = ptyDelegate;
         _config        = config;
         _loggerFactory = loggerFactory;
         _logger        = loggerFactory.CreateLogger<CodexHostedAgentRuntimeFactory>();
-        _spawnFactory  = spawnFactory ?? DefaultSpawnFactory;
+        _spawnFactory  = spawnFactory
+            ?? ((cli, args, seed, cwd, env, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, cfg, lf, time));
         _connection    = connection;
     }
 
@@ -67,6 +70,12 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public bool             ReviewFlowRedirectsHome                     => _pty.ReviewFlowRedirectsHome;
     public IReviewerModelResolver? ReviewerModelResolver               => _pty.ReviewerModelResolver;
     public bool             SupportsModelSelection                      => _pty.SupportsModelSelection;
+
+    // A default-kind launch is the only Codex shape that accepts a follow-up while running, so it is
+    // the only one whose fetch happens alongside a live, write-contained process: the store keeps
+    // that write outside every cwd it could steer. Protected kinds fetch before the process exists.
+    public AttachmentPlacement AttachmentPlacementFor(LaunchKind kind) =>
+        kind == LaunchKind.Default ? AttachmentPlacement.DaemonStore : AttachmentPlacement.Worktree;
 
     /// <summary>App-server hosts unattended reviewers (review-flow) wherever the daemon resolved it
     /// active. INTERACTIVE launches join only where the operator opted that daemon in, so one daemon can
@@ -133,7 +142,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
         var runtime = new CodexAppServerHostedAgentRuntime(
             spawn, launch, ctx.ActivityClock,
-            _loggerFactory.CreateLogger<CodexAppServerHostedAgentRuntime>(),
+            _loggerFactory.CreateLogger<CodexAppServerHostedAgentRuntime>(), _time,
             emitEnvelopeTranscript: envelopeSourced,
             deferFirstTurn: envelopeSourced,
             agentId: ctx.AgentId,
@@ -205,7 +214,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// shared <see cref="AcpChildProcess"/> (stderr drain + terminate) and the JSON-RPC transport.</summary>
     static Task<(CodexAppServerConnection, IAcpProcess)> DefaultSpawnFactory(
             string cliPath, IReadOnlyList<string> appServerArgs, string? hookStateSeed, string cwd,
-            IReadOnlyDictionary<string, string> env, DaemonConfig config, ILoggerFactory loggerFactory) {
+            IReadOnlyDictionary<string, string> env, DaemonConfig config, ILoggerFactory loggerFactory,
+            TimeProvider time) {
         var argv = new List<string> { "app-server" };
         argv.AddRange(appServerArgs);
         if (!string.IsNullOrEmpty(hookStateSeed)) {
@@ -224,7 +234,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start '{cliPath} {string.Join(' ', argv)}'.");
-        var child = new AcpChildProcess(process, loggerFactory.CreateLogger<AcpChildProcess>(), config.DebugFrames, "codex");
+        var child = new AcpChildProcess(
+            process, loggerFactory.CreateLogger<AcpChildProcess>(), time, config.DebugFrames, "codex");
         var conn  = new CodexAppServerConnection(
             process.StandardInput.BaseStream, process.StandardOutput.BaseStream,
             loggerFactory.CreateLogger<CodexAppServerConnection>(), config.DebugFrames);

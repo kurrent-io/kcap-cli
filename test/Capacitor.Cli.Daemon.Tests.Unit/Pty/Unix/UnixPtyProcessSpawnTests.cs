@@ -16,8 +16,8 @@ public class UnixPtyProcessSpawnTests {
         // whole test-host process never exits (confirmed empirically: an earlier version of this
         // test that let UnixPtyProcessFactory own an undisposed static singleton hung indefinitely).
         using var spawner = new UnixSpawnerThread();
-        var       factory = new UnixPtyProcessFactory(spawner);
-        var       proc    = factory.Spawn("sleep", ["5"], Directory.GetCurrentDirectory());
+        var       factory = new UnixPtyProcessFactory(spawner, TimeProvider.System);
+        var       proc    = factory.Spawn("sleep", ["5"], AppContext.BaseDirectory);
         try {
             await Assert.That(proc.Pid).IsGreaterThan(0);
             await Assert.That(proc.StartIdentity).IsNotNull();
@@ -57,14 +57,14 @@ public class UnixPtyProcessSpawnTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       factory = new UnixPtyProcessFactory(spawner);
+        var       factory = new UnixPtyProcessFactory(spawner, TimeProvider.System);
         // The helper IGNORES SIGHUP (trap '' HUP survives the exec): a plain background sleep dies
         // to the controlling terminal's leader-exit SIGHUP even under a leader-only kill, which let
         // exactly that mutation pass this test — a helper that shrugs off HUP is also the shape
         // that leaks in production. Only a signal to the GROUP reaches it.
         var proc = factory.Spawn(
             "/bin/sh", ["-c", "(trap '' HUP; exec sleep 300) & echo \"CHILD:$!:DONE\"; wait"],
-            Directory.GetCurrentDirectory());
+            AppContext.BaseDirectory);
         try {
             var childPid = await ReadReportedChildPidAsync(proc);
             await Assert.That(childPid).IsGreaterThan(0);

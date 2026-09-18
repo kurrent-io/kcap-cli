@@ -79,7 +79,7 @@ internal sealed class LaunchConsentGate(
 
     LaunchConsentOutcome Done(string agentId, in LaunchConsentInput input, bool allowed, string source, string detail) {
         log.Record(new ConsentDecisionRecord(
-            DateTimeOffset.UtcNow.ToString("O"), agentId, input.RequesterUserId, input.RequesterIsOwner,
+            time.GetUtcNow().ToString("O"), agentId, input.RequesterUserId, input.RequesterIsOwner,
             input.Kind, input.RepoPath, input.Vendor, allowed ? "allowed" : "denied", source,
             input.RequesterDisplay));
         return new LaunchConsentOutcome(allowed, source, detail);

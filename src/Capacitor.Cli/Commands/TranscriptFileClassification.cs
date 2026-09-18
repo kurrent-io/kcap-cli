@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -14,23 +15,23 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 internal static class TranscriptFileClassification {
     public static async Task<List<ImportCommand.SessionClassification>> ClassifyAsync(
+            GitProviderRouter                                            router,
             ConfigRoot                                                   config,
             UserHome                                                     home,
             HttpClient                                                   httpClient,
+            TimeProvider                                                 time,
             string                                                       baseUrl,
             List<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             int                                                          minLines,
-            string[]?                                                    excludedRepos,
             CancellationToken                                            ct,
             HarnessId                                                    vendor        = HarnessId.Claude,
-            Action?                                                      onProbed      = null,
-            string[]?                                                    excludedPaths = null
+            Action?                                                      onProbed      = null
         ) {
         using var probeGate = new SemaphoreSlim(8);
         var       tasks     = new List<Task<ImportCommand.SessionClassification>>(transcripts.Count);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, onProbed, ct));
+            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -39,39 +40,39 @@ internal static class TranscriptFileClassification {
     }
 
     static async Task<ImportCommand.SessionClassification> ClassifyOneAsync(
+            GitProviderRouter router,
             ConfigRoot        config,
             UserHome          home,
             HttpClient        httpClient,
+            TimeProvider      time,
             string            baseUrl,
             string            sessionId,
             string            filePath,
             string            encodedCwd,
             int               minLines,
-            string[]?         excludedRepos,
-            string[]?         excludedPaths,
             SemaphoreSlim     probeGate,
             HarnessId         vendor,
             Action?           onProbed,
             CancellationToken ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, ct);
+            return await ClassifyOneCoreAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ct);
         } finally {
             onProbed?.Invoke();
         }
     }
 
     static async Task<ImportCommand.SessionClassification> ClassifyOneCoreAsync(
+            GitProviderRouter router,
             ConfigRoot        config,
             UserHome          home,
             HttpClient        httpClient,
+            TimeProvider      time,
             string            baseUrl,
             string            sessionId,
             string            filePath,
             string            encodedCwd,
             int               minLines,
-            string[]?         excludedRepos,
-            string[]?         excludedPaths,
             SemaphoreSlim     probeGate,
             HarnessId         vendor,
             CancellationToken ct
@@ -118,7 +119,7 @@ internal static class TranscriptFileClassification {
         await probeGate.WaitAsync(ct);
 
         try {
-            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
+            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", time, ct: ct);
 
             switch (resp.StatusCode) {
                 case HttpStatusCode.NotFound:
@@ -190,39 +191,6 @@ internal static class TranscriptFileClassification {
             }
         }
 
-        // Flag excluded repos/paths for New/Partial sessions. Resolution (include or skip?)
-        // happens later in HandleImport, where we can batch prompts by key.
-        string? excludedRepoKey = null;
-        string? excludedPathKey = null;
-
-        if (status is ImportCommand.ClassificationStatus.New or ImportCommand.ClassificationStatus.Partial) {
-            var cwd = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(encodedCwd);
-
-            if (cwd is not null) {
-                if (excludedRepos is { Length: > 0 }) {
-                    // Classification only needs owner/repo for the exclusion key — skip PR detection.
-                    var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false);
-
-                    if (repo?.Owner is not null && repo.RepoName is not null) {
-                        var key = $"{repo.Owner}/{repo.RepoName}";
-
-                        if (excludedRepos.Contains(key, StringComparer.OrdinalIgnoreCase)) {
-                            excludedRepoKey = key;
-                        }
-                    }
-                }
-
-                if (excludedPathKey is null && excludedPaths is { Length: > 0 }) {
-                    foreach (var entry in excludedPaths) {
-                        if (PathExclusion.IsExcluded(cwd, [entry], home)) {
-                            excludedPathKey = PathExclusion.Normalize(entry, home);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
         // TotalLines is only meaningful for TooShort sessions (where we know the exact
         // count because it's below the threshold). Leave it at 0 for other statuses —
         // we only read enough of the file to confirm the TooShort filter didn't apply.
@@ -234,8 +202,6 @@ internal static class TranscriptFileClassification {
             Status           = status,
             ResumeFromLine   = resumeFromLine,
             ProbeErrorReason = probeErrorReason,
-            ExcludedRepoKey  = excludedRepoKey,
-            ExcludedPathKey  = excludedPathKey,
             Vendor           = vendor,
         };
     }

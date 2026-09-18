@@ -14,10 +14,11 @@ internal static class EvalQuestionCatalogClient {
             string            baseUrl,
             HttpClient        httpClient,
             IEvalObserver     observer,
+            TimeProvider      time,
             CancellationToken ct
         ) {
         try {
-            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/eval/questions", ct: ct);
+            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/eval/questions", time, ct: ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized) {
                 observer.OnFailed("authentication failed — run 'kcap login' to re-authenticate");
                 return null;

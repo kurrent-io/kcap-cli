@@ -33,6 +33,7 @@ using Profile = Capacitor.Cli.Core.Config.Profile;
 
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -70,14 +71,14 @@ sealed class SetupAuthProgress(IAuthProgress inner) : IAuthProgress {
 /// a browser opened — a machine with no browser of its own has a human at a different one.</summary>
 /// <param name="keys">Only to tell whether there is a keyboard at all: advertising a key that cannot be
 /// pressed is worse than not offering the way out.</param>
-sealed class SpectreFirstRunFlowProgress(IKeyWatcher? keys = null) : IFirstRunFlowProgress, IDisposable {
+sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = null) : IFirstRunFlowProgress, IDisposable {
     internal static readonly string Offer =
         $"{BrowserFirstRunFlow.HandoverKey} to carry on here  ·  ctrl+c to stop";
 
     internal const string Unreachable = "Can't reach the server. Still trying…";
 
     readonly IKeyWatcher      _keys = keys ?? ConsoleKeyWatcher.Instance;
-    readonly TerminalWaitLine _wait = new(tty: !Console.IsOutputRedirected);
+    readonly TerminalWaitLine _wait = new(tty: !Console.IsOutputRedirected, time: time);
 
     FirstRunFlowStep? _step;
     bool              _healthy = true;
@@ -238,6 +239,8 @@ sealed class SetupImportLane(
         UserHome home,
         ICapacitorHttpClient http,
         HarnessRegistry harnesses,
+        GitProviderRouter router,
+        TimeProvider time,
         Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>>? runner = null) : IFirstRunImportLane {
     /// <summary>One invocation's arguments, so a test can assert what each level asked for without
     /// running an import.</summary>
@@ -253,9 +256,9 @@ sealed class SetupImportLane(
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
             filterCwd:    null,
-            sources:      SetupCommand.BuildImportSources(config, harnesses, vendors),
+            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors),
             discoverOnly: true,
             discoverJson: true,
             windowsAsOf:  asOf,
@@ -306,9 +309,9 @@ sealed class SetupImportLane(
     async Task<ImportCommand.ImportRunOutcome?> Run(Pass pass) {
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        await new ImportCommand(config, profiles, home, harnesses, http).HandleImport(
+        await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
             filterCwd:          null,
-            sources:            SetupCommand.BuildImportSources(config, harnesses, pass.Vendors),
+            sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors),
             since:              pass.Since,
             scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
             skipConfirmation:   true,
@@ -400,26 +403,31 @@ sealed class SetupImportLane(
 /// <see cref="SetupDaemonService"/>. The loop leaves an unadvertised capability outstanding rather than
 /// reporting it, which is the state the screen already renders as having asked.</para>
 /// </summary>
-sealed class SetupMachineActions : IFirstRunMachineActions {
+sealed class SetupMachineActions(TimeProvider time) : IFirstRunMachineActions {
     public IReadOnlyCollection<string> Capabilities { get; } = [FirstRunMachineCapabilities.PathShim];
 
     public async Task<FirstRunMachineActionResult> PerformAsync(string capability, CancellationToken ct) {
         if (capability != FirstRunMachineCapabilities.PathShim)
             throw new ArgumentOutOfRangeException(nameof(capability), capability, "Not a capability this host advertises.");
 
-        var result = await DaemonShimCommands.EvaluateAsync(ct: ct);
+        var result = await DaemonShimCommands.EvaluateAsync(time, ct: ct);
 
         return new FirstRunMachineActionResult(result.Outcome, result.Reason);
     }
 }
 
 public sealed class SetupCommand(
-        ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
-        TokenStore store, IHttpClientFactory httpFactory,
-        IAuthProxyClient proxy, WorkOSClient workos, GitHubOAuthClient github, IBrowserLauncher browser,
+        ConfigRoot config, ProfileContext profiles,
+        TokenStore store, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
-        TenantProvisioningClient provisioning, AuthProviderDiscovery discovery) {
+        TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
+        AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
+        ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
+        BinaryProbe binaries) {
+
     public async Task<int> HandleAsync(string[] args) {
+        if (args.Contains("--discover")) return await RunDiscoverOnlyAsync(args);
+
         var serverUrlArg     = GetArg(args, "--server-url");
 
         // `kcap setup <tenant>`: a leading positional arg (bare slug or full URL) is treated as the
@@ -486,7 +494,7 @@ public sealed class SetupCommand(
 
         var profile = await AppConfig.LoadProfileConfig(config);
 
-        SetupFunnel.Started(
+        telemetry.Funnel.Started(
             hasExistingProfile: AppConfig.HasConfiguredProfile(profile),
             serverUrlProvided:  serverUrlArg is not null,
             noPrompt:           noPrompt);
@@ -496,11 +504,11 @@ public sealed class SetupCommand(
         // unrelated to any project, or — worse — under a subdirectory of the repo if we
         // used cwd directly, which means two devs running setup from different subdirs
         // install hooks in different places.
-        var gitRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+        var gitRoot = GitRepository.FindRoot(workdir.Path);
 
         if (legacyProjectScope && gitRoot is null) {
             await Console.Error.WriteLineAsync(
-                $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+                $"--plugin-scope project requires a git working tree, but '{workdir.Path}' is not inside one.");
             await Console.Error.WriteLineAsync(
                 "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
             return 1;
@@ -757,7 +765,7 @@ public sealed class SetupCommand(
             InstallCursorHooks:     PluginCommand.InstallCursorHooks,
             InstallCopilotHooks:    PluginCommand.InstallCopilotHooks,
             InstallGeminiHooks:     PluginCommand.InstallGeminiHooks,
-            CapacitorOnPath:        () => BinaryProbe.OnPath("kcap"),
+            CapacitorOnPath:        () => binaries.Finds("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
             InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses),
@@ -812,7 +820,7 @@ public sealed class SetupCommand(
         OfferedIf(detected.Pi,          skipPiFlag,          HarnessId.Pi);
         OfferedIf(detected.OpenCode,    skipOpenCodeFlag,    HarnessId.OpenCode);
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
-        new HarnessOfferStore(config).StampOffered(offeredNow, DateTimeOffset.UtcNow);
+        new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default so subscription auth
@@ -931,18 +939,18 @@ public sealed class SetupCommand(
                 // skipping on it would leave the request outstanding on a server that would have
                 // answered — the browser leg skips there only because it has nothing left to do.
                 if (deferredAuth is AuthStatus.Ok or AuthStatus.NoAuthRequired) {
-                    var channel = new FirstRunFlowClient(deferred);
+                    var channel = new FirstRunFlowClient(deferred, time);
 
                     // The browser is holding the request this leg is about to perform, and enabling a
                     // service can outlast any staleness window — so the beat has to span it. Only for a
                     // flow that finished: every other ending already relinquished, and beating again
                     // would take that back.
                     using var beat = browserAnswers.FlowStillLive
-                        ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, TimeProvider.System)
+                        ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, time)
                         : null;
 
                     await SetupDaemonService.RunAsync(
-                        channel, serverUrl, browserFlowId, config, saved, home);
+                        channel, serverUrl, browserFlowId, config, saved, home, time);
                 }
                 else
                     AnsiConsole.MarkupLine(
@@ -971,7 +979,8 @@ public sealed class SetupCommand(
         // detectPullRequest:false — Step 6 only needs (owner, name) to scope the repo import;
         // PR/MR detection would run extra provider probes/subprocesses for nothing here.
         var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(
-            config, Environment.CurrentDirectory, detectPullRequest: false);
+            router,
+            config, workdir.Path, time, detectPullRequest: false);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
             : null;
@@ -1023,14 +1032,22 @@ public sealed class SetupCommand(
         // live until it restarts — so tell them, but only when something was actually
         // installed (no point promising recording we never wired up).
         var restartTip = LiveRecordingRestartTip(installResult);
-        if (restartTip is not null) AnsiConsole.MarkupLine($"\n  {restartTip}");
+
+        if (restartTip is not null) {
+            AnsiConsole.MarkupLine($"\n  {restartTip}");
+
+            // The same reminder, left for the next session to deliver through the hooks this run
+            // installed. Armed on the same condition as the tip — with nothing wired up there is
+            // nothing to announce.
+            new FirstRunNoticeStore(config).Arm();
+        }
 
         // Setup itself is user-scope and works fine outside a repo, but sessions recorded
         // from non-repo directories have no owner/repo/branch/PR enrichment (see
         // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
         if (gitRoot is null) {
             AnsiConsole.MarkupLine(
-                $"\n  [yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(Environment.CurrentDirectory)}[/]).");
+                $"\n  [yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(workdir.Path)}[/]).");
             AnsiConsole.MarkupLine(
                 "    Hooks fire from any directory, but sessions recorded outside a repo won't include owner/repo/branch context.");
             AnsiConsole.MarkupLine(
@@ -1052,7 +1069,7 @@ public sealed class SetupCommand(
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
         }.Count(installed => installed);
 
-        SetupFunnel.Succeeded(agentsConfigured);
+        telemetry.Funnel.Succeeded(agentsConfigured);
 
         return 0;
     }
@@ -1179,9 +1196,9 @@ public sealed class SetupCommand(
     /// Step 6 (import past sessions) decision + best-effort execution, extracted from
     /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
     /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
-    /// actual import call goes through <see cref="ImportRunnerOverride"/> (the real
-    /// <see cref="ImportCommand.HandleImport"/> when null) so tests can intercept the invocation
-    /// instead of running a real import. Import is best-effort: a thrown exception or a non-zero
+    /// actual import call goes through the injected <see cref="ISetupImportRunner"/> so a test can
+    /// intercept the invocation instead of running a real import. Import is best-effort: a thrown
+    /// exception or a non-zero
     /// exit code is reported with a warning and swallowed — this method never throws and never
     /// fails setup.
     /// </summary>
@@ -1224,7 +1241,7 @@ public sealed class SetupCommand(
             Profiles:           profiles);
 
         try {
-            var exitCode = await (ImportRunnerOverride ?? DefaultImportRunner)(invocation);
+            var exitCode = await imports.RunAsync(invocation);
 
             if (exitCode != 0) {
                 AnsiConsole.MarkupLine(
@@ -1236,66 +1253,9 @@ public sealed class SetupCommand(
         }
     }
 
-    /// <summary>
-    /// The arguments Step 6 pins into its embedded <see cref="ImportCommand.HandleImport"/> call.
-    /// A record (not a bare argument list) so tests can capture and assert on it via
-    /// <see cref="ImportRunnerOverride"/> without running a real import.
-    /// </summary>
-    internal sealed record ImportInvocation(
-        (string Owner, string Name) Repo,
-        string?                      DefaultVisibility,
-        bool                         AutoSkipExclusions,
-        bool                         ForcePrivate,
-        ProfileContext               Profiles);
-
-    /// <summary>
-    /// Test seam: when set, replaces the real <see cref="ImportCommand.HandleImport"/> call made
-    /// by <see cref="RunImportStepAsync"/>. Process-global static state — tests must reset it to
-    /// null (in a finally block) after use.
-    /// </summary>
-    internal static Func<ImportInvocation, Task<int>>? ImportRunnerOverride;
-
-    /// <summary>
-    /// A client aimed at the server THIS run chose. The process container resolved its server once
-    /// at startup — before this command could pick one, and null on a first run — so every leg that
-    /// runs after the choice has to build its own or it authenticates against the wrong server, or
-    /// against none at all. The profile name and config root stay the process's, so the token lookup
-    /// targets the profile it always did.
-    /// </summary>
-    internal ServiceProvider HttpForChosenServer(string serverUrl, ProfileContext? chosen = null) {
-        var context = chosen ?? new ProfileContext(profiles.Resolution with { ServerUrl = serverUrl }, profiles.Snapshot);
-
-        return new ServiceCollection()
-            .AddSingleton(config)
-            .AddSingleton(context)
-            .AddSingleton(new CapacitorServer(serverUrl, config, context))
-            .AddCapacitorHttp(env, machine)
-            .BuildValidated();
-    }
-
-    async Task<int> DefaultImportRunner(ImportInvocation inv) {
-        await using var scoped = HttpForChosenServer(inv.Profiles.Resolution.ServerUrl ?? "", inv.Profiles);
-
-        return await new ImportCommand(
-                config, inv.Profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>())
-            .HandleImport(
-            filterCwd:               null,
-            filterSession:           null,
-            minLines:                15,
-            generateSummaries:       false,
-            sources:                 BuildImportSources(config, harnesses),
-            explicitVendorSelection: false,
-            since:                   null,
-            scope:                   new ImportScope.Repo(inv.Repo.Owner, inv.Repo.Name),
-            skipConfirmation:        true,
-            forcePrivate:            inv.ForcePrivate,
-            currentRepo:             inv.Repo,
-            needOrgPick:             false,
-            storedOrg:               null,
-            autoSkipExclusions:      inv.AutoSkipExclusions,
-            defaultVisibility:       inv.DefaultVisibility,
-            nested:                  true);
-    }
+    /// <inheritdoc cref="ChosenServerHttp.For"/>
+    internal ServiceProvider HttpForChosenServer(string serverUrl, ProfileContext? chosen = null) =>
+        chosenHttp.For(serverUrl, chosen);
 
     /// <summary>
     /// Every import source, one per catalogue vendor.
@@ -1304,22 +1264,23 @@ public sealed class SetupCommand(
     /// nothing. Filtering the sources rather than the counts afterwards is what makes a reported figure
     /// already scoped to what the user kept.</param>
     internal static IReadOnlyList<IImportSource> BuildImportSources(
-            ConfigRoot config, HarnessRegistry harnesses, IReadOnlyCollection<HarnessId>? vendors = null) {
+            ConfigRoot config, HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time,
+            IReadOnlyCollection<HarnessId>? vendors = null) {
         var cursor   = harnesses.Of<CursorHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
 
         IReadOnlyList<IImportSource> all = [
-            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects),
-            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions),
-            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir),
-            new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths),
-            new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir),
-            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir),
-            new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir),
+            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
+            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
+            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time),
+            new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
+            new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
+            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, router, time),
+            new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir, router, time),
             new OpenCodeImportSource(
                     Path.Combine(opencode.DataDir, "opencode.db"),
-                    opencode.ImportLedgerJson),
-            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths)
+                    opencode.ImportLedgerJson, time),
+            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time)
         ];
 
         if (vendors is null) return all;
@@ -1365,27 +1326,15 @@ public sealed class SetupCommand(
         }
     }
 
-    /// <summary>Test seam: overrides façade construction for Step 1/2. Reset to null in a finally block.</summary>
-    internal static Func<ITenantProvisioner?, OnboardingFacade>? FacadeOverride;
-
     internal static readonly SetupAuthProgress StepProgress = new(new ConsoleAuthProgress(SetupAuthProgress.StepIndent));
-
-    OnboardingFacade NewFacade(
-            ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null) =>
-        FacadeOverride?.Invoke(provisioner)
-            ?? new OnboardingFacade(config, store, httpFactory, proxy, github, workos, StepProgress, browser,
-                picker ?? DefaultPicker(browser, () => true), provisioner,
-                WorkspaceGuard(requested)) {
-                KeyWatcher = ConsoleKeyWatcher.Instance
-            };
 
     /// <summary>
     /// The workspace pick, in the browser where one is reachable and in the terminal otherwise. The
     /// composite decides per call, since only the completed login knows which channel it used.
     /// </summary>
-    static ITenantPicker DefaultPicker(IBrowserLauncher launcher, Func<bool> canPrompt) =>
+    internal static ITenantPicker DefaultPicker(IBrowserLauncher launcher, Func<bool> canPrompt, TimeProvider time) =>
         new BrowserTenantPicker(
-            launcher, new SpectreTenantPicker(canPrompt), StepProgress, ConsoleKeyWatcher.Instance,
+            launcher, new SpectreTenantPicker(canPrompt), time, StepProgress, ConsoleKeyWatcher.Instance,
             canPrompt: canPrompt);
 
     /// <summary>
@@ -1433,7 +1382,7 @@ public sealed class SetupCommand(
             return 0;
         }
 
-        var result = await NewFacade(provisioner: null)
+        var result = await facades.Create(provisioner: null)
             .LoginAsync(serverUrl, forceDevice, activeProfile, CancellationToken.None, adoptServer: true);
 
         if (result is not AuthResult.Committed) {
@@ -1553,15 +1502,16 @@ public sealed class SetupCommand(
 
                 var report = FirstRunMachineReport.EvaluateCurrent(
                     config, harnesses,
-                    Environment.MachineName, await LoginShellFindsCliAsync());
+                    Environment.MachineName, await LoginShellFindsCliAsync(time), time);
 
-                importing = new SetupImportLane(config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses);
+                importing = new SetupImportLane(
+                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time);
 
-                using var progress = new SpectreFirstRunFlowProgress();
+                using var progress = new SpectreFirstRunFlowProgress(time);
 
                 result = await new BrowserFirstRunFlow(
-                        new FirstRunFlowClient(client), progress, browser,
-                        actions:   new SetupMachineActions(),
+                        new FirstRunFlowClient(client, time), progress, browser, time,
+                        actions:   new SetupMachineActions(time),
                         importing: importing)
                     .RunAsync(serverUrl, report, CancellationToken.None);
             }
@@ -1625,11 +1575,11 @@ public sealed class SetupCommand(
     /// <summary>Whether the login shell resolves the CLI — see <see cref="ILoginShellProbe"/> for why
     /// that differs from this process's PATH. Bounded because it spawns a shell: a probe that did not
     /// finish reports unknown rather than as a hazard, since only an explicit false draws the alarm.</summary>
-    static async Task<bool?> LoginShellFindsCliAsync() {
+    static async Task<bool?> LoginShellFindsCliAsync(TimeProvider time) {
         try {
-            using var cts = new CancellationTokenSource(LoginShellProbeBudget);
+            using var cts = new CancellationTokenSource(LoginShellProbeBudget, time);
 
-            return await new LoginShellProbe(new ProcessRunner(), Environment.GetEnvironmentVariable)
+            return await new LoginShellProbe(new ProcessRunner(time), Environment.GetEnvironmentVariable)
                 .KcapOnPathAsync(cts.Token);
         } catch (Exception) {
             return null;
@@ -1773,12 +1723,96 @@ public sealed class SetupCommand(
         return (new RequestedWorkspace(orgName!.Trim(), canonical), null);
     }
 
+    static readonly string[] DiscoverFlags =
+        ["--discover", "--json", "--github", "--device", "--no-prompt", "--no-update-check"];
+
+    /// <summary>
+    /// Why these arguments cannot go with <c>--discover</c>, or null when they can. The accepted set
+    /// is closed rather than a list of what to refuse: a flag that takes a value would otherwise have
+    /// its value read as a workspace, and a flag that configures something would be dropped without
+    /// a word by a run that configures nothing.
+    /// </summary>
+    internal static string? DiscoverArgumentError(string[] args) {
+        var stray = args.Skip(1).FirstOrDefault(a => !DiscoverFlags.Contains(a));
+
+        if (stray is null) return null;
+
+        // Naming a workspace answers the question discovery exists to ask, so the pair is a mistake
+        // rather than a refinement. A bare token names one wherever it sits, not only straight
+        // after the verb where the tenant argument is normally read.
+        return stray is "--server-url" or "--org" or "--slug" || !stray.StartsWith('-')
+            ? "--discover reports the workspaces you belong to, so it cannot also be given one.\n"
+            + "  Drop the workspace argument to discover, or drop --discover to use it."
+            : $"--discover only reports, so {stray} has nothing to apply to.\n"
+            + "  It takes --json, --github, --device and --no-prompt.";
+    }
+
+    /// <summary>
+    /// <c>kcap setup --discover</c>: sign in, report the workspaces this account can reach, and change
+    /// nothing. Nothing is kept, the token included, so the run that follows signs in again.
+    /// </summary>
+    async Task<int> RunDiscoverOnlyAsync(string[] args) {
+        if (DiscoverArgumentError(args) is { } refusal) {
+            await Console.Error.WriteLineAsync(refusal);
+
+            return 1;
+        }
+
+        var json   = args.Contains("--json");
+        var chosen = OAuthLoginFlow.ChooseDiscoveryProvider(args);
+        var device = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
+
+        // The sign-in still has to show the user a URL and a code. Under --json that narration goes
+        // to stderr, so the document stays the only thing on stdout.
+        var narration = json ? ConsoleAuthProgress.OnStderr("  ") : null;
+
+        var report = await facades.Create(provisioner: null, picker: null, requested: null, narration)
+            .DiscoverOnlyAsync(chosen, device, CancellationToken.None);
+
+        if (report.Error is not null) {
+            await Console.Error.WriteLineAsync($"  {report.Error}");
+
+            return 1;
+        }
+
+        var payload = SetupDiscoverRender.Payload(report);
+
+        if (json) {
+            await Console.Out.WriteLineAsync(SetupDiscoverRender.Render(payload));
+
+            return 0;
+        }
+
+        if (payload.Workspaces.Count == 0) {
+            AnsiConsole.MarkupLine("  No Capacitor workspace found for this account.");
+            AnsiConsole.MarkupLine(payload.CanCreate
+                ? "  [dim]Create one with `kcap setup --org \"<name>\" --slug <slug>`.[/]"
+                : "  [dim]Ask an admin to install the Kurrent GitHub App on your org, or use `kcap setup --server-url <url>`.[/]");
+
+            return 0;
+        }
+
+        foreach (var workspace in payload.Workspaces)
+            AnsiConsole.MarkupLine(
+                $"  [cyan]{Markup.Escape(workspace.Slug ?? workspace.Url)}[/]  [dim]{Markup.Escape(workspace.Url)}[/]");
+
+        // A GitHub-App row is identified by origin and carries no slug, so the command it can be
+        // handed is the URL one.
+        var named = payload.Workspaces.FirstOrDefault(w => w.Slug is not null)?.Slug;
+
+        AnsiConsole.MarkupLine(named is not null
+            ? $"  [dim]Nothing was changed. Run `kcap setup {Markup.Escape(named)}` to use one.[/]"
+            : "  [dim]Nothing was changed. Run `kcap setup --server-url <address above>` to use one.[/]");
+
+        return 0;
+    }
+
     internal async Task<(string ServerUrl, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
             string[] args, bool forceDevice, RequestedWorkspace? requested = null) {
         var chosen   = OAuthLoginFlow.ChooseDiscoveryProvider(args);
         var headless = HeadlessEnvironment.IsHeadless();
 
-        AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
+        AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(endpoints.ProxyUrl)}[/]");
 
         // WorkOS no longer follows headlessness: its ladder opens the browser either way, and only an
         // explicit --device takes the device grant. GitHub's exchange URL is not known until the proxy
@@ -1786,7 +1820,7 @@ public sealed class SetupCommand(
         var signinMode = chosen == AuthProvider.WorkOS
             ? OAuthLoginFlow.ChooseWorkOSFlow(forceDevice) == WorkOSFlow.Device ? "device" : "browser"
             : forceDevice || headless ? "device" : "browser";
-        SetupFunnel.SigninOpened(signinMode, chosen);
+        telemetry.Funnel.SigninOpened(signinMode, chosen);
 
         // Armed for every WorkOS session, headless included: that path has a device grant now, so
         // a zero-workspace headless user now completes a sign-in and would otherwise hold a live
@@ -1798,29 +1832,29 @@ public sealed class SetupCommand(
 
         var provisioner = chosen == AuthProvider.WorkOS
             ? new SpectreTenantProvisioner(
-                provisioning, ProvisioningEndpoint.Url,
+                provisioning, endpoints.SignupUrl, telemetry, time,
                 isInteractive: () => canPrompt, requested: requested)
             : null;
 
-        var result = await NewFacade(provisioner, DefaultPicker(browser, () => canPrompt), requested)
+        var result = await facades.Create(provisioner, DefaultPicker(browser, () => canPrompt, time), requested)
             .DiscoverAsync(chosen, forceDevice, CancellationToken.None);
 
         // WorkOS's own signin_completed/tenant_none fire from inside Core — only GitHub is derived here.
         if (chosen == AuthProvider.GitHubApp) {
             switch (result) {
                 case AuthResult.Failed { Reason: AuthFailureReason.SigninDenied }:
-                    SetupFunnel.SigninFailed("github_token_denied");
+                    telemetry.Funnel.SigninFailed("github_token_denied");
 
                     break;
                 // Other and NoTenantsFound only occur once AcquireGitHubTokenAsync already succeeded.
                 case AuthResult.Committed:
                 case AuthResult.Failed { Reason: AuthFailureReason.Other }:
-                    SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
+                    telemetry.Funnel.SigninCompleted(AuthProvider.GitHubApp);
 
                     break;
                 case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound }:
-                    SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
-                    SetupFunnel.TenantNone(AuthProvider.GitHubApp);
+                    telemetry.Funnel.SigninCompleted(AuthProvider.GitHubApp);
+                    telemetry.Funnel.TenantNone(AuthProvider.GitHubApp);
 
                     break;
             }
@@ -1949,7 +1983,7 @@ public sealed class SetupCommand(
 
         try {
             var tokens = await store.LoadAsync(profile);
-            if (tokens is null || tokens.IsExpired) {
+            if (tokens is null || tokens.IsExpiredAt(time.GetUtcNow())) {
                 Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
 
                 return;
@@ -1969,12 +2003,12 @@ public sealed class SetupCommand(
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
-                CliSetupPingBody(version, SetupJoin.Current),
+                CliSetupPingBody(version, telemetry.Join.Current),
                 System.Text.Encoding.UTF8,
                 "application/json");
 
             var pingTask = client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
-            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5)));
+            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time));
 
             if (winner == pingTask) {
                 // Observe the result so any exception is consumed by the outer

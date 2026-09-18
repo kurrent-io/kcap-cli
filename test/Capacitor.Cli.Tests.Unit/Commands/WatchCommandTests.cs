@@ -9,21 +9,21 @@ public class TryExtractUserTextTests {
     [Arguments("""{"type":"user","message":{"content":"hello world"}}""", "hello world")]
     [Arguments("""{"type":"user","message":{"content":"fix the bug"}}""", "fix the bug")]
     public async Task StringContent_ReturnsText(string line, string expected) {
-        var result = WatchCommand.TryExtractUserText(line);
+        var result = WatchCommand.TryExtractUserText(line, TimeProvider.System);
         await Assert.That(result).IsEqualTo(expected);
     }
 
     [Test]
     public async Task ArrayContent_ReturnsFirstTextElement() {
         const string line   = """{"type":"user","message":{"content":[{"type":"text","text":"from array"}]}}""";
-        var          result = WatchCommand.TryExtractUserText(line);
+        var          result = WatchCommand.TryExtractUserText(line, TimeProvider.System);
         await Assert.That(result).IsEqualTo("from array");
     }
 
     [Test]
     public async Task ArrayContent_SkipsNonTextElements() {
         const string line   = """{"type":"user","message":{"content":[{"type":"image","url":"x"},{"type":"text","text":"second"}]}}""";
-        var          result = WatchCommand.TryExtractUserText(line);
+        var          result = WatchCommand.TryExtractUserText(line, TimeProvider.System);
         await Assert.That(result).IsEqualTo("second");
     }
 
@@ -40,7 +40,7 @@ public class TryExtractUserTextTests {
     [Arguments("""{"type":"user","message":{}}""")]
     [Arguments("""{"type":"user","message":{"content":[]}}""")]
     public async Task ReturnsNull_ForInvalidOrFilteredInput(string line) {
-        var result = WatchCommand.TryExtractUserText(line);
+        var result = WatchCommand.TryExtractUserText(line, TimeProvider.System);
         await Assert.That(result).IsNull();
     }
 }
@@ -100,21 +100,21 @@ public class TryExtractUserTextWithSystemInstructionsTests {
     [Test]
     public async Task Strips_SystemInstructions_FromStringContent() {
         const string line   = """{"type":"user","message":{"content":"<system_instructions>secret</system_instructions>fix the bug"}}""";
-        var          result = WatchCommand.TryExtractUserText(line);
+        var          result = WatchCommand.TryExtractUserText(line, TimeProvider.System);
         await Assert.That(result).IsEqualTo("fix the bug");
     }
 
     [Test]
     public async Task ReturnsNull_WhenOnlySystemInstructions_InContent() {
         const string line   = """{"type":"user","message":{"content":"<system_instructions>only instructions here</system_instructions>"}}""";
-        var          result = WatchCommand.TryExtractUserText(line);
+        var          result = WatchCommand.TryExtractUserText(line, TimeProvider.System);
         await Assert.That(result).IsNull();
     }
 
     [Test]
     public async Task Strips_SystemInstructions_FromArrayContent() {
         const string line   = """{"type":"user","message":{"content":[{"type":"text","text":"<system-reminder>reminder</system-reminder>do stuff"}]}}""";
-        var          result = WatchCommand.TryExtractUserText(line);
+        var          result = WatchCommand.TryExtractUserText(line, TimeProvider.System);
         await Assert.That(result).IsEqualTo("do stuff");
     }
 }
@@ -283,6 +283,20 @@ public class WatchCommandTests {
         var decision = WatchCommand.DecideParentDeadRecovery(
             reResolvedPid: null, isAlive: _ => false,
             noProgressElapsed: TimeSpan.FromHours(1), ceiling: RecoveryCeiling);
+
+        await Assert.That(decision).IsEqualTo(WatchCommand.ParentDeadRecovery.KeepWaiting);
+    }
+
+    [Test]
+    [Arguments(1)]
+    [Arguments(0)]
+    [Arguments(-1)]
+    public async Task DecideParentDeadRecovery_keepsWaiting_on_an_implausible_pid(int reResolved) {
+        // Re-arming on init (or anything below it) watchdogs an immortal PID, so the agent's
+        // death can never be observed and only the idle ceiling can end the session.
+        var decision = WatchCommand.DecideParentDeadRecovery(
+            reResolved, _ => true, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(90)
+        );
 
         await Assert.That(decision).IsEqualTo(WatchCommand.ParentDeadRecovery.KeepWaiting);
     }
@@ -1018,7 +1032,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"still working"}]}}"""]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None);
+        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(pending.Contains("toolu_big")).IsTrue();
     }
@@ -1030,7 +1044,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, OversizedToolResult()]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None);
+        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
@@ -1044,7 +1058,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, OversizedToolResult()]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, CancellationToken.None);
+        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(pending.Contains("toolu_big")).IsTrue();
     }
@@ -1069,7 +1083,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, lines);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, lines.Count, CancellationToken.None);
+        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, lines.Count, CancellationToken.None, TimeProvider.System);
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
@@ -1084,7 +1098,7 @@ public class ClaudeToolTrackingSourceTests {
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
 
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, cancelled.Token);
+        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, cancelled.Token, time: TimeProvider.System);
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
@@ -1095,7 +1109,7 @@ public class ClaudeToolTrackingSourceTests {
         var pending = new HashSet<string>(StringComparer.Ordinal);
 
         await WatchCommand.BackfillClaudePendingToolCallsAsync(
-            pending, missing, upToLine: 5, CancellationToken.None);
+            pending, missing, upToLine: 5, CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
@@ -1113,7 +1127,7 @@ public class CodexTranscriptExtractionTests {
              "content":[{"type":"input_text","text":"fix the bug"}]}}
             """;
 
-        var result = WatchCommand.TryExtractUserText(line, "codex");
+        var result = WatchCommand.TryExtractUserText(line, TimeProvider.System, "codex");
 
         await Assert.That(result).IsEqualTo("fix the bug");
     }
@@ -1126,7 +1140,7 @@ public class CodexTranscriptExtractionTests {
         var encoded = System.Text.Json.JsonSerializer.Serialize(preludeText);
         var line    = "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":" + encoded + "}]}}";
 
-        var result = WatchCommand.TryExtractUserText(line, "codex");
+        var result = WatchCommand.TryExtractUserText(line, TimeProvider.System, "codex");
 
         await Assert.That(result).IsNull();
     }
@@ -1138,7 +1152,7 @@ public class CodexTranscriptExtractionTests {
     [Arguments("""{"type":"user","message":{"content":"claude-shape"}}""")]
     [Arguments("not json")]
     public async Task UserText_ReturnsNull_ForUnrelatedCodexLines(string line) {
-        var result = WatchCommand.TryExtractUserText(line, "codex");
+        var result = WatchCommand.TryExtractUserText(line, TimeProvider.System, "codex");
 
         await Assert.That(result).IsNull();
     }
@@ -1203,13 +1217,13 @@ public class PiTitleHelperTests {
     [Test]
     public async Task UserText_StringContent() {
         const string line = """{"type":"message","id":"a1","message":{"role":"user","content":"build the thing"}}""";
-        await Assert.That(WatchCommand.TryExtractUserText(line, "pi")).IsEqualTo("build the thing");
+        await Assert.That(WatchCommand.TryExtractUserText(line, TimeProvider.System, "pi")).IsEqualTo("build the thing");
     }
 
     [Test]
     public async Task UserText_ArrayContent_FirstTextBlock_ImagesSkipped() {
         const string line = """{"type":"message","id":"a1","message":{"role":"user","content":[{"type":"image","data":"x"},{"type":"text","text":"look at this"}]}}""";
-        await Assert.That(WatchCommand.TryExtractUserText(line, "pi")).IsEqualTo("look at this");
+        await Assert.That(WatchCommand.TryExtractUserText(line, TimeProvider.System, "pi")).IsEqualTo("look at this");
     }
 
     [Test]
@@ -1242,7 +1256,7 @@ public class PiTitleHelperTests {
     [Arguments("""{"type":"model_change","id":"d1","modelId":"gpt-5"}""")]
     [Arguments("""{"type":"message","id":"c1","message":{"role":"toolResult","toolCallId":"t1","content":[]}}""")]
     public async Task TitleHelpers_ReturnNull_ForNonConversationalPiLines(string line) {
-        await Assert.That(WatchCommand.TryExtractUserText(line, "pi")).IsNull();
+        await Assert.That(WatchCommand.TryExtractUserText(line, TimeProvider.System, "pi")).IsNull();
         await Assert.That(WatchCommand.TryExtractAssistantText(line, "pi")).IsNull();
     }
 }

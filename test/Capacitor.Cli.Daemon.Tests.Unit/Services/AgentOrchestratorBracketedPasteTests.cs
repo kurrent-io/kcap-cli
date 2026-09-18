@@ -11,6 +11,11 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class AgentOrchestratorBracketedPasteTests {
     [TempDir] public required TempDir Worktree { get; init; }
 
+    /// <summary>A directory under the fixture, never the fixture itself: cleanup of a standalone
+    /// worktree deletes the path it is given, and a fixture that vanishes under its own test takes
+    /// the reason for every later failure with it.</summary>
+    string WorktreePath => Worktree.CreateDir("worktree");
+
     const string PasteStart = "\x1b[200~";
     const string PasteEnd   = "\x1b[201~";
 
@@ -24,8 +29,12 @@ public class AgentOrchestratorBracketedPasteTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance(
-            "agent-paste", null, "", null, Worktree.Path, "codex",
-            new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true), new WorktreeInfo(Worktree.Path, "", Worktree.Path, IsStandalone: true), new CancellationTokenSource());
+            "agent-paste", null, "", null, WorktreePath, "codex",
+            new PtyHostedAgentRuntime("codex", pty, TimeProvider.System, approvalsDisabled: true), new WorktreeInfo(WorktreePath, "", WorktreePath, IsStandalone: true), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
         orch.RegisterAgentForTest(agent);
 
         await orch.HandleSendInputForTest(new SendInputCommand("agent-paste", message, null));

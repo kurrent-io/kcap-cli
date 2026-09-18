@@ -1,7 +1,10 @@
+using System.Collections.Frozen;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -12,6 +15,22 @@ public interface IAgentDirectory {
     IObservableCache<AgentRow, string> Rows { get; }
     /// True while the server lane is not Connected — rail rows grey out on it.
     IObservable<bool> RemoteStale { get; }
+    /// True while the local daemon reports the app's own server; replays on subscribe. A session
+    /// id is unique only within one server, so nothing local may be matched to a server-lane
+    /// session while this is false: the same id there names a different session.
+    IObservable<bool> LocalDaemonOnAppServer { get; }
+    /// Session id -> logical agent id, over the current rows. Replay-1, distinct by content.
+    IObservable<IReadOnlyDictionary<string, string>> SessionAgents { get; }
+    /// The vendor of the row whose SessionId matches, or null.
+    string? VendorOfSession(string sessionId);
+    /// Whether the local daemon has proven it hosts this agent — the daemon proved to be its
+    /// server twin registers it. A shared agent id proves nothing: the dedup fails open.
+    bool IsProvenLocalTwin(string agentId);
+    /// A row for a launch the server accepted, standing until the local lane publishes the id;
+    /// a same-id row on the remote lane is a different agent and leaves it in place. It is
+    /// dropped by the caller on a launch failure, and expires on its own after ten minutes.
+    void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model);
+    void RemovePlaceholder(string agentId);
 }
 
 /// Merges the local daemon's agents with the server registry's into source-scoped rows.
@@ -28,23 +47,34 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     readonly Func<string, string> _resolveLocalRepoRoot;
     readonly string? _localMachineId;
     readonly string? _appServerUrl;
+    readonly TimeProvider _time;
+    // Nothing else need ever change in an idle directory, so expiry is this timer's job alone.
+    readonly ITimer _placeholderExpiry;
     readonly object _lock = new();
+    readonly BehaviorSubject<bool> _onAppServer = new(false);
 
     IReadOnlyList<DaemonInfo> _daemons = [];
     bool _localConnected;
     string? _localServerUrl;
     List<AgentInstanceDto> _remoteAgents = [];
     List<AgentStatusDto> _localAgents = [];
+    List<PendingLaunchDto> _pendingLaunches = [];
+    readonly Dictionary<string, AgentRow> _placeholders = new(StringComparer.Ordinal);
+    static readonly TimeSpan PlaceholderTtl = TimeSpan.FromMinutes(10);
+    FrozenSet<string> _twinAgents = FrozenSet<string>.Empty;
+    bool _disposed;
 
     public AgentDirectory(
             IDaemonClientService local, IRemoteAgentsService remote, IServerLane lane,
             RepoIdentityResolver repoIdentity, Func<string, string> resolveLocalRepoRoot,
-            string? localMachineId, string? appServerUrl) {
+            string? localMachineId, string? appServerUrl, TimeProvider time) {
         _local = local;
         _repoIdentity = repoIdentity;
         _resolveLocalRepoRoot = resolveLocalRepoRoot;
         _localMachineId = localMachineId;
         _appServerUrl = appServerUrl;
+        _time = time;
+        _placeholderExpiry = _time.CreateTimer(_ => Recompute(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
         RemoteStale = lane.Status.Select(s => s.State != ServerLaneState.Connected).DistinctUntilChanged();
 
@@ -53,6 +83,10 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         // every change — an incremental Add/Update/Remove-per-key handler can't express that.
         local.Agents.Connect().ToCollection()
             .Subscribe(items => { lock (_lock) _localAgents = [.. items]; Recompute(); })
+            .DisposeWith(_subscriptions);
+
+        local.Pending.Connect().ToCollection()
+            .Subscribe(items => { lock (_lock) _pendingLaunches = [.. items]; Recompute(); })
             .DisposeWith(_subscriptions);
 
         remote.Agents.Connect().ToCollection()
@@ -73,13 +107,63 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
 
     public IObservableCache<AgentRow, string> Rows => _rows.AsObservableCache();
     public IObservable<bool> RemoteStale { get; }
+    public IObservable<bool> LocalDaemonOnAppServer => _onAppServer;
 
-    AgentRow ProjectLocal(AgentStatusDto dto) {
-        var repo = dto.RepoPath is { Length: > 0 } path
-            ? _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)))
-            : new RepoIdentity("path:", "No repository");
-        return AgentRow.FromLocal(dto, repo);
+    // The scope flag is an input, not just a consumer's filter: a flip changes the answer for rows
+    // that never moved, so the map has to be republished on it.
+    public IObservable<IReadOnlyDictionary<string, string>> SessionAgents => _rows.Connect()
+        .QueryWhenChanged(q => (IReadOnlyList<AgentRow>)[.. q.Items])
+        .StartWith((IReadOnlyList<AgentRow>)[.. _rows.Items])
+        .CombineLatest(_onAppServer, SessionMap)
+        .DistinctUntilChanged(new DictionaryEquality());
+
+    public string? VendorOfSession(string sessionId) =>
+        ServerSessionRows(_rows.Items, _onAppServer.Value)
+            .Where(r => r.SessionId == sessionId).OrderBy(r => r.Origin).Select(r => r.Vendor).FirstOrDefault();
+
+    public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
+
+    // Placeholders are keyed by the normalized id: the server accepts a launch under one spelling
+    // and the daemon can publish it under another.
+    public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) {
+        if (AgentIds.Normalize(agentId) is not { } key) return;
+        lock (_lock) _placeholders[key] = AgentRow.Placeholder(key, vendor, repoPath, title, model, _time.GetUtcNow().UtcDateTime, RepoFor(repoPath));
+        Recompute();
     }
+
+    public void RemovePlaceholder(string agentId) {
+        if (AgentIds.Normalize(agentId) is not { } key) return;
+        lock (_lock) _placeholders.Remove(key);
+        Recompute();
+    }
+
+    /// Both session lookups answer for a server-lane session id. While the local daemon reports
+    /// another server, its rows carry that server's ids and a match here is coincidence: the id
+    /// names a different session, whose agent is not the local one.
+    static IEnumerable<AgentRow> ServerSessionRows(IEnumerable<AgentRow> rows, bool localOnAppServer) =>
+        localOnAppServer ? rows : rows.Where(r => r.Origin != AgentOrigin.Local);
+
+    // Local sorts before Remote in AgentOrigin, so the ordered pass's TryAdd lets a local row win
+    // a session claimed by both an unproven twin pair — proven suppression already keeps a twin's
+    // remote row out of _rows entirely, so this tie only ever arises while the pairing is unproven.
+    static IReadOnlyDictionary<string, string> SessionMap(IReadOnlyList<AgentRow> rows, bool localOnAppServer) {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var row in ServerSessionRows(rows, localOnAppServer).OrderBy(r => r.Origin))
+            if (row.SessionId is { Length: > 0 } sid) map.TryAdd(sid, row.Id);
+        return map.Count == 0 ? FrozenDictionary<string, string>.Empty : map;
+    }
+
+    sealed class DictionaryEquality : IEqualityComparer<IReadOnlyDictionary<string, string>> {
+        public bool Equals(IReadOnlyDictionary<string, string>? x, IReadOnlyDictionary<string, string>? y) =>
+            x is not null && y is not null && x.Count == y.Count && x.All(kv => y.TryGetValue(kv.Key, out var v) && v == kv.Value);
+        public int GetHashCode(IReadOnlyDictionary<string, string> obj) => obj.Count;
+    }
+
+    RepoIdentity RepoFor(string? repoPath) => repoPath is { Length: > 0 } path
+        ? _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)))
+        : new RepoIdentity("path:", "No repository");
+
+    AgentRow ProjectLocal(AgentStatusDto dto) => AgentRow.FromLocal(dto, RepoFor(dto.RepoPath));
 
     // The compute-then-edit pair must be one atomic unit under _lock: two triggers (e.g. a
     // socket-thread Status flip racing a SignalR-thread Daemons refresh) that read-then-edit as
@@ -92,10 +176,24 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     // seed gap after every connect), so an unpaired local row stands as display-only history.
     void Recompute() {
         lock (_lock) {
+            // The expiry timer's callback can land after Dispose ran; the lock serialises the two
+            // and the flag turns the late callback into a no-op instead of an edit of a disposed cache.
+            if (_disposed) return;
             var twin = LocalDaemonTwin.Find(_daemons, _localMachineId, _local.DaemonName, _localServerUrl, _appServerUrl);
             var twinProven = twin is not null;
             bool OnTwin(AgentInstanceDto a) =>
                 twinProven && a.OwnerUserId == twin!.Value.OwnerUserId && a.DaemonName == twin.Value.DaemonName;
+
+            // What says a retiring remote row means the local daemon took that agent over. It is a
+            // takeover verdict, so it takes current local authority and not the pairing alone: the
+            // socket up and the agent still live on it. A server verdict that ends the session
+            // retires the same row, and read as a takeover it would hide the end.
+            var liveLocally = _localAgents
+                .Where(a => !ViewModels.SessionStatusDots.IsTerminal(a.Status))
+                .Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
+            _twinAgents = twinProven && _localConnected
+                ? _remoteAgents.Where(OnTwin).Select(a => a.AgentId).Where(liveLocally.Contains).ToFrozenSet(StringComparer.Ordinal)
+                : FrozenSet<string>.Empty;
 
             var remote = _remoteAgents
                 .Where(a => a.Status is "Starting" or "Running")
@@ -110,6 +208,27 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                 .Select(ProjectLocal);
             var next = localRows.Concat(remote.Select(AgentRow.FromRemote)).ToList();
 
+            // A published local row retires the launch's stand-ins for good; the daemon's own
+            // pending entry only hides the app's placeholder, which returns should the entry vanish
+            // without a row, until the failure notice or the TTL removes it. Only the local lane
+            // counts: a same-id row on the remote lane is a different agent, and ids compare in
+            // their normalized form because the two lanes spell a Guid differently.
+            var published = next.Where(r => r.Origin == AgentOrigin.Local).Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            foreach (var id in _placeholders.Keys.Where(published.Contains).ToList()) _placeholders.Remove(id);
+            var now = _time.GetUtcNow().UtcDateTime;
+            foreach (var id in _placeholders.Where(kv => kv.Value.CreatedAt + PlaceholderTtl <= now).Select(kv => kv.Key).ToList()) _placeholders.Remove(id);
+            // Infinite when nothing is pending: a negative due time would fire at once and re-arm forever.
+            var remaining = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : _placeholders.Values.Min(r => r.CreatedAt) + PlaceholderTtl - now;
+            var nextExpiry = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : remaining < TimeSpan.Zero ? TimeSpan.Zero : remaining;
+            _placeholderExpiry.Change(nextExpiry, Timeout.InfiniteTimeSpan);
+            var pendingRows = _pendingLaunches
+                .Where(p => AgentIds.Normalize(p.Id) is { } id && !published.Contains(id))
+                .Select(p => AgentRow.FromPending(p, RepoFor(p.RepoPath)))
+                .ToList();
+            var starting = pendingRows.Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            next.AddRange(pendingRows);
+            next.AddRange(_placeholders.Values.Where(r => !starting.Contains(r.Id)));
+
             _rows.Edit(cache => {
                 foreach (var key in cache.Keys.Where(k => !next.Any(r => r.Key == k)).ToList())
                     cache.RemoveKey(key);
@@ -117,10 +236,22 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                     if (cache.Lookup(row.Key) is not { HasValue: true, Value: var existing } || existing != row)
                         cache.AddOrUpdate(row);
             });
+
+            // Published inside the lock, like the row edit above, so no subscriber sees this
+            // verdict and the rows disagreeing about which recompute produced them. A side that
+            // does not canonicalize is not a match: no assertion can be made, and matching a local
+            // session to a server one on that basis is what this exists to prevent.
+            var onAppServer = ServerIdentity.SameServer(_localServerUrl, _appServerUrl);
+            if (_onAppServer.Value != onAppServer) _onAppServer.OnNext(onAppServer);
         }
     }
 
     public void Dispose() {
+        lock (_lock) {
+            if (_disposed) return;
+            _disposed = true;
+            _placeholderExpiry.Dispose();
+        }
         _subscriptions.Dispose();
         _rows.Dispose();
     }

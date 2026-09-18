@@ -140,7 +140,7 @@ public class AntigravityRuntimeLifecycleTests {
             return process;
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
 
@@ -222,7 +222,7 @@ public class AntigravityRuntimeLifecycleTests {
             return Task.FromResult<IAgyTurnProcess>(new FakeAgyTurnProcess(kind, FixedConversationId));
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("one").WaitAsync(HangGuard);
         await rt.WaitForConversationIdAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -285,7 +285,7 @@ public class AntigravityRuntimeLifecycleTests {
                 : new FakeAgyTurnProcess(FakeTurn.Normal, FixedConversationId));
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("first").WaitAsync(HangGuard);
 
@@ -416,6 +416,14 @@ public class AntigravityRuntimeLifecycleTests {
 
         await rt.SendUserInputAsync("two").WaitAsync(HangGuard);
 
+        // Park the worker before touching the fake clock: an Advance still in flight when time jumps
+        // resets the very idle we are about to read. session_started is the barrier — the worker emits
+        // it after handling turn 1's init, and Write advances the clock BEFORE the envelope becomes
+        // visible, so consuming it proves that last Advance has landed. SettleClock then covers any
+        // residual emission and fails loudly if the worker never parks.
+        await DrainUntil(rt, AcpEventKind.SessionStarted);
+        await SettleClock(clock);
+
         // Non-zero idleness to lose: without this the "unchanged" assertion below would hold trivially
         // at 0 whether or not the clock advanced.
         time.Advance(TimeSpan.FromSeconds(7));
@@ -439,6 +447,35 @@ public class AntigravityRuntimeLifecycleTests {
 
         await Assert.That(clock.ActivitySeq).IsEqualTo(seqBefore);
         await Assert.That(clock.IdleForMs).IsEqualTo(idleBefore);
+    }
+
+    /// <summary>Waits for <see cref="AgentActivityClock.ActivitySeq"/> to hold still, so no
+    /// background <c>Advance</c> is pending when the caller next stamps the clock.</summary>
+    /// <summary>Consumes envelopes until one of <paramref name="kind"/> is seen — a deterministic
+    /// barrier on the worker having produced that emission.</summary>
+    static async Task DrainUntil(AntigravityHostedAgentRuntime rt, string kind) {
+        using var cts = new CancellationTokenSource(HangGuard);
+        while (true) {
+            var env = await rt.Envelopes.ReadAsync(cts.Token);
+            if (env.Kind == kind) return;
+        }
+    }
+
+    static async Task SettleClock(AgentActivityClock clock) {
+        const int required = 4;
+        var last = clock.ActivitySeq;
+        var stable = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < HangGuard && stable < required) {
+            await Task.Delay(25);
+            var now = clock.ActivitySeq;
+            if (now != last) { last = now; stable = 0; }
+            else stable++;
+        }
+        // Assert, not fall through: a starved worker that never settles must fail loudly here rather
+        // than let the test advance the clock into still-pending background activity.
+        await Assert.That(stable).IsGreaterThanOrEqualTo(required)
+            .Because("the turn worker must reach a parked state before the fake clock is advanced");
     }
 
     /// <summary>A turn child that emits its <c>init</c> and then holds the turn open until the test
@@ -481,7 +518,7 @@ public class AntigravityRuntimeLifecycleTests {
             return Task.FromResult<IAgyTurnProcess>(spawned);
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
         await rt.WaitForConversationIdAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -512,7 +549,7 @@ public class AntigravityRuntimeLifecycleTests {
             Task.FromResult<IAgyTurnProcess>(new FakeAgyTurnProcess(
                 FakeTurn.Normal, FixedConversationId, pid: 5000 + Interlocked.Increment(ref spawns)));
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
         rt.PidCallbacks = new AgyPidRecordCallbacks(
             Record: pid => { lock (recorded) recorded.Add(pid); },
             Clear:  () => Interlocked.Increment(ref cleared));
@@ -546,7 +583,7 @@ public class AntigravityRuntimeLifecycleTests {
 
         await using var rt = new AntigravityHostedAgentRuntime(
             spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         rt.PidCallbacks = new AgyPidRecordCallbacks(
             Record: _ => throw new InvalidOperationException("pid record store is unavailable"),
@@ -593,7 +630,7 @@ public class AntigravityRuntimeLifecycleTests {
                 spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
                 logger: logger,
                 agentId: "agy-survivor",
-                onDisposed: () => Interlocked.Increment(ref invoked))) {
+                onDisposed: () => Interlocked.Increment(ref invoked), timeProvider: TimeProvider.System)) {
             await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
 
             // The turn genuinely spawned a child, so "unconfirmed" is a fact about a real process
@@ -617,7 +654,7 @@ public class AntigravityRuntimeLifecycleTests {
                     new FakeAgyTurnProcess(FakeTurn.Normal, FixedConversationId)),
                 logger: NullLogger.Instance,
                 agentId: "agy-clean",
-                onDisposed: () => Interlocked.Increment(ref invoked))) {
+                onDisposed: () => Interlocked.Increment(ref invoked), timeProvider: TimeProvider.System)) {
             await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
             await rt.WaitForConversationIdAsync(CancellationToken.None).WaitAsync(HangGuard);
             await rt.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -652,7 +689,7 @@ public class AntigravityRuntimeLifecycleTests {
                 spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
                 logger: NullLogger.Instance,
                 agentId: "agy-lingerer",
-                onDisposed: () => Interlocked.Increment(ref invoked))) {
+                onDisposed: () => Interlocked.Increment(ref invoked), timeProvider: TimeProvider.System)) {
             rt.PidCallbacks = new AgyPidRecordCallbacks(
                 Record: _ => { },
                 Clear:  () => Interlocked.Increment(ref cleared));
@@ -760,7 +797,7 @@ public class AntigravityRuntimeLifecycleTests {
         Func<string, string?, CancellationToken, Task<IAgyTurnProcess>> spawn = (_, _, _) =>
             Task.FromResult<IAgyTurnProcess>(new ThrowingWaitForExitTurnProcess());
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
         var read = Task.Run(async () => { await foreach (var _ in rt.ReadOutputAsync()) { } });
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);

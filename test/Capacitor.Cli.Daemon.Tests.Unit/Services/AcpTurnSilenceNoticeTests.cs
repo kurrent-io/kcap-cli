@@ -63,7 +63,7 @@ public class AcpTurnSilenceNoticeTests {
                 new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
                 UnusedTokenStore.Create(),
                 NullLoggerFactory.Instance,
-                NullLogger<ServerConnection>.Instance);
+                NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
             Factory = new AcpHostedAgentRuntimeFactory(
                 descriptor: AcpVendorDescriptors.Cursor,
@@ -113,7 +113,7 @@ public class AcpTurnSilenceNoticeTests {
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("awk 'BEGIN { while (i++ < 20000) printf \"x\"; print \"\" }' 1>&2");
 
-        await using var child = new AcpChildProcess(Process.Start(psi)!, NullLogger.Instance);
+        await using var child = new AcpChildProcess(Process.Start(psi)!, NullLogger.Instance, TimeProvider.System);
 
         await child.WaitForExitAsync(TimeSpan.FromSeconds(10));
 

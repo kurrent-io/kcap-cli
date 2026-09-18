@@ -15,6 +15,7 @@
         <PackageReference Include="TUnit" />
         <PackageReference Include="Tomlyn" />
         <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+        <PackageReference Include="WireMock.Net" />
     </ItemGroup>
     <ItemGroup>
         <!-- Hosts a real SignalR hub for the wire tests: positional hub arity is checked by the

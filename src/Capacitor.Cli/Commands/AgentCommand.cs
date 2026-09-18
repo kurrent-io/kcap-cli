@@ -19,7 +19,7 @@ internal readonly record struct AgentRow(
 /// </summary>
 internal sealed class AgentCommand(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries) {
+        HarnessRegistry harnesses, BinaryProbe binaries, WorkingDirectory workdir, TimeProvider time) {
     internal static readonly string[] KnownSubcommands = ["start", "ls", "stop", "attach"];
 
     /// Verbs that only ever belonged to the pre-rename `agent` daemon group, minus the
@@ -90,11 +90,11 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(name);
         var work = parsed.Worktree ? WorkLocation.OwnedWorktree : WorkLocation.BorrowedCwd;
         var (cols, rows) = TermSize();
-        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, Environment.CurrentDirectory, parsed.Passthrough, cols, rows);
+        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows);
 
         return parsed.Detached
             ? await SpawnDetachedAsync(sock, spawn)
-            : await LocalAgentClient.RunAsync(sock, spawn, CancellationToken.None);
+            : await LocalAgentClient.RunAsync(sock, spawn, time, CancellationToken.None);
     }
 
     async Task<int> AttachAsync(string[] args) {
@@ -122,7 +122,8 @@ internal sealed class AgentCommand(
         var agentId = await ResolveOrReportAsync(sock, args[0]);
         if (agentId is null) return 1;
 
-        return await LocalAgentClient.RunAsync(sock, new LocalFrame(FrameType.Attach) { Text = agentId }, CancellationToken.None);
+        return await LocalAgentClient.RunAsync(
+            sock, new LocalFrame(FrameType.Attach) { Text = agentId }, time, CancellationToken.None);
     }
 
     async Task<int> StopAsync(string[] args) {
@@ -415,13 +416,13 @@ internal sealed class AgentCommand(
         if (await CanConnectAsync(sock)) return true;
 
         await Console.Error.WriteLineAsync($"kcap: starting daemon '{name}'…");
-        await new DaemonCommands(store, config, profiles, home, harnesses, binaries)
+        await new DaemonCommands(store, config, profiles, home, harnesses, binaries, time)
             .HandleAsync(["daemon", "start", "-d", "--name", name]);
 
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < deadline) {
+        var deadline = time.GetUtcNow().UtcDateTime.AddSeconds(15);
+        while (time.GetUtcNow().UtcDateTime < deadline) {
             if (await CanConnectAsync(sock)) return true;
-            await Task.Delay(250);
+            await Task.Delay(TimeSpan.FromMilliseconds(250), time);
         }
 
         await Console.Error.WriteLineAsync("kcap: daemon did not come up in time (check `kcap daemon logs`).");

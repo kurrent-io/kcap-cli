@@ -63,9 +63,9 @@ internal static class UpdateNotice {
     /// (<see cref="FlushAsync"/>, <c>kcap status</c>) ask for the result.
     /// </summary>
     internal static Task<UpdateCommand.UpdateCheckResult?> GetSharedCheckAsync(
-            string channel, ConfigRoot root, NpmRegistryClient npm) {
+            string channel, ConfigRoot root, NpmRegistryClient npm, TimeProvider time) {
         lock (_gate) {
-            return _sharedCheck ??= UpdateCommand.CheckForUpdateWithBudgetAsync(root, channel, npm);
+            return _sharedCheck ??= UpdateCommand.CheckForUpdateWithBudgetAsync(root, channel, npm, time);
         }
     }
 
@@ -78,7 +78,8 @@ internal static class UpdateNotice {
     /// the command it's attached to.
     /// </summary>
     public static async Task FlushAsync(
-            string command, string[] args, ProfileContext profiles, ConfigRoot config, Func<NpmRegistryClient> npm) {
+            string command, string[] args, ProfileContext profiles, ConfigRoot config, Func<NpmRegistryClient> npm,
+            TimeProvider time) {
         try {
             if (_reported || !IsHumanFacing(command, args)) return;
 
@@ -89,7 +90,7 @@ internal static class UpdateNotice {
             // Asked for only once the notice is going to happen: this runs on the way out of EVERY
             // invocation, and a registry client built for a suppressed one costs a handler chain the
             // command never sends on.
-            var result   = await GetSharedCheckAsync(channel, config, npm());
+            var result   = await GetSharedCheckAsync(channel, config, npm(), time);
 
             // Cap the recommendation at the connected server's version (min(npm latest, server)) so we
             // never steer a user to a CLI newer than the server they talk to. Uncapped ⇒ today's copy.
@@ -105,18 +106,12 @@ internal static class UpdateNotice {
 
             _reported = true;
 
-            await Console.Error.WriteLineAsync();
+            var marker = advisory.ServerCapped ? " (server version)" : "";
 
-            if (advisory.ServerCapped) {
-                // The server is behind npm latest; plain `kcap update` follows the dist-tag and would
-                // overshoot the cap, so recommend the pinned install of the server's version.
-                await Console.Error.WriteLineAsync(
-                    $"Update available: {advisory.Current} {UpdateCommand.Arrow} {advisory.Target} (server version)");
-                await Console.Error.WriteLineAsync($"Run: npm install -g @kurrent/kcap@{advisory.Target}");
-            } else {
-                await Console.Error.WriteLineAsync($"Update available: {advisory.Current} {UpdateCommand.Arrow} {advisory.Target}");
-                await Console.Error.WriteLineAsync("Run `kcap update` to update");
-            }
+            await Console.Error.WriteLineAsync();
+            await Console.Error.WriteLineAsync($"Update available: {advisory.Current} {UpdateCommand.Arrow} {advisory.Target}{marker}");
+            // `kcap update` applies the same cap, so it installs this target rather than npm latest.
+            await Console.Error.WriteLineAsync("Run `kcap update` to update");
         } catch {
             // Best effort — an update notice must never break the command it's attached to.
         }

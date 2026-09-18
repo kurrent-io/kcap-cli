@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness;
 // ReSharper disable ShortLivedHttpClient
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -39,9 +40,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -156,7 +157,7 @@ sealed class CodexHookCommand(
         // the injected client factory can throw synchronously.
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Codex, sessionId!, LifecycleInstanceId: null,
@@ -186,7 +187,7 @@ sealed class CodexHookCommand(
             if (remaining <= TimeSpan.Zero)
                 return task.IsCompletedSuccessfully ? task.Result : null;
 
-            return await task.WaitAsync(remaining);
+            return await task.WaitAsync(remaining, budget.Time);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -246,7 +247,7 @@ sealed class CodexHookCommand(
         // Ahead of the disabled and exclusion gates: the hosting daemon's turn-boundary hint is
         // local display state, not recording.
         if (eventName switch { "Stop" => true, "UserPromptSubmit" or "PreToolUse" => false, _ => (bool?) null } is { } waiting)
-            await DaemonInputWaitRelay.NotifyAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
 
         // Mirror the Claude path: if the user ran `kcap disable`, skip every
         // server POST and the watcher restart. Without this check the next Codex
@@ -266,7 +267,7 @@ sealed class CodexHookCommand(
         // Path exclusion is a string-prefix compare against the payload's cwd
         // — cheap, safe to run on every event (including Stop, which fires
         // per turn). Repo exclusion is handled inside HandleSessionStart
-        // instead: running it here would call RepoExclusion.IsExcludedAsync,
+        // instead: running it here would call RepoExclusion.IsOutOfScopeAsync,
         // which falls back to DetectRepositoryAsync (multiple git commands +
         // gh pr view) when the payload lacks a repository block — too
         // expensive for the per-turn Stop hook. Doing the repo check once at
@@ -276,8 +277,8 @@ sealed class CodexHookCommand(
         // above without paying any git cost.
         var activeProfile = profiles.Effective;
 
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(TryGetString(node, "cwd"), excludedPaths, home)) {
+        if (PathExclusion.IsOutOfScope(TryGetString(node, "cwd"), activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) {
             EmitFallbackOutput(eventName);
             return 0;
         }
@@ -300,7 +301,7 @@ sealed class CodexHookCommand(
             // CLI's top-level guard would exit 0 with empty stdout and Codex would
             // report "invalid hook output". Emit the
             // event-appropriate fallback here first, and record for diagnosis.
-            CrashReporter.Record(config, "hook", ex);
+            CrashReporter.Record(config, "hook", ex, clock.Time);
             EmitFallbackOutput(eventName);
             return 0;
         }
@@ -343,8 +344,8 @@ sealed class CodexHookCommand(
             node["workspace_root"] = workspaceRoot;
         }
 
-        SessionStartInventory.Stamp(node.AsObject(), config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(config, node.ToJsonString());
+        SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, node.ToJsonString(), clock.Time);
 
         // Repo exclusion runs here (not above the event switch) so that the
         // repository block is already populated by enrichment — RepoExclusion
@@ -353,8 +354,8 @@ sealed class CodexHookCommand(
         // DisabledSessions so subsequent Stop / PermissionRequest events
         // take the existing disabled-session fast path at the top of Handle
         // without paying any git cost.
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             var excludedSessionId = TryGetString(node, "session_id");
 
             if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId, config);
@@ -386,7 +387,7 @@ sealed class CodexHookCommand(
             // Remaining already reserves Safety — subtracting it again here halved the window.
             budget.Remaining);
 
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
         var outcome = await _poster.PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
             sessionId: sessionId ?? "", route: "session-start/codex");
 
@@ -408,8 +409,10 @@ sealed class CodexHookCommand(
         // The static work-items nudge, resolved (availability-gated + opt-out) independently
         // of the lease-driven memory/guidelines fragment and merged only at the output layer.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
+            PlansNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Codex, harnesses));
 
         await RunSessionStartHandshakeForTest(
             writeStdout: () => WriteSessionStartOutput(Console.Out, fragment, workItemsNudge),
@@ -435,7 +438,7 @@ sealed class CodexHookCommand(
 
     Task RunPostStdoutWork(
             HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome) {
-        var transcriptSpool = new TranscriptSpool(config);
+        var transcriptSpool = new TranscriptSpool(config, clock.Time);
 
         _ = _poster.DrainSpoolsAsync(spool, transcriptSpool, sessionId);
 
@@ -445,7 +448,7 @@ sealed class CodexHookCommand(
         var cwd        = TryGetString(enrichedNode, "cwd");
 
         return sessionId is not null && transcript is not null && !IsEnvelopeSourcedHostedSession()
-            ? _watchers.EnsureWatcherRunning(sessionId, transcript,
+            ? watchers.EnsureWatcherRunning(sessionId, transcript,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "codex")
             : Task.CompletedTask;
@@ -472,7 +475,7 @@ sealed class CodexHookCommand(
             // Guard-1: skip the watcher restart for an envelope-sourced hosted session (the daemon owns
             // its transcript); the idle-marker stop POST still fires so the "working" indicator clears.
             if (!IsEnvelopeSourcedHostedSession()) {
-                await _watchers.EnsureWatcherRunning(sessionId, transcript,
+                await watchers.EnsureWatcherRunning(sessionId, transcript,
                     agentId: null, sessionIdOverride: null, cwd: cwd,
                     skipTitle: false, vendor: "codex"
                 );
@@ -599,7 +602,7 @@ sealed class CodexHookCommand(
             return;
         }
 
-        using var cts = new CancellationTokenSource(cap);
+        using var cts = new CancellationTokenSource(cap, clock.Time);
 
         try {
             // The hook verb, so a lapse writes nothing to stderr: a per-turn Stop would spam it, and

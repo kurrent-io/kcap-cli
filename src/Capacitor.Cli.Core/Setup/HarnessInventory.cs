@@ -37,6 +37,7 @@ public sealed record HarnessInventory(
 
     /// <summary>Production convenience: evaluate over the given harnesses and the default on-disk
     /// offer ledger (read-only — never claims the throttle stamp).</summary>
-    public static HarnessInventory EvaluateCurrent(ConfigRoot config, HarnessRegistry harnesses) =>
-        Evaluate(harnesses, new HarnessOfferStore(config).Load(), new Core.MachineId(config).Get());
+    public static HarnessInventory EvaluateCurrent(
+            ConfigRoot config, HarnessRegistry harnesses, TimeProvider time) =>
+        Evaluate(harnesses, new HarnessOfferStore(config, time).Load(), new Core.MachineId(config).Get());
 }

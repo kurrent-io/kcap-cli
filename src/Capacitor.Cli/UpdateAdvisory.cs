@@ -6,8 +6,9 @@ namespace Capacitor.Cli;
 /// <summary>
 /// The effective "update available" advisory after capping the raw npm-latest target at the connected
 /// server's version. A manually-rolled tenant can trail npm for days, so recommending a CLI newer than
-/// the server it talks to only risks protocol mismatch; the passive update notice and <c>kcap status</c>
-/// render this instead of the raw npm result. <see cref="ServerCapped"/> drives the pinned-install copy.
+/// the server it talks to only risks protocol mismatch; the passive update notice, <c>kcap status</c> and
+/// <c>kcap update</c> use this instead of the raw npm result. <see cref="ServerCapped"/> pins the version
+/// <c>kcap update</c> installs.
 /// </summary>
 internal readonly record struct UpdateAdvisory(string? Current, string? Target, bool Newer, bool ServerCapped);
 

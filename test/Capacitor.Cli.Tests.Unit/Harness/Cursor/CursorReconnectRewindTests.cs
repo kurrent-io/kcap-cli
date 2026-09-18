@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
 using Microsoft.AspNetCore.SignalR.Client;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
@@ -20,9 +21,9 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 public class CursorReconnectRewindTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource());
+    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter(), TimeProvider.System);
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -157,7 +158,7 @@ public class CursorReconnectRewindTests {
 
     [Test]
     public async Task ResetCheckpoint_clears_a_prior_checkpoint_so_the_next_prior_zone_check_passes_trivially() {
-        var guard = new CursorRewriteGuard(Config.Root, NewSessionId());
+        var guard = new CursorRewriteGuard(Config.Root, NewSessionId(), TimeProvider.System);
         guard.Checkpoint(offset: 100, trailingSha: "some-stale-hash");
 
         // Before reset: an unrelated hash mismatches the stale checkpoint.
@@ -167,7 +168,7 @@ public class CursorReconnectRewindTests {
     [Test]
     public async Task ResetCheckpoint_after_reset_any_hash_passes_like_a_fresh_watcher() {
         var sid   = Guid.NewGuid().ToString("N");
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         guard.Checkpoint(offset: 100, trailingSha: "some-stale-hash");
 
         guard.ResetCheckpoint();
@@ -193,7 +194,7 @@ public class CursorReconnectRewindTests {
         await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\neeeee\n");
 
         var sid   = NewSessionId();
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         // A fresh watcher process resuming at server line 2 — CursorByteOffset starts at its
         // default (0), exactly as WatchState leaves it before this fix's seeding runs.
         var state = new WatchState { LinesProcessed = 2 };
@@ -235,7 +236,7 @@ public class CursorReconnectRewindTests {
             const string content = "{\"a\":1}\n{\"b\":2}"; // line 1 terminated, line 2 complete but no trailing '\n'
             await File.WriteAllTextAsync(transcriptPath, content);
 
-            var guard = new CursorRewriteGuard(Config.Root, sid);
+            var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
             // Resuming exactly at line 2 — the final, unterminated-but-complete record the prior
             // watcher's shutdown drain already sent and the server already acknowledged.
             var state = new WatchState { LinesProcessed = 2 };
@@ -279,7 +280,7 @@ public class CursorReconnectRewindTests {
         var transcriptPath = tmp.PathTo("t.jsonl");
         await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\neeeee\n"); // 5 lines, offsets 2,7,10,15,21
 
-        var guard = new CursorRewriteGuard(Config.Root, NewSessionId());
+        var guard = new CursorRewriteGuard(Config.Root, NewSessionId(), TimeProvider.System);
         // The server resumed this fresh watcher process at line N=2 (0-based frontier already
         // sent/acked by a PRIOR watcher instance).
         var state = new WatchState { LinesProcessed = 2 };
@@ -313,7 +314,7 @@ public class CursorReconnectRewindTests {
             var transcriptPath = tmp.PathTo("t.jsonl");
             await File.WriteAllTextAsync(transcriptPath, "a\nb\n"); // only 2 lines locally
 
-            var guard = new CursorRewriteGuard(Config.Root, sid);
+            var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
             var state = new WatchState { LinesProcessed = 0, CursorByteOffset = 0 };
 
             // Server claims line 5 was already acknowledged — beyond what this (truncated) local
@@ -339,7 +340,7 @@ public class CursorReconnectRewindTests {
         var transcriptPath = tmp.PathTo("t.jsonl");
         await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\n"); // 4 lines
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         // Simulate: the watcher had sent/acked all 4 lines and checkpointed at the file's
         // full (stale, too-far-ahead) length.
         guard.Checkpoint(offset: 15, trailingSha: "later-acked-hash");
@@ -392,7 +393,7 @@ public class CursorReconnectRewindTests {
 
         // A small TrailingBytes makes the "which region does the checkpoint actually
         // protect" distinction concrete without needing a large synthetic file.
-        var guard = new CursorRewriteGuard(Config.Root, sid) { TrailingBytes = 3 };
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System) { TrailingBytes = 3 };
         guard.Checkpoint(offset: 15, trailingSha: "stale-hash-from-before-reconnect"); // the bug: too-far-ahead
         var state = new WatchState { LinesProcessed = 4, CursorByteOffset = 15 };
 
@@ -441,7 +442,7 @@ public class CursorReconnectRewindTests {
         await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\n"); // 4 lines
 
         var gate  = new SemaphoreSlim(1, 1);
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         var state = new WatchState { LinesProcessed = 4, CursorByteOffset = 15 };
 
         // Simulate an in-flight reconnect rewind: acquire the gate ourselves (standing in for
@@ -477,7 +478,7 @@ public class CursorReconnectRewindTests {
         await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\n"); // 4 lines: offsets 2,7,10,15
 
         var gate  = new SemaphoreSlim(1, 1);
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         guard.Checkpoint(offset: 15, trailingSha: "acked-hash");
         var state = new WatchState { LinesProcessed = 4, CursorByteOffset = 15 };
 
@@ -533,7 +534,7 @@ public class CursorReconnectRewindTests {
         var transcriptPath = tmp.PathTo("t.jsonl");
         await File.WriteAllTextAsync(transcriptPath, "a\nb\n"); // only 2 lines locally
 
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         var state = new WatchState { LinesProcessed = 2, CursorByteOffset = 7 };
 
         // The server claims line 9 — far beyond the local (truncated) file's 2 lines.

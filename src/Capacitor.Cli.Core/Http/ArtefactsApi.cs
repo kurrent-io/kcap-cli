@@ -3,11 +3,11 @@ using System.Net.Http.Json;
 
 namespace Capacitor.Cli.Core.Http;
 
-internal sealed class ArtefactsApi(ICapacitorHttpClient http, CapacitorServer server) : IArtefactsApi {
+internal sealed class ArtefactsApi(ICapacitorHttpClient http, CapacitorServer server, TimeProvider time) : IArtefactsApi {
     public async Task<ArtefactWriteResult> PublishAsync(PublishArtefactBody body, CancellationToken ct = default) {
         using var content = JsonContent.Create(body, CapacitorJsonContext.Default.PublishArtefactBody);
 
-        return await WriteAsync((c, token) => c.PostWithRetryAsync($"{server.Url}/api/artefacts", content, ct: token), ct);
+        return await WriteAsync((c, token) => c.PostWithRetryAsync($"{server.Url}/api/artefacts", content, time, ct: token), ct);
     }
 
     public async Task<ArtefactWriteResult> PublishVersionAsync(string artefactId, string html, CancellationToken ct = default) {
@@ -15,7 +15,7 @@ internal sealed class ArtefactsApi(ICapacitorHttpClient http, CapacitorServer se
                                                CapacitorJsonContext.Default.PublishArtefactVersionBody);
 
         return await WriteAsync(
-            (c, token) => c.PostWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}/versions", content, ct: token), ct);
+            (c, token) => c.PostWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}/versions", content, time, ct: token), ct);
     }
 
     public async Task<ArtefactWriteResult> SetVisibilityAsync(string artefactId, string visibility,
@@ -24,15 +24,15 @@ internal sealed class ArtefactsApi(ICapacitorHttpClient http, CapacitorServer se
                                                CapacitorJsonContext.Default.SetArtefactVisibilityBody);
 
         return await WriteAsync(
-            (c, token) => c.PutWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}/visibility", content, ct: token), ct);
+            (c, token) => c.PutWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}/visibility", content, time, ct: token), ct);
     }
 
     public async Task<ArtefactWriteResult> DeleteAsync(string artefactId, CancellationToken ct = default) =>
-        await WriteAsync((c, token) => c.DeleteWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}", ct: token), ct);
+        await WriteAsync((c, token) => c.DeleteWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}", time, ct: token), ct);
 
     public async Task<List<ArtefactDto>> ListAsync(CancellationToken ct = default) {
         using var response = await CapacitorApiRequests.SendAsync(
-            http, server, (c, token) => c.GetWithRetryAsync($"{server.Url}/api/artefacts", ct: token), ct);
+            http, server, (c, token) => c.GetWithRetryAsync($"{server.Url}/api/artefacts", time, ct: token), ct);
 
         if (response.StatusCode != HttpStatusCode.OK) throw await CapacitorApiRequests.FailureAsync(response);
 

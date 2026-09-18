@@ -61,18 +61,20 @@ public class HealBarrierReportTests {
         await Assert.That(orch.ReadLiveness("rev")).IsEqualTo(AgentLiveness.Dead); // genuinely dead at the end
     }
 
-    // Phase B2-b (sequenced-settlement design §4.2.2/§5.5): a Seq'd LaunchAgentCommand the shipped launch
-    // would reject at capacity flows through the processor as a terminal LaunchRejected(daemon_capacity)
-    // CommandOutcome, so the sequenced lane emits a CommandRejected (in addition to the legacy
-    // LaunchFailed) and the watermark still advances. MaxConcurrentAgents=0 makes the very first admission
-    // check reject with no launcher/worktree side effects.
+    // A Seq'd LaunchAgentCommand the shipped launch would reject at capacity flows through the
+    // processor as a terminal LaunchRejected(daemon_capacity) CommandOutcome, so the sequenced lane
+    // emits a CommandRejected (in addition to the legacy LaunchFailed) and the watermark still
+    // advances. Capacity 0 is the unlimited sentinel, so forcing a rejection needs a finite cap: a
+    // daemon at cap 1 with one seeded agent rejects the next admission at the gate, before any
+    // launcher/worktree side effect.
     [Test]
     public async Task Sequenced_launch_over_capacity_emits_daemon_capacity_rejection() {
         var server = new SeqCaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") },
-            configure: c => c.MaxConcurrentAgents = 0);
+            configure: c => c.MaxConcurrentAgents = 1);
+        orch.SeedAgentForTest("occupant"); // fills the single slot, so the next admission is over capacity
 
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
             AgentId: "cap", Prompt: "hi", Model: "opus", Effort: null,

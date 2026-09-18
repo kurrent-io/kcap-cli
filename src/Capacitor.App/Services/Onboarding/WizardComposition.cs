@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
@@ -21,6 +22,9 @@ internal sealed record WizardFacadeSpec(
     IAuthProgress                                              Progress,
     ITenantPicker                                              Picker,
     ITenantProvisioner?                                        Provisioner,
+    CliTelemetry                                               Telemetry,
+    AuthEndpoints                                              Endpoints,
+    TimeProvider                                               Time,
     Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit);
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
@@ -69,21 +73,24 @@ internal sealed record WizardGraphOptions(
 /// The wizard half of the composition root (spec decision 2), split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
-    internal const string CliMissingNote     = "kcap CLI not found";
-    internal const string RequiresSignInNote = "requires sign-in";
+    internal const string CliMissingNote     = "kcap isn't on this machine";
+    internal const string RequiresSignInNote = "Sign in to enable the daemon";
 
     /// Production bridges: one marshalling boundary (Avalonia's dispatcher in the app) and a
     /// provisioner built from the bridges' OWN sink, per WizardBridges' contract.
-    internal static WizardBridges BuildBridges(Action<Action> post, TenantProvisioningClient provisioning) =>
-        new(post, progress => new WizardTenantProvisioner(
-            provisioning, ProvisioningEndpoint.Url, progress));
+    internal static WizardBridges BuildBridges(
+            Action<Action> post, TenantProvisioningClient provisioning, CliTelemetry telemetry,
+            AuthEndpoints endpoints, TimeProvider time) =>
+        new(post, telemetry, endpoints, progress => new WizardTenantProvisioner(
+            provisioning, endpoints.SignupUrl, progress, telemetry, time));
 
     /// Production operation: the spec IS the façade's arguments, and WizardSignInOperation owns
     /// the intent→call map (paste adopts the server; create/discover run WorkOS discovery).
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> NewOperation(WizardFacadeSpec spec) =>
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-            SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.BeforeCommit), spec.Profile);
+            SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
+            spec.Time, spec.BeforeCommit), spec.Profile);
 
     /// The ONE façade a wizard run signs in through — provisioner armed (a provisioner-less façade
     /// dead-ends "Create a workspace" at "ask your admin") and the decision-7 arming hook wired as
@@ -91,17 +98,18 @@ internal static class WizardComposition {
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> BuildOperation(
             ConfigRoot root, TokenStore tokenStore, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
             GitHubOAuthClient github, WorkOSClient workos,
-            string profile, WizardBridges bridges, ConsentFlipClaims claims,
+            string profile, WizardBridges bridges, ConsentFlipClaims claims, TimeProvider time,
             Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation) =>
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
-            bridges.Provisioner, WizardAuthService.ArmingHook(claims)));
+            bridges.Provisioner, bridges.Telemetry, bridges.Endpoints, time,
+            WizardAuthService.ArmingHook(claims)));
 
     internal static WizardGraph BuildGraph(WizardGraphOptions options) {
         var claims = options.Claims;
         var cli    = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
         var auth   = new WizardAuthService(BuildOperation(options.Root, options.TokenStore, options.HttpFactory, options.Proxy,
-        options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Operation));
+        options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
         var connect  = new ConnectStepViewModel();
         var signIn   = new SignInStepViewModel(auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener);
@@ -138,12 +146,58 @@ internal static class WizardComposition {
         return new WizardGraph(wizard, auth, steps, import);
     }
 
-    /// The Done step's rows: what each earlier step reached and — when it didn't — why it was skipped.
+    /// The Done step's rows: outcome labels, not the in-wizard step titles. Connect picks a
+    /// workspace; Sign in authenticates — both appear because Skip can leave one done and the other not.
     internal static IReadOnlyList<(string Title, bool Satisfied, string? Note)> Summarize(
             IReadOnlyList<IWizardStep> steps, bool cliAvailable) =>
         steps.Where(step => step.Id != WizardStepId.Done)
-            .Select(step => (step.Title, step.Satisfied, step.Satisfied ? null : SkipNote(step, cliAvailable)))
+            .Select(step => (
+                SummaryTitle(step),
+                step.Satisfied,
+                step.Satisfied ? SuccessNote(step) : SkipNote(step, cliAvailable)))
             .ToList();
+
+    static string SummaryTitle(IWizardStep step) => step switch {
+        ShimStepViewModel     => "Use kcap in the terminal",
+        ConnectStepViewModel  => "Choose a workspace",
+        DefaultsStepViewModel => "Sessions from this machine",
+        AgentsStepViewModel   => "Install agent hooks",
+        _                    => step.Title,
+    };
+
+    static string? SuccessNote(IWizardStep step) => step switch {
+        ShimStepViewModel              => "kcap works from any terminal",
+        ConnectStepViewModel connect   => ConnectNote(connect),
+        DefaultsStepViewModel defaults => DefaultsNote(defaults),
+        AgentsStepViewModel agents     => AgentsNote(agents),
+        _                              => null,
+    };
+
+    static string ConnectNote(ConnectStepViewModel step) => step.Intent switch {
+        ConnectIntent.Discover { Provider: AuthProvider.GitHubApp } => "Find workspaces with GitHub",
+        ConnectIntent.Discover                                      => "Find workspaces with single sign-on",
+        ConnectIntent.Paste paste                                   => paste.ServerInput,
+        ConnectIntent.Create                                        => "Create a new workspace",
+        _                                                           => "Workspace chosen",
+    };
+
+    static string DefaultsNote(DefaultsStepViewModel step) {
+        var visibility = step.Visibility switch {
+            "private"    => "Only you can see sessions from here",
+            "project"    => "Project-repo sessions visible to project members",
+            "org_public" => "Org-repo sessions visible in the workspace",
+            "public"     => "Everyone in the workspace can see sessions from here",
+            _            => "Session visibility saved",
+        };
+
+        return $"{visibility}. Machine name {step.DaemonName}.";
+    }
+
+    static string? AgentsNote(AgentsStepViewModel step) {
+        var names = step.Rows.Where(r => r.Succeeded).Select(r => r.Label).ToList();
+
+        return names.Count == 0 ? null : "Installed for " + string.Join(", ", names);
+    }
 
     // A missing CLI dominates: every step that shells out is unreachable for that one reason.
     static string? SkipNote(IWizardStep step, bool cliAvailable) {

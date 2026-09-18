@@ -7,38 +7,8 @@
     <!-- The Sessions surface's empty state: launching IS the pane — a fixed question over an
          optional repo subtitle, then one big composer. DataContext is a HomeViewModel supplied
          externally (MainWindow binds Home), same contract as HomeView. Connection / sign-in
-         status sits ABOVE the composer card as chrome, not inside the goal field. -->
-    <DockPanel Margin="24,16,24,0">
-        <Border DockPanel.Dock="Top" Margin="0,0,0,16" Padding="14,12" CornerRadius="10"
-                HorizontalAlignment="Stretch" MaxWidth="680"
-                Background="{StaticResource KcapWarningDimBrush}"
-                BorderBrush="{StaticResource KcapWarningBrush}" BorderThickness="1"
-                IsVisible="{Binding ConnectionBannerVisible}">
-            <StackPanel Spacing="12">
-                <TextBlock x:Name="BannerMessageText" Text="{Binding BannerMessage}"
-                           Foreground="{StaticResource KcapWarningBrush}" FontSize="13" LineHeight="20"
-                           TextWrapping="Wrap" />
-                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Left">
-                    <Button x:Name="StartDaemonButton" Classes="kcapPrimary" Content="Start daemon"
-                            Command="{Binding StartDaemonCommand}" IsVisible="{Binding DaemonStartVisible}"
-                            Background="{StaticResource KcapPrimaryBrush}"
-                            Foreground="{StaticResource KcapOnPrimaryBrush}"
-                            FontWeight="SemiBold" CornerRadius="7" Padding="14,6" />
-                    <Button x:Name="RetryDaemonButton" Classes="kcapChip" Content="Reconnect"
-                            Command="{Binding RetryDaemonCommand}" IsVisible="{Binding DaemonRetryVisible}"
-                            Background="{StaticResource KcapSurfaceRaisedBrush}"
-                            BorderBrush="{StaticResource KcapBorderBrush}"
-                            Foreground="{StaticResource KcapTextBrush}"
-                            CornerRadius="7" Padding="14,6" />
-                    <Button x:Name="HomeSignInButton" Classes="kcapPrimary"
-                            Content="Sign in" Command="{Binding SignInCommand}"
-                            Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
-                            FontWeight="SemiBold" CornerRadius="7" Padding="14,6"
-                            IsVisible="{Binding SignInVisible}" />
-                </StackPanel>
-            </StackPanel>
-        </Border>
-
+         status overlays the top of the pane so showing it does not shift the composer. -->
+    <Grid Margin="24,16,24,0">
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Stretch" MaxWidth="680"
                     Spacing="20">
             <!-- Question is fixed; the leaf sits on its own line so a long name never blows out
@@ -58,14 +28,17 @@
                            IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
 
-            <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+            <Border x:Name="GoalCard" Classes="attachTarget" Background="{StaticResource KcapSurfaceBrush}"
                     BorderThickness="1" CornerRadius="12" Padding="14">
                 <StackPanel Spacing="12">
+                    <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
+                                               IsVisible="{Binding Tray.HasAttachments}" />
+
                     <TextBox x:Name="GoalInput" Classes="kcapEmbedded" Text="{Binding Goal}"
                              PlaceholderText="What should we build? Type a goal or paste an issue, PR, or work-item URL…"
                              Background="Transparent" Foreground="{StaticResource KcapTextBrush}"
-                             BorderThickness="0" MinHeight="72" TextWrapping="Wrap" FontSize="14"
-                             VerticalContentAlignment="Top" AcceptsReturn="False" />
+                             BorderThickness="0" MinHeight="72" MaxHeight="220" TextWrapping="Wrap"
+                             VerticalContentAlignment="Top" AcceptsReturn="True" />
 
                     <!-- Repo on its own row (capped width + ellipsis); settings + Start below so a
                          long leaf never orphans Permissions alone under the repo pill. -->
@@ -97,6 +70,15 @@
 
                         <Grid ColumnDefinitions="*,Auto">
                             <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
+                                <Button x:Name="AttachButton" Content="+"
+                                        IsEnabled="{Binding CanAttach}" ToolTip.Tip="{Binding AttachHint}"
+                                        ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
+                                        Width="26" Height="26" Padding="0" FontSize="15" CornerRadius="999" Cursor="Hand"
+                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                        Background="{StaticResource KcapSurfaceRaisedBrush}"
+                                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                                        Foreground="{StaticResource KcapMutedBrush}" />
+
                                 <!-- Harness + model picker: built per open in code-behind, like the repo menu. -->
                                 <Button x:Name="AgentChip" Classes="kcapChip" Click="OnAgentChipClick"
                                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
@@ -111,6 +93,7 @@
                                                     <Binding Path="Harnesses" />
                                                     <Binding Path="SelectedVendor" />
                                                     <Binding Path="SelectedModel" />
+                                                    <Binding Path="ModelCatalog" />
                                                 </MultiBinding>
                                             </TextBlock.Text>
                                         </TextBlock>
@@ -135,10 +118,15 @@
                                     Background="{StaticResource KcapPrimaryBrush}" Width="36" Height="36" CornerRadius="18"
                                     Padding="0" Margin="12,0,0,0" VerticalAlignment="Center"
                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                    ToolTip.Tip="{Binding StartButtonTip}"
                                     ToolTip.ShowOnDisabled="True"
                                     AutomationProperties.Name="Start"
                                     IsEnabled="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <ToolTip.Tip>
+                                    <MultiBinding Converter="{x:Static views:StartButtonTipConverter.Instance}">
+                                        <Binding Path="StartButtonTip" />
+                                        <Binding Path="Uploading" />
+                                    </MultiBinding>
+                                </ToolTip.Tip>
                                 <Path Data="M8,13.5 L8,3 M3.5,7.5 L8,3 L12.5,7.5"
                                       Stroke="{StaticResource KcapOnPrimaryBrush}" StrokeThickness="2"
                                       StrokeLineCap="Round" StrokeJoin="Round" Width="16" Height="16" />
@@ -152,5 +140,38 @@
                 </StackPanel>
             </Border>
         </StackPanel>
-    </DockPanel>
+
+        <Border x:Name="ConnectionBanner" VerticalAlignment="Top" HorizontalAlignment="Stretch" MaxWidth="680"
+                Padding="14,12" CornerRadius="10"
+                Background="{StaticResource KcapWarningDimBrush}"
+                BorderBrush="{StaticResource KcapWarningBrush}" BorderThickness="1"
+                IsVisible="{Binding ConnectionBannerVisible}">
+            <StackPanel Spacing="12">
+                <ProgressBar x:Name="BannerBusyBar" Height="3" IsIndeterminate="True"
+                             IsVisible="{Binding BannerBusy}"
+                             Foreground="{StaticResource KcapWarningBrush}" />
+                <TextBlock x:Name="BannerMessageText" Text="{Binding BannerMessage}"
+                           Foreground="{StaticResource KcapWarningBrush}" FontSize="13" LineHeight="20"
+                           TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Left">
+                    <Button x:Name="StartDaemonButton" Classes="kcapPrimary" Content="Start daemon"
+                            Command="{Binding StartDaemonCommand}" IsVisible="{Binding DaemonStartVisible}"
+                            Background="{StaticResource KcapPrimaryBrush}"
+                            Foreground="{StaticResource KcapOnPrimaryBrush}"
+                            FontWeight="SemiBold" CornerRadius="7" Padding="14,6" />
+                    <Button x:Name="RetryDaemonButton" Classes="kcapChip" Content="Reconnect"
+                            Command="{Binding RetryDaemonCommand}" IsVisible="{Binding DaemonRetryVisible}"
+                            Background="{StaticResource KcapSurfaceRaisedBrush}"
+                            BorderBrush="{StaticResource KcapBorderBrush}"
+                            Foreground="{StaticResource KcapTextBrush}"
+                            CornerRadius="7" Padding="14,6" />
+                    <Button x:Name="HomeSignInButton" Classes="kcapPrimary"
+                            Content="Sign in" Command="{Binding SignInCommand}"
+                            Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
+                            FontWeight="SemiBold" CornerRadius="7" Padding="14,6"
+                            IsVisible="{Binding SignInVisible}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
 </UserControl>

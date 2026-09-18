@@ -8,21 +8,27 @@ internal enum GitProviderKind { GitHub, GitLab, Unknown }
 /// <summary>
 /// Maps a remote host to a provider. SaaS hosts route directly; a custom host is
 /// probed once via `gh auth status --json hosts` (GitHub if listed, else best-effort
-/// GitLab). The decision is memoized per host for the process lifetime so the
-/// ImportCommand bulk loop can't multiply the probe.
+/// GitLab), and the answer is remembered.
+///
+/// <para>Injected, never constructed at a call site: one per process is what makes remembering
+/// worth anything. The watcher re-detects every 60s for as long as it runs, so a custom host would
+/// otherwise pay for that probe on every refresh.</para>
+///
+/// <para>Public only because two hook commands are, and a public constructor cannot take a less
+/// accessible parameter; everything it does stays internal.</para>
 /// </summary>
-internal static class GitProviderRouter {
-    static readonly ConcurrentDictionary<string, GitProviderKind> Memo = new(StringComparer.OrdinalIgnoreCase);
+public sealed class GitProviderRouter {
+    readonly ConcurrentDictionary<string, GitProviderKind> _memo = new(StringComparer.OrdinalIgnoreCase);
 
-    public static async Task<GitProviderKind> ResolveAsync(string? host, string cwd, TimeSpan cap, CommandRunner run) {
+    internal async Task<GitProviderKind> ResolveAsync(string? host, string cwd, TimeSpan cap, CommandRunner run) {
         if (string.IsNullOrEmpty(host)) return GitProviderKind.Unknown;
         if (host == "github.com") return GitProviderKind.GitHub;
         if (host == "gitlab.com") return GitProviderKind.GitLab;
 
-        if (Memo.TryGetValue(host, out var cached)) return cached;
+        if (_memo.TryGetValue(host, out var cached)) return cached;
 
         var kind = await ProbeAsync(host, cwd, cap, run);
-        Memo[host] = kind;
+        _memo[host] = kind;
         return kind;
     }
 
@@ -40,6 +46,4 @@ internal static class GitProviderRouter {
         // Not a known GitHub host → assume GitLab and let the detector no-op if unauthenticated.
         return GitProviderKind.GitLab;
     }
-
-    internal static void ResetMemoForTests() => Memo.Clear();
 }

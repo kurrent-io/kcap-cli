@@ -67,6 +67,7 @@ internal sealed class AcpTranscriptForwarder {
     readonly Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> _send;
     readonly ChannelReader<AcpEventEnvelope>                                _envelopes;
     readonly ILogger                                                       _logger;
+    readonly TimeProvider                                                  _time;
     readonly AcpEventEnvelope?                                             _initialEnvelope;
     readonly TimeSpan                                                      _initialSendRetryDelay;
     readonly TimeSpan                                                      _maxSendRetryDelay;
@@ -116,6 +117,7 @@ internal sealed class AcpTranscriptForwarder {
             AcpEventEnvelope?                                              initialEnvelope,
             ChannelReader<AcpEventEnvelope>                                envelopes,
             ILogger                                                        logger,
+            TimeProvider                                                   time,
             TimeSpan?                                                      initialSendRetryDelay = null,
             TimeSpan?                                                      maxSendRetryDelay = null,
             int?                                                           maxStalledGapResends = null,
@@ -125,6 +127,7 @@ internal sealed class AcpTranscriptForwarder {
         _send                   = send;
         _envelopes              = envelopes;
         _logger                 = logger;
+        _time                   = time;
         if (resumeFromSeq is { } rs) {
             // Resume/rebind: canonical already holds events through rs. No SessionStarted (the source-claim
             // rebind is idempotent by thread id), and new events start at rs+1.
@@ -240,7 +243,7 @@ internal sealed class AcpTranscriptForwarder {
                             return;
                         }
 
-                        await Task.Delay(_stalledGapResendDelay, ct).ConfigureAwait(false);
+                        await Task.Delay(_stalledGapResendDelay, _time, ct).ConfigureAwait(false);
                     } else {
                         _lastResendFrom    = expectedNextSeq;
                         _stalledGapResends = 0;
@@ -316,7 +319,7 @@ internal sealed class AcpTranscriptForwarder {
             } catch (Exception ex) {
                 LogSendFailed(ex, batch[0].Seq, batch[^1].Seq, delay);
 
-                await Task.Delay(delay, ct).ConfigureAwait(false);
+                await Task.Delay(delay, _time, ct).ConfigureAwait(false);
                 delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, _maxSendRetryDelay.TotalMilliseconds));
             }
         }

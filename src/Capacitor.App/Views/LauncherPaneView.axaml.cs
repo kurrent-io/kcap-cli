@@ -16,18 +16,39 @@ namespace Capacitor.App.Views;
 /// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel),
 /// same contract as HomeView — this view never builds its own ViewModel.
 public partial class LauncherPaneView : UserControl {
+    AttachmentDropPaste? _attachments;
+
     public LauncherPaneView() {
         InitializeComponent();
-        // Tunnel, not bubble: TextBox can still mark Enter handled on the bubble route even when
-        // AcceptsReturn is false, so Start must see the key on the way down.
+        // Tunnel, not bubble: the TextBox marks Enter handled on the bubble route, so bare-Enter
+        // submit must see the key on the way down. Shift+Enter falls through untouched, so the
+        // TextBox inserts a newline (AcceptsReturn is true).
         GoalInput.AddHandler(KeyDownEvent, OnGoalKeyDown, RoutingStrategies.Tunnel);
     }
 
+    internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
+
+    /// Paired with the visual tree rather than the constructor: a pane swap detaches and
+    /// re-attaches the same view, and a behaviour disposed on the way out has to come back with it.
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        _attachments ??= AttachmentDropPaste.Attach(
+            GoalCard, GoalInput, AttachButton,
+            () => (DataContext as HomeViewModel)?.Attachments, TimeProvider.System);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        _attachments?.Dispose();
+        _attachments = null;
+        base.OnDetachedFromVisualTree(e);
+    }
+
     /// Bare Enter starts a session when Start can run; otherwise the key is consumed so it does
-    /// not leave a stray newline. Mirrors the Start button: connection readiness from CanExecute,
-    /// repository from SelectedRepoPath (the button's IsEnabled binding).
+    /// not leave a stray newline. Shift+Enter is left for the TextBox to insert a newline. Mirrors
+    /// the Start button: connection readiness from CanExecute, repository from SelectedRepoPath.
     void OnGoalKeyDown(object? sender, KeyEventArgs e) {
         if (e.Key != Key.Enter) return;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
         e.Handled = true;
         if (DataContext is not HomeViewModel vm) return;
         if (string.IsNullOrEmpty(vm.SelectedRepoPath)) return;
@@ -411,7 +432,7 @@ public partial class LauncherPaneView : UserControl {
                 rows.Children.Add(Row(
                     vendor, option.Label, $"Default — {option.Label} chooses", option.Available,
                     isCurrentVendor && vm.SelectedModel.Length == 0, () => Pick(vendor, "")));
-            foreach (var model in HostedHarnessCatalog.ModelChoicesFor(vendor)
+            foreach (var model in vm.ModelChoicesFor(vendor)
                          .Where(m => matches(m.Label) || matches(m.Slug)))
                 rows.Children.Add(Row(
                     vendor, option.Label, model.Label, option.Available,
@@ -440,7 +461,7 @@ public partial class LauncherPaneView : UserControl {
             }
 
             // The escape hatch: whatever was typed, offered verbatim for the active vendor tab.
-            if (!vm.Harnesses.SelectMany(o => HostedHarnessCatalog.ModelChoicesFor(o.Vendor))
+            if (!vm.Harnesses.SelectMany(o => vm.ModelChoicesFor(o.Vendor))
                     .Any(m => string.Equals(m.Slug, term, StringComparison.OrdinalIgnoreCase))) {
                 var tabOption = vm.Harnesses.FirstOrDefault(
                     o => string.Equals(o.Vendor, currentTab, StringComparison.OrdinalIgnoreCase));
@@ -499,15 +520,25 @@ public sealed class VendorGlyphConverter : IValueConverter {
         throw new NotSupportedException();
 }
 
-/// AgentChip's label: "Claude · Fable 5" — vendor label plus the model's curated label (raw slug
-/// when uncurated, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions.
+/// AgentChip's label: "Claude · Fable 5" — vendor label plus the model's label, resolved first
+/// against the server catalog (4th binding), then the curated fallback (raw slug when neither
+/// carries it, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions.
 public sealed class AgentChipTextConverter : IMultiValueConverter {
     public static readonly AgentChipTextConverter Instance = new();
 
     public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture) =>
-        values is [IReadOnlyList<HarnessOption> options, string vendor, string model]
-            ? $"{HostedHarnessCatalog.LabelFor(options, vendor)} · {HostedHarnessCatalog.ModelLabelFor(vendor, model)}"
+        values is [IReadOnlyList<HarnessOption> options, string vendor, string model, ..]
+            ? $"{HostedHarnessCatalog.LabelFor(options, vendor)} · {ModelLabel(vendor, model, values.Count > 3 ? values[3] : null)}"
             : "";
+
+    static string ModelLabel(string vendor, string model, object? catalog) {
+        if (!string.IsNullOrWhiteSpace(model)
+         && catalog is IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> map
+         && map.TryGetValue(vendor, out var models)
+         && models.FirstOrDefault(m => string.Equals(m.Slug, model, StringComparison.OrdinalIgnoreCase)) is { } hit)
+            return hit.Label;
+        return HostedHarnessCatalog.ModelLabelFor(vendor, model);
+    }
 }
 
 /// EffortChip's label: always "Effort · …" — Default when null, otherwise the chosen rung's
@@ -574,6 +605,18 @@ public sealed class MachineLabelConverter : IValueConverter {
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is string { Length: > 0 } name ? $"Machine · {name}" : "Machine";
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// StartButton's tip: an upload in flight owns the button, so it says so rather than leaving the
+/// repository-gate wording standing over a control the user cannot use.
+public sealed class StartButtonTipConverter : IMultiValueConverter {
+    public static readonly StartButtonTipConverter Instance = new();
+
+    public object Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture) =>
+        values is [_, true] ? "Uploading…" : values is [string tip, ..] ? tip : "";
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

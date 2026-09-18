@@ -18,6 +18,8 @@ namespace Capacitor.Cli.Commands;
 public sealed class SpectreTenantProvisioner(
         TenantProvisioningClient client,
         string                   baseUrl,
+        CliTelemetry             telemetry,
+        TimeProvider             time,
         Func<bool>?              isInteractive = null,
         RequestedWorkspace?      requested = null) : ITenantProvisioner {
     const int PollIntervalMs = 4000;
@@ -48,13 +50,13 @@ public sealed class SpectreTenantProvisioner(
             // width, which breaks `kcap setup <slug>` across a line and hands the reader a command that
             // does not survive being copied. stderr also matches the non-zero exit this leads to.
             Console.Error.WriteLine();
-            Console.Error.WriteLine(OAuthLoginFlow.WorkspaceCreationNeedsATerminalMessage());
+            Console.Error.WriteLine(OAuthLoginFlow.WorkspaceCreationNeedsATerminalMessage(baseUrl));
 
             return ProvisionOffer.Declined;
         }
 
         PromptHygiene.DiscardTypeAhead();
-        SetupFunnel.WorkspaceOffered();
+        telemetry.Funnel.WorkspaceOffered();
 
         // Three ways out, not two: discovery finding nothing does NOT mean the user has no
         // workspace, so offering only "create one" sends an existing member off to make a second.
@@ -65,7 +67,7 @@ public sealed class SpectreTenantProvisioner(
 
         if (choice == CancelChoice) {
             AnsiConsole.MarkupLine("  [dim]No tenant created.[/]");
-            SetupFunnel.WorkspaceDeclined();
+            telemetry.Funnel.WorkspaceDeclined();
             return ProvisionOffer.Declined;
         }
 
@@ -76,7 +78,7 @@ public sealed class SpectreTenantProvisioner(
                         ? ValidationResult.Error("Enter a workspace slug (e.g. acme) or a full server URL")
                         : ValidationResult.Success()));
 
-            SetupFunnel.WorkspaceRedirected();
+            telemetry.Funnel.WorkspaceRedirected();
             return ProvisionOffer.ExistingWorkspace(workspace.Trim());
         }
 
@@ -86,7 +88,7 @@ public sealed class SpectreTenantProvisioner(
 
         var slug = await PromptSlugAsync(orgName, tokens, ct);
         if (slug is null) {
-            SetupFunnel.WorkspaceDeclined();
+            telemetry.Funnel.WorkspaceDeclined();
             return ProvisionOffer.Declined;
         }
 
@@ -95,7 +97,7 @@ public sealed class SpectreTenantProvisioner(
             new ConfirmationPrompt($"  Create tenant [cyan]{Markup.Escape(orgName)}[/] at [cyan]{origin}[/]?") { DefaultValue = true });
         if (!confirm) {
             AnsiConsole.MarkupLine("  [dim]No tenant created.[/]");
-            SetupFunnel.WorkspaceDeclined();
+            telemetry.Funnel.WorkspaceDeclined();
             return ProvisionOffer.Declined;
         }
 
@@ -170,7 +172,7 @@ public sealed class SpectreTenantProvisioner(
         if (Scripted) Console.Error.WriteLine($"  ✗ {plain}");
         else          AnsiConsole.MarkupLine($"  [red]✗[/] {markup ?? Markup.Escape(plain)}");
 
-        SetupFunnel.WorkspaceFailed(funnelReason);
+        telemetry.Funnel.WorkspaceFailed(funnelReason);
     }
 
     void Note(string plain, string? markup = null) {
@@ -185,11 +187,12 @@ public sealed class SpectreTenantProvisioner(
 
     async Task<ProvisionOffer> ProvisionAsync(
             string orgName, string slug, string origin, WorkOSTokenSource tokens, CancellationToken ct) {
-        SetupFunnel.WorkspaceRequested();
-        var outcome = await client.ProvisionAsync(baseUrl, await tokens.GetAsync(ct), orgName, slug, ct);
+        telemetry.Funnel.WorkspaceRequested();
+        var outcome = await client.ProvisionAsync(
+            baseUrl, await tokens.GetAsync(ct), orgName, slug, telemetry.Join.Current, ct);
         switch (outcome.StatusCode) {
             case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
-                SetupFunnel.WorkspaceProvisioned();
+                telemetry.Funnel.WorkspaceProvisioned();
                 return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
             case 202 or 200:
                 return await PollAsync(tokens, slug, orgName, origin, ct);
@@ -262,12 +265,12 @@ public sealed class SpectreTenantProvisioner(
 
         async Task<ProvisionOffer> PollLoopAsync(Action<string> setStatus) {
             for (var i = 0; i < MaxPolls; i++) {
-                await Task.Delay(PollIntervalMs, ct);
+                await Task.Delay(TimeSpan.FromMilliseconds(PollIntervalMs), time, ct);
                 var status = await client.GetStatusAsync(baseUrl, await tokens.GetAsync(ct), slug, ct);
 
                 switch (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)) {
                     case PollVerdict.Active:
-                        SetupFunnel.WorkspaceProvisioned();
+                        telemetry.Funnel.WorkspaceProvisioned();
                         return ProvisionOffer.Created(new ProvisionedTenant(status.Body!.WorkosOrgId!, slug, orgName, status.Body.Url ?? origin));
                     case PollVerdict.ActiveNoOrg:
                         Fail($"{slug}.kcap.ai is live but isn't linked to an organization. Contact support.", "active_no_org");
@@ -292,7 +295,7 @@ public sealed class SpectreTenantProvisioner(
             }
             Retry($"Still provisioning. {waitPlain} once it's ready.",
                   markup: $"Still provisioning. {waitMarkup} once it's ready.");
-            SetupFunnel.WorkspaceFailed("poll_timeout");
+            telemetry.Funnel.WorkspaceFailed("poll_timeout");
             return ProvisionOffer.InProgress(slug);
         }
     }

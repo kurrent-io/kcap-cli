@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -32,16 +31,23 @@ internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? 
 internal sealed partial class LocalPermissionBridge(
         ServerConnection               server,
         ILogger<LocalPermissionBridge> logger,
+        ILoopbackPortSource            ports,
+        TimeProvider time,
         PermissionPromptBroker?        broker      = null,
         PermissionDecisionLog?         decisionLog = null
     ) : IHostedService, IAsyncDisposable {
     const int    MaxBindAttempts = 15;
-    const string PathSuffix      = "/permission-request";
-    const string InputWaitSuffix = "/input-wait";
+    const string PathSuffix        = "/permission-request";
+    const string InputWaitSuffix   = "/input-wait";
+    const string ToolSettledSuffix = "/tool-settled";
 
     internal static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan RequestReadTimeout   = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan ShutdownDrain        = TimeSpan.FromSeconds(2);
+    static readonly          TimeSpan DrainPollGap         = TimeSpan.FromMilliseconds(10);
+
+    // Jittered so two bridges racing for the same port don't retry in lockstep.
+    static TimeSpan BindRetryGap() => TimeSpan.FromMilliseconds(Random.Shared.Next(10, 60));
 
     readonly PermissionPromptBroker _broker      = broker ?? new();
     readonly PermissionDecisionLog? _decisionLog = decisionLog;
@@ -69,6 +75,10 @@ internal sealed partial class LocalPermissionBridge(
     /// agent id and whether a PTY vendor's hook just reported its turn ended (true) or a new one
     /// began (false). Null = relays are acknowledged and dropped.
     internal Action<string, bool>? InputWaitHandler { get; set; }
+
+    /// Assigned by the orchestrator like <see cref="AttributeHandler"/>: receives the attributed
+    /// agent id and what its hook reports as settled. Null = notices are acknowledged and dropped.
+    internal Action<string, ToolSettledNotice>? ToolSettledHandler { get; set; }
 
     internal int ServerLegsInFlightForTest => Volatile.Read(ref _serverLegsInFlight);
 
@@ -136,10 +146,10 @@ internal sealed partial class LocalPermissionBridge(
         for (var attempt = 1; attempt <= MaxBindAttempts; attempt++) {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var port = ReserveFreeLoopbackPort();
+            var port = ports.Reserve();
             if (!TryClaimPort(port)) {
                 if (attempt < MaxBindAttempts)
-                    await Task.Delay(Random.Shared.Next(10, 60), cancellationToken);
+                    await Task.Delay(BindRetryGap(), time, cancellationToken);
                 continue;
             }
 
@@ -165,7 +175,7 @@ internal sealed partial class LocalPermissionBridge(
                 if (attempt == MaxBindAttempts) throw;
 
                 LogBindRetry(logger, attempt, port, ex.Message);
-                await Task.Delay(Random.Shared.Next(10, 60), cancellationToken);
+                await Task.Delay(BindRetryGap(), time, cancellationToken);
             } catch {
                 CloseSilently(listener);
                 ReleasePortClaim(port);
@@ -219,9 +229,9 @@ internal sealed partial class LocalPermissionBridge(
 
         // Closing the listener before the drain would abort the very responses the claims promised.
         lock (_admission) _admitting = false;
-        var drainDeadline = DateTime.UtcNow + ShutdownDrain;
-        while (Volatile.Read(ref _inFlight) > 0 && DateTime.UtcNow < drainDeadline)
-            await Task.Delay(10, CancellationToken.None);
+        var drainDeadline = time.GetUtcNow().UtcDateTime + ShutdownDrain;
+        while (Volatile.Read(ref _inFlight) > 0 && time.GetUtcNow().UtcDateTime < drainDeadline)
+            await Task.Delay(DrainPollGap, time, CancellationToken.None);
 
         // Close exactly once, before awaiting the accept loop. Stop() alone releases the port but
         // leaves HttpListener's prefix registered until a later Close(); another bridge can claim
@@ -233,7 +243,7 @@ internal sealed partial class LocalPermissionBridge(
 
         if (_acceptLoop is not null) {
             try {
-                await _acceptLoop.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
+                await _acceptLoop.WaitAsync(TimeSpan.FromSeconds(2), time, cancellationToken);
             } catch {
                 /* shutting down */
             }
@@ -354,21 +364,6 @@ internal sealed partial class LocalPermissionBridge(
         return Uri.TryCreate(urlOrToken, UriKind.Absolute, out var uri)
             ? uri.AbsolutePath.Trim('/')
             : urlOrToken.Trim('/');
-    }
-
-    /// <summary>Instance-scoped test seam for deterministic port-collision coverage.</summary>
-    internal Func<int>? ReserveLoopbackPortOverrideForTest;
-
-    int ReserveFreeLoopbackPort() {
-        if (ReserveLoopbackPortOverrideForTest is { } overridePort) return overridePort();
-
-        // HttpListener doesn't accept port 0 in its prefix; reserve a free ephemeral
-        // port via TcpListener and immediately release. There's a TOCTOU window before
-        // HttpListener.Start binds the same port, but on a single-user developer machine
-        // the race is benign — port collisions are vanishingly rare.
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
     }
 
     async Task AcceptLoopAsync(CancellationToken ct) {
@@ -494,6 +489,13 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
+            if (context.Request.HttpMethod == "POST" && path is not null
+             && path.EndsWith(ToolSettledSuffix, StringComparison.Ordinal)) {
+                await HandleToolSettledAsync(context, path);
+
+                return;
+            }
+
             // Require token + vendor + endpoint match. The HttpListener prefix already routed us
             // here, but we re-validate explicitly so a stray prefix can't quietly admit anything.
             // Path shape: /{token}/{vendor}/permission-request.
@@ -546,7 +548,7 @@ internal sealed partial class LocalPermissionBridge(
             // below, so this reads under its own bounded RequestReadTimeout instead. Capped at
             // MaxPermissionRequestBodyBytes so an unbounded read from the local hook can't exhaust
             // the daemon's memory.
-            using var readCts = new CancellationTokenSource(RequestReadTimeout);
+            using var readCts = new CancellationTokenSource(RequestReadTimeout, time);
             var       body    = await ReadCappedBodyAsync(context.Request.InputStream, MaxPermissionRequestBodyBytes, readCts.Token);
 
             if (body is null) {
@@ -638,7 +640,7 @@ internal sealed partial class LocalPermissionBridge(
                     node["agent_id"]?.GetValue<string>(), canonicalSessionId, node["cwd"]?.GetValue<string>()));
                 var pending = attributed is { } a
                     ? BuildPending(Guid.NewGuid().ToString("N"), a.AgentId, canonicalSessionId!, vendor, toolName, toolInput, suggestions,
-                        DateTimeOffset.UtcNow.ToString("O"), ToolUseIdOf(node))
+                        time.GetUtcNow().ToString("O"), ToolUseIdOf(node))
                     : null;
 
                 // The launched agent's own policy answers before a human is asked. The vendor gate
@@ -649,7 +651,7 @@ internal sealed partial class LocalPermissionBridge(
                     try {
                         policy = ClaudeHostedPolicySeam.Evaluate(
                             canonicalSessionId!, governed.AgentId, snapshot, toolName, toolInput,
-                            node["cwd"]?.GetValue<string>());
+                            node["cwd"]?.GetValue<string>(), time);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
                     }
@@ -660,12 +662,12 @@ internal sealed partial class LocalPermissionBridge(
                                 ? PermissionSettlements.Allow
                                 : PermissionSettlements.Deny;
                             _decisionLog?.Record(new PermissionDecisionRecord(
-                                DateTimeOffset.UtcNow.ToString("O"), governed.AgentId, canonicalSessionId!, vendor,
+                                time.GetUtcNow().ToString("O"), governed.AgentId, canonicalSessionId!, vendor,
                                 toolName ?? "", behavior, PermissionSettlements.SourcePolicy));
                             _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
                             // No Register: a call the policy answered raises no card, and the
                             // decision log plus the run event are its audit trail.
-                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor));
+                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
 
                             return;
                         }
@@ -684,7 +686,7 @@ internal sealed partial class LocalPermissionBridge(
                         decision = new PermissionDecision("deny", null, null);
                     }
                 } else {
-                    var settlementTask = _broker.Register(pending);
+                    var settlementTask = _broker.Register(pending, SubagentIdOf(node));
                     _ = RunServerLegAsync(pending, toolName, toolInput, suggestions, settlementTask, ct);
 
                     PermissionSettlement settlement;
@@ -694,21 +696,21 @@ internal sealed partial class LocalPermissionBridge(
                         // Shutdown: claim rather than inspect. Losing means another party settled first.
                         if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
                                 PermissionSettlements.Deny, PermissionSettlements.SourceDaemonShutdown)) {
-                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor));
+                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor), time);
                             return;
                         }
                         settlement = await settlementTask;
                     }
 
                     _decisionLog?.Record(new PermissionDecisionRecord(
-                        DateTimeOffset.UtcNow.ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
+                        time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
                         pending.ToolName, settlement.Outcome, settlement.Source));
-                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor));
+                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor), time);
                     return;
                 }
             }
 
-            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor));
+            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor), time);
         } catch (Exception ex) {
             LogBridgeHandlerError(logger, ex);
 
@@ -725,8 +727,8 @@ internal sealed partial class LocalPermissionBridge(
     /// token before the drain, and a claimed answer must still reach the hook. A failed write
     /// aborts the connection rather than leaving it open for the caller's Close() to fault on
     /// already-sent headers.
-    static async Task WriteResponseAsync(HttpListenerContext context, string responseJson) {
-        using var writeCts = new CancellationTokenSource(ResponseWriteTimeout);
+    static async Task WriteResponseAsync(HttpListenerContext context, string responseJson, TimeProvider time) {
+        using var writeCts = new CancellationTokenSource(ResponseWriteTimeout, time);
         var bytes = Encoding.UTF8.GetBytes(responseJson);
         context.Response.ContentType     = "application/json";
         context.Response.StatusCode      = 200;
@@ -782,6 +784,8 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
+            _broker.TryCorrelate(pending.RequestId, serverRequestId);
+
             if (settlement.IsCompleted) {
                 await RelaySettlementAsync(pending, serverRequestId, settlement.Result);
                 return;
@@ -833,6 +837,9 @@ internal sealed partial class LocalPermissionBridge(
 
     static string? ToolUseIdOf(JsonNode node) =>
         node["tool_use_id"] is JsonValue v && v.TryGetValue<string>(out var id) ? id : null;
+
+    static string? SubagentIdOf(JsonNode node) =>
+        node["subagent_id"] is JsonValue v && v.TryGetValue<string>(out var id) && id.Length > 0 ? id : null;
 
     /// <summary>
     /// True when the permission request names one of the reserved result channel's unattended-safe
@@ -908,39 +915,89 @@ internal sealed partial class LocalPermissionBridge(
     /// a body it cannot read a session and a verdict from.
     /// </summary>
     async Task HandleInputWaitAsync(HttpListenerContext context, string path) {
+        if (await ReadRelayAsync(context, path, InputWaitSuffix, reviewerAllowed: true) is not (var node, var sessionId)) return;
+
+        var waiting = node["waiting"] is JsonValue verdict && verdict.TryGetValue<bool>(out var w) ? w : (bool?) null;
+
+        if (waiting is null) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
+        if (attributed is { } agent) InputWaitHandler?.Invoke(agent.AgentId, waiting.Value);
+
+        Close(context, 204);
+    }
+
+    /// Shared token only: an unattended reviewer has no prompt a human could have answered, so
+    /// its token buys it no say over the interactive agents' prompts.
+    async Task HandleToolSettledAsync(HttpListenerContext context, string path) {
+        if (await ReadRelayAsync(context, path, ToolSettledSuffix, reviewerAllowed: false) is not (var node, var sessionId)) return;
+
+        if (!TryScope(node, "tool_use_id", PermissionWire.MaxToolUseIdBytes, out var toolUseId)
+         || !TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId)) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
+        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId));
+
+        Close(context, 204);
+    }
+
+    /// An absent scope field widens the notice to a whole turn, so a present one must be usable:
+    /// an empty or over-cap id can match nothing and is refused rather than read as absent.
+    static bool TryScope(JsonObject node, string field, int maxBytes, out string? value) {
+        value = null;
+        if (node[field] is not { } present) return true;
+        if (present is not JsonValue v || !v.TryGetValue<string>(out var s) || s.Length == 0 || Encoding.UTF8.GetByteCount(s) > maxBytes) return false;
+        value = s;
+
+        return true;
+    }
+
+    /// The prologue the hook relays share: the shared token (or a live reviewer token, where the
+    /// route admits one), a PTY vendor and a bounded JSON object carrying a session id. Null means
+    /// the response is already closed with the refusal.
+    async Task<(JsonObject Node, string SessionId)?> ReadRelayAsync(
+            HttpListenerContext context, string path, string suffix, bool reviewerAllowed) {
         var trimmed    = path.TrimStart('/');
         var firstSlash = trimmed.IndexOf('/');
 
         if (firstSlash <= 0) {
             Close(context, 404);
 
-            return;
+            return null;
         }
 
         var token = trimmed[..firstSlash];
 
-        if (!string.Equals(token, _sharedToken, StringComparison.Ordinal) && !_reviewerTokens.ContainsKey(token)) {
+        if (!string.Equals(token, _sharedToken, StringComparison.Ordinal) && !(reviewerAllowed && _reviewerTokens.ContainsKey(token))) {
             Close(context, 404);
 
-            return;
+            return null;
         }
 
         var afterToken = path[(token.Length + 2)..];
-        var vendor     = afterToken.Length > InputWaitSuffix.Length ? afterToken[..^InputWaitSuffix.Length] : "";
+        var vendor     = afterToken.Length > suffix.Length ? afterToken[..^suffix.Length] : "";
 
         if (vendor is not ("claude" or "codex")) {
             Close(context, 404);
 
-            return;
+            return null;
         }
 
-        using var readCts = new CancellationTokenSource(RequestReadTimeout);
+        using var readCts = new CancellationTokenSource(RequestReadTimeout, time);
         var       body    = await ReadCappedBodyAsync(context.Request.InputStream, MaxPermissionRequestBodyBytes, readCts.Token);
 
         if (body is null) {
             Close(context, 413);
 
-            return;
+            return null;
         }
 
         JsonObject? node;
@@ -952,18 +1009,14 @@ internal sealed partial class LocalPermissionBridge(
         }
 
         var sessionId = PermissionWire.Canonical(Str(node, "session_id"));
-        var waiting   = node?["waiting"] is JsonValue verdict && verdict.TryGetValue<bool>(out var w) ? w : (bool?) null;
 
-        if (sessionId is null || waiting is null) {
+        if (node is null || sessionId is null) {
             Close(context, 400);
 
-            return;
+            return null;
         }
 
-        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
-        if (attributed is { } agent) InputWaitHandler?.Invoke(agent.AgentId, waiting.Value);
-
-        Close(context, 204);
+        return (node, sessionId);
     }
 
     static string? Str(JsonObject? node, string field) =>

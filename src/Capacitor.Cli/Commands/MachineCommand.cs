@@ -21,7 +21,8 @@ namespace Capacitor.Cli.Commands;
 /// burying it in documentation.</para>
 /// </summary>
 public sealed class MachineCommand(
-        ProfileContext profiles, TokenStore store, IMachinesApi machines, IAuthProxyClient proxy) {
+        ProfileContext profiles, TokenStore store, IMachinesApi machines, IAuthProxyClient proxy,
+        AuthEndpoints endpoints) {
     /// <summary>
     /// Visibility values a machine may record with — the same set a human's profile accepts, because a
     /// machine is just another principal running this CLI. Kept in sync with the server's own list by
@@ -88,7 +89,7 @@ public sealed class MachineCommand(
         }
 
         var provisioning = await proxy.CreateMachineApplicationAsync(
-            AuthProxyEndpoint.Url, tokens.AccessToken, name);
+            endpoints.ProxyUrl, tokens.AccessToken, name);
 
         if (provisioning.Error is MachineProvisioningError.Unauthorized) {
             await Console.Error.WriteLineAsync(

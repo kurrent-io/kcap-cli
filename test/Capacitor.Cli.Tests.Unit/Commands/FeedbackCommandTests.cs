@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Http;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -27,7 +28,7 @@ public class FeedbackCommandTests : IDisposable {
     public void Dispose() => _server.Stop();
 
     IFeedbackApi Api(string? url = null) =>
-        new FeedbackApi(new FixedCapacitorHttpClient(), new CapacitorServer(url ?? _server.Urls[0], Config.Root, Resolutions.At(url ?? _server.Urls[0], Config.Root)));
+        new FeedbackApi(new FixedCapacitorHttpClient(), new CapacitorServer(url ?? _server.Urls[0], Config.Root, Resolutions.At(url ?? _server.Urls[0], Config.Root)), TimeProvider.System);
 
     static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(Func<Task<int>> action) {
         using var capture = ConsoleOutput.StartFullCapture("\n");
@@ -135,7 +136,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("""{"reporter_email":"someone@example.com"}"""));
 
-        var exitCode = await FeedbackCommand.HandleCore(Api(), "bug", "the daemon crashed");
+        var exitCode = await FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "the daemon crashed");
 
         await Assert.That(exitCode).IsEqualTo(0);
 
@@ -157,7 +158,7 @@ public class FeedbackCommandTests : IDisposable {
         await Assert.That(context.GetProperty("client_version").GetString()).IsEqualTo(CapacitorVersion.CurrentDisplay());
         await Assert.That(string.IsNullOrEmpty(context.GetProperty("os").GetString())).IsFalse();
 
-        // No camelCase leakage — the server binds snake_case only (Task 10's global JSON policy).
+        // No camelCase leakage — the server binds snake_case only.
         await Assert.That(root.TryGetProperty("clientRequestId", out _)).IsFalse();
     }
 
@@ -168,8 +169,8 @@ public class FeedbackCommandTests : IDisposable {
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("""{"reporter_email":"someone@example.com"}"""));
 
-        await FeedbackCommand.HandleCore(Api(), "bug", "first");
-        await FeedbackCommand.HandleCore(Api(), "bug", "second");
+        await FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "first");
+        await FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "second");
 
         var hits = _server.LogEntries.Where(e => e.RequestMessage.Path == "/api/feedback").ToList();
         await Assert.That(hits.Count).IsEqualTo(2);
@@ -192,7 +193,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"reporter_email":"alice@example.com"}"""));
 
         var (exitCode, stdout, _) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsEqualTo(0);
         // Byte-exact: the pinned string, including the checkmark glyph, with the reply promise.
@@ -205,7 +206,7 @@ public class FeedbackCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(404));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("This server doesn't have support intake enabled.");
@@ -219,7 +220,7 @@ public class FeedbackCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(405));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("This server doesn't have support intake enabled.");
@@ -236,7 +237,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"error":"feedback_not_configured","message":"Feedback submission is not configured for this server."}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("Support intake isn't configured on this server — ask your admin.");
@@ -250,7 +251,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"error":"feedback_misconfigured","message":"Feedback submission is currently misconfigured on this server."}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("Support intake isn't configured on this server — ask your admin.");
@@ -264,7 +265,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"error":"feedback_no_email","message":"We don't have an email address on file for your account."}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo(
@@ -279,7 +280,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"error":"feedback_rate_limited","message":"Too many feedback submissions — please try again later."}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("You've sent several reports recently — try again in a few minutes.");
@@ -294,7 +295,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"error":"feedback_sink_error","message":"Feedback submission is temporarily unavailable — please try again shortly."}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("Couldn't reach Kurrent support (temporary) — try again in 30s.");
@@ -308,7 +309,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"error":"feedback_sink_error","message":"Feedback submission is temporarily unavailable — please try again shortly."}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("Couldn't reach Kurrent support (temporary) — try again.");
@@ -322,7 +323,7 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"error":"feedback_invalid","message":"a custom validation message from the server"}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("a custom validation message from the server");
@@ -338,9 +339,32 @@ public class FeedbackCommandTests : IDisposable {
                 .WithBody("""{"message":"Your session has expired. Run 'kcap login' to re-authenticate."}"""));
 
         var (exitCode, _, stderr) = await RunAsync(() =>
-            FeedbackCommand.HandleCore(Api(), "bug", "hi"));
+            FeedbackCommand.HandleCore(Api(), FeedbackCategory.Bug, "hi"));
 
         await Assert.That(exitCode).IsNotEqualTo(0);
         await Assert.That(stderr.Trim()).IsEqualTo("Your session has expired. Run 'kcap login' to re-authenticate.");
+    }
+
+    // ── submission shape (via a recording fake — no HTTP involved) ───────────────────────────────
+
+    [Test, NotInParallel]
+    public async Task Bug_flag_sends_the_bug_category_from_the_cli() {
+        var api  = new RecordingFeedbackApi(new FeedbackResult.Sent("a@b.c"));
+        var code = await FeedbackCommand.HandleCore(api, FeedbackCategory.Bug, "It broke.");
+
+        await Assert.That(code).IsEqualTo(0);
+        await Assert.That(api.Last!.Category).IsEqualTo(FeedbackCategory.Bug);
+        await Assert.That(api.Last.Source).IsEqualTo(FeedbackSource.Cli);
+        await Assert.That(api.Last.ClientRequestId).IsNotEqualTo(Guid.Empty);
+    }
+
+    sealed class RecordingFeedbackApi(FeedbackResult result) : IFeedbackApi {
+        public FeedbackSubmission? Last { get; private set; }
+
+        public Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) {
+            Last = submission;
+
+            return Task.FromResult(result);
+        }
     }
 }

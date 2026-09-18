@@ -82,7 +82,8 @@ public sealed record FirstRunMachineReport(
     /// a result.</para>
     /// </summary>
     public static FirstRunMachineReport EvaluateCurrent(
-            ConfigRoot config, HarnessRegistry harnesses, string? machine, bool? loginShellFindsCli) {
+            ConfigRoot config, HarnessRegistry harnesses, string? machine, bool? loginShellFindsCli,
+            TimeProvider time) {
         try {
             return Evaluate(
                 machine,
@@ -90,7 +91,7 @@ public sealed record FirstRunMachineReport(
                 // probe around it, which swallows its own I/O failures.
                 MachineIdOrNull(config),
                 harnesses,
-                new HarnessOfferStore(config).Load(),
+                new HarnessOfferStore(config, time).Load(),
                 loginShellFindsCli,
                 FirstRunPlatforms.Current());
         } catch (Exception) {

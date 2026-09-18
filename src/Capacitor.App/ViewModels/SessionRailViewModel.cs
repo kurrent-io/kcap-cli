@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Collections.ObjectModel;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -60,9 +61,10 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     /// permission service still compile and render.
     public SessionRailViewModel(
             IAgentDirectory directory,
-            Action<string> openLocalSession, Action<string> openRemoteInWeb,
+            Action<string> openLocalSession, Action<string> openRemoteSession, TimeProvider time,
             Func<string, string>? resolveRepoRoot = null,
-            IObservable<IReadOnlySet<string>>? agentsWithPending = null) {
+            IObservable<IReadOnlySet<string>>? agentsWithPending = null,
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
         _directory = directory;
         var resolveRoot = resolveRepoRoot ?? GitRepository.ResolveMainRepoRoot;
         // Not disposed with the rest: same as RailCollapseState's Changes subject, a bare
@@ -72,6 +74,12 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         // here so every nested OAPH downstream (RailSessionViewModel, RailWorktreeViewModel) sees
         // it on the UI thread without adding its own ObserveOn.
         var pending = (agentsWithPending ?? Observable.Return((IReadOnlySet<string>)new HashSet<string>()))
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        // Marshaled once here, like `pending` above, so every nested OAPH downstream sees it on
+        // the UI thread without its own ObserveOn.
+        var stale = directory.RemoteStale.ObserveOn(RxSchedulers.MainThreadScheduler);
+        // The tone cache publishes from its read continuations; marshaled once here like the others.
+        var tones = (pullRequestTones ?? Observable.Return<IReadOnlyDictionary<string, PullRequestTone>>(FrozenDictionary<string, PullRequestTone>.Empty))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         _isEmpty = directory.Rows.CountChanged
@@ -90,7 +98,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, resolveRoot, openLocalSession, openRemoteInWeb))
+                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()
@@ -102,6 +110,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public void NotifySessionOpened(string agentId) {
         var row = _directory.Rows.Lookup($"local:{agentId}");
         if (!row.HasValue) row = _directory.Rows.Lookup($"remote:{agentId}");
+        if (!row.HasValue) row = _directory.Rows.Lookup($"pending:{agentId}");
         if (!row.HasValue || row.Value.CheckoutKey is not { Length: > 0 } path) return;
         _collapse.Set(path, collapsed: false);
     }

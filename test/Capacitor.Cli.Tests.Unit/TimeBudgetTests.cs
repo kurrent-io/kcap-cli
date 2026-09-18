@@ -13,7 +13,7 @@ public class TimeBudgetTests {
     public async Task RunCappedAsync_ReturnsFalseAtCap_WhenWorkExceedsIt() {
         var sw = Stopwatch.StartNew();
 
-        var completed = await TimeBudget.RunCappedAsync(() => Task.Delay(TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(200));
+        var completed = await TimeBudget.RunCappedAsync(() => Task.Delay(TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(200), TimeProvider.System);
 
         sw.Stop();
 
@@ -28,7 +28,7 @@ public class TimeBudgetTests {
     public async Task RunCappedAsync_ReturnsTrueWhenWorkCompletes_WithoutWaitingForCap() {
         var sw = Stopwatch.StartNew();
 
-        var completed = await TimeBudget.RunCappedAsync(() => Task.CompletedTask, TimeSpan.FromSeconds(30));
+        var completed = await TimeBudget.RunCappedAsync(() => Task.CompletedTask, TimeSpan.FromSeconds(30), TimeProvider.System);
 
         sw.Stop();
 
@@ -43,7 +43,8 @@ public class TimeBudgetTests {
                 await TimeBudget.RunCappedAsync(
                     () => Task.FromException(new InvalidOperationException("drain blew up")),
                     TimeSpan.FromSeconds(30)
-                )
+                ,
+                TimeProvider.System)
             )
             .Throws<InvalidOperationException>();
     }

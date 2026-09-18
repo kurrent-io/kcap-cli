@@ -6,6 +6,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -37,9 +38,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class KiroHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -105,7 +106,7 @@ sealed class KiroHookCommand(
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Kiro, sessionId, LifecycleInstanceId: null,
@@ -162,7 +163,7 @@ sealed class KiroHookCommand(
 
         // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
 
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = profiles.Effective;
@@ -170,8 +171,8 @@ sealed class KiroHookCommand(
         // Cheap string-prefix path exclusion runs on every firing; repo exclusion
         // runs once after enrichment, then marks the session disabled so later
         // agentSpawn firings take the fast path above.
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(cwd, excludedPaths, home)) {
+        if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) {
             return 0;
         }
 
@@ -220,11 +221,11 @@ sealed class KiroHookCommand(
             forwarded["model"] = model;
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(config, forwarded.ToJsonString());
+        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -272,8 +273,10 @@ sealed class KiroHookCommand(
         // claim could commit its record with nothing emitted and silence the nudges for the
         // session. The emitters run at most once per firing: the harness nudge stamps a ledger.
         string? ResolveNudges() => HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
+            PlansNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Kiro, harnesses));
         var nudgeDecided = nudgeClaim.IsCompleted;
         var workItemsNudge = nudgeDecided && await nudgeClaim ? ResolveNudges() : null;
         WriteAgentSpawnOutput(Console.Out, fragment, workItemsNudge);
@@ -286,7 +289,7 @@ sealed class KiroHookCommand(
         // only by the Pi/OpenCode capture scripts, so it is inert in Kiro context.
         if (!nudgeDecided && budget.Remaining is { Ticks: > 0 } claimWait) {
             var claimed = false;
-            try { claimed = await nudgeClaim.WaitAsync(claimWait); } catch (TimeoutException) { }
+            try { claimed = await nudgeClaim.WaitAsync(claimWait, budget.Time); } catch (TimeoutException) { }
             if (claimed) {
                 WriteAgentSpawnOutput(Console.Out, null, ResolveNudges());
                 await Console.Out.FlushAsync();
@@ -304,7 +307,7 @@ sealed class KiroHookCommand(
         HookPostOutcome outcome;
 
         try {
-            outcome = await postTask.WaitAsync(budget.Remaining);
+            outcome = await postTask.WaitAsync(budget.Remaining, budget.Time);
         } catch (TimeoutException) {
             // Spooled, not Failed: a drain pass will replay it, so capture must still start — but only
             // claim that when the write actually landed.
@@ -317,9 +320,8 @@ sealed class KiroHookCommand(
 
         // The watcher tails Kiro's own append-only session log
         // ~/.kiro/sessions/cli/{id}.jsonl (the file is named with the dashed id).
-        // The watcher also owns session-end: GetCodingAgentPid() inside
-        // SpawnWatcher passes the kiro-cli pid as --parent-pid, so the watcher
-        // POSTs session-end/kiro when kiro-cli exits.
+        // The watcher also owns session-end: ProcessWatcherSpawner resolves the kiro-cli pid and
+        // passes it as --parent-pid, so the watcher POSTs session-end/kiro when kiro-cli exits.
         var transcriptPath = harnesses.Of<KiroHarness>().Paths.SessionJsonl(dashedSessionId);
 
         // Bounded for the same reason as the POST, and this is the LAST step between the committed
@@ -328,10 +330,10 @@ sealed class KiroHookCommand(
         // transcript (startup is idempotent and agentSpawn fires again next prompt); a killed hook
         // costs the whole session's injection. An abandoned in-flight spawn reconciles on that firing.
         try {
-            await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "kiro"
-            ).WaitAsync(budget.Remaining);
+            ).WaitAsync(budget.Remaining, budget.Time);
         } catch (TimeoutException) {
             // Budget exhausted (possibly already zero, which skips the attempt outright). The next
             // agentSpawn ensures the watcher; exiting 0 now is what keeps the fragment deliverable.

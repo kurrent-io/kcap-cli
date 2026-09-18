@@ -18,7 +18,7 @@ public class ConPtyJobObjectTests {
         // immediate child — is under test.
         await using var proc = ConPtyProcess.Spawn(
             "cmd.exe", ["/c", "start /min cmd.exe /c timeout /t 60 >NUL & timeout /t 60 >NUL"],
-            Directory.GetCurrentDirectory());
+            AppContext.BaseDirectory, TimeProvider.System);
 
         await Task.Delay(500); // let the grandchild actually spawn before we kill the job
 
@@ -44,7 +44,7 @@ public class ConPtyJobObjectTests {
         // NOT by joining this test host to proc's killing job and disposing it (which would
         // close the last handle and have the OS kill the host). Reading the flags is host-safe;
         // proc.DisposeAsync closes proc's own killing job, killing proc's child, never the host.
-        await using var proc = ConPtyProcess.Spawn("cmd.exe", ["/c", "exit"], Directory.GetCurrentDirectory());
+        await using var proc = ConPtyProcess.Spawn("cmd.exe", ["/c", "exit"], AppContext.BaseDirectory, TimeProvider.System);
 
         var limitFlags = ConPtyJobObjectTestHelper.QueryJobLimitFlags(ConPtyInteropTestAccessor.JobHandle(proc));
 
@@ -68,7 +68,7 @@ public class ConPtyJobObjectTests {
         var outerJob = ConPtyInterop.CreateJobObjectW(IntPtr.Zero, null);
         ConPtyJobObjectTestHelper.AssignSelfToJob(outerJob);
 
-        await using var proc = ConPtyProcess.Spawn("cmd.exe", ["/c", "timeout /t 5 >NUL"], Directory.GetCurrentDirectory());
+        await using var proc = ConPtyProcess.Spawn("cmd.exe", ["/c", "timeout /t 5 >NUL"], AppContext.BaseDirectory, TimeProvider.System);
 
         // Nesting succeeded iff the spawn didn't throw AND the child is (transitively) a
         // member of the outer job too — checked via the native IsProcessInJob.
@@ -100,7 +100,7 @@ public class ConPtyJobObjectTests {
 
         var threw = false;
         try {
-            await using var proc = ConPtyProcess.Spawn(missing, [], Directory.GetCurrentDirectory());
+            await using var proc = ConPtyProcess.Spawn(missing, [], AppContext.BaseDirectory, TimeProvider.System);
         } catch (InvalidOperationException) {
             threw = true; // Spawn threw → failed closed, no uncontained child created
         }

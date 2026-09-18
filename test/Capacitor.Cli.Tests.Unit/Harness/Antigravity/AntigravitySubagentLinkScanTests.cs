@@ -18,8 +18,8 @@ public class AntigravitySubagentLinkScanTests {
             """{"type":"PLANNER_RESPONSE","content":"thinking"}""",
             """{"type":"INVOKE_SUBAGENT","content":"Created the following subagents:\n{\"conversationId\":\"6111e615-3caa-4fe8-9d55-b85c43f2cf1f\"}"}""",
         };
-        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, child => { sent.Add(child); return Task.FromResult(true); });
-        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, child => { sent.Add(child); return Task.FromResult(true); }); // re-scan
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, child => { sent.Add(child); return Task.FromResult(true); }, TimeProvider.System);
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, child => { sent.Add(child); return Task.FromResult(true); }, TimeProvider.System); // re-scan
         await Assert.That(sent).IsEquivalentTo(new List<string> { "6111e615-3caa-4fe8-9d55-b85c43f2cf1f" }); // once
     }
 
@@ -28,8 +28,8 @@ public class AntigravitySubagentLinkScanTests {
         var posted = new HashSet<string>(StringComparer.Ordinal);
         var attempts = 0;
         var lines = new[] { """{"type":"INVOKE_SUBAGENT","content":"{\"conversationId\":\"6111e615-3caa-4fe8-9d55-b85c43f2cf1f\"}"}""" };
-        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, _ => { attempts++; return Task.FromResult(false); }); // fail
-        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, _ => { attempts++; return Task.FromResult(true); });  // retry, succeed
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, _ => { attempts++; return Task.FromResult(false); }, TimeProvider.System); // fail
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, _ => { attempts++; return Task.FromResult(true); }, TimeProvider.System);  // retry, succeed
         await Assert.That(attempts).IsEqualTo(2);
         await Assert.That(posted).Contains("6111e615-3caa-4fe8-9d55-b85c43f2cf1f");
     }

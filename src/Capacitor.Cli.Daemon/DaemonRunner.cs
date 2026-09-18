@@ -49,6 +49,9 @@ public static partial class DaemonRunner {
     }
 
     public static async Task<int> RunAsync(string[] args) {
+        // The daemon's one clock, resolved at the entry point and registered below; the boot path runs
+        // before DI exists, so it is threaded by hand until the container is built.
+        var time = TimeProvider.System;
         if (TryHandleVersionFlag(args, Console.Out)) return 0;
 
         string?    logFile     = null;
@@ -111,14 +114,14 @@ public static partial class DaemonRunner {
                 case "--log-file": logFile = args[++i]; break;
                 case "--stderr-file": stderrFile = args[++i]; break;
                 case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
-                case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
+                case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 0:
                     config.MaxConcurrentAgents = n;
                     maxAgentsFromArgs = true;
                     i++;
 
                     break;
                 case "--max-agents":
-                    await Console.Error.WriteLineAsync($"Invalid --max-agents value: {args[i + 1]} (must be a positive integer)");
+                    await Console.Error.WriteLineAsync($"Invalid --max-agents value: {args[i + 1]} (must be 0 for unlimited, or a positive integer)");
 
                     return 1;
             }
@@ -158,7 +161,7 @@ public static partial class DaemonRunner {
         builder.Logging.SetMinimumLevel(minLevel);
 
         if (logFile is not null) {
-            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, minLevel: minLevel));
+            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, time, minLevel: minLevel));
         } else {
             builder.Logging.AddSimpleConsole(opts => {
                     opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
@@ -179,7 +182,7 @@ public static partial class DaemonRunner {
             config.CodexPath = profileDaemon.CodexPath;
 
         if (Environment.GetEnvironmentVariable("KCAP_MAX_AGENTS") is { } maxAgents) {
-            if (int.TryParse(maxAgents, out var n) && n >= 1)
+            if (int.TryParse(maxAgents, out var n) && n >= 0)
                 config.MaxConcurrentAgents = n;
             else
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");
@@ -263,7 +266,7 @@ public static partial class DaemonRunner {
         // the server can refuse a second daemon claiming the same
         // (owner, name) slot.
         var daemonLock = awaitLock
-            ? DaemonLock.TryAcquire(config.Store, config.Name, TimeSpan.FromSeconds(5), config.Version)
+            ? await DaemonLock.TryAcquireAsync(config.Store, config.Name, TimeSpan.FromSeconds(5), time, config.Version)
             : DaemonLock.TryAcquire(config.Store, config.Name, config.Version);
 
         if (daemonLock is null) {
@@ -276,7 +279,7 @@ public static partial class DaemonRunner {
         }
 
         config.InstanceId = daemonLock.InstanceId;
-        StartupPhase("lock acquired");
+        StartupPhase(time, "lock acquired");
 
         // Phase B2-b (sequenced-settlement design §4.2.3): the durable per-daemon state root — used by
         // the pre-host boot-check block immediately below AND (further down) by the coverage journal /
@@ -293,7 +296,7 @@ public static partial class DaemonRunner {
         // Pre-host boot checks — see RunBootChecksAsync. Both refusal arms return BEFORE the host is
         // built, before any ServerConnection/token use of any kind, so a misdirected or un-consented
         // daemon never gets far enough to touch the network or spawn anything.
-        if (await RunBootChecksAsync(config) is { } bootCheckExit) return bootCheckExit;
+        if (await RunBootChecksAsync(config, time) is { } bootCheckExit) return bootCheckExit;
 
         // Phase B2-b (sequenced-settlement design): pin the per-boot epoch here, before any service is
         // built, so the epoch advertised on DaemonConnect and the orchestrator's own _daemonEpoch (which
@@ -333,7 +336,7 @@ public static partial class DaemonRunner {
             .RecordBoot(daemonLock.InstanceId, daemonLock.PriorInstanceId,
                 priorLockReadFailed: daemonLock.PriorLockIndeterminate, thisEpochContained: OperatingSystem.IsWindows());
 
-        StartupPhase("boot checks done");
+        StartupPhase(time, "boot checks done");
 
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton(configRoot);
@@ -348,16 +351,15 @@ public static partial class DaemonRunner {
         // The owner consent gate — policy store + append-only decision log share the
         // per-daemon state root with the coverage journal above; the prompter is null until
         // the broker below registers itself (a Prompt-default policy then denies with "prompt_no_ui").
-        // TimeProvider.System drives the gate's monotonic deadline discipline (spec §3.2) — a
-        // real singleton in production, swapped for a FakeTimeProvider in tests.
-        builder.Services.AddSingleton(TimeProvider.System);
+        // The gate's deadlines are monotonic against this clock, so a test can hold them still.
+        builder.Services.AddSingleton(time);
         // A FRESH instance with the real ILogger<LaunchConsentStore> — deliberately NOT the throwaway
         // NullLogger store the boot-check block above used for classification. Reusing that instance
         // here would silence LaunchConsentStore's diagnostics (Load()-time corruption warnings, and the
         // Persist() failure path LaunchConsentIpc doesn't independently log) for the daemon's entire
         // lifetime. The extra file read at boot is cheap; a permanently silenced diagnostic is not.
         builder.Services.AddSingleton(sp => new LaunchConsentStore(
-            coverageStateDir, sp.GetRequiredService<ILogger<LaunchConsentStore>>()));
+            coverageStateDir, sp.GetRequiredService<ILogger<LaunchConsentStore>>(), time));
         builder.Services.AddSingleton(sp => new LaunchConsentDecisionLog(
             coverageStateDir, sp.GetRequiredService<ILogger<LaunchConsentDecisionLog>>()));
         builder.Services.AddSingleton(sp => new LaunchConsentGate(
@@ -394,6 +396,7 @@ public static partial class DaemonRunner {
         // singleton so AgentOrchestrator can read its bound URL at agent-spawn time, AND
         // as a hosted service so its IHostedService lifecycle starts the listener before
         // any agent is spawned.
+        builder.Services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         builder.Services.AddSingleton<LocalPermissionBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalPermissionBridge>());
 
@@ -415,6 +418,7 @@ public static partial class DaemonRunner {
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
 
+        builder.Services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         builder.Services.AddSingleton<WorktreeManager>();
         builder.Services.AddSingleton<RepoMatcher>();
 
@@ -437,7 +441,8 @@ public static partial class DaemonRunner {
                 sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "claude")
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
-                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
+                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
+                sp.GetRequiredService<TimeProvider>()
             )
         );
         // Codex is the ONE vendor with two transports. The composite factory routes review-flow
@@ -450,11 +455,13 @@ public static partial class DaemonRunner {
             var pty = new PtyHostedAgentRuntimeFactory(
                 codexLauncher,
                 sp.GetRequiredService<IPtyProcessFactory>(),
-                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>());
+                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
+                sp.GetRequiredService<TimeProvider>());
             return new Harness.Codex.CodexHostedAgentRuntimeFactory(
                 (Harness.Codex.CodexLauncher) codexLauncher, pty,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
+                time,
                 connection: sp.GetRequiredService<ServerConnection>()); // §2.3 interactive approvals
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -462,7 +469,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Cursor,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>() // spec-review Finding 4 — real production wiring
+                sp.GetRequiredService<ServerConnection>(), time,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -470,7 +479,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Copilot,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(), time,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -478,7 +489,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Kiro,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(), time,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -486,7 +499,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Gemini,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(), time,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -494,7 +509,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.OpenCode,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(), time,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
 
@@ -505,7 +522,8 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AntigravityHostedAgentRuntimeFactory(
                 sp.GetRequiredService<DaemonConfig>(),
-                sp.GetRequiredService<ILoggerFactory>()
+                sp.GetRequiredService<ILoggerFactory>(),
+                time
             )
         );
 
@@ -516,7 +534,8 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new PiRpcHostedAgentRuntimeFactory(
                 sp.GetRequiredService<DaemonConfig>(),
-                sp.GetRequiredService<ILoggerFactory>()
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<TimeProvider>()
             )
         );
 
@@ -553,13 +572,16 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
 
+        builder.Services.AddSingleton<RepoStoreWatcher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());
+
         // Local control socket: lets `kcap agent start`/`attach`/`ls`/`stop` drive daemon-hosted
         // agents from the user's own terminal (AI local-attach Phase 1).
         builder.Services.AddSingleton<LocalControlServer>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalControlServer>());
 
         builder.Services.AddSingleton(sp => new TranscriptJournalSweep(
-            config.Store.StateDirectory(config.Name), TimeProvider.System, sp.GetRequiredService<ILogger<TranscriptJournalSweep>>(),
+            config.Store.StateDirectory(config.Name), time, sp.GetRequiredService<ILogger<TranscriptJournalSweep>>(),
             isLive: sp.GetRequiredService<AgentOrchestrator>().IsLiveJournalStem));
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptJournalSweep>());
 
@@ -662,17 +684,17 @@ public static partial class DaemonRunner {
         // tears down the logging pipeline. Lifetime is captured so SIGHUP
         // (terminal closed) can be turned into a cooperative StopApplication
         // — without that, the host's finally-block cleanup never runs.
-        RegisterDeathRattle(logger, lifetime, AttachedToTerminal());
+        RegisterDeathRattle(logger, lifetime, AttachedToTerminal(), time);
 
         // Lifetime-driven log lines — pair with the AppDomain/signal hooks so
         // we can distinguish a cooperative StopApplication (e.g. NameInUse,
         // Ctrl+C consumed by ConsoleLifetime) from an outside-the-runtime kill.
         lifetime.ApplicationStopping.Register(() => {
-            DeathRattle("Lifetime: ApplicationStopping fired");
+            DeathRattle(time, "Lifetime: ApplicationStopping fired");
             LogLifetimeStopping(logger);
         });
         lifetime.ApplicationStopped.Register(() => {
-            DeathRattle("Lifetime: ApplicationStopped fired");
+            DeathRattle(time, "Lifetime: ApplicationStopped fired");
             LogLifetimeStopped(logger);
         });
 
@@ -722,6 +744,8 @@ public static partial class DaemonRunner {
                 await orchestrator.ReapOrphansOnceAsync();
 
                 await host.Services.GetRequiredService<TranscriptJournalSweep>().RunOnceAsync(lifetime.ApplicationStopping);
+
+                orchestrator.AttachmentStore.SweepOrphans(orchestrator.IsLiveAttachmentStem, logger);
 
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
@@ -791,16 +815,16 @@ public static partial class DaemonRunner {
     /// or null to proceed to host construction.
     /// </summary>
     /// <summary>The config's view of a refusal — the only place DaemonConfig meets the marker.</summary>
-    static void WriteRefusal(DaemonStore store, DaemonConfig config, string token) =>
+    static void WriteRefusal(DaemonStore store, DaemonConfig config, string token, TimeProvider time) =>
         BootRefusalMarker.TryWrite(
             store, config.Name, token, config.ExpectedServerUrl, config.ServerUrl,
-            config.InstanceId, config.BootAttemptId);
+            config.InstanceId, config.BootAttemptId, time);
 
-    internal static async Task<int?> RunBootChecksAsync(DaemonConfig config) {
+    internal static async Task<int?> RunBootChecksAsync(DaemonConfig config, TimeProvider time) {
         var store      = config.Store;
         var daemonName = config.Name;
         if (!ExpectationSatisfied(config.ExpectedServerUrl, config.ServerUrl)) {
-            WriteRefusal(store, config, "server_expectation_mismatch");
+            WriteRefusal(store, config, "server_expectation_mismatch", time);
             await Console.Error.WriteLineAsync("kcap-daemon: refusing to start: server_expectation_mismatch");
 
             return 0;
@@ -813,16 +837,17 @@ public static partial class DaemonRunner {
             // entire lifetime).
             SeedResult seed;
             try {
-                seed = new LaunchConsentStore(store.StateDirectory(daemonName), NullLogger.Instance).BootSeed(config.ConsentSeedDirective);
+                seed = new LaunchConsentStore(store.StateDirectory(daemonName), NullLogger.Instance, time)
+                    .BootSeed(config.ConsentSeedDirective);
             } catch {
-                WriteRefusal(store, config, "consent_seed_unwritable");
+                WriteRefusal(store, config, "consent_seed_unwritable", time);
                 await Console.Error.WriteLineAsync("kcap-daemon: refusing to start: consent_seed_unwritable");
 
                 return 0;
             }
 
             if (seed.Outcome is SeedOutcome.RefusedInvalidDirective or SeedOutcome.RefusedUnwritable) {
-                WriteRefusal(store, config, seed.RefusalToken!);
+                WriteRefusal(store, config, seed.RefusalToken!, time);
                 await Console.Error.WriteLineAsync($"kcap-daemon: refusing to start: {seed.RefusalToken}");
 
                 return 0;
@@ -1555,8 +1580,12 @@ public static partial class DaemonRunner {
             IEnumerable<string> vendors, Func<string, T> probe, T timedOut,
             int ceilingMs = ConcurrentProbeCeilingMs) {
         var tasks = new Dictionary<string, Task<T>>(StringComparer.Ordinal);
+        // A probe blocks its thread for its whole budget, so each gets a dedicated one. Queued on the
+        // thread pool they start only as the pool grows — one thread a second once it is saturated —
+        // which serializes the very pass this seam exists to overlap.
         foreach (var vendor in vendors)
-            tasks.TryAdd(vendor, Task.Run(() => probe(vendor)));
+            tasks.TryAdd(vendor, Task.Factory.StartNew(
+                () => probe(vendor), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default));
 
         if (tasks.Count == 0) return FrozenDictionary<string, T>.Empty;
 
@@ -1593,7 +1622,10 @@ public static partial class DaemonRunner {
     const int DrainGraceMs = 1_500;
 
     static string? ProbeCliVersionOnce(string cliPath, int timeoutMs) {
+        // Wall-clock: the probe and its retry gap are synchronous, so a provider would bound neither.
+#pragma warning disable RS0030
         using var deadline = new CancellationTokenSource(timeoutMs);
+#pragma warning restore RS0030
         try {
             using var process = Process.Start(new ProcessStartInfo {
                 FileName = cliPath,
@@ -1808,16 +1840,17 @@ public static partial class DaemonRunner {
     /// <see cref="SignalRequestsShutdown"/> accepts is routed through <paramref name="lifetime"/>
     /// so the host's cleanup runs instead of the OS default termination.
     /// </summary>
-    static void RegisterDeathRattle(ILogger logger, IHostApplicationLifetime lifetime, bool attachedToTerminal) {
+    static void RegisterDeathRattle(
+            ILogger logger, IHostApplicationLifetime lifetime, bool attachedToTerminal, TimeProvider time) {
         AppDomain.CurrentDomain.UnhandledException += (_, args) => {
             if (args.ExceptionObject is Exception ex) {
-                DeathRattle($"AppDomain.UnhandledException (terminating={args.IsTerminating}): {ex.GetType().Name}: {ex.Message}");
+                DeathRattle(time, $"AppDomain.UnhandledException (terminating={args.IsTerminating}): {ex.GetType().Name}: {ex.Message}");
                 LogUnhandledException(logger, ex, args.IsTerminating);
             }
         };
 
         TaskScheduler.UnobservedTaskException += (_, args) => {
-            DeathRattle($"TaskScheduler.UnobservedTaskException: {args.Exception.GetType().Name}: {args.Exception.Message}");
+            DeathRattle(time, $"TaskScheduler.UnobservedTaskException: {args.Exception.GetType().Name}: {args.Exception.Message}");
             LogUnobservedTaskException(logger, args.Exception);
             // Mark observed so the default policy (a no-op in .NET 5+, but a
             // process-killing rethrow on legacy/AOT configurations) can't
@@ -1826,7 +1859,7 @@ public static partial class DaemonRunner {
         };
 
         AppDomain.CurrentDomain.ProcessExit += (_, _) => {
-            DeathRattle("AppDomain.ProcessExit fired (this is the last log line)");
+            DeathRattle(time, "AppDomain.ProcessExit fired (this is the last log line)");
             LogProcessExit(logger);
         };
 
@@ -1848,7 +1881,7 @@ public static partial class DaemonRunner {
                         return;
                     }
 
-                    DeathRattle($"Received POSIX signal {ctx.Signal} — requesting cooperative shutdown");
+                    DeathRattle(time, $"Received POSIX signal {ctx.Signal} — requesting cooperative shutdown");
                     LogPosixSignal(logger, ctx.Signal);
                     lifetime.StopApplication();
                 }));
@@ -1882,9 +1915,9 @@ public static partial class DaemonRunner {
     /// on stderr immediately. Best-effort: a closed terminal or broken pipe
     /// must not throw out of an exit hook.
     /// </summary>
-    static void DeathRattle(string message) {
+    static void DeathRattle(TimeProvider time, string message) {
         try {
-            Console.Error.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [death-rattle] {message}");
+            Console.Error.WriteLine($"{time.GetLocalNow().DateTime:yyyy-MM-dd HH:mm:ss.fff} [death-rattle] {message}");
             Console.Error.Flush();
         } catch {
             // Stderr might be redirected to a closed pipe, the terminal
@@ -1899,9 +1932,9 @@ public static partial class DaemonRunner {
     /// stderr file on the detached path), so the last line printed names the last phase reached. Once
     /// the host is built, normal logging takes over via <see cref="LogStartupPhase"/>.
     /// </summary>
-    internal static void StartupPhase(string phase) {
+    internal static void StartupPhase(TimeProvider time, string phase) {
         try {
-            Console.Error.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [startup] {phase}");
+            Console.Error.WriteLine($"{time.GetLocalNow().DateTime:yyyy-MM-dd HH:mm:ss.fff} [startup] {phase}");
             Console.Error.Flush();
         } catch {
             // Same posture as DeathRattle: a redirected/closed stderr must not fault the boot.

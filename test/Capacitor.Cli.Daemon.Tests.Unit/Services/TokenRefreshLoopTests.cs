@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Auth;
+using Microsoft.Extensions.Time.Testing;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
@@ -47,7 +48,7 @@ public class TokenRefreshLoopTests {
     public async Task Tick_TokenInsideWindow_RefreshesAndLogsAtDebug() {
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Refreshed) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, TimeProvider.System);
 
         await loop.TickAsync(CancellationToken.None);
 
@@ -60,7 +61,7 @@ public class TokenRefreshLoopTests {
     public async Task Tick_TokenStillValid_IsQuietNoWarning() {
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.NotDue) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, TimeProvider.System);
 
         await loop.TickAsync(CancellationToken.None);
 
@@ -72,7 +73,7 @@ public class TokenRefreshLoopTests {
     public async Task Tick_RefreshFailed_LogsWarning() {
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Failed) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, TimeProvider.System);
 
         await loop.TickAsync(CancellationToken.None);
 
@@ -85,17 +86,17 @@ public class TokenRefreshLoopTests {
         // A rejected refresh means the refresh token itself is dead (WorkOS refused it). The loop
         // must warn once, point at `kcap login`, and stop re-sending the dead token every interval
         // — a much longer backoff than a transient Failed, so a tick 30 minutes later is skipped.
-        var now    = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var time   = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Rejected) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval, () => now);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, time);
 
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(1);
         await Assert.That(logger.Entries.Count(e => e.Level == LogLevel.Warning)).IsEqualTo(1);
         await Assert.That(logger.Entries).Contains(e => e.Level == LogLevel.Warning && e.Message.Contains("kcap login"));
 
-        now = now.AddMinutes(30);                           // far past the 5-minute interval, well inside the hard backoff
+        time.Advance(TimeSpan.FromMinutes(30));                           // far past the 5-minute interval, well inside the hard backoff
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(1);         // suppressed — the dead token isn't re-sent
     }
@@ -106,7 +107,7 @@ public class TokenRefreshLoopTests {
         // fault reading the token file that TokenStore lets propagate).
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromException<ProactiveRefreshOutcome>(new InvalidOperationException("disk gone")) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, TimeProvider.System);
 
         await loop.TickAsync(CancellationToken.None);
 
@@ -118,16 +119,16 @@ public class TokenRefreshLoopTests {
     public async Task Tick_Contended_IsQuietAndDoesNotBackOff() {
         // Lock contention (a peer holds the refresh lock) is not a refresh failure: no warning,
         // and the next tick is NOT rate-limited — contention is transient, so we retry promptly.
-        var now    = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var time   = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Contended) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval, () => now);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, time);
 
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(1);
         await Assert.That(logger.Entries).DoesNotContain(e => e.Level == LogLevel.Warning);
 
-        now = now.AddMinutes(1);                            // well within the rate-limit interval
+        time.Advance(TimeSpan.FromMinutes(1));                            // well within the rate-limit interval
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(2);         // not suppressed — contention doesn't arm the gate
     }
@@ -141,7 +142,7 @@ public class TokenRefreshLoopTests {
 
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromException<ProactiveRefreshOutcome>(new OperationCanceledException()) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, TimeProvider.System);
 
         await loop.TickAsync(cts.Token);
 
@@ -153,19 +154,19 @@ public class TokenRefreshLoopTests {
         // A failed refresh leaves the token inside the window, so without rate-limiting the
         // next tick would re-hit the (dead/rotated) refresh endpoint 60s later — and every 60s
         // forever. The loop must back off for the interval before attempting again.
-        var now    = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var time   = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Failed) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval, () => now);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, time);
 
         await loop.TickAsync(CancellationToken.None);      // attempt #1
         await Assert.That(port.Calls).IsEqualTo(1);
 
-        now = now.AddMinutes(2);                           // still inside the 5-minute interval
+        time.Advance(TimeSpan.FromMinutes(2));                           // still inside the 5-minute interval
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(1);         // suppressed — no second endpoint hit
 
-        now = now.AddMinutes(3);                           // interval (5 min total) has elapsed
+        time.Advance(TimeSpan.FromMinutes(3));                           // interval (5 min total) has elapsed
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(2);         // allowed to retry now
     }
@@ -176,15 +177,15 @@ public class TokenRefreshLoopTests {
         // the new token back inside the window (lifetime <= window), so a success must also arm
         // the rate limiter — otherwise we'd refresh (and rotate the WorkOS refresh token) every
         // tick.
-        var now    = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var time   = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         var logger = new CaptureLogger();
         var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Refreshed) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval, () => now);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, time);
 
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(1);
 
-        now = now.AddMinutes(2);
+        time.Advance(TimeSpan.FromMinutes(2));
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(1);         // suppressed within the interval
     }
@@ -193,17 +194,17 @@ public class TokenRefreshLoopTests {
     public async Task Tick_NotDue_DoesNotArmRateLimiter() {
         // A no-op tick isn't an attempt, so it must not gate the next tick — a healthy token
         // that later enters the window must be refreshed promptly, not held off by an interval.
-        var now    = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var time   = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         var logger = new CaptureLogger();
         var outcome = ProactiveRefreshOutcome.NotDue;
         var port   = new FakePort { Handler = () => Task.FromResult(outcome) };
-        var loop   = new TokenRefreshLoop(port, logger, Interval, () => now);
+        var loop   = new TokenRefreshLoop(port, logger, Interval, time);
 
         await loop.TickAsync(CancellationToken.None);       // NotDue
         await Assert.That(port.Calls).IsEqualTo(1);
 
         outcome = ProactiveRefreshOutcome.Refreshed;
-        now = now.AddMinutes(1);                            // token just entered the window
+        time.Advance(TimeSpan.FromMinutes(1));                            // token just entered the window
         await loop.TickAsync(CancellationToken.None);
         await Assert.That(port.Calls).IsEqualTo(2);         // not suppressed — attempted immediately
     }

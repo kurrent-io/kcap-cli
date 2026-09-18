@@ -47,7 +47,7 @@ public class AcpHostedAgentRuntimeModelSelectionTests {
             Process = new FakeAcpProcess();
             // null keeps the runtime's legacy ConfigOptionModelSelector default, preserving every
             // existing test unchanged; the set_model composition test passes SetModelSelector.
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance, modelSelector: modelSelector);
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance, TimeProvider.System, modelSelector: modelSelector);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
@@ -123,6 +123,25 @@ public class AcpHostedAgentRuntimeModelSelectionTests {
         // will report as live.
         await Assert.That(calls[3].Method).IsEqualTo("session/prompt");
         await Assert.That(h.Runtime.ResolvedModel).IsEqualTo("claude-haiku-4.5");
+    }
+
+    /// A default launch (no requested model) applies no selection, but the desktop rail still needs
+    /// the running model — so the runtime reports the handshake's current model as ResolvedModel,
+    /// the same "show the running model" Pi has. No set_* is sent.
+    [Test]
+    public async Task StartAsync_DefaultLaunch_ExposesTheHandshakeCurrentModelAsResolved() {
+        await using var h = new Harness();
+        h.Fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(
+            FakeAcpAgent.FixedSessionId, currentModelId: "composer-2.5[fast=true]", TeamAvailableModels));
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.StartAsync(
+            "/abs/worktree", "do the thing", h.Cts.Token, requestedModel: null
+        ).WaitAsync(HangGuard);
+
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/set_config_option")).IsFalse();
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/set_model")).IsFalse();
+        await Assert.That(h.Runtime.ResolvedModel).IsEqualTo("composer-2.5[fast=true]");
     }
 
     [Test]

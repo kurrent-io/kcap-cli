@@ -65,7 +65,7 @@ public class AntigravityUserTurnTests {
         // The stock completion grace bounds the writer against a hung disk, which turns an assertion
         // over fifty fsynced appends into a throughput race the suite's own load can lose.
         var journal = new TranscriptJournal(
-            tmp.PathTo("journal.jsonl"), NullLogger.Instance, completeGrace: TimeSpan.FromMinutes(1));
+            tmp.PathTo("journal.jsonl"), NullLogger.Instance, TimeProvider.System, completeGrace: TimeSpan.FromMinutes(1));
         journal.Open("/w", null);
         await using var rt = AntigravityRuntimeFakes.FakeRuntime(FakeTurn.NeverEnds, queueCap: 1, time: Time, journal: journal);
         await rt.SendUserInputAsync("first");
@@ -75,6 +75,12 @@ public class AntigravityUserTurnTests {
         var refusals = Task.Run(async () => { for (var i = 0; i < refused; i++) { try { await rt.SendUserInputAsync($"r{i}"); } catch { } } });
         await refusals;
 
+        // The emitter's journal Record runs one statement AFTER the channel TryWrite, so a channel
+        // reader can outrun it — and CompleteAsync would then drop the Records still landing, since
+        // a completed queue rejects a late TryWrite. Wait for the journal ITSELF to hold every line
+        // (header + 2 + refusals) before draining the channel and completing.
+        await WaitUntil(() => JournalFiles.ReadLines(journal.Path).Length >= 1 + 2 + refused);
+
         // user("first"), session_started, then one note per refusal. Counted, not waited for: a loaded
         // runner emits the tail of the notes past any fixed delay this test could pick.
         var drained = await Drain(rt, 2 + refused);
@@ -83,5 +89,13 @@ public class AntigravityUserTurnTests {
 
         var journaled = JournalFiles.ReadLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
         await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
+    }
+
+    /// <summary>Bounded on the wall clock, not a poll count: each poll's delay is itself a thread-pool
+    /// continuation, so under load 500 of them is nothing like the seconds it reads as.</summary>
+    static async Task WaitUntil(Func<bool> condition) {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && sw.Elapsed < TimeSpan.FromSeconds(30)) await Task.Delay(10);
+        await Assert.That(condition()).IsTrue();
     }
 }

@@ -13,9 +13,9 @@ namespace Capacitor.Cli;
 /// Never throws — a probe failure just omits the field (must never break a hook).
 /// </summary>
 static class SessionStartInventory {
-    public static void Stamp(JsonObject body, ConfigRoot config, HarnessRegistry harnesses) {
+    public static void Stamp(JsonObject body, ConfigRoot config, HarnessRegistry harnesses, TimeProvider time) {
         try {
-            var inv  = HarnessInventory.EvaluateCurrent(config, harnesses);
+            var inv  = HarnessInventory.EvaluateCurrent(config, harnesses, time);
             var json = JsonSerializer.Serialize(inv, CapacitorJsonContext.Default.HarnessInventory);
             body["harness_inventory"] = JsonNode.Parse(json);
         } catch {

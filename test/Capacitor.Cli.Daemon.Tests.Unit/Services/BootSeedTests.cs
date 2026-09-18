@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 public class BootSeedTests {
-    static LaunchConsentStore Store(string dir) => new(dir, NullLogger.Instance);
+    static LaunchConsentStore Store(string dir) => new(dir, NullLogger.Instance, TimeProvider.System);
     static string PolicyPath(string dir) => Path.Combine(dir, "consent.json");
 
     [Test]

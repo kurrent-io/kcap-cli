@@ -169,13 +169,13 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     public SequencedCommandProcessor(
             string epoch, Func<string, AgentLiveness> readLiveness,
             Func<CommandAck, Task> sendAck, Func<CommandRejected, Task> sendRejected,
-            ILogger logger, int cacheBound = 256,
-            Func<string, bool>? isKnownStopTarget = null, TimeProvider? time = null,
+            ILogger logger, TimeProvider time, int cacheBound = 256,
+            Func<string, bool>? isKnownStopTarget = null,
             Task? startBarrier = null) {
         _epoch = epoch; _readLiveness = readLiveness; _sendAck = sendAck; _sendRejected = sendRejected;
         _logger = logger; _cacheBound = cacheBound;
         _isKnownStopTarget = isKnownStopTarget ?? (_ => false);
-        _time = time ?? TimeProvider.System;
+        _time = time;
         _startBarrier = startBarrier;
         _laneTask = Task.Run(RunLaneAsync);
     }

@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Skills;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -17,7 +18,8 @@ namespace Capacitor.Cli.Commands;
 /// are untouchable. Nothing is ever written into a repo.
 /// </summary>
 class SkillsCommand(
-        ConfigRoot config, HarnessRegistry harnesses, AgentsPaths agents, IRepositoriesApi repositories) {
+        ConfigRoot config, HarnessRegistry harnesses, AgentsPaths agents, IRepositoriesApi repositories,
+        GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
     // The background refresh keys off each manifest's synced_at, so a burst of session starts
     // costs one network round-trip per interval per target, not one per session.
     static readonly TimeSpan AutoSyncInterval = TimeSpan.FromHours(6);
@@ -34,13 +36,13 @@ class SkillsCommand(
     ];
 
     public async Task<int> HandleSync(bool dryRun, bool auto = false) {
-        var cwd = Environment.CurrentDirectory;
+        var cwd = workdir.Path;
 
         if (GitRepository.FindRoot(cwd) is null) {
             await Console.Error.WriteLineAsync("Not inside a git repository — run `kcap skills sync` from a repo.");
             return 1;
         }
-        var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time);
         if (repo?.Owner is null || repo.RepoName is null) {
             await Console.Error.WriteLineAsync("Could not determine the repo's owner/name from its git remote.");
             return 1;
@@ -84,7 +86,7 @@ class SkillsCommand(
         using var heldSyncLock = syncLock;
 
         if (!TryLoadManifest(manifestPath, out var manifest)) return 1;
-        if (auto && AutoThrottled(manifest, DateTimeOffset.UtcNow)) return 0;
+        if (auto && AutoThrottled(manifest, time.GetUtcNow())) return 0;
 
         // Metadata alone cannot prove a skill is served: a deleted or hand-edited SKILL.md must be
         // re-materialized, so local drift forfeits the conditional request — a 304 would otherwise
@@ -102,7 +104,7 @@ class SkillsCommand(
         }
 
         if (fetched is SkillsSnapshotResult.NotModified) {
-            if (!dryRun) SaveManifest(manifestPath, manifest! with { SyncedAt = DateTimeOffset.UtcNow });
+            if (!dryRun) SaveManifest(manifestPath, manifest! with { SyncedAt = time.GetUtcNow() });
             Info($"[{target.Key}] skills up to date ({manifest?.Skills?.Length ?? 0} materialized).");
             return 0;
         }
@@ -168,8 +170,8 @@ class SkillsCommand(
         manifest?.SyncedAt is { } syncedAt && now - syncedAt is { } age
             && age >= TimeSpan.Zero && age < AutoSyncInterval;
 
-    static SkillsManifest BuildManifest(string? etag, SkillSnapshotItem[] snapshot, string root) => new() {
-        Etag = etag, SyncedAt = DateTimeOffset.UtcNow,
+    SkillsManifest BuildManifest(string? etag, SkillSnapshotItem[] snapshot, string root) => new() {
+        Etag = etag, SyncedAt = time.GetUtcNow(),
         Skills = [.. snapshot.Select(s => new SkillsManifestEntry {
             DocId = s.DocId, Slug = s.Slug, Version = s.Version, ContentHash = s.ContentHash,
             Path = SkillsMaterializer.SkillDirFor(root, s.Slug),

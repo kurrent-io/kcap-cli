@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Codex;
 
@@ -15,7 +16,8 @@ namespace Capacitor.Cli.Harness.Codex;
 /// with <c>vendor = "codex"</c>. Codex sessions are imported per chain, so
 /// <see cref="ImportSessionAsync"/> is never the entry point — <c>ImportChainsAsync</c> is.
 /// </summary>
-internal sealed class CodexImportSource(ConfigRoot config, string sessionsDir) : IImportSource {
+internal sealed class CodexImportSource(
+        ConfigRoot config, string sessionsDir, GitProviderRouter router, TimeProvider time) : IImportSource {
     readonly string _sessionsDir = sessionsDir;
 
     public HarnessId Vendor => HarnessId.Codex;
@@ -102,16 +104,15 @@ internal sealed class CodexImportSource(ConfigRoot config, string sessionsDir) :
         }
 
         return await TranscriptFileClassification.ClassifyAsync(
+            router,
             config,
             ctx.Home,
-            ctx.HttpClient,
+            ctx.HttpClient, time,
             ctx.BaseUrl,
             transcripts,
             ctx.MinLines,
-            ctx.ExcludedRepos?.ToArray(),
             ct,
-            vendor: Vendor,
-            excludedPaths: ctx.ExcludedPaths?.ToArray()
+            vendor: Vendor
         );
     }
 

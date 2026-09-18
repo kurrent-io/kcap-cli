@@ -20,7 +20,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// AOT-safe: no reflection, no JSON — plain text sampling and reporting only.
 /// </summary>
 public static class CursorVerifyAppendOnlyCommand {
-    public static async Task<int> RunAsync(string[] args, CancellationToken ct = default) {
+    public static async Task<int> RunAsync(string[] args, TimeProvider time, CancellationToken ct = default) {
         var path = GetArg(args, "--path");
 
         if (string.IsNullOrEmpty(path)) {
@@ -38,19 +38,19 @@ public static class CursorVerifyAppendOnlyCommand {
 
         var durationSeconds = ParseIntArg(args, "--duration-seconds", 60);
         var intervalSeconds = ParseIntArg(args, "--interval-seconds", 1);
-        var deadline         = DateTimeOffset.UtcNow.AddSeconds(durationSeconds);
+        var deadline         = time.GetUtcNow().AddSeconds(durationSeconds);
 
         var samples  = new List<CursorAppendOnlyProbe.Sample>();
         var failures = new List<string>();
 
-        while (DateTimeOffset.UtcNow < deadline && !ct.IsCancellationRequested) {
+        while (time.GetUtcNow() < deadline && !ct.IsCancellationRequested) {
             byte[] bytes;
 
             try {
                 bytes = await File.ReadAllBytesAsync(path, ct);
             } catch (IOException) {
                 // Racing a concurrent writer — skip this tick rather than fail the whole run.
-                await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), ct);
+                await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), time, ct);
 
                 continue;
             }
@@ -66,7 +66,7 @@ public static class CursorVerifyAppendOnlyCommand {
 
             samples.Add(sample);
 
-            await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), ct);
+            await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), time, ct);
         }
 
         await Console.Out.WriteLineAsync(

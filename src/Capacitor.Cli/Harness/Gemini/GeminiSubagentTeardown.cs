@@ -25,8 +25,7 @@ namespace Capacitor.Cli.Harness.Gemini;
 /// <c>SubagentStarted</c> + content but no <c>SubagentCompleted</c>. Best-effort per step
 /// (a failure on one subagent — or one step — never skips the rest; re-import recovers).
 /// </summary>
-sealed class GeminiSubagentTeardown(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+sealed class GeminiSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time) {
 
     /// <summary>
     /// Time budget for the teardown on a shutdown path (the parent-exit watchdog), so a slow
@@ -50,8 +49,8 @@ sealed class GeminiSubagentTeardown(ConfigRoot config, ProfileContext profiles, 
 
             // Each step best-effort + independent so subagent-stop (→ SubagentCompleted) is
             // always attempted even if the kill or drain hiccups; re-import recovers the rest.
-            await SafeAsync(() => _watchers.KillWatcher($"{sessionId}-{agentId}"));
-            await SafeAsync(() => _watchers.InlineDrainAsync(sessionId, subFile, agentId, vendor: "gemini"));
+            await SafeAsync(() => watchers.KillWatcher($"{sessionId}-{agentId}"));
+            await SafeAsync(() => watchers.InlineDrainAsync(sessionId, subFile, agentId, vendor: "gemini"));
             await SafeAsync(() => PostStopAsync(sessionId, agentId, agentType, subFile));
         }
     }
@@ -61,7 +60,7 @@ sealed class GeminiSubagentTeardown(ConfigRoot config, ProfileContext profiles, 
         using var client  = await http.ForBackgroundAsync();
         var       payload = GeminiSubagentDiscovery.BuildStopPayload(sessionId, agentId, agentType, subFile);
         using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content);
+        await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content, time);
     }
 
     static async Task SafeAsync(Func<Task> op) {

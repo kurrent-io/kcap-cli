@@ -41,8 +41,10 @@ public static class WorkOSDiscovery {
             ProxyConfigResponse                             proxyConfig,
             IAuthProxyClient                                proxy,
             ITenantPicker                                   picker,
+            SetupFunnel                                     funnel,
             Func<Task<WorkOSAuthResponse?>>                 orglessLogin,
             Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch,     // args: refreshToken, organizationId
+            TimeProvider                                    time,
             Func<string, CancellationToken, Task<WorkOSAuthResponse?>>? orglessRefresh = null, // args: refreshToken, ct
             ITenantProvisioner?                             provisioner = null,
             CancellationToken                               ct = default,
@@ -62,25 +64,21 @@ public static class WorkOSDiscovery {
             // tenant_none/workspace_provisioned and make signin_failed fire for declined offers,
             // provisioning failures, and the deliberately-non-zero retarget path — none of which
             // are a sign-in failure.
-            SetupFunnel.SigninFailed("workos_signin_failed");
+            funnel.SigninFailed("workos_signin_failed");
 
             return Failed(progress, "WorkOS sign-in failed.", ct);
         }
 
-        SetupFunnel.SigninCompleted(AuthProvider.WorkOS);
+        funnel.SigninCompleted(AuthProvider.WorkOS);
 
         var result = await proxy.DiscoverWorkOSTenantsAsync(proxyUrl, auth.AccessToken, ct);
         if (result.Error != DiscoveryError.None) {
-            return Failed(progress, result.Error switch {
-                DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
-                DiscoveryError.TokenRejected    => "WorkOS rejected the authentication token. Please sign in again.",
-                DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
-                _                               => "Tenant discovery failed."
-            }, ct);
+            return Failed(progress, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
         }
 
         if (result.Tenants.Length == 0) {
-            return await OfferCreateAsync(proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, ct, progress);
+            return await OfferCreateAsync(
+                proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, time, ct, progress);
         }
 
         var picked = result.Tenants.Length == 1
@@ -105,12 +103,14 @@ public static class WorkOSDiscovery {
             Func<string, string, Task<WorkOSAuthResponse?>>             orgSwitch,
             Func<string, CancellationToken, Task<WorkOSAuthResponse?>>? orglessRefresh,
             ITenantProvisioner?                                         provisioner,
+            SetupFunnel                                                 funnel,
+            TimeProvider                                                time,
             CancellationToken                                           ct,
             IAuthProgress                                               progress) {
         // Fires before the provisioner-null check below: a headless run (null provisioner,
         // "ask your admin" dead-end) still reached the fork and must count as such — this is
         // the denominator for "reached signup".
-        SetupFunnel.TenantNone(AuthProvider.WorkOS);
+        funnel.TenantNone(AuthProvider.WorkOS);
 
         if (provisioner is null) {
             progress.Error("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
@@ -122,7 +122,7 @@ public static class WorkOSDiscovery {
         // TTL, so hand the provisioner a refreshing token source rather than the login-time token.
         var tokens = new WorkOSTokenSource(
             auth.AccessToken, auth.RefreshToken,
-            orglessRefresh ?? ((_, _) => Task.FromResult<WorkOSAuthResponse?>(null)));
+            orglessRefresh ?? ((_, _) => Task.FromResult<WorkOSAuthResponse?>(null)), time);
         var offer = await provisioner.OfferCreateAsync(tokens, ct);
 
         if (offer.Status == ProvisionOfferStatus.ExistingWorkspace) {
@@ -199,6 +199,7 @@ public static class WorkOSDiscovery {
             WorkOSDiscoveryFlow.Ready                                   ready,
             IAuthProgress                                               progress,
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
+            TimeProvider                                                time,
             CancellationToken                                           ct) {
         var picked = ready.Picked;
 
@@ -211,7 +212,7 @@ public static class WorkOSDiscovery {
         var tokens = new StoredTokens {
             AccessToken    = ready.SwitchedAuth.AccessToken,
             RefreshToken   = ready.SwitchedAuth.RefreshToken,
-            ExpiresAt      = TokenStore.JwtExpiry(ready.SwitchedAuth.AccessToken),
+            ExpiresAt      = TokenStore.JwtExpiry(ready.SwitchedAuth.AccessToken, time),
             GitHubUsername = ready.Username,
             Provider       = AuthProvider.WorkOS,
             ClientId       = ready.ClientId,

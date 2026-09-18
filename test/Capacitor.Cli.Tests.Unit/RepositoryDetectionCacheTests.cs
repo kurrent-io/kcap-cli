@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -30,7 +31,7 @@ public class RepositoryDetectionCacheTests {
     [Test]
     public async Task Detects_nested_gitlab_repo_base_info() {
         using var repo = MakeTempRepo("git@gitlab.com:group/sub/project.git");
-        var payload = await RepositoryDetection.DetectRepositoryAsync(Config.Root, repo);
+        var payload = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, TimeProvider.System);
 
         await Assert.That(payload).IsNotNull();
         await Assert.That(payload!.Owner).IsEqualTo("group/sub");
@@ -57,7 +58,7 @@ public class RepositoryDetectionCacheTests {
     [Test]
     public async Task Detects_gitlab_repo_base_info() {
         using var repo = MakeTempRepo("git@gitlab.com:group/project.git");
-        var payload = await RepositoryDetection.DetectRepositoryAsync(Config.Root, repo);
+        var payload = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, TimeProvider.System);
 
         await Assert.That(payload).IsNotNull();
         await Assert.That(payload!.Owner).IsEqualTo("group");

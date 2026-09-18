@@ -53,11 +53,11 @@ internal static class ShimEnsureClassifier {
 public static class DaemonShimCommands {
     public const string Capability = FirstRunMachineCapabilities.PathShim;
 
-    public static async Task<int> DispatchAsync(string[] args) {
+    public static async Task<int> DispatchAsync(string[] args, TimeProvider time) {
         if (args.Length == 0) return Usage();
 
         return args[0] switch {
-            "ensure" => await Ensure(args[1..]),
+            "ensure" => await Ensure(args[1..], time),
             _        => Usage(),
         };
     }
@@ -75,7 +75,7 @@ public static class DaemonShimCommands {
     /// <param name="isMacOs">Test seam — the shim is osascript-based, so the classifier refuses
     /// off-macOS. A bool cannot distinguish "unspecified" from "explicitly false" on a macOS host,
     /// so this is nullable: null resolves to the real OS, false forces the off-macOS arm.</param>
-    internal static async Task<int> Ensure(string[] args, Func<string?>? resolveTarget = null,
+    internal static async Task<int> Ensure(string[] args, TimeProvider time, Func<string?>? resolveTarget = null,
             ILoginShellProbe? probe = null, Func<string, CancellationToken, Task<ShimResult>>? install = null,
             Func<string, ShimPreflight>? preflight = null, bool? isMacOs = null) {
         // Only --json is a legal flag; anything else (including --help and typos) is rejected
@@ -85,7 +85,7 @@ public static class DaemonShimCommands {
         if (args.Any(a => a != "--json"))
             return Usage();
 
-        var result = await EvaluateAsync(resolveTarget, probe, install, preflight, isMacOs, CancellationToken.None);
+        var result = await EvaluateAsync(time, resolveTarget, probe, install, preflight, isMacOs, CancellationToken.None);
 
         return await Report(result, args.Contains("--json"));
     }
@@ -99,7 +99,7 @@ public static class DaemonShimCommands {
     /// outcome the browser renders is the outcome the terminal would have printed.</para>
     /// </summary>
     internal static async Task<ShimEnsureJson> EvaluateAsync(
-            Func<string?>? resolveTarget = null, ILoginShellProbe? probe = null,
+            TimeProvider time, Func<string?>? resolveTarget = null, ILoginShellProbe? probe = null,
             Func<string, CancellationToken, Task<ShimResult>>? install = null,
             Func<string, ShimPreflight>? preflight = null, bool? isMacOs = null,
             CancellationToken ct = default) {
@@ -111,7 +111,7 @@ public static class DaemonShimCommands {
             return new ShimEnsureJson(Capability, null, null, null, "none",
                 FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NoCliPath);
 
-        probe ??= new LoginShellProbe(new ProcessRunner(), Environment.GetEnvironmentVariable);
+        probe ??= new LoginShellProbe(new ProcessRunner(time), Environment.GetEnvironmentVariable);
         var onPath = await probe.KcapOnPathAsync(ct).ConfigureAwait(false);
 
         var decision = ShimEnsureClassifier.Classify(onPath, isMacOs.Value);
@@ -125,7 +125,7 @@ public static class DaemonShimCommands {
                 new ShimEnsureJson(Capability, target, onPath != null, onPath, "none",
                     FirstRunMachineActionOutcomes.Refused, decision.Reason),
 
-            _ => await Install(target, probe, install, preflight, ct),
+            _ => await Install(target, probe, time, install, preflight, ct),
         };
     }
 
@@ -157,7 +157,7 @@ public static class DaemonShimCommands {
         return fileExists(launcher) ? launcher : native;
     }
 
-    static async Task<ShimEnsureJson> Install(string target, ILoginShellProbe probe,
+    static async Task<ShimEnsureJson> Install(string target, ILoginShellProbe probe, TimeProvider time,
             Func<string, CancellationToken, Task<ShimResult>>? install, Func<string, ShimPreflight>? preflight,
             CancellationToken ct) {
         // Preflight is checked here (before the admin prompt) so a conflict is a coded refusal
@@ -170,7 +170,7 @@ public static class DaemonShimCommands {
 
         var result = install is not null
             ? await install(target, ct).ConfigureAwait(false)
-            : await new PathShimInstaller(new ProcessRunner(), probe)
+            : await new PathShimInstaller(new ProcessRunner(time), probe)
                 .InstallAsync(target, ct).ConfigureAwait(false);
 
         // The outer preflight and the installer's own checks are not atomic: an entry can appear

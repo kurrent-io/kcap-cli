@@ -12,6 +12,7 @@ using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -95,15 +96,15 @@ public class ReplayChildContentCapabilityTests {
         var scratch = tmp.PathTo("capability-probe");
 
         return vendor switch {
-            "claude"      => new ClaudeImportSource(Config.Root, scratch),
-            "codex"       => new CodexImportSource(Config.Root, scratch),
-            "copilot"     => new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths),
-            "cursor"      => new CursorImportSource(Config.Root, scratch, scratch),
-            "gemini"      => new GeminiImportSource(scratch),
-            "kiro"        => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir),
-            "pi"          => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir),
-            "opencode"    => new OpenCodeImportSource(Path.Combine(scratch, "db"), Path.Combine(scratch, "ledger")),
-            "antigravity" => new AntigravityImportSource(new(new(scratch), "")),
+            "claude"      => new ClaudeImportSource(Config.Root, scratch, router: new GitProviderRouter(), time: TimeProvider.System),
+            "codex"       => new CodexImportSource(Config.Root, scratch, router: new GitProviderRouter(), time: TimeProvider.System),
+            "copilot"     => new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System),
+            "cursor"      => new CursorImportSource(Config.Root, scratch, scratch, router: new GitProviderRouter(), time: TimeProvider.System),
+            "gemini"      => new GeminiImportSource(scratch, TimeProvider.System),
+            "kiro"        => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System),
+            "pi"          => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System),
+            "opencode"    => new OpenCodeImportSource(Path.Combine(scratch, "db"), Path.Combine(scratch, "ledger"), TimeProvider.System),
+            "antigravity" => new AntigravityImportSource(new(new(scratch), ""), TimeProvider.System),
             _             => throw new ArgumentOutOfRangeException(nameof(vendor), vendor, "unclassified import source"),
         };
     }

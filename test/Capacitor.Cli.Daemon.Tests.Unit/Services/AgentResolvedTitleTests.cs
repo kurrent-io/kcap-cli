@@ -49,16 +49,16 @@ public class AgentResolvedTitleTests {
             WorktreeRoot = daemons.PathTo("worktrees"),
         };
 
-        var store       = new LaunchConsentStore(config.Store.StateDirectory(config.Name), NullLogger.Instance);
+        var store       = new LaunchConsentStore(config.Store.StateDirectory(config.Name), NullLogger.Instance, TimeProvider.System);
         var broker      = new LaunchConsentBroker();
         var decisionLog = new LaunchConsentDecisionLog(config.Store.StateDirectory(config.Name), NullLogger.Instance);
         var gate        = new LaunchConsentGate(store, decisionLog, broker, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
 
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
-        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance);
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
-        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance);
+        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
+        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
         var notifier         = new DaemonStatusNotifier();
 
         var orchestrator = new AgentOrchestrator(
@@ -67,7 +67,7 @@ public class AgentResolvedTitleTests {
             tokens,
             permissionBridge, new Dictionary<string, IHostedAgentLauncher>(),
             new Dictionary<string, IHostedAgentRuntimeFactory>(), new NoopHostLifetime(),
-            NullLogger<AgentOrchestrator>.Instance, gate, statusNotifier: notifier);
+            NullLogger<AgentOrchestrator>.Instance, gate, TimeProvider.System, statusNotifier: notifier);
 
         return new Fixture(orchestrator, notifier, daemons);
     }

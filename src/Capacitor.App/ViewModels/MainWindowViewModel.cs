@@ -1,9 +1,13 @@
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
+using Capacitor.App.Views;
+using Capacitor.Cli.Core.Commands;
+using DynamicData;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -48,10 +52,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // affinity enforced the moment the renderer references it; caching one as a shared
     // `static readonly` field would tie its affinity to whichever thread happens to trigger this
     // type's static initializer FIRST (e.g. a plain unit test calling a static helper off the UI
-    // thread) and then poison every later render that reuses the same cached instance. DotBrush
+    // thread) and then poison every later render that reuses the same cached instance. Paint
     // below constructs a fresh instance per call instead — cheap, and always on whatever thread
     // the caller is on.
-    static IBrush DotBrush(string hex) => new SolidColorBrush(Color.Parse(hex));
+    static IBrush Paint(string hex) => new SolidColorBrush(Color.Parse(hex));
 
     readonly IDaemonClientService _service;
 
@@ -63,9 +67,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _daemonVersion;
     public string DaemonVersion => _daemonVersion?.Value ?? "";
 
-    // SEMVER-only projection of DaemonVersion (everything from the first '+' is build metadata —
-    // never meaningful to a human glancing at the status line); the untruncated value still lives
-    // on DaemonVersion for the version TextBlock's ToolTip.Tip.
+    // Compact rail label: the daemon semver alone — build metadata stays off the line.
     ObservableAsPropertyHelper<string>? _versionDisplay;
     public string VersionDisplay => _versionDisplay?.Value ?? "";
 
@@ -84,15 +86,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _connectionDisplay;
     public string ConnectionDisplay => _connectionDisplay?.Value ?? "";
 
-    // Status-dot color for ConnectionDisplay's same bucket — kept as a single source of truth so
-    // the dot and the word can never disagree.
-    ObservableAsPropertyHelper<IBrush>? _statusDotBrush;
-    public IBrush StatusDotBrush => _statusDotBrush?.Value ?? DotBrush(StatusColors.Unavailable);
+    // The color ConnectionDisplay is painted in — the word itself carries the status, so this
+    // and the text come from parallel switches over one bucketing.
+    ObservableAsPropertyHelper<IBrush>? _statusBrush;
+    public IBrush StatusBrush => _statusBrush?.Value ?? Paint(StatusColors.Unavailable);
 
     // "n of m agents" only while Connected — active_agents is a display count, never capacity.
-    // "—" otherwise; the service still retains the last snapshot across disconnects.
+    // Empty otherwise, which is what hides it: the service still retains the last snapshot
+    // across disconnects, so a count would go on reading as live.
     ObservableAsPropertyHelper<string>? _agentCountText;
-    public string AgentCountText => _agentCountText?.Value ?? "—";
+    public string AgentCountText => _agentCountText?.Value ?? "";
 
     internal const string RestartPendingMessage = "Daemon update pending — it restarts once no agents are running.";
 
@@ -117,6 +120,18 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string?>? _serverLaneTip;
     public string? ServerLaneTip => _serverLaneTip?.Value;
 
+    ObservableAsPropertyHelper<bool>? _connectionHasDetail;
+    public bool ConnectionHasDetail => _connectionHasDetail?.Value ?? false;
+
+    public const string AttachStatusTip = "Attach status to the daemon on this machine";
+    public const string DaemonNameTip = "Name of the daemon on this machine";
+
+    /// Caption under the URL in the org label's hover — the org is what you point at, the
+    /// server it talks to is what the hover tells you.
+    public const string ServerUrlTip = "Capacitor server for this organization";
+    public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
+    public const string AgentCountTip = "Agents running on this daemon";
+
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
@@ -132,12 +147,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly NavigationGate _navigation;
     readonly Action<Func<Task>> _trackTeardown;
     readonly Func<string, WorkspaceViewModel>? _workspaceFactory;
+    readonly Func<string, AgentOrigin?> _originOf;
+    readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
+    readonly IAgentDirectory? _directory;
+    readonly SerialDisposable _rebind = new();
 
-    WorkspaceViewModel? _currentWorkspace;
-    /// null = the Sessions surface shows its placeholder pane; non-null = that session's workspace.
-    /// Exactly one workspace at a time, and this VM owns it: every swap starts the outgoing one's
-    /// tracked teardown.
-    public WorkspaceViewModel? CurrentWorkspace {
+    ISessionWorkspace? _currentWorkspace;
+    /// null = the Sessions surface shows its placeholder pane; non-null = that session's workspace,
+    /// local or remote. Exactly one at a time, and this VM owns it: every swap starts the outgoing
+    /// one's tracked teardown.
+    public ISessionWorkspace? CurrentWorkspace {
         get => _currentWorkspace;
         private set => this.RaiseAndSetIfChanged(ref _currentWorkspace, value);
     }
@@ -175,6 +194,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Clears the open workspace back to the Sessions surface's placeholder pane — the same command
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
+
+    /// Opens the product documentation. Enabled whatever the server says — a user who cannot reach
+    /// a tenant is exactly the one who needs the docs.
+    public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }
+
+    /// Opens the bug/feedback window for one category; inert without an action to route it to.
+    public ReactiveCommand<FeedbackCategory, Unit> OpenFeedbackCommand { get; }
+
+    /// Whether the two report items have somewhere to go — the same oracle the menu bar's items use.
+    public bool CanOpenFeedback { get; }
+
+    /// Opens the re-auth sign-in surface. Inert without an action to route it to.
+    public ReactiveCommand<Unit, Unit> SignInCommand { get; }
+
+    ObservableAsPropertyHelper<bool>? _signInVisible;
+    /// True while the footer reads Signed out and a sign-in action exists — the launcher's
+    /// Sign in lives on the other pane and is hidden once a workspace is open.
+    public bool SignInVisible => _signInVisible?.Value ?? false;
 
     string? _startMessage;
     // Cleared on every new start attempt and on Connected; set when a start attempt fails.
@@ -236,32 +273,64 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// caller that predates it keeps working the way it always has.
     /// </param>
     /// <param name="laneStatus">
-    /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic.
-    /// Null means the tip never sets — every existing caller without a live lane.
+    /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic
+    /// and the connection row's hover. Null means the hover stays on AttachStatusTip.
     /// </param>
     /// <param name="restartPending">
     /// DaemonRestartPendingWatcher.Pending. Null means the indicator never shows.
     /// </param>
+    /// <param name="originOf">
+    /// Which lane an agent id belongs to, for routing a click at the right workspace. Null reads
+    /// every id as local — the only answer a caller with no merged directory can give. A null
+    /// ANSWER means neither lane holds the id, which opens nothing.
+    /// </param>
+    /// <param name="remoteWorkspaceFactory">
+    /// Builds the card host for a remote row, or returns null when the row is gone by the time it
+    /// runs. A null factory means a remote id has no host to open, so it falls back to the local
+    /// factory.
+    /// </param>
+    /// <param name="directory">
+    /// The merged rows, watched so an open local workspace can follow its agent to the server lane.
+    /// Null means a dropped local row is only ever an ended session — the only reading a caller with
+    /// no directory can give it.
+    /// </param>
+    /// <param name="requestSignIn">
+    /// Opens the re-auth sign-in surface (App owns the window). Null hides the rail Sign in —
+    /// a window with no dialog to open.
+    /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,
-            CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
-            IObservable<string?>? lifecycleStatus = null, TimeProvider? time = null, HomeViewModel? home = null,
+            CancellationToken shutdownToken, ActivityViewModel activity, TimeProvider time,
+            Func<CancellationToken, Task>? startAction = null,
+            IObservable<string?>? lifecycleStatus = null, HomeViewModel? home = null,
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
-            IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null) {
+            IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
+            Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
+            IAgentDirectory? directory = null,
+            Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
+            Action? requestSignIn = null) {
         _service = service;
-        _time = time ?? TimeProvider.System;
+        _time = time;
         Activity = activity;
         Home = home;
         _navigation = navigation ?? new NavigationGate();
         _trackTeardown = trackWorkspaceTeardown ?? RunUntracked;
         _workspaceFactory = workspaceFactory;
+        _originOf = originOf ?? (_ => AgentOrigin.Local);
+        _remoteFactory = remoteWorkspaceFactory;
+        _directory = directory;
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
         ShowHomeCommand = ReactiveCommand.Create(() => { CurrentView = ShellView.Home; });
         ShowSessionsCommand = ReactiveCommand.Create(() => { CurrentView = ShellView.Sessions; });
+        CanOpenFeedback     = openFeedback is not null;
+        OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
+        OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
+        SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
+        var offersSignIn    = requestSignIn is not null;
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
         // "not currently executing" (confirmed against the installed ReactiveUI 23.2.28 API
@@ -335,19 +404,35 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             // transition, see its own comment) means a real value is always already there by then.
             var daemonConnection = snapshots.Select(s => s.Daemon.Connection).StartWith("");
 
-            _connectionDisplay = status.CombineLatest(daemonConnection, ConnectionDisplayFor)
+            // Expired sign-in is a separate diagnosis from the daemon hub word: auto-reconnect
+            // will not restore a session, so the footer must not say Reconnecting. The lane
+            // covers ParkSignedOut; Home's stream also covers a 401 launch that has not parked.
+            var fromLane = (laneStatus ?? Observable.Return(new ServerLaneStatus(ServerLaneState.Dormant)))
+                .Select(s => s.State == ServerLaneState.SignedOut);
+            var fromHome = Home?.SignInExpired ?? Observable.Return(false);
+            var signInExpired = fromLane.CombineLatest(fromHome, (lane, notice) => lane || notice)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+
+            _signInVisible = signInExpired
+                .Select(expired => expired && offersSignIn)
+                .ToProperty(this, x => x.SignInVisible, false)
+                .DisposeWith(disposables);
+
+            _connectionDisplay = status.CombineLatest(daemonConnection, signInExpired, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusDotBrush = status.CombineLatest(daemonConnection, StatusDotFor)
-                .ToProperty(this, x => x.StatusDotBrush, DotBrush(StatusColors.Unavailable))
+            _statusBrush = status.CombineLatest(daemonConnection, signInExpired, StatusBrushFor)
+                .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
             _agentCountText = status.CombineLatest(snapshots, (st, snap) => (st, snap))
-                .Select(t => t.st.State == AttachState.Connected
-                    ? $"{t.snap.Daemon.ActiveAgents} of {t.snap.Daemon.MaxAgents} agents"
-                    : "—")
-                .ToProperty(this, x => x.AgentCountText, "—")
+                .Select(t => t.st.State != AttachState.Connected ? ""
+                    : t.snap.Daemon.MaxAgents == 0
+                        ? $"{t.snap.Daemon.ActiveAgents} agents (unlimited)"
+                        : $"{t.snap.Daemon.ActiveAgents} of {t.snap.Daemon.MaxAgents} agents")
+                .ToProperty(this, x => x.AgentCountText, "")
                 .DisposeWith(disposables);
 
             // Only while attached: a marker left by a daemon we cannot reach says nothing about
@@ -375,10 +460,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.Reason, (string?)null)
                 .DisposeWith(disposables);
 
-            _serverLaneTip = (laneStatus ?? Observable.Empty<ServerLaneStatus>())
+            var lane = (laneStatus ?? Observable.Empty<ServerLaneStatus>())
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+
+            _serverLaneTip = lane
                 .Select(s => s.Diagnostic)
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .ToProperty(this, x => x.ServerLaneTip, (string?)null)
+                .DisposeWith(disposables);
+
+            _connectionHasDetail = lane
+                .Select(s => !string.IsNullOrWhiteSpace(s.Diagnostic))
+                .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
             status.Where(s => s.State == AttachState.Connected)
@@ -408,17 +500,37 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         });
     }
 
-    /// Card and rail click: swaps to this session's workspace. Refused once shutdown has latched —
-    /// a new workspace is a new attach, and quiesce is already running.
-    public void OpenSession(string agentId) {
-        if (_navigation.ShutdownLatched || _workspaceFactory is null) return;
+    /// Card and rail click: swaps to this session's workspace — the local one, or the remote card
+    /// host when the id belongs to another machine. A caller that knows which row was clicked says
+    /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
+    /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
+    /// running.
+    public void OpenSession(string agentId, AgentOrigin? origin = null) {
+        if (_navigation.ShutdownLatched) return;
         CurrentView = ShellView.Sessions;
-        // Re-clicking the open session must not tear down and rebuild a live attach.
-        if (CurrentWorkspace?.AgentId == agentId) return;
 
-        SwapTo(_workspaceFactory(agentId));
+        // Neither lane holds the id: opening the local workspace for it would attach a terminal to
+        // an agent this machine never ran.
+        if ((origin ?? _originOf(agentId)) is not { } lane) return;
+
+        // Re-clicking the open session must not tear down and rebuild a live attach. The other
+        // lane's same-id agent is a different agent, and a remote host the local daemon has taken
+        // over no longer owns the id at all: both are a real swap.
+        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) return;
+
+        ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
+            ? remote(agentId)
+            : _workspaceFactory is { } local ? local(agentId) : null;
+        if (next is null) return;
+
+        SwapTo(next);
         Rail?.NotifySessionOpened(agentId);
     }
+
+    static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
+        open is RemoteSessionViewModel remote
+            ? lane != AgentOrigin.Remote || remote.OriginChangedToLocal
+            : lane != AgentOrigin.Local;
 
     /// The launch auto-open. `generation` is what the launch captured BEFORE its call: a success
     /// arriving after any navigation (closing the workspace, another session, close-to-hide, the
@@ -439,17 +551,88 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void LatchShutdown() {
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
+        _rebind.Disposable = Disposable.Empty;
         if (Rail is not null) Rail.SelectedAgentId = null;
         _navigation.Latch();
         if (live is not null) _trackTeardown(live.TeardownAsync);
     }
 
-    void SwapTo(WorkspaceViewModel? next) {
+    void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
         if (Rail is not null) Rail.SelectedAgentId = next?.AgentId;
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
+        // Last, so a watch that fires synchronously on its first element cannot have the swap it
+        // caused overwritten by the arming that is still returning.
+        WatchOrigin(next);
+    }
+
+    /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
+    /// Nothing here ends a session — the row that wins says whether it did.
+    void WatchOrigin(ISessionWorkspace? workspace) {
+        var watch = workspace switch {
+            RemoteSessionViewModel remote => remote.OriginChangedChanges
+                .Where(moved => moved)
+                .Take(1)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
+            // Not a one-shot: a swap the host cannot complete leaves the watch armed for the next
+            // proof, and one that completes retires it through the swap's own re-arming.
+            WorkspaceViewModel local when _directory is { } directory => LocalRowMoves(directory, local.AgentId)
+                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
+            _ => Disposable.Empty,
+        };
+        // A watch that fired while it was still being armed has already swapped the workspace and
+        // armed the next one: keeping this subscription would retire that one unwatched.
+        if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;
+        else watch.Dispose();
+    }
+
+    /// Fires once a dropped local row's own session stands live on the server lane. The registry
+    /// can list the twin before it knows its session id, so the dropped row's id is kept and the
+    /// twin's later revisions are held against it until the local row returns.
+    static IObservable<bool> LocalRowMoves(IAgentDirectory directory, string agentId) {
+        var localKey = $"local:{agentId}";
+        var remoteKey = $"remote:{agentId}";
+        string? droppedSession = null;
+        return directory.Rows.Connect()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .SelectMany(changes => changes)
+            .Where(change => {
+                if (change.Key == localKey) droppedSession = change.Reason == ChangeReason.Remove ? change.Current.SessionId : null;
+                else if (change.Key != remoteKey) return false;
+                // Judged on the directory as it stands, never on the change: a queued revision can
+                // describe a twin the directory has since dropped, with the local row back.
+                return droppedSession is { Length: > 0 }
+                    && !directory.Rows.Lookup(localKey).HasValue
+                    && directory.Rows.Lookup(remoteKey) is { HasValue: true, Value: var twin }
+                    && MovedToServer(twin, droppedSession);
+            })
+            .Select(_ => true);
+    }
+
+    /// The dropped row's own session, still live on the server lane. A shared agent id proves
+    /// nothing on its own — the directory's dedup fails open, so two unrelated agents can carry one
+    /// id — which is why the session ids must match, the same proof the remote host demands of a
+    /// local twin before it hands the id over.
+    static bool MovedToServer(AgentRow twin, string? droppedSession) =>
+        droppedSession is { Length: > 0 }
+        && !SessionStatusDots.IsTerminal(twin.Status)
+        && twin.SessionId == droppedSession;
+
+    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
+        if (!ReferenceEquals(CurrentWorkspace, open)) return;
+        // The row moved machines on its own; only a click of the user's own navigates, so the
+        // surface they are reading survives the swap underneath it.
+        var view = CurrentView;
+        OpenSession(open.AgentId, origin);
+        CurrentView = view;
+        if (!terminal || ReferenceEquals(CurrentWorkspace, open)) return;
+        switch (CurrentWorkspace) {
+            case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
+            case RemoteSessionViewModel remote: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+        }
     }
 
     // A VM built without a tracker (a test, or any caller predating workspaces) must still not
@@ -490,11 +673,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             ? ""
             : profileName;
 
-    // Single word for the merged status line. Local attach State is checked FIRST — the daemon's
+    internal const string SignedOutDisplay = "Signed out";
+
+    // Single word for the merged status line. Expired sign-in wins: waiting on the daemon hub
+    // will not restore a session. Otherwise local attach State is checked FIRST — the daemon's
     // own upstream Connection word is only meaningful once State is Connected (see the
     // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
     // regardless of whatever Connection word a stale retained snapshot might carry.
-    internal static string ConnectionDisplayFor(AttachStatus status, string daemonConnection) {
+    internal static string ConnectionDisplayFor(
+            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+        if (signInExpired) return SignedOutDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
             return status.Reason == IncompatibleReason ? "Incompatible" : "Unreachable";
@@ -504,17 +692,19 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     }
 
     // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
-    // so a future wording tweak there can never silently detune the dot's color.
-    internal static IBrush StatusDotFor(AttachStatus status, string daemonConnection) {
-        if (status.State == AttachState.Connecting) return DotBrush(StatusColors.InProgress);
+    // so a future wording tweak there can never silently detune the color.
+    internal static IBrush StatusBrushFor(
+            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+        if (signInExpired) return Paint(StatusColors.Disrupted);
+        if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? DotBrush(StatusColors.Disrupted) : DotBrush(StatusColors.Unavailable);
+            return status.Reason == IncompatibleReason ? Paint(StatusColors.Disrupted) : Paint(StatusColors.Unavailable);
 
         return daemonConnection switch {
-            "connected" => DotBrush(StatusColors.Connected),
-            "connecting" or "reconnecting" => DotBrush(StatusColors.InProgress),
-            "disconnected" => DotBrush(StatusColors.Disrupted),
-            _ => DotBrush(StatusColors.Unavailable),
+            "connected" => Paint(StatusColors.Connected),
+            "connecting" or "reconnecting" => Paint(StatusColors.InProgress),
+            "disconnected" => Paint(StatusColors.Disrupted),
+            _ => Paint(StatusColors.Unavailable),
         };
     }
 

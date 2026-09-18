@@ -1,7 +1,6 @@
 using Capacitor.Cli.Core.Auth;
 using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
 using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
@@ -10,10 +9,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// <summary>
 /// The ordered commit boundary itself: the claim hook runs last-cancellable and sees every
 /// identity before anything durable exists, then config + stamp + tokens publish to completion
-/// even under a cancel. Shares the sink key: WorkOS discovery emits into CliTelemetry's
-/// process-global sink.
+/// even under a cancel.
 /// </summary>
-[NotInParallel(nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink))]
 public class CommitBoundaryTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -207,9 +204,9 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
-            orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(switched));
+            orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(switched), time: TimeProvider.System);
 
         await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
 
@@ -218,7 +215,7 @@ public class CommitBoundaryTests {
             Config.Root, AuthFixtures.NewTokenStore(Config.Root),
             (WorkOSDiscoveryFlow.Ready)flow, new RecordingAuthProgress(),
             beforeCommit: (ids, _) => { seen.AddRange(ids); return Task.CompletedTask; },
-            ct: CancellationToken.None);
+            ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
         await Assert.That(seen.Select(i => i.Profile)).IsEquivalentTo(new[] { "eventuous" });
@@ -249,7 +246,7 @@ public class CommitBoundaryTests {
             var flow     = await ReadyEventuousFlowAsync();
             var progress = new RecordingAuthProgress();
 
-            var result = await WorkOSDiscovery.PublishAsync(Config.Root, AuthFixtures.NewTokenStore(Config.Root), flow, progress, beforeCommit: null, ct: CancellationToken.None);
+            var result = await WorkOSDiscovery.PublishAsync(Config.Root, AuthFixtures.NewTokenStore(Config.Root), flow, progress, beforeCommit: null, ct: CancellationToken.None, time: TimeProvider.System);
 
             // The config commit landed, so the boundary had begun — no torn stop, and the loss is reported.
             await Assert.That(result).IsTypeOf<AuthResult.Committed>();
@@ -270,7 +267,7 @@ public class CommitBoundaryTests {
             var flow     = await ReadyEventuousFlowAsync();
             var progress = new RecordingAuthProgress();
 
-            var result = await WorkOSDiscovery.PublishAsync(Config.Root, AuthFixtures.NewTokenStore(Config.Root), flow, progress, beforeCommit: null, ct: CancellationToken.None);
+            var result = await WorkOSDiscovery.PublishAsync(Config.Root, AuthFixtures.NewTokenStore(Config.Root), flow, progress, beforeCommit: null, ct: CancellationToken.None, time: TimeProvider.System);
 
             // Nothing durable began, so this arm is honestly a failure rather than a partial commit.
             await Assert.That(result).IsTypeOf<AuthResult.Failed>();
@@ -348,11 +345,11 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { User = new() { Id = "u", FirstName = "Ada" }, AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(
-                new WorkOSAuthResponse { OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" }));
+                new WorkOSAuthResponse { OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" }), time: TimeProvider.System);
 
         return (WorkOSDiscoveryFlow.Ready)flow;
     }
@@ -368,16 +365,16 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(
-                new WorkOSAuthResponse { OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" }));
+                new WorkOSAuthResponse { OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" }), time: TimeProvider.System);
 
         var result = await WorkOSDiscovery.PublishAsync(
             Config.Root, AuthFixtures.NewTokenStore(Config.Root),
             (WorkOSDiscoveryFlow.Ready)flow, new RecordingAuthProgress(),
             beforeCommit: (_, _) => throw new IOException("claim not persisted"),
-            ct: CancellationToken.None);
+            ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(File.Exists(ConfigPath)).IsFalse();
@@ -395,15 +392,16 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { User = new() { Id = "u", FirstName = "Ada" }, AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(
-                new WorkOSAuthResponse { OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" }));
+                new WorkOSAuthResponse { OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" }), time: TimeProvider.System);
 
         var result = await WorkOSDiscovery.PublishAsync(
             Config.Root, AuthFixtures.NewTokenStore(Config.Root),
-            (WorkOSDiscoveryFlow.Ready)flow, new RecordingAuthProgress(), beforeCommit: null, CancellationToken.None);
+            (WorkOSDiscoveryFlow.Ready)flow, new RecordingAuthProgress(), beforeCommit: null,
+            TimeProvider.System, CancellationToken.None);
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
         await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("eventuous"))!.AccessToken).IsEqualTo("acc2");

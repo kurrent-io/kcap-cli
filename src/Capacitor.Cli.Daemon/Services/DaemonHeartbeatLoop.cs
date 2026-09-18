@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 
@@ -31,6 +30,7 @@ internal sealed class DaemonHeartbeatLoop(
         IDaemonHeartbeatPort port,
         TimeSpan             pingDeadline,
         ILogger              logger,
+        TimeProvider         time,
         TimeSpan?            slowPingThreshold = null
     ) {
     /// <summary>
@@ -70,22 +70,22 @@ internal sealed class DaemonHeartbeatLoop(
             return;
         }
 
-        var sw = Stopwatch.StartNew();
+        var started = time.GetTimestamp();
 
         try {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(pingDeadline);
+            using var cap = new CancellationTokenSource(pingDeadline, time);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
 
             var alive = await port.PingAsync(cts.Token);
-            sw.Stop();
+            var rtt   = time.GetElapsedTime(started);
 
-            if (sw.Elapsed >= _slowPingThreshold) {
+            if (rtt >= _slowPingThreshold) {
                 logger.LogWarning(
                     "Heartbeat: DaemonPing slow — {RttMs:F0} ms RTT (deadline {DeadlineMs:F0} ms); transport latency climbing toward a forced reconnect",
-                    sw.Elapsed.TotalMilliseconds, pingDeadline.TotalMilliseconds
+                    rtt.TotalMilliseconds, pingDeadline.TotalMilliseconds
                 );
             } else {
-                logger.LogDebug("Heartbeat: DaemonPing ok — {RttMs:F0} ms RTT", sw.Elapsed.TotalMilliseconds);
+                logger.LogDebug("Heartbeat: DaemonPing ok — {RttMs:F0} ms RTT", rtt.TotalMilliseconds);
             }
 
             if (!alive) {
@@ -105,7 +105,6 @@ internal sealed class DaemonHeartbeatLoop(
         } catch (OperationCanceledException) {
             // Outer cancellation (process shutting down) — let the loop exit.
         } catch (Exception ex) {
-            sw.Stop();
             // A ping that THROWS (as opposed to hanging until the deadline) means the SignalR client
             // already knows the connection is unusable — "connection is not active" is exactly its
             // signal that the hub has dropped — and OnClosed plus automatic reconnect are already
@@ -113,7 +112,7 @@ internal sealed class DaemonHeartbeatLoop(
             // reading HubState to decide is unsafe because the invoke failure can be observed before
             // the state transitions. Only a hung ping (the deadline above) needs the heartbeat, since
             // SignalR still believes a half-open transport is fine. So stand down on any throw.
-            logger.LogWarning(ex, "Heartbeat: DaemonPing threw after {RttMs:F0} ms (cause=ping_threw) — standing down for automatic reconnect", sw.Elapsed.TotalMilliseconds);
+            logger.LogWarning(ex, "Heartbeat: DaemonPing threw after {RttMs:F0} ms (cause=ping_threw) — standing down for automatic reconnect", time.GetElapsedTime(started).TotalMilliseconds);
         }
     }
 

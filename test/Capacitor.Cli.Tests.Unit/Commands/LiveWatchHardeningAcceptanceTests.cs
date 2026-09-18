@@ -47,9 +47,9 @@ public class LiveWatchHardeningAcceptanceTests {
     // the drain below needs an unreachable server rather than an unusable URL.
     const string Unreachable = "http://127.0.0.1:1";
 
-    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(Unreachable, Config.Root), new FixedCapacitorHttpClient());
+    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(Unreachable, Config.Root), new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Unreachable, Config.Root), new FixedCapacitorHttpClient()), TimeProvider.System);
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     static TempDir TmpDir(string prefix) => new(prefix);
 
@@ -82,7 +82,7 @@ public class LiveWatchHardeningAcceptanceTests {
 
         foreach (var route in routes) {
             using var dir = TmpDir("spawn-matrix");
-            var spool = new HookSpool(dir.Path);
+            var spool = new HookSpool(dir.Path, time: TimeProvider.System);
             var sessionId = Guid.NewGuid().ToString("N");
 
             var outcome = await Poster.PostOrSpoolAsync(
@@ -117,8 +117,8 @@ public class LiveWatchHardeningAcceptanceTests {
         using var lifecycleDir  = TmpDir("codex-stdout-lifecycle");
         using var transcriptDir = TmpDir("codex-stdout-transcript");
 
-        var lifecycle  = new HookSpool(lifecycleDir.Path);
-        var transcript = new TranscriptSpool(transcriptDir.Path);
+        var lifecycle  = new HookSpool(lifecycleDir.Path, time: TimeProvider.System);
+        var transcript = new TranscriptSpool(transcriptDir.Path, time: TimeProvider.System);
 
         // ~5 MB backlog spread across many sessions' transcript spools — large enough that a
         // naive synchronous scan/read would be observable if it ran before stdout.
@@ -161,7 +161,7 @@ public class LiveWatchHardeningAcceptanceTests {
     /// <para><c>LifecycleSpoolDrainTests.drains_start_then_transcript_then_end_for_a_session_with_no_further_hook</c>
     /// and <c>...delivers_needs_import_marker_even_when_transcript_bytes_exceeded_cap</c> already
     /// prove this exact ordering against injected poster delegates; this test proves the SAME
-    /// contract through <see cref="LifecycleSpoolDrain.RunAsync(CursorMarkers,HttpClient,string,HookSpool,TranscriptSpool,string?,TimeSpan,CancellationToken,Action{string,string}?)"/>'s
+    /// contract through <see cref="LifecycleSpoolDrain.RunAsync(CursorMarkers,HttpClient,string,HookSpool,TranscriptSpool,string?,TimeSpan,TimeProvider,CancellationToken,Action{string,string}?)"/>'s
     /// production HTTP wrapper (route→POST mapping, status→<see cref="DrainOutcome"/> mapping,
     /// the needs-import route literally hitting the wire) — the part the delegate-injected test
     /// can't reach.</para>
@@ -173,8 +173,8 @@ public class LiveWatchHardeningAcceptanceTests {
 
         using var dir = TmpDir("global-drain-http");
 
-        var lifecycle  = new HookSpool(dir.PathTo("life"));
-        var transcript = new TranscriptSpool(dir.PathTo("tx"), capBytes: 32); // tiny cap → needs-import
+        var lifecycle  = new HookSpool(dir.PathTo("life"), time: TimeProvider.System);
+        var transcript = new TranscriptSpool(dir.PathTo("tx"), capBytes: 32, time: TimeProvider.System); // tiny cap → needs-import
         var sid        = Guid.NewGuid().ToString("N");
 
         lifecycle.Append(sid, "session-start/kiro", """{"phase":"start"}""");
@@ -188,7 +188,7 @@ public class LiveWatchHardeningAcceptanceTests {
         // invocation; `sid`'s session never fires another hook of its own.
         await LifecycleSpoolDrain.RunAsync(
             Markers, client, server.Url!, lifecycle, transcript, currentSessionId: null,
-            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+            budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None, time: TimeProvider.System);
 
         var hits = server.LogEntries.Select(e => e.RequestMessage).ToList();
         var routeOrder = hits.Select(h => h.Path).ToList();
@@ -247,7 +247,7 @@ public class LiveWatchHardeningAcceptanceTests {
             await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writing\"}\n");
         });
 
-        var completed = await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 8, delayMs: 25);
+        var completed = await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 8, delayMs: 25);
         await writer;
         await Assert.That(completed).IsTrue();
 

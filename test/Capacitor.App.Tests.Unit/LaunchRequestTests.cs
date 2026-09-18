@@ -80,6 +80,24 @@ public class LaunchRequestTests {
     }
 
     [Test]
+    public async Task Attachment_ids_are_carried_when_the_launch_has_any() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AttachmentIds: ["u1", "u2"]));
+        var ids = json.GetProperty("attachment_ids").EnumerateArray().Select(e => e.GetString() ?? "").ToArray();
+
+        await Assert.That(ids).IsEquivalentTo(new[] { "u1", "u2" });
+    }
+
+    /// A launch with no files sends the same null the payload carried before attachments existed —
+    /// never an empty array, which the server would read as "these ids, none of them".
+    [Test]
+    public async Task An_empty_attachment_list_is_sent_as_null() {
+        await Assert.That(Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AttachmentIds: []))
+            .GetProperty("attachment_ids").IsNull).IsTrue();
+        await Assert.That(Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go"))
+            .GetProperty("attachment_ids").IsNull).IsTrue();
+    }
+
+    [Test]
     public async Task Wire_keys_are_exactly_the_twelve_hub_fields_when_no_mode_is_chosen() {
         var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go"));
         var keys = json.EnumerateObject().Select(p => p.Name).ToArray();

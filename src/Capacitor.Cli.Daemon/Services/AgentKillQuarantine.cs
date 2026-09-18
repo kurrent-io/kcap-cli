@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// physically-live for heal/settlement.</item>
 /// </list>
 /// </summary>
-internal sealed class AgentKillQuarantine(ILogger logger) {
+internal sealed class AgentKillQuarantine(ILogger logger, TimeProvider time) {
     /// <summary>A quarantined process — enough to retry the kill by exact identity and to report it.</summary>
     internal readonly record struct Entry(
         string AgentId, int Pid, string Identity, string Kind, DateTimeOffset CreatedAt,
@@ -42,14 +42,14 @@ internal sealed class AgentKillQuarantine(ILogger logger) {
     /// Returns the ENTRIES drained this pass (death/recycle confirmed) so the caller can both delete
     /// their durable PID records — a quarantined survivor's record is retained by teardown and, carrying
     /// the current epoch, would otherwise be skipped by the orphan sweep and leak until restart — AND
-    /// (Phase B2-b, sequenced-settlement design §4.2.4) emit their flow identity as positive per-id
-    /// death evidence to the resolved-candidates ledger before that delete.</summary>
+    /// emit their flow identity as positive per-id death evidence to the resolved-candidates ledger
+    /// before that delete.</summary>
     public async Task<IReadOnlyList<Entry>> RetryAllAsync(CancellationToken ct) {
         var drained = new List<Entry>();
 
         foreach (var entry in _entries.Values) {
             try {
-                if (await ProcessReaper.ReapByIdentityAsync(entry.Pid, entry.Identity, entry.AgentId, logger, ct)
+                if (await ProcessReaper.ReapByIdentityAsync(entry.Pid, entry.Identity, entry.AgentId, logger, time, ct)
                     && _entries.TryRemove(new KeyValuePair<string, Entry>(entry.AgentId, entry)))
                     drained.Add(entry);
             } catch (Exception ex) when (ex is not OperationCanceledException) {

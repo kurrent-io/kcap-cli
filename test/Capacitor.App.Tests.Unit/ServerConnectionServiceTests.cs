@@ -1,14 +1,24 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text;
+using System.Text.Json;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
+using Eventuous.SignalR;
+using Microsoft.AspNetCore.SignalR;
+using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
 [NotInParallel(nameof(HubTestHost))]
 public class ServerConnectionServiceTests {
     static ServerConnectionService Lane(HubTestHost host, string? token = null) =>
-        new(host.Url, () => Task.FromResult(token));
+        new(TimeProvider.System, host.Url, () => Task.FromResult(token));
+
+    /// A lane whose SignalR reconnect ladder is the caller's, for the one test whose bound is
+    /// that ladder rather than the behaviour under it.
+    static ServerConnectionService Lane(HubTestHost host, TimeSpan[] reconnectDelays) =>
+        new(TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), reconnectDelays);
 
     static async Task<T> Next<T>(IObservable<T> source, Func<T, bool> match, int seconds = 10) =>
         await source.Where(match).Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(seconds));
@@ -44,7 +54,7 @@ public class ServerConnectionServiceTests {
 
     [Test]
     public async Task NoServerMeansDormantForever() {
-        await using var lane = new ServerConnectionService(serverUrl: null, () => Task.FromResult<string?>(null));
+        await using var lane = new ServerConnectionService(TimeProvider.System, serverUrl: null, () => Task.FromResult<string?>(null));
         lane.Start();
         var status = await lane.Status.Take(1).ToTask();
         await Assert.That(status.State).IsEqualTo(ServerLaneState.Dormant);
@@ -59,7 +69,7 @@ public class ServerConnectionServiceTests {
         var url = host.Url;
         await host.StopAsync();
 
-        await using var lane = new ServerConnectionService(url, () => Task.FromResult<string?>(null));
+        await using var lane = new ServerConnectionService(TimeProvider.System, url, () => Task.FromResult<string?>(null));
         lane.Start();
         await Next(lane.Status, s => s.State == ServerLaneState.Retrying, seconds: 15);
     }
@@ -118,7 +128,7 @@ public class ServerConnectionServiceTests {
 
     [Test]
     public async Task LaunchWhileDisconnectedFailsWithoutThrowing() {
-        await using var lane = new ServerConnectionService("http://127.0.0.1:1", () => Task.FromResult<string?>(null));
+        await using var lane = new ServerConnectionService(TimeProvider.System, "http://127.0.0.1:1", () => Task.FromResult<string?>(null));
         lane.Start();
         var outcome = await ((ILaunchClient)lane).StartAsync(
             new LaunchRequest("d", "/r", "claude", null), CancellationToken.None);
@@ -130,7 +140,7 @@ public class ServerConnectionServiceTests {
     public async Task UnauthorizedNegotiateSurfacesSignedOutAndStaysThere() {
         await using var host = await HubTestHost.StartAsync(requireAuth: true);
         string? token = null;
-        await using var lane = new ServerConnectionService(host.Url, () => Task.FromResult(token));
+        await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => Task.FromResult(token));
         lane.Start();
 
         await Next(lane.Status, s => s.State == ServerLaneState.SignedOut);
@@ -225,7 +235,7 @@ public class ServerConnectionServiceTests {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
-        await using var lane = new ServerConnectionService(host.Url, () => {
+        await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
             return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
         });
@@ -282,7 +292,7 @@ public class ServerConnectionServiceTests {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
-        await using var lane = new ServerConnectionService(host.Url, () => {
+        await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
             return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
         });
@@ -314,5 +324,288 @@ public class ServerConnectionServiceTests {
         await Assert.That(ServerConnectionService.IsUnauthorized(
             new HttpRequestException("403", null, System.Net.HttpStatusCode.Forbidden))).IsFalse();
         await Assert.That(ServerConnectionService.IsUnauthorized(new InvalidOperationException("no http"))).IsFalse();
+    }
+
+    [Test]
+    public async Task PermissionBroadcastsSurfaceTyped() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var pending = lane.PermissionPending.Take(1).ToTask();
+        var responded = lane.PermissionResponded.Take(2).ToList().ToTask();
+        var requests = lane.PermissionRequests.Take(2).ToList().ToTask();
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        var access = lane.SessionAccessChanged.Take(1).ToTask();
+
+        await host.BroadcastAsync(HubBroadcasts.PermissionPending, "s1");
+        await host.BroadcastAsync(HubBroadcasts.PermissionResponded, "s1", "r1");
+        await host.BroadcastAsync(HubBroadcasts.PermissionResponded, "s1", null);
+        await host.BroadcastAsync(HubBroadcasts.PermissionRequested, "s1", "r1", "Bash", new { command = "ls" }, null);
+        await host.BroadcastAsync(HubBroadcasts.PermissionRequested, "s1", "r2", "fs/write", null,
+            new[] { new AcpInteractionOption { OptionId = "allow-once", Label = "Allow", Kind = "allow_once" } });
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new[] { new AcpInteractionOption { OptionId = "a", Label = "A", MinSelections = 1, MaxSelections = 1 } }, false);
+        await host.BroadcastAsync(HubBroadcasts.SessionAccessChanged, "s1");
+
+        await Assert.That(await pending.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo("s1");
+        var pings = await responded.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(pings[0].RequestId).IsEqualTo("r1");
+        await Assert.That(pings[1].RequestId).IsNull();
+        var reqs = await requests.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(reqs[0].ToolInput!.Value.GetProperty("command").GetString()).IsEqualTo("ls");
+        await Assert.That(reqs[0].Options).IsNull();
+        await Assert.That(reqs[1].Options![0].OptionId).IsEqualTo("allow-once");
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Prompt).IsEqualTo("Pick one");
+        await Assert.That(q.Options[0].MaxSelections).IsEqualTo(1);
+        await Assert.That(await access.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo("s1");
+    }
+
+    /// One option missing its id must not cost the whole push, and no option may reach a card
+    /// without one: the malformed array reads as no options, which asks for free text.
+    [Test]
+    public async Task AnElicitationWithAMalformedOptionSurfacesWithNoOptions() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new object[] { new { option_id = "a", label = "A" }, new { label = "B" } }, false);
+
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Prompt).IsEqualTo("Pick one");
+        await Assert.That(q.Options).IsEmpty();
+    }
+
+    /// An empty option id is offered, not missing: the daemon accepts an empty-string enum value
+    /// and resolves by exact id, so dropping it would degrade a selection question into a
+    /// free-text card whose answer cannot satisfy that contract.
+    [Test]
+    public async Task AnElicitationOptionWithAnEmptyIdStillReachesTheCard() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new object[] { new { option_id = "", label = "Default" }, new { option_id = "b", label = "B" } }, false);
+
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Options.Select(o => o.OptionId)).IsEquivalentTo(new[] { "", "b" });
+    }
+
+    [Test]
+    public async Task ToolInputSentAsAJsonStringIsParsed() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+        var request = lane.PermissionRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.PermissionRequested, "s1", "r1", "Bash", "{\"command\":\"pwd\"}", null);
+        var r = await request.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(r.ToolInput!.Value.GetProperty("command").GetString()).IsEqualTo("pwd");
+    }
+
+    [Test]
+    public async Task InvokesRouteToTheHubAndClassifyDenial() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.ChatSubscribeHandler = sid => sid != "hidden";
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        await Assert.That((await lane.RequestStopAgentAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That(HubTestHost.StopCalls).Contains("a1");
+        await Assert.That((await lane.SubscribeToChatAsync("s1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That((await lane.SubscribeToChatAsync("hidden", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Denied);
+        await Assert.That((await lane.RegisterSessionAccessWatchAsync("hidden", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Denied);
+        await Assert.That((await lane.UnsubscribeFromChatAsync("s1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That(HubTestHost.ChatUnsubscribes).Contains("s1");
+    }
+
+    [Test]
+    public async Task InvokesReportNotConnectedWithoutALiveHub() {
+        await using var lane = new ServerConnectionService(TimeProvider.System, serverUrl: null, () => Task.FromResult<string?>(null));
+        lane.Start();
+        await Assert.That((await lane.RequestStopAgentAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.NotConnected);
+
+        var tailed = new List<StreamEventEnvelope>();
+        await foreach (var envelope in lane.TailStreamAsync("AgentSession-s1", null, CancellationToken.None)) tailed.Add(envelope);
+        await Assert.That(tailed).IsEmpty();
+    }
+
+    [Test]
+    public async Task StreamTailYieldsPushedEventsInOrderAndADeniedStreamThrows() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.StreamHandler = stream => stream != "AgentSession-hidden";
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var received = new List<StreamEventEnvelope>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var tail = Task.Run(async () => {
+            await foreach (var envelope in lane.TailStreamAsync("AgentSession-s1", 4, cts.Token)) {
+                received.Add(envelope);
+                if (received.Count == 2) break;
+            }
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Contains(("AgentSession-s1", (ulong?)4)), what: "the subscribe");
+        var hello = Envelope("AgentSession-s1", 5, "hello");
+        var world = Envelope("AgentSession-s1", 6, "world");
+        await host.PushStreamEventAsync(hello);
+        // At or before the last seen position: the client drops it.
+        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 5, "duplicate"));
+        await host.PushStreamEventAsync(world);
+        await tail.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Select(e => e.StreamPosition)).IsEquivalentTo(new ulong[] { 5, 6 });
+        await Assert.That(received[0].JsonPayload).Contains("hello");
+        await Assert.That(received[0].EventId).IsEqualTo(hello.EventId);
+        await Assert.That(received[0].EventType).IsEqualTo(hello.EventType);
+        await Assert.That(received[0].GlobalPosition).IsEqualTo(hello.GlobalPosition);
+        await Assert.That(received[0].Timestamp).IsEqualTo(hello.Timestamp);
+        await Assert.That(received[1].EventId).IsEqualTo(world.EventId);
+        await Assert.That(received[1].EventType).IsEqualTo(world.EventType);
+        await Assert.That(received[1].GlobalPosition).IsEqualTo(world.GlobalPosition);
+        await Assert.That(received[1].Timestamp).IsEqualTo(world.Timestamp);
+
+        await using var denied = lane.TailStreamAsync("AgentSession-hidden", null, cts.Token).GetAsyncEnumerator(cts.Token);
+        HubException? error = null;
+        try { await denied.MoveNextAsync(); } catch (HubException ex) { error = ex; }
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!.Message).Contains(WireTokens.StreamNotAuthorized);
+    }
+
+    // SignalR's automatic reconnect sits between the host stopping and the tail actually ending,
+    // and its default ladder is ~42s before it gives up and fires Closed. This lane retries once,
+    // immediately, so the bound below measures the tail ending rather than that wait.
+    [Test]
+    public async Task StreamTailEndsCleanlyWhenTheHostStops() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host, [TimeSpan.Zero]);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var tail = Task.Run(async () => {
+            await foreach (var _ in lane.TailStreamAsync("AgentSession-s1", null, cts.Token)) { }
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Contains(("AgentSession-s1", (ulong?)null)), what: "the subscribe");
+
+        await host.StopAsync();
+        await tail.WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Test]
+    public async Task TerminalSubscribeReplaysDimensionsAndBufferThenTheInvokesRecordViewportAndInput() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.TerminalDims = (120, 40);
+        HubTestHost.TerminalReplay.Add("hel"u8.ToArray());
+        HubTestHost.TerminalReplay.Add("lo"u8.ToArray());
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var dims = lane.TerminalDimensions.Take(1).ToTask();
+        var frames = lane.TerminalOutput.Take(2).ToList().ToTask();
+        await Assert.That((await lane.SubscribeToTerminalAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That(await dims.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(new TerminalSize("a1", 120, 40));
+        var received = await frames.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Select(f => Encoding.UTF8.GetString(Convert.FromBase64String(f.Base64)))).IsEquivalentTo(new[] { "hel", "lo" });
+
+        await lane.RequestResizeTerminalAsync("a1", 100, 30, CancellationToken.None);
+        await lane.ReleaseResizeTerminalAsync("a1", CancellationToken.None);
+        await lane.SendUserInputAsync("a1", "fix it", CancellationToken.None);
+        await lane.SendSpecialKeyAsync("a1", SpecialKeys.Escape, CancellationToken.None);
+        await lane.UnsubscribeFromTerminalAsync("a1", CancellationToken.None);
+        await Assert.That(HubTestHost.Resizes).Contains(("a1", 100, 30));
+        await Assert.That(HubTestHost.ResizeReleases).Contains("a1");
+        await Assert.That(HubTestHost.UserInputs).Contains(("a1", "fix it"));
+        await Assert.That(HubTestHost.SpecialKeys).Contains(("a1", "Escape"));
+        await Assert.That(HubTestHost.TerminalUnsubscribes).Contains("a1");
+    }
+
+    [Test]
+    public async Task TheChatJoinSnapshotAndPendingInputPushesSurfaceAsQueueUpdates() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.ChatSnapshot.Add(new QueuedInputItem { DispatchId = Guid.NewGuid(), SenderUserId = "u2", Text = "queued one" });
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var updates = lane.PendingInputChanged.Take(2).ToList().ToTask();
+        await Assert.That((await lane.SubscribeToChatAsync("s1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await host.BroadcastAsync(HubBroadcasts.PendingInputChanged, "a1", "s1",
+            new[] { new QueuedInputItem { DispatchId = Guid.NewGuid(), Text = "queued two" } });
+        var received = await updates.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received[0].SessionId).IsEqualTo("s1");
+        await Assert.That(received[0].Items.Single().Text).IsEqualTo("queued one");
+        await Assert.That(received[1].Items.Single().Text).IsEqualTo("queued two");
+    }
+
+    /// An unreadable push is no news about the queue. Publishing it as an empty one would retire
+    /// every prompt the strip is showing on behalf of the server that still holds them.
+    [Test]
+    public async Task AnUnreadableQueuePushIsSkippedRatherThanPublishedAsAnEmptyQueue() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var update = lane.PendingInputChanged.Take(1).ToTask();
+        using var malformed = JsonDocument.Parse("""[{"dispatch_id":"not-a-guid","text":"unreadable"}]""");
+        await host.BroadcastAsync(HubBroadcasts.PendingInputChanged, "a1", "s1", malformed.RootElement);
+        await host.BroadcastAsync(HubBroadcasts.PendingInputChanged, "a1", "s1",
+            new[] { new QueuedInputItem { DispatchId = Guid.NewGuid(), Text = "readable" } });
+        var received = await update.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Items.Single().Text).IsEqualTo("readable");
+    }
+
+    static StreamEventEnvelope Envelope(string stream, ulong position, string content) => new() {
+        EventId = Guid.NewGuid(), Stream = stream, EventType = CanonicalEventTypes.UserMessageReceived,
+        StreamPosition = position, GlobalPosition = position, Timestamp = DateTime.UtcNow,
+        JsonPayload = $$"""{"content":"{{content}}"}""",
+    };
+
+    /// The subscription client's cleanup removes a stream's registration by name, so a replacement
+    /// that registered first would lose its own; and ending an enumeration tells the server
+    /// nothing, so the tail has to.
+    [Test]
+    public async Task AnEndedTailUnsubscribesOnTheServerAndAReplacementWaitsForThatFirst() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var firstEnded = false;
+        var first = Task.Run(async () => {
+            await foreach (var _ in lane.TailStreamAsync("AgentSession-s1", null, cts.Token)) { }
+            firstEnded = true;
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Count == 1, what: "the first subscribe");
+
+        var received = new List<StreamEventEnvelope>();
+        var second = Task.Run(async () => {
+            await foreach (var envelope in lane.TailStreamAsync("AgentSession-s1", 4, cts.Token)) {
+                received.Add(envelope);
+                break;
+            }
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Count == 2, what: "the second subscribe");
+        // The replaced tail ended, and told the server so, before the replacement subscribed.
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(firstEnded).IsTrue();
+        await Assert.That(HubTestHost.StreamUnsubscribes).IsEquivalentTo(new[] { "AgentSession-s1" });
+
+        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 5, "hello"));
+        await second.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Single().StreamPosition).IsEqualTo(5UL);
+        await WaitUntilAsync(() => HubTestHost.StreamUnsubscribes.Count == 2, what: "the second unsubscribe");
     }
 }

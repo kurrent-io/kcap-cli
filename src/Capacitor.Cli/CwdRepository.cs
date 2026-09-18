@@ -9,7 +9,8 @@ namespace Capacitor.Cli;
 /// name only, and the provider round-trip would otherwise run in every agent session that spawns
 /// the server, tool call or not. Not thread-safe; a concurrent first use resolves twice.
 /// </summary>
-sealed class CwdRepository(ConfigRoot config, string cwd, CommandRunner? run = null) {
+sealed class CwdRepository(
+        ConfigRoot config, string cwd, GitProviderRouter router, TimeProvider time, CommandRunner? run = null) {
     bool               _resolved;
     RepositoryPayload? _repository;
 
@@ -17,7 +18,7 @@ sealed class CwdRepository(ConfigRoot config, string cwd, CommandRunner? run = n
     public async ValueTask<RepositoryPayload?> GetAsync() {
         if (_resolved) return _repository;
 
-        _repository = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false, run: run);
+        _repository = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false, run: run);
         _resolved   = true;
 
         return _repository;

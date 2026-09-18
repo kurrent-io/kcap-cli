@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.Commands;
 
 namespace Capacitor.Cli.Core.Http;
 
-internal sealed class MachinesApi(ICapacitorHttpClient http, CapacitorServer server) : IMachinesApi {
+internal sealed class MachinesApi(ICapacitorHttpClient http, CapacitorServer server, TimeProvider time) : IMachinesApi {
     public async Task<MachineRegistrationResult> RegisterAsync(
             string clientId, string name, string? role, CancellationToken ct = default) {
         // The *WithRetryAsync helpers check this for themselves; this call avoids them by design, so
@@ -38,7 +38,7 @@ internal sealed class MachinesApi(ICapacitorHttpClient http, CapacitorServer ser
     }
 
     public async Task<MachinesResult> ListAsync(CancellationToken ct = default) {
-        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/admin/machines", ct: token), ct);
+        using var response = await SendAsync((c, token) => c.GetWithRetryAsync($"{server.Url}/api/admin/machines", time, ct: token), ct);
 
         if (response.StatusCode is HttpStatusCode.NotFound) return new MachinesResult.FeatureDisabled();
         if (!response.IsSuccessStatusCode) throw await CapacitorApiRequests.FailureAsync(response);
@@ -53,7 +53,7 @@ internal sealed class MachinesApi(ICapacitorHttpClient http, CapacitorServer ser
         // which a strict endpoint can reject with a 415.
         using var body = new StringContent("{}", Encoding.UTF8, "application/json");
         using var response = await SendAsync(
-            (c, token) => c.PostWithRetryAsync($"{server.Url}/api/admin/machines/{Uri.EscapeDataString(serviceId)}/revoke", body, ct: token), ct);
+            (c, token) => c.PostWithRetryAsync($"{server.Url}/api/admin/machines/{Uri.EscapeDataString(serviceId)}/revoke", body, time, ct: token), ct);
 
         if (response.StatusCode is HttpStatusCode.NotFound) return new MachineRevokeResult.NotFound();
         if (!response.IsSuccessStatusCode) throw await CapacitorApiRequests.FailureAsync(response);

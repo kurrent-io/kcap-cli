@@ -19,7 +19,7 @@ namespace Capacitor.App.Tests.Unit;
 public class AppStartupCarveOutTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None);
+    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System);
 
     const string ProfileName = "acme";
     const string ServerUrl = "https://acme.example";

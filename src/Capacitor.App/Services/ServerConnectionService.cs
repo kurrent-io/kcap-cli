@@ -1,10 +1,14 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Remote.Models;
+using Eventuous.SignalR;
+using Eventuous.SignalR.Client;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -18,15 +22,30 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public const string TeamClaimMissingNotice =
         "Signed-in token carries no team claim — server broadcasts may not reach this app.";
 
+    readonly TimeProvider _time;
+
     static readonly TimeSpan[] Backoff =
         [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
 
     readonly string? _serverUrl;
     readonly Func<Task<string?>> _token;
+    /// SignalR's own reconnect ladder, which a test shortens; null keeps the client's default.
+    readonly TimeSpan[]? _reconnectDelays;
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
     readonly Subject<LaunchFailure> _launchFailures = new();
+    readonly Subject<string> _permissionPending = new();
+    readonly Subject<PermissionRespondedPing> _permissionResponded = new();
+    readonly Subject<ServerPermissionRequest> _permissionRequests = new();
+    readonly Subject<ServerElicitationRequest> _elicitations = new();
+    readonly Subject<string> _sessionAccessChanged = new();
+    readonly Subject<PendingInputUpdate> _pendingInput = new();
+    readonly Subject<TerminalOutputFrame> _terminalOutput = new();
+    readonly Subject<TerminalSize> _terminalDimensions = new();
+    // The subscription client of the live hub, replaced with it: it registers the StreamEvent
+    // handler on the hub it wraps, so one per connection generation.
+    volatile SignalRSubscriptionClient? _streams;
     readonly SemaphoreSlim _restartGate = new(1, 1);
     // One lock owns the whole lane lifecycle: the generation, the current loop's cancellation
     // source, and EVERY status publish. A generation names one admitted connect loop; a park, a
@@ -45,23 +64,36 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     Task _loop = Task.CompletedTask;
     volatile HubConnection? _hub;
 
-    public ServerConnectionService(ProfileContext? profiles, TokenStore tokenStore)
+    public ServerConnectionService(ProfileContext? profiles, TokenStore tokenStore, TimeProvider time)
         : this(
+            time,
             profiles?.Resolution.ServerUrl,
             profiles is null
                 ? () => Task.FromResult<string?>(null)
                 : async () => (await tokenStore.GetValidTokensForServerAsync(
                     profiles.Name, profiles.Resolution.ServerUrl!)).Tokens?.AccessToken) { }
 
-    internal ServerConnectionService(string? serverUrl, Func<Task<string?>> accessTokenProvider) {
+    internal ServerConnectionService(
+            TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,
+            TimeSpan[]? reconnectDelays = null) {
+        _time = time;
         _serverUrl = string.IsNullOrEmpty(serverUrl) ? null : serverUrl.TrimEnd('/');
         _token = accessTokenProvider;
+        _reconnectDelays = reconnectDelays;
     }
 
     public IObservable<ServerLaneStatus> Status => _status.AsObservable();
     public IObservable<Unit> AgentInstancesChanged => _agentsChanged.AsObservable();
     public IObservable<Unit> DaemonsChanged => _daemonsChanged.AsObservable();
     public IObservable<LaunchFailure> LaunchFailures => _launchFailures.AsObservable();
+    public IObservable<string> PermissionPending => _permissionPending.AsObservable();
+    public IObservable<PermissionRespondedPing> PermissionResponded => _permissionResponded.AsObservable();
+    public IObservable<ServerPermissionRequest> PermissionRequests => _permissionRequests.AsObservable();
+    public IObservable<ServerElicitationRequest> ElicitationRequests => _elicitations.AsObservable();
+    public IObservable<string> SessionAccessChanged => _sessionAccessChanged.AsObservable();
+    public IObservable<PendingInputUpdate> PendingInputChanged => _pendingInput.AsObservable();
+    public IObservable<TerminalOutputFrame> TerminalOutput => _terminalOutput.AsObservable();
+    public IObservable<TerminalSize> TerminalDimensions => _terminalDimensions.AsObservable();
 
     public void Start() {
         if (_serverUrl is null) return;
@@ -138,9 +170,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             // down — and has nothing left to dial for.
             if (!Publish(generation, new(ServerLaneState.Connecting))) return;
             HubConnection? hub = null;
+            SignalRSubscriptionClient? streams = null;
             try {
                 hub = Build();
                 var capturedHub = hub;
+                streams = new SignalRSubscriptionClient(hub);
 
                 // Registered before StartAsync (SignalR supports that), so a close during the
                 // DiagnoseAsync token read below — or during StartAsync itself — is still
@@ -158,6 +192,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
 
                 await hub.StartAsync(ct).ConfigureAwait(false);
                 _hub = hub;
+                _streams = streams;
                 attempt = 0;
                 var (connectedDiagnostic, connectedSubject) = await DiagnoseAsync().ConfigureAwait(false);
                 PublishConnected(generation, capturedHub, connectedDiagnostic, connectedSubject);
@@ -180,13 +215,21 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             } catch (Exception ex) {
                 Publish(generation, new(ServerLaneState.Retrying, ex.Message));
             } finally {
+                _streams = null;
                 _hub = null;
                 if (hub is not null) await hub.DisposeAsync().ConfigureAwait(false);
+                // The hub goes first: disposed, the client's courtesy unsubscribe finds a dead
+                // connection and skips it (the library itself catches ObjectDisposedException),
+                // so it never makes a server round-trip on the shutdown path. A failure here still
+                // must not turn a loop exit into a fault.
+                if (streams is not null) {
+                    try { await streams.DisposeAsync().ConfigureAwait(false); } catch (Exception) { }
+                }
             }
 
             if (ct.IsCancellationRequested) break;
             var delay = Backoff[Math.Min(attempt++, Backoff.Length - 1)];
-            try { await Task.Delay(delay, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
+            try { await Task.Delay(delay, _time, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
         }
     }
 
@@ -202,14 +245,29 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     }
 
     HubConnection Build() {
-        var hub = new HubConnectionBuilder()
-            .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token)
-            .WithAutomaticReconnect()
+        var builder = new HubConnectionBuilder()
+            .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token);
+        var hub = (_reconnectDelays is { } delays ? builder.WithAutomaticReconnect(delays) : builder.WithAutomaticReconnect())
             .AddJsonProtocol(o => o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower)
             .Build();
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));
         hub.On(HubBroadcasts.DaemonsChanged, () => _daemonsChanged.OnNext(Unit.Default));
         hub.On<string, string>(HubBroadcasts.LaunchFailed, (agentId, reason) => _launchFailures.OnNext(new(agentId, reason)));
+        hub.On<string>(HubBroadcasts.PermissionPending, _permissionPending.OnNext);
+        hub.On<string, string?>(HubBroadcasts.PermissionResponded, (sid, rid) => _permissionResponded.OnNext(new(sid, rid)));
+        hub.On<string, string, string?, JsonElement?, JsonElement?>(HubBroadcasts.PermissionRequested,
+            (sid, rid, tool, input, options) => _permissionRequests.OnNext(ServerPermissionRequest.From(sid, rid, tool, input, options)));
+        // JsonElement, not the typed array: binding the options to a record with required members
+        // makes SignalR drop the WHOLE push over one malformed option, so it is parsed leniently
+        // instead — an array that does not read as options is no options, which asks for free text.
+        hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
+            (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
+        hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
+        hub.On<string, string, JsonElement?>(HubBroadcasts.PendingInputChanged, (_, sessionId, items) => {
+            if (ParseQueue(items) is { } queue) _pendingInput.OnNext(new(sessionId, queue));
+        });
+        hub.On<string, string>(HubBroadcasts.TerminalOutput, (agentId, base64) => _terminalOutput.OnNext(new(agentId, base64)));
+        hub.On<string, int, int>(HubBroadcasts.TerminalDimensions, (agentId, cols, rows) => _terminalDimensions.OnNext(new(agentId, cols, rows)));
         return hub;
     }
 
@@ -243,6 +301,135 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             return await hub.InvokeAsync<List<DaemonInfo>>(HubMethods.GetConnectedDaemons, ct).ConfigureAwait(false);
         } catch (Exception) {
             return null;
+        }
+    }
+
+    public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.RequestStopAgent, ct, agentId);
+    public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);
+    public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.RegisterSessionAccessWatch, ct, sessionId);
+
+    /// One tail per stream at a time. The subscription client keys its registrations by stream
+    /// name and removes the key unconditionally when an enumeration ends, so a replacement that
+    /// registered before the previous enumeration finished would lose its registration to that
+    /// cleanup and receive nothing: a new tail ends the previous one and waits for its cleanup
+    /// first, and the replaced consumer sees an ended tail. Ending an enumeration also removes
+    /// only the client-side registration — the server keeps pushing the stream to this
+    /// connection until told otherwise — so a tail that ends with the hub up unsubscribes there.
+    public async IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(
+            string stream, ulong? fromPosition, [EnumeratorCancellation] CancellationToken ct) {
+        var slot = new TailSlot(ct);
+        TailSlot? previous;
+        lock (_tailLock) {
+            _tails.TryGetValue(stream, out previous);
+            _tails[stream] = slot;
+        }
+        try {
+            if (previous is not null) {
+                previous.Cts.Cancel();
+                await previous.Done.Task.ConfigureAwait(false);
+            }
+            var streams = _streams;
+            var hub = _hub;
+            if (streams is null || hub is not { State: HubConnectionState.Connected }) yield break;
+            var source = streams.SubscribeAsync(stream, fromPosition, slot.Cts.Token).GetAsyncEnumerator(slot.Cts.Token);
+            var refused = false;
+            try {
+                while (true) {
+                    bool more;
+                    try {
+                        more = await source.MoveNextAsync().ConfigureAwait(false);
+                    } catch (HubException) {
+                        refused = true;
+                        throw;
+                    } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                        throw;
+                    } catch (Exception) {
+                        // Lane loss is data, not an error: the next Connected re-tails from the last
+                        // position, so the consumer sees an ended tail, never a transport fault. This
+                        // also catches the library's own reconnect-exhausted close, which completes the
+                        // channel with an OperationCanceledException carrying ITS OWN internal token —
+                        // indistinguishable from ours by type, so only our own `ct` firing re-throws.
+                        more = false;
+                    }
+                    if (!more) yield break;
+                    yield return source.Current;
+                }
+            } finally {
+                await source.DisposeAsync().ConfigureAwait(false);
+                if (!refused && hub.State == HubConnectionState.Connected) {
+                    try { await hub.InvokeAsync(SignalRSubscriptionMethods.Unsubscribe, stream, CancellationToken.None).ConfigureAwait(false); }
+                    catch (Exception) { }
+                }
+            }
+        } finally {
+            lock (_tailLock) { if (ReferenceEquals(_tails.GetValueOrDefault(stream), slot)) _tails.Remove(stream); }
+            slot.Cts.Dispose();
+            slot.Done.TrySetResult();
+        }
+    }
+
+    readonly Dictionary<string, TailSlot> _tails = new(StringComparer.Ordinal);
+    readonly Lock _tailLock = new();
+
+    sealed class TailSlot(CancellationToken ct) {
+        public readonly CancellationTokenSource Cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        public readonly TaskCompletionSource Done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    public Task<HubCallOutcome> SubscribeToTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.SubscribeToTerminal, ct, agentId);
+    public Task<HubCallOutcome> UnsubscribeFromTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromTerminal, ct, agentId);
+    public Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct) => InvokeAsync(HubMethods.RequestResizeTerminal, ct, agentId, cols, rows);
+    public Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.ReleaseResizeTerminal, ct, agentId);
+    // Three arguments always: the method's arity is frozen and SignalR does not backfill a
+    // missing trailing one.
+    public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => InvokeAsync(HubMethods.SendUserInput, ct, agentId, text, null);
+    public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => InvokeAsync(HubMethods.SendSpecialKey, ct, agentId, key);
+
+    /// Denied is the server's session-visibility refusal (HubException carrying WireTokens.
+    /// SessionNotVisible); every other exception is Failed with its message, and a lane with no
+    /// live hub answers NotConnected without dialing.
+    async Task<HubCallOutcome> InvokeAsync(string method, CancellationToken ct, params object?[] args) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return HubCallOutcome.NotConnected;
+        try {
+            await hub.InvokeCoreAsync(method, args, ct).ConfigureAwait(false);
+            return HubCallOutcome.Ok;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (HubException ex) when (ex.Message.Contains(WireTokens.SessionNotVisible, StringComparison.Ordinal)) {
+            return HubCallOutcome.Denied(ex.Message);
+        } catch (Exception ex) {
+            return HubCallOutcome.Failed(ex.Message);
+        }
+    }
+
+    /// The join answers with the session's queue; it rides the same stream as the pushes so a
+    /// consumer sees one shape.
+    public async Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) {
+        var (outcome, snapshot) = await InvokeAsync<JsonElement?>(HubMethods.SubscribeToChat, ct, sessionId).ConfigureAwait(false);
+        if (outcome.Result == HubCallResult.Ok && ParseQueue(snapshot) is { } queue) _pendingInput.OnNext(new(sessionId, queue));
+        return outcome;
+    }
+
+    /// Null for a payload that is not a readable queue — never an empty one, which a consumer
+    /// would read as the server having dropped every prompt it holds.
+    static IReadOnlyList<QueuedInputItem>? ParseQueue(JsonElement? items) {
+        if (items is not { } array || !array.IsArray) return null;
+        try { return array.Deserialize(RemoteModelsJsonContext.Default.QueuedInputItemArray); }
+        catch (JsonException) { return null; }
+    }
+
+    async Task<(HubCallOutcome Outcome, T? Result)> InvokeAsync<T>(string method, CancellationToken ct, params object?[] args) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return (HubCallOutcome.NotConnected, default);
+        try {
+            return (HubCallOutcome.Ok, await hub.InvokeCoreAsync<T>(method, args, ct).ConfigureAwait(false));
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (HubException ex) when (ex.Message.Contains(WireTokens.SessionNotVisible, StringComparison.Ordinal)) {
+            return (HubCallOutcome.Denied(ex.Message), default);
+        } catch (Exception ex) {
+            return (HubCallOutcome.Failed(ex.Message), default);
         }
     }
 
@@ -294,5 +481,13 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _agentsChanged.Dispose();
         _daemonsChanged.Dispose();
         _launchFailures.Dispose();
+        _permissionPending.Dispose();
+        _permissionResponded.Dispose();
+        _permissionRequests.Dispose();
+        _elicitations.Dispose();
+        _sessionAccessChanged.Dispose();
+        _pendingInput.Dispose();
+        _terminalOutput.Dispose();
+        _terminalDimensions.Dispose();
     }
 }

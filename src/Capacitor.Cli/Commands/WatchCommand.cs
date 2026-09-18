@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
@@ -20,6 +21,7 @@ using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.OpenCode;
+using Capacitor.Cli.PrDetection;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,9 +31,9 @@ namespace Capacitor.Cli.Commands;
 
 partial class WatchCommand(
         ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, ICredentialSource credentials) {
-    readonly CursorMarkers  _markers  = new(config);
-    readonly WatcherManager _watchers = new(config, profiles, http);
+        ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
+        GitProviderRouter router, TimeProvider time) {
+    readonly CursorMarkers  _markers  = new(config, time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -118,9 +120,9 @@ partial class WatchCommand(
             TimeSpan        noProgressElapsed,
             TimeSpan        ceiling
         ) =>
-        reResolvedPid is { } pid && isAlive(pid) ? ParentDeadRecovery.ReArm
-        : noProgressElapsed > ceiling            ? ParentDeadRecovery.EndTerminal
-        :                                          ParentDeadRecovery.KeepWaiting;
+        reResolvedPid is { } pid && pid > 1 && isAlive(pid) ? ParentDeadRecovery.ReArm
+        : noProgressElapsed > ceiling                        ? ParentDeadRecovery.EndTerminal
+        :                                                      ParentDeadRecovery.KeepWaiting;
 
     /// <summary>
     /// Long ceiling for the staged parent-dead / wedged-watcher recovery. Deliberately far above the
@@ -167,7 +169,8 @@ partial class WatchCommand(
     /// <para>Shares read+write: this polls while the vendor flushes its final records, so it must not
     /// block that write (see <see cref="SharedFileText"/>).</para>
     /// </summary>
-    internal static async Task<bool> WaitForFinalLineCompletionAsync(string path, int attempts = 4, int delayMs = 500) {
+    internal static async Task<bool> WaitForFinalLineCompletionAsync(
+            string path, TimeProvider time, int attempts = 4, int delayMs = 500) {
         for (var i = 0; i < attempts; i++) {
             try {
                 if (IsFinalLineComplete(await File.ReadAllTextSharedAsync(path))) return true;
@@ -176,7 +179,7 @@ partial class WatchCommand(
             }
 
             try {
-                await Task.Delay(delayMs);
+                await Task.Delay(TimeSpan.FromMilliseconds(delayMs), time);
             } catch {
                 // Never let a delay hiccup abort the shutdown path.
             }
@@ -255,11 +258,11 @@ partial class WatchCommand(
         // once here (startup) and then every main-loop iteration below so a hook-side
         // staleness probe can distinguish a wedged (hung-but-alive) watcher from a healthy
         // one — a PID-only liveness check can't tell the difference.
-        var heartbeatPath = _watchers.GetHeartbeatFilePath(logKey);
+        var heartbeatPath = watchers.GetHeartbeatFilePath(logKey);
 
         void TouchHeartbeat() {
             try {
-                WatcherHeartbeat.Touch(heartbeatPath, DateTimeOffset.UtcNow);
+                WatcherHeartbeat.Touch(heartbeatPath, time.GetUtcNow());
             } catch {
                 /* best-effort — a missed touch just risks one false-stale reading, never worse */
             }
@@ -273,10 +276,13 @@ partial class WatchCommand(
         // window, and the parent-PID poll below never fires — leaving the
         // session stuck "active" because session-end is never POSTed.
         if (!ProcessHelpers.DetachFromControllingTerminal()) {
-            Log("setsid() failed; SIGHUP from terminal close may kill the watcher");
+            Log(time, "setsid() failed; SIGHUP from terminal close may kill the watcher");
         }
 
         using var cts = new CancellationTokenSource();
+
+        var shutdownRequestedAt = 0L;
+        using var shutdownStamp = cts.Token.Register(() => Interlocked.CompareExchange(ref shutdownRequestedAt, time.GetTimestamp(), 0));
 
         // A cancellable delay that keeps the heartbeat fresh across long waits. The connect-retry
         // backoff grows to 30s — longer than the ~20s staleness threshold — so a single Task.Delay
@@ -288,7 +294,7 @@ partial class WatchCommand(
                 TouchHeartbeat();
 
                 try {
-                    await Task.Delay(chunk, cts.Token);
+                    await Task.Delay(chunk, time, cts.Token);
                 } catch (OperationCanceledException) {
                     return false;
                 }
@@ -337,7 +343,7 @@ partial class WatchCommand(
         // failed, this handler keeps the watcher alive long enough to run the
         // parent-exit cleanup path (drain + session-end POST).
         using var sighupReg = PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => {
-            Log("Received SIGHUP; treating as parent-exit");
+            Log(time, "Received SIGHUP; treating as parent-exit");
             Interlocked.Exchange(ref parentExited, 1);
             cts.Cancel();
             ctx.Cancel = true;
@@ -346,13 +352,13 @@ partial class WatchCommand(
         // declared before the parent-watchdog block so the staged parent-dead recovery
         // task can read state.LastActivityAt as its no-progress clock.
         var state = new WatchState();
-        state.LastActivityAt = DateTimeOffset.UtcNow;
+        state.LastActivityAt = time.GetUtcNow();
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
         // lifetime (its checkpoint/pending-range state is meant to persist poll-to-poll). Null
         // for every non-Cursor vendor — DrainNewLines only exercises guard/ack logic when both
         // vendor == "cursor" AND this is non-null.
-        var cursorGuard = vendor == "cursor" ? new CursorRewriteGuard(config, sessionId) : null;
+        var cursorGuard = vendor == "cursor" ? new CursorRewriteGuard(config, sessionId, time) : null;
 
         // serializes a reconnect-discovered rewind
         // (ApplyReconnectRewindAsync, run from the Reconnected handler) against DrainNewLines'
@@ -369,13 +375,13 @@ partial class WatchCommand(
         // returned without advancing state) and quarantines the session (the guard itself writes
         // the marker); this just triggers the same clean-exit path StopWatcher uses.
         void OnCursorRewriteDetected() {
-            Log("cursor_transcript_rewrite_detected: discarding unsent batch and exiting (session quarantined)");
+            Log(time, "cursor_transcript_rewrite_detected: discarding unsent batch and exiting (session quarantined)");
             cts.Cancel();
         }
 
         // Task 8: the dedicated undelivered-transcript-tail spool, shared by the final-drain
         // needs-import marker below and the shutdown-during-outage tail spool.
-        var transcriptSpool = new TranscriptSpool(config);
+        var transcriptSpool = new TranscriptSpool(config, time);
 
         // Watch the spawning coding-agent process. If it dies without firing
         // session-end (crash, force-kill, IDE-detach), self-terminate within ~5s and
@@ -385,17 +391,17 @@ partial class WatchCommand(
         // resolved parent PID was already dead at startup and nothing recorded it.
         // Local so both the initial Monitor case and the recovery re-arm start the identical poll.
         void ArmParentMonitor(int ppid) {
-            Log($"Monitoring parent pid {ppid}");
+            Log(time, $"Monitoring parent pid {ppid}");
             _ = Task.Run(async () => {
                 while (!cts.Token.IsCancellationRequested) {
                     try {
-                        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                        await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
                     } catch (OperationCanceledException) {
                         return;
                     }
 
                     if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                        Log($"Parent pid {ppid} exited; shutting down watcher");
+                        Log(time, $"Parent pid {ppid} exited; shutting down watcher");
                         Interlocked.Exchange(ref parentExited, 1);
                         cts.Cancel();
 
@@ -407,12 +413,12 @@ partial class WatchCommand(
 
         switch (DecideParentWatchdog(parentPid, ProcessHelpers.IsProcessAlive)) {
             case ParentWatchdog.NoParentPid:
-                Log("No parent pid supplied; parent-exit watchdog disabled (session-end relies on the agent's own hook)");
+                Log(time, "No parent pid supplied; parent-exit watchdog disabled (session-end relies on the agent's own hook)");
 
                 break;
 
             case ParentWatchdog.ParentAlreadyDead:
-                Log($"Parent pid {parentPid} already dead at watcher startup; entering staged recovery — "
+                Log(time, $"Parent pid {parentPid} already dead at watcher startup; entering staged recovery — "
                   + "will periodically re-resolve + re-arm the watchdog, and only end after a long ceiling "
                   + "with no transcript progress and continued resolution failure.");
 
@@ -426,23 +432,25 @@ partial class WatchCommand(
                     _ = Task.Run(async () => {
                         while (!cts.Token.IsCancellationRequested) {
                             try {
-                                await Task.Delay(TimeSpan.FromSeconds(30), cts.Token);
+                                await Task.Delay(TimeSpan.FromSeconds(30), time, cts.Token);
                             } catch (OperationCanceledException) {
                                 return;
                             }
 
-                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor);
-                            var noProgressElapsed = DateTimeOffset.UtcNow - state.LastActivityAt;
+                            // No fallback: this watcher has been reparented, so the heuristic here
+                            // resolves systemd/init rather than the agent.
+                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false);
+                            var noProgressElapsed = time.GetUtcNow() - state.LastActivityAt;
 
                             switch (DecideParentDeadRecovery(reResolved, ProcessHelpers.IsProcessAlive, noProgressElapsed, ceiling)) {
                                 case ParentDeadRecovery.ReArm:
-                                    Log($"Parent re-resolved to live pid {reResolved}; re-arming the watchdog");
+                                    Log(time, $"Parent re-resolved to live pid {reResolved}; re-arming the watchdog");
                                     ArmParentMonitor(reResolved!.Value);
 
                                     return;
 
                                 case ParentDeadRecovery.EndTerminal:
-                                    Log($"Parent unresolved and no transcript progress for >{ceiling.TotalMinutes:F0}m; "
+                                    Log(time, $"Parent unresolved and no transcript progress for >{ceiling.TotalMinutes:F0}m; "
                                       + "ending session (parent_dead_ceiling)");
                                     Interlocked.Exchange(ref wedgedCeilingExit, 1);
                                     cts.Cancel();
@@ -502,8 +510,13 @@ partial class WatchCommand(
 
         // Detect repository info upfront if cwd is provided (session watchers only, not agents)
         if (cwd is not null) {
-            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
-            state.LastRepoDetection = DateTimeOffset.UtcNow;
+            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time);
+            state.LastRepoDetection = time.GetUtcNow();
+        }
+
+        if (vendor == "claude" && agentId is null) {
+            state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
+            state.SecondaryRoots.SeedFromTranscript(vendor, transcriptPath);
         }
 
         // No cwd-derived repo (launched outside any checkout, or no cwd at all): fall back to
@@ -512,7 +525,7 @@ partial class WatchCommand(
         // watcher is always spawned with cwd: null too and has never had its own repo detection.
         if (vendor == "claude" && agentId is null && (cwd is null || GitRepository.FindRoot(cwd) is null)) {
             state.EvidenceScanner = new RepoEvidenceScanner<RepositoryPayload>(
-                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(config, root),
+                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(router, config, root, time),
                 p => p.Owner is not null && p.RepoName is not null);
 
             try {
@@ -528,7 +541,7 @@ partial class WatchCommand(
             }
         }
 
-        Log($"Watching {transcriptPath} for session {sessionId}" + (agentId is not null ? $" agent {agentId}" : ""));
+        Log(time, $"Watching {transcriptPath} for session {sessionId}" + (agentId is not null ? $" agent {agentId}" : ""));
 
         var hubConnection = BuildHubConnection($"{Url}/hubs/sessions");
 
@@ -545,26 +558,26 @@ partial class WatchCommand(
         hubConnection.On<string>(
             "StopWatcher",
             reason => {
-                Log($"Received StopWatcher signal: {reason}");
+                Log(time, $"Received StopWatcher signal: {reason}");
                 cts.Cancel();
             }
         );
 
         hubConnection.Reconnecting += ex => {
-            Log($"SignalR reconnecting: {ex?.Message}");
+            Log(time, $"SignalR reconnecting: {ex?.Message}");
 
             return Task.CompletedTask;
         };
 
         hubConnection.Reconnected += async connectionId => {
-            Log($"SignalR reconnected: {connectionId}");
+            Log(time, $"SignalR reconnected: {connectionId}");
 
             // Re-register with server and check if it's behind us (gap recovery)
             try {
                 var serverPosition = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cancellationToken: cts.Token);
 
                 if (serverPosition < state.LinesProcessed) {
-                    Log($"Server behind ({serverPosition} vs {state.LinesProcessed}), rewinding to resend gap");
+                    Log(time, $"Server behind ({serverPosition} vs {state.LinesProcessed}), rewinding to resend gap");
 
                     // hold cursorRewindGate for the whole
                     // rewind so a concurrently-running DrainNewLines (main loop or final drain)
@@ -580,17 +593,17 @@ partial class WatchCommand(
                         // was disconnected). SeedCursorByteOffsetAsync already quarantined the
                         // session rather than seed a bogus baseline; exit the same way a runtime
                         // rewrite detection does — neither the byte nor the line frontier moved.
-                        Log("cursor_transcript_rewrite_detected: reconnect frontier beyond local transcript — quarantined, exiting");
+                        Log(time, "cursor_transcript_rewrite_detected: reconnect frontier beyond local transcript — quarantined, exiting");
                         cts.Cancel();
                     }
                 }
             } catch (Exception ex) {
-                Log($"Re-register after reconnect failed: {ex.Message}");
+                Log(time, $"Re-register after reconnect failed: {ex.Message}");
             }
         };
 
         hubConnection.Closed += ex => {
-            Log($"SignalR connection closed: {ex?.Message}");
+            Log(time, $"SignalR connection closed: {ex?.Message}");
             cts.Cancel();
 
             return Task.CompletedTask;
@@ -617,7 +630,7 @@ partial class WatchCommand(
                 // SIGTERM/SIGINT during connect — exit gracefully
                 break;
             } catch (Exception ex) {
-                Log($"SignalR connect failed, retrying in {connectRetryDelay.TotalSeconds}s: {ex.Message}");
+                Log(time, $"SignalR connect failed, retrying in {connectRetryDelay.TotalSeconds}s: {ex.Message}");
 
                 // Heartbeat-aware wait: the backoff caps at 30s > the staleness threshold, so a
                 // plain Task.Delay here would falsely mark a reconnecting watcher stale.
@@ -638,7 +651,7 @@ partial class WatchCommand(
 
         // Register with server and get resume position
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
-        Log($"Connected via SignalR, resuming from line {state.LinesProcessed}");
+        Log(time, $"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
 
         // seed the Cursor byte frontier to the TRUE byte
@@ -658,7 +671,7 @@ partial class WatchCommand(
         // than seed a bogus (clamped-to-EOF) baseline; exit the same way a runtime rewrite
         // detection does — the loop below never runs against a state that never resolved.
         if (!await SeedCursorByteOffsetAsync(state, state.LinesProcessed, sessionId, vendor, transcriptPath, cursorGuard, cts.Token)) {
-            Log("cursor_transcript_rewrite_detected: initial resume frontier beyond local transcript — quarantined, exiting");
+            Log(time, "cursor_transcript_rewrite_detected: initial resume frontier beyond local transcript — quarantined, exiting");
             cts.Cancel();
         }
 
@@ -668,12 +681,13 @@ partial class WatchCommand(
         if (state.LinesProcessed > 0) {
             if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {
                 await BackfillClaudePendingToolCallsAsync(
-                    state.PendingClaudeToolCalls, transcriptPath, state.LinesProcessed, cts.Token);
+                    state.PendingClaudeToolCalls, transcriptPath, state.LinesProcessed, cts.Token, time);
             }
 
             if (TracksCodexToolCalls(vendor)) {
                 await BackfillCodexWatcherStateAsync(
-                    state, transcriptPath, isChildWatcher: agentId is not null, state.LinesProcessed, cts.Token);
+                    state, transcriptPath, isChildWatcher: agentId is not null, upToLine: state.LinesProcessed,
+                    ct: cts.Token, time: time);
             }
         }
 
@@ -708,10 +722,10 @@ partial class WatchCommand(
                 if (hubConnection.State != HubConnectionState.Connected) {
                     // Freeze the idle clock: record when we went offline so the reconnect path can
                     // subtract the outage from the idle measure.
-                    state.DisconnectedSince ??= DateTimeOffset.UtcNow;
+                    state.DisconnectedSince ??= time.GetUtcNow();
 
                     try {
-                        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                        await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
                     } catch (OperationCanceledException) {
                         break;
                     }
@@ -723,13 +737,13 @@ partial class WatchCommand(
                 // accumulator so the idle measure ignores it. DisconnectedSince is only ever set while
                 // disconnected, so this runs exactly once per outage.
                 if (state.DisconnectedSince is { } since) {
-                    state.AccumulatedDisconnected += DateTimeOffset.UtcNow - since;
+                    state.AccumulatedDisconnected += time.GetUtcNow() - since;
                     state.DisconnectedSince        = null;
                 }
 
                 // Periodically refresh repository info (every 60s)
-                if (cwd is not null && DateTimeOffset.UtcNow - state.LastRepoDetection > TimeSpan.FromSeconds(60)) {
-                    var detected = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+                if (cwd is not null && time.GetUtcNow() - state.LastRepoDetection > TimeSpan.FromSeconds(60)) {
+                    var detected = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time);
 
                     // An evidence-derived repo may only be replaced by another real detection,
                     // never cleared back to null by a launch-cwd probe that still finds nothing.
@@ -737,7 +751,12 @@ partial class WatchCommand(
                         state.Repository = detected;
                     }
 
-                    state.LastRepoDetection = DateTimeOffset.UtcNow;
+                    state.LastRepoDetection = time.GetUtcNow();
+                }
+
+                if (state.SecondaryRoots is not null && time.GetUtcNow() - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {
+                    await LinkSecondaryPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
+                    state.LastSecondaryProbe = time.GetUtcNow();
                 }
 
                 // gated so this can never interleave with a
@@ -775,18 +794,18 @@ partial class WatchCommand(
                 // streaming after the stop — appends are not lifecycle-gated, so a re-engaged
                 // child's content still lands in its subsession.
                 if (agentId is not null && vendor == "codex"
-                 && DateTimeOffset.UtcNow >= codexStopNextAttemptAt
+                 && time.GetUtcNow() >= codexStopNextAttemptAt
                  && state.CodexSubagentTurn.ShouldPostStop(
                         state.PendingCodexToolCalls.Count, state.LastActivityAt,
-                        DateTimeOffset.UtcNow, codexSubagentStopGrace)) {
+                        time.GetUtcNow(), codexSubagentStopGrace)) {
                     codexChildAgentType ??= ResolveCodexChildAgentType(transcriptPath);
 
                     if (await PostCodexSubagentStopAsync(sessionId, agentId, codexChildAgentType, transcriptPath, cts.Token)) {
                         state.CodexSubagentTurn.StopPosted = true;
-                        Log($"Codex subagent {agentId} ({codexChildAgentType}) turn complete + idle "
+                        Log(time, $"Codex subagent {agentId} ({codexChildAgentType}) turn complete + idle "
                           + $"{codexSubagentStopGrace.TotalMinutes:F0}m; posted subagent-stop");
                     } else {
-                        codexStopNextAttemptAt = DateTimeOffset.UtcNow + CodexSubagentStopRetryInterval;
+                        codexStopNextAttemptAt = time.GetUtcNow() + CodexSubagentStopRetryInterval;
                     }
                 }
 
@@ -805,7 +824,7 @@ partial class WatchCommand(
                         isSessionWatcher: agentId is null,
                         state.ThresholdReached,
                         cursorIdleClockAt,
-                        DateTimeOffset.UtcNow,
+                        time.GetUtcNow(),
                         idleTimeout,
                         // A tool awaiting its result suppresses idle-end: Codex tracks call_ids,
                         // Antigravity counts PLANNER_RESPONSE calls vs result steps, Claude tracks
@@ -816,7 +835,7 @@ partial class WatchCommand(
                             _             => state.PendingCodexToolCalls.Count > 0,
                         },
                         disconnectedSinceActivity: state.AccumulatedDisconnected)) {
-                    Log($"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
+                    Log(time, $"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
 
@@ -824,7 +843,7 @@ partial class WatchCommand(
                 }
 
                 try {
-                    await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);
+                    await Task.Delay(TimeSpan.FromSeconds(1), time, cts.Token);
                 } catch (OperationCanceledException) {
                     break;
                 }
@@ -833,13 +852,17 @@ partial class WatchCommand(
             // Expected
         }
 
+        // The kill grace runs from the stop request, not from the loop noticing it: an await the
+        // loop was in when the request arrived has already spent some of it.
+        var shutdownStarted = Volatile.Read(ref shutdownRequestedAt) is var requestedAt and not 0 ? requestedAt : time.GetTimestamp();
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
             // Skip sending buffered lines so the server can clean up the empty session.
-            Log($"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
+            Log(time, $"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
         } else {
-            Log("Draining remaining lines...");
+            Log(time, "Draining remaining lines...");
 
             // Shutdown completion signal: the outage/idle-timeout final drain used
             // to disable the half-written-line holdback unconditionally, which could consume a line
@@ -852,7 +875,7 @@ partial class WatchCommand(
             //      record after the wait is still held, never sent-and-advanced (no TOCTOU).
             // If the final line was held back at consume time, flag the session needs-import so
             // `kcap import` can recover the tail rather than dropping a truncated line.
-            await WaitForFinalLineCompletionAsync(transcriptPath);
+            await WaitForFinalLineCompletionAsync(transcriptPath, time);
 
             // gated for the same reason as the main loop's
             // drain call above (a reconnect right at shutdown is unlikely but not impossible).
@@ -862,7 +885,7 @@ partial class WatchCommand(
                 // Keyed on the canonical server sessionId (not agentId) even for a subagent
                 // watcher — TranscriptSpool/LifecycleSpoolDrain's session-id space is the server's,
                 // and `kcap import`/session-needs-import operate at the session level.
-                Log("Final transcript line still incomplete at consume time; held back and flagging needs-import");
+                Log(time, "Final transcript line still incomplete at consume time; held back and flagging needs-import");
                 transcriptSpool.MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
             }
 
@@ -884,6 +907,10 @@ partial class WatchCommand(
             if (agentId is null && vendor == "antigravity") {
                 await ScanAntigravitySubagentLinks(sessionId, finalDrained, state.PostedSubagentLinks, CancellationToken.None);
             }
+
+            // A PR is usually opened in the session's last turn, after the previous 60s probe.
+            await LinkSecondaryPullRequestsAsync(state, sessionId,
+                FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted), CancellationToken.None, TouchHeartbeat);
         }
 
         // Signal drain complete to server.
@@ -893,23 +920,23 @@ partial class WatchCommand(
         // hears the drain-complete signal and can release StopAndDrainAsync waiters.
         try {
             if (hubConnection.State == HubConnectionState.Connected) {
-                using var drainCompleteCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var drainCompleteCts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
                 await hubConnection.InvokeAsync("WatcherDrainComplete", sessionId, agentId, cancellationToken: drainCompleteCts.Token);
-                Log("Drain complete signaled to server");
+                Log(time, "Drain complete signaled to server");
             }
         } catch (Exception ex) {
-            Log($"Failed to signal drain complete: {ex.Message}");
+            Log(time, $"Failed to signal drain complete: {ex.Message}");
         }
 
         // #550: stop spawned child watchers on every parent exit path — SIGTERM-first, so each
         // runs its final drain before the session-end POST below. A SIGKILLed parent skips this;
         // that orphan case is what the codex-child reap ceiling backstops.
         if (spawnedChildWatcherKeys.Count > 0) {
-            Log($"Stopping {spawnedChildWatcherKeys.Count} spawned child watcher(s)");
-            await _watchers.KillWatchers(spawnedChildWatcherKeys);
+            Log(time, $"Stopping {spawnedChildWatcherKeys.Count} spawned child watcher(s)");
+            await watchers.KillWatchers(spawnedChildWatcherKeys);
         }
 
-        Log($"Done. {state.LinesProcessed} total lines processed.");
+        Log(time, $"Done. {state.LinesProcessed} total lines processed.");
 
         await hubConnection.DisposeAsync();
 
@@ -950,7 +977,7 @@ partial class WatchCommand(
 
         // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
         // on a recycled pid (KillWatcher's token guard is the crash-exit backstop).
-        _watchers.RemoveOwnPidFile(
+        watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
 
         await logWriter.DisposeAsync();
@@ -1002,11 +1029,11 @@ partial class WatchCommand(
                 continue;
             }
 
-            await _watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
+            await watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
                 agentId: agentId, sessionIdOverride: sessionId, vendor: "gemini");
             spawnedChildKeys.Add($"{sessionId}-{agentId}");
 
-            Log($"Gemini subagent {agentId} ({agentType}) registered + child watcher spawned");
+            Log(time, $"Gemini subagent {agentId} ({agentType}) registered + child watcher spawned");
         }
     }
 
@@ -1017,7 +1044,7 @@ partial class WatchCommand(
             using var client  = await http.ForBackgroundAsync(ct);
             var       payload = GeminiSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, time, ct: ct);
 
             return resp.IsSuccessStatusCode;
         } catch {
@@ -1067,11 +1094,11 @@ partial class WatchCommand(
                 continue;
             }
 
-            await _watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
+            await watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
                 agentId: agentId, sessionIdOverride: sessionId, vendor: "opencode");
             spawnedChildKeys.Add($"{sessionId}-{agentId}");
 
-            Log($"OpenCode subagent {agentId} ({agentType}) registered + child watcher spawned");
+            Log(time, $"OpenCode subagent {agentId} ({agentType}) registered + child watcher spawned");
         }
     }
 
@@ -1082,7 +1109,7 @@ partial class WatchCommand(
             using var client  = await http.ForBackgroundAsync(ct);
             var       payload = OpenCodeSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, time, ct: ct);
 
             return resp.IsSuccessStatusCode;
         } catch {
@@ -1154,11 +1181,11 @@ partial class WatchCommand(
                 continue;
             }
 
-            await _watchers.EnsureWatcherRunning(key: $"{sessionId}-{childAgentId}", transcriptPath: sub.FilePath,
+            await watchers.EnsureWatcherRunning(key: $"{sessionId}-{childAgentId}", transcriptPath: sub.FilePath,
                 agentId: childAgentId, sessionIdOverride: sessionId, vendor: "codex");
             spawnedChildKeys.Add($"{sessionId}-{childAgentId}");
 
-            if (isNew) Log($"Codex subagent {childAgentId} ({agentType}) registered + child watcher spawned");
+            if (isNew) Log(time, $"Codex subagent {childAgentId} ({agentType}) registered + child watcher spawned");
         }
     }
 
@@ -1169,7 +1196,7 @@ partial class WatchCommand(
             using var client  = await http.ForBackgroundAsync(ct);
             var       payload = CodexSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, time, ct: ct);
 
             return resp.IsSuccessStatusCode;
         } catch {
@@ -1207,22 +1234,22 @@ partial class WatchCommand(
         string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
     ) {
         try {
-            using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            budgetCts.CancelAfter(CodexSubagentStopPostBudget);
+            using var budgetCap = new CancellationTokenSource(CodexSubagentStopPostBudget, time);
+            using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(ct, budgetCap.Token);
 
             using var client  = await http.ForBackgroundAsync(budgetCts.Token);
             var       payload = CodexSubagentDiscovery.BuildStopPayload(sessionId, agentId, agentType, subFile);
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-stop", content, timeout: CodexSubagentStopPostBudget, ct: budgetCts.Token);
+            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-stop", content, time, timeout: CodexSubagentStopPostBudget, ct: budgetCts.Token);
 
             if (!resp.IsSuccessStatusCode) {
-                Log($"Codex subagent {agentId} stop POST returned {(int)resp.StatusCode}; "
+                Log(time, $"Codex subagent {agentId} stop POST returned {(int)resp.StatusCode}; "
                   + $"retrying in {CodexSubagentStopRetryInterval.TotalSeconds:F0}s");
             }
 
             return resp.IsSuccessStatusCode;
         } catch (Exception ex) {
-            Log($"Codex subagent {agentId} stop POST failed: {ex.Message}; "
+            Log(time, $"Codex subagent {agentId} stop POST failed: {ex.Message}; "
               + $"retrying in {CodexSubagentStopRetryInterval.TotalSeconds:F0}s");
 
             return false;
@@ -1249,7 +1276,7 @@ partial class WatchCommand(
     /// else re-delivers the acknowledged <c>task_complete</c> that arms the live stop.
     /// </summary>
     internal static async Task BackfillCodexWatcherStateAsync(
-            WatchState state, string transcriptPath, bool isChildWatcher, int upToLine, CancellationToken ct) {
+            WatchState state, string transcriptPath, bool isChildWatcher, int upToLine, CancellationToken ct, TimeProvider time) {
         if (ct.IsCancellationRequested) return;
 
         var firstParsedLine = Math.Max(0, upToLine - ToolBackfillWindowLines);
@@ -1269,7 +1296,7 @@ partial class WatchCommand(
         } catch (OperationCanceledException) {
             // Shutdown racing startup — expected, and not worth a log line.
         } catch (Exception ex) {
-            Log($"Codex watcher-state backfill skipped: {ex.Message}");
+            Log(time, $"Codex watcher-state backfill skipped: {ex.Message}");
         }
     }
 
@@ -1582,7 +1609,7 @@ partial class WatchCommand(
     /// Failure is a no-op, never fatal — losing the backstop beats failing a watcher's startup.
     /// </summary>
     internal static async Task BackfillClaudePendingToolCallsAsync(
-            HashSet<string> pending, string transcriptPath, int upToLine, CancellationToken ct) {
+            HashSet<string> pending, string transcriptPath, int upToLine, CancellationToken ct, TimeProvider time) {
         if (ct.IsCancellationRequested) return;
 
         var firstParsedLine = Math.Max(0, upToLine - ToolBackfillWindowLines);
@@ -1601,7 +1628,7 @@ partial class WatchCommand(
         } catch (OperationCanceledException) {
             // Shutdown racing startup — expected, and not worth a log line.
         } catch (Exception ex) {
-            Log($"Claude tool-call backfill skipped: {ex.Message}");
+            Log(time, $"Claude tool-call backfill skipped: {ex.Message}");
         }
     }
 
@@ -1636,7 +1663,7 @@ partial class WatchCommand(
             string             reason = "parent_exited"
         ) {
         if (!KnownVendors.Contains(vendor)) {
-            Log($"Parent-exit session-end skipped: unknown vendor '{vendor}'");
+            Log(time, $"Parent-exit session-end skipped: unknown vendor '{vendor}'");
             return;
         }
 
@@ -1649,15 +1676,15 @@ partial class WatchCommand(
         if (vendor == "gemini") {
             try {
                 var finalized = await TimeBudget.RunCappedAsync(
-                    () => new GeminiSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath),
-                    GeminiSubagentTeardown.DrainCap);
+                    () => new GeminiSubagentTeardown(profiles, http, watchers, time).DrainAsync(sessionId, transcriptPath),
+                    GeminiSubagentTeardown.DrainCap, time);
 
                 if (!finalized) {
-                    Log("Parent-exit Gemini subagent teardown cap elapsed; "
+                    Log(time, "Parent-exit Gemini subagent teardown cap elapsed; "
                       + "unfinalized subagents recover via: kcap import --gemini");
                 }
             } catch (Exception ex) {
-                Log($"Parent-exit Gemini subagent teardown failed: {ex.Message}");
+                Log(time, $"Parent-exit Gemini subagent teardown failed: {ex.Message}");
             }
         }
 
@@ -1670,15 +1697,15 @@ partial class WatchCommand(
         if (vendor == "codex") {
             try {
                 var finalized = await TimeBudget.RunCappedAsync(
-                    () => new CodexSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath),
-                    CodexSubagentTeardown.DrainCap);
+                    () => new CodexSubagentTeardown(profiles, http, watchers, time).DrainAsync(sessionId, transcriptPath),
+                    CodexSubagentTeardown.DrainCap, time);
 
                 if (!finalized) {
-                    Log("Parent-exit Codex subagent teardown cap elapsed; "
+                    Log(time, "Parent-exit Codex subagent teardown cap elapsed; "
                       + "unfinalized subagents recover via: kcap import --codex");
                 }
             } catch (Exception ex) {
-                Log($"Parent-exit Codex subagent teardown failed: {ex.Message}");
+                Log(time, $"Parent-exit Codex subagent teardown failed: {ex.Message}");
             }
         }
 
@@ -1695,17 +1722,17 @@ partial class WatchCommand(
             // ceiling and returns how many were left unfinalized (logged below — OpenCode has no
             // historical import to recover a missed stop).
             try {
-                var unfinalized = await new OpenCodeSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath);
+                var unfinalized = await new OpenCodeSubagentTeardown(profiles, http, watchers, time).DrainAsync(sessionId, transcriptPath);
                 if (unfinalized > 0) {
-                    Log($"Parent-exit OpenCode subagent teardown hit the {OpenCodeSubagentTeardown.OverallBudget.TotalSeconds:0}s ceiling; "
+                    Log(time, $"Parent-exit OpenCode subagent teardown hit the {OpenCodeSubagentTeardown.OverallBudget.TotalSeconds:0}s ceiling; "
                       + $"{unfinalized} subagent(s) left without SubagentCompleted");
                 }
             } catch (Exception ex) {
-                Log($"Parent-exit OpenCode subagent teardown failed: {ex.Message}");
+                Log(time, $"Parent-exit OpenCode subagent teardown failed: {ex.Message}");
             }
         }
 
-        using var budgetCts = new CancellationTokenSource(ParentExitPostBudget);
+        using var budgetCts = new CancellationTokenSource(ParentExitPostBudget, time);
 
         try {
             var endHook = new JsonObject {
@@ -1720,7 +1747,7 @@ partial class WatchCommand(
                 // dedupe against the first and the session would stay Active.
                 // Computed once here and reused across POST retries, so it stays
                 // idempotent for a single exit.
-                ["ended_at"]        = DateTimeOffset.UtcNow.ToString("O"),
+                ["ended_at"]        = time.GetUtcNow().ToString("O"),
             };
 
             if (repository is not null) {
@@ -1733,29 +1760,29 @@ partial class WatchCommand(
             using var content    = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
 
             var url = $"{Url}/hooks/session-end/{vendor}";
-            using var response = await httpClient.PostWithRetryAsync(url, content, timeout: ParentExitPostBudget, ct: budgetCts.Token);
+            using var response = await httpClient.PostWithRetryAsync(url, content, time, timeout: ParentExitPostBudget, ct: budgetCts.Token);
 
             if (!response.IsSuccessStatusCode) {
-                Log($"Parent-exit session-end POST returned HTTP {(int)response.StatusCode}");
+                Log(time, $"Parent-exit session-end POST returned HTTP {(int)response.StatusCode}");
                 return;
             }
 
-            Log("Parent-exit session-end POST succeeded");
+            Log(time, "Parent-exit session-end POST succeeded");
 
             try {
                 var body = await response.Content.ReadAsStringAsync(budgetCts.Token);
                 var node = JsonNode.Parse(body);
 
                 if (node?["generate_whats_done"]?.GetValue<bool>() == true) {
-                    _watchers.SpawnWhatsDoneGenerator(sessionId, vendor);
+                    watchers.SpawnWhatsDoneGenerator(sessionId, vendor);
                 }
             } catch (Exception ex) {
-                Log($"Parent-exit session-end response parse failed: {ex.Message}");
+                Log(time, $"Parent-exit session-end response parse failed: {ex.Message}");
             }
         } catch (OperationCanceledException) {
-            Log($"Parent-exit session-end POST timed out after {ParentExitPostBudget.TotalSeconds:F0}s");
+            Log(time, $"Parent-exit session-end POST timed out after {ParentExitPostBudget.TotalSeconds:F0}s");
         } catch (Exception ex) {
-            Log($"Parent-exit session-end POST failed: {ex.Message}");
+            Log(time, $"Parent-exit session-end POST failed: {ex.Message}");
         }
     }
 
@@ -1795,7 +1822,7 @@ partial class WatchCommand(
                     return [];
                 }
 
-                if (_markers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
+                if (_markers.BarrierPending(sessionId, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound)) {
                     return [];
                 }
             }
@@ -1980,7 +2007,7 @@ partial class WatchCommand(
             // advances only after a successful send (below), so a failed batch re-reads the rows.
             var antigravityGenMax = -1L;
             if (vendor == "antigravity" && (agentId is not null || state.ThresholdReached)) {
-                antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt);
+                antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt, time);
             }
 
             // Task 10: Kiro's per-turn credits/context% live in the sibling {id}.json, not
@@ -1992,11 +2019,11 @@ partial class WatchCommand(
             // into state.KiroUsageEmittedAnchors only after a successful send (below), so a failed
             // batch re-reads and re-stages the same anchors next drain.
             if (vendor == "kiro" && (agentId is not null || state.ThresholdReached)) {
-                AppendKiroUsageBackfillLines(state, newLines, newLineNumbers, transcriptPath);
+                AppendKiroUsageBackfillLines(state, newLines, newLineNumbers, transcriptPath, time);
             }
 
             if (newLines.Count > 0) {
-                state.LastActivityAt          = DateTimeOffset.UtcNow;
+                state.LastActivityAt          = time.GetUtcNow();
                 // New activity restarts the idle measure, so discard disconnected time accrued
                 // before it (draining only happens while connected, so DisconnectedSince is null).
                 state.AccumulatedDisconnected = TimeSpan.Zero;
@@ -2022,6 +2049,13 @@ partial class WatchCommand(
                 }
             }
 
+            // Secondary checkouts, from raw lines and ahead of the threshold buffering below: a
+            // mutation in a session's first lines must register before the buffer flushes, and an
+            // oversized Write redacts to a placeholder with no path. Only paths are read.
+            if (state.SecondaryRoots is { } secondaryRoots) {
+                foreach (var line in drainRead.Lines) secondaryRoots.OnLine(vendor, line);
+            }
+
             // A Codex collab CHILD watcher additionally folds its own rollout's turn state
             // (task_complete vs renewed activity) so the polling loop can post a live
             // subagent-stop once the child is done + idle. Raw lines here too, in the other
@@ -2037,7 +2071,7 @@ partial class WatchCommand(
             if (state is { TitleGenerated: false, FirstUserText: null } && agentId is null) {
                 // If we resumed from a later position, scan from the beginning of the file
                 if (state is { LinesProcessed: > 0, FullFileScanDone: false }) {
-                    Log("Scanning full file for first user text (resumed from later position)");
+                    Log(time, "Scanning full file for first user text (resumed from later position)");
 
                     try {
                         await using var scanStream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -2048,13 +2082,13 @@ partial class WatchCommand(
                                 continue;
                             }
 
-                            var userText = TryExtractUserText(scanLine, vendor);
+                            var userText = TryExtractUserText(scanLine, time, vendor);
 
                             if (userText is null) {
                                 continue;
                             }
 
-                            SetFirstUserText(state, userText);
+                            SetFirstUserText(state, userText, time);
 
                             if (state.FirstUserText is not null) {
                                 break;
@@ -2063,14 +2097,14 @@ partial class WatchCommand(
 
                         state.FullFileScanDone = true;
                     } catch (Exception ex) {
-                        Log($"Full file scan for user text failed: {ex.Message}");
+                        Log(time, $"Full file scan for user text failed: {ex.Message}");
                     }
                 }
 
                 // Also check new lines (normal path)
                 if (state.FirstUserText is null && newLines.Count > 0) {
-                    foreach (var userText in newLines.Select(line => TryExtractUserText(line, vendor)).OfType<string>()) {
-                        SetFirstUserText(state, userText);
+                    foreach (var userText in newLines.Select(line => TryExtractUserText(line, time, vendor)).OfType<string>()) {
+                        SetFirstUserText(state, userText, time);
 
                         if (state.FirstUserText is not null) {
                             break;
@@ -2079,14 +2113,14 @@ partial class WatchCommand(
                 }
 
                 if (state.FirstUserText is not null) {
-                    Log($"First user text captured ({state.FirstUserText.Length} chars)");
+                    Log(time, $"First user text captured ({state.FirstUserText.Length} chars)");
                 }
 
                 // Send truncated user text as the initial title immediately
                 // (deferred until threshold is reached for session watchers)
                 if (state is { InitialTitleSent: false, FirstUserText: not null, ThresholdReached: true } && agentId is null) {
                     state.InitialTitleSent = true;
-                    _                      = SendInitialTitleAsync(hubConnection, sessionId, TruncateForTitle(state.FirstUserText, 80));
+                    _                      = SendInitialTitleAsync(hubConnection, sessionId, TruncateForTitle(state.FirstUserText, 80), time);
                 }
             }
 
@@ -2102,7 +2136,7 @@ partial class WatchCommand(
 
                         if (assistantText is not null) {
                             state.FirstAssistantText = assistantText.Length > 300 ? assistantText[..300] : assistantText;
-                            Log($"First assistant text captured ({state.FirstAssistantText.Length} chars)");
+                            Log(time, $"First assistant text captured ({state.FirstAssistantText.Length} chars)");
                         }
                     }
                 }
@@ -2114,7 +2148,7 @@ partial class WatchCommand(
              && agentId is null
              && state.FirstUserText is not null
              && state.EventCount >= 5) {
-                Log($"Triggering LLM title generation (attempt {state.TitleAttempts + 1}/5, events: {state.EventCount})");
+                Log(time, $"Triggering LLM title generation (attempt {state.TitleAttempts + 1}/5, events: {state.EventCount})");
                 state.TitleInFlight = true;
                 state.TitleAttempts++;
                 _ = GenerateTitleAsync(hubConnection, sessionId, state, vendor);
@@ -2131,13 +2165,13 @@ partial class WatchCommand(
                     state.LinesReadAhead = linesRead;
 
                     if (state.BufferedLines.Count < WatchState.TranscriptThreshold) {
-                        Log($"Buffering {newLines.Count} line(s) ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} threshold)");
+                        Log(time, $"Buffering {newLines.Count} line(s) ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} threshold)");
 
                         return newLines;
                     }
 
                     // Threshold reached — flush the entire buffer
-                    Log($"Threshold reached ({state.BufferedLines.Count} lines), flushing buffer");
+                    Log(time, $"Threshold reached ({state.BufferedLines.Count} lines), flushing buffer");
                     state.ThresholdReached = true;
                     newLines               = [..state.BufferedLines];
                     newLineNumbers         = [..state.BufferedLineNumbers];
@@ -2148,7 +2182,7 @@ partial class WatchCommand(
                     // Send the initial title now that we're flushing
                     if (state is { InitialTitleSent: false, FirstUserText: not null }) {
                         state.InitialTitleSent = true;
-                        _                      = SendInitialTitleAsync(hubConnection, sessionId, TruncateForTitle(state.FirstUserText, 80));
+                        _                      = SendInitialTitleAsync(hubConnection, sessionId, TruncateForTitle(state.FirstUserText, 80), time);
                     }
 
                     break;
@@ -2164,7 +2198,7 @@ partial class WatchCommand(
             // first send — it can't be backfilled (the server dedupes Kiro events by canonical id).
             // Best-effort; rationale in the design spec.
             if (vendor == "kiro" && newLines.Count > 0) {
-                newLines = EnrichKiroContextUsage(newLines, transcriptPath);
+                newLines = EnrichKiroContextUsage(newLines, transcriptPath, time);
             }
 
             // Evidence-based repo detection for a session launched outside any repo — extracted
@@ -2285,7 +2319,7 @@ partial class WatchCommand(
                     // a concurrent process — in that window must still be caught here, never sent.
                     // Hold (never advance state) so the next poll re-evaluates from scratch.
                     if (_markers.IsQuarantined(sessionId)
-                     || _markers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
+                     || _markers.BarrierPending(sessionId, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound)) {
                         return newLines;
                     }
 
@@ -2296,13 +2330,13 @@ partial class WatchCommand(
                 }
 
                 if (newLines.Count > 0) {
-                    Log(cursorAckNextLine is { } nextLine
+                    Log(time, cursorAckNextLine is { } nextLine
                         ? $"Sent {newLines.Count} line(s) via SignalR (acked next-line {nextLine})"
                         : $"Sent {newLines.Count} line(s) via SignalR");
                 }
 
                 if (repoToSend is not null) {
-                    Log("Sent updated repository info via SignalR");
+                    Log(time, "Sent updated repository info via SignalR");
                 }
 
                 // Only advance position after successful send — if send fails,
@@ -2371,7 +2405,7 @@ partial class WatchCommand(
                 }
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 if (newLines.Count > 0) {
-                    Log($"SendTranscriptBatch failed, will retry from line {state.LinesProcessed}: {ex.Message}");
+                    Log(time, $"SendTranscriptBatch failed, will retry from line {state.LinesProcessed}: {ex.Message}");
                 } else {
                     // Repo-only batch failed — no transcript lines at risk, so advance
                     // position and defer retry to the next 60s repo detection cycle.
@@ -2388,14 +2422,14 @@ partial class WatchCommand(
                     AdvanceCursorBlankByteFrontierInLockstep();
 
                     state.LinesProcessed    = linesRead;
-                    state.LastRepoDetection = DateTimeOffset.UtcNow;
-                    Log($"Repo info send failed, will retry in 60s: {ex.Message}");
+                    state.LastRepoDetection = time.GetUtcNow();
+                    Log(time, $"Repo info send failed, will retry in 60s: {ex.Message}");
                 }
             }
 
             return newLines;
         } catch (IOException ex) {
-            Log($"Error reading file: {ex.Message}");
+            Log(time, $"Error reading file: {ex.Message}");
         } catch (OperationCanceledException) {
             // Expected during shutdown
         }
@@ -2459,7 +2493,7 @@ partial class WatchCommand(
         // diagnosable stop (see CursorRewriteGuard), and `kcap import` also refuses a quarantined
         // session (review fix #7), so a needs-import marker here would just be inert.
         if (vendor == "cursor" && _markers.IsQuarantined(sessionId)) {
-            Log($"Cursor session {sessionId} is quarantined; skipping shutdown-tail spool "
+            Log(time, $"Cursor session {sessionId} is quarantined; skipping shutdown-tail spool "
               + "(no line-number path may keep feeding a corrupted cursor)");
 
             return null;
@@ -2472,7 +2506,7 @@ partial class WatchCommand(
             tail = await ReadNewCompleteLinesAsync(
                 stream, linesProcessed, IncompleteFinalLinePolicy.ConsumeIfComplete, ct);
         } catch (IOException ex) {
-            Log($"Shutdown-tail spool: failed to read transcript for {sessionId}: {ex.Message}");
+            Log(time, $"Shutdown-tail spool: failed to read transcript for {sessionId}: {ex.Message}");
 
             return null;
         }
@@ -2489,12 +2523,12 @@ partial class WatchCommand(
 
         switch (result) {
             case TranscriptSpool.AppendResult.Appended:
-                Log($"Spooled {tail.Lines.Count} undelivered transcript line(s) at shutdown for "
+                Log(time, $"Spooled {tail.Lines.Count} undelivered transcript line(s) at shutdown for "
                   + $"{sessionId} (hub down) — will replay on the next global drain");
 
                 break;
             case TranscriptSpool.AppendResult.MarkedNeedsImport:
-                Log($"Undelivered transcript tail for {sessionId} could not be spooled (cap exhausted "
+                Log(time, $"Undelivered transcript tail for {sessionId} could not be spooled (cap exhausted "
                   + "or write failed); session flagged needs-import — recover via `kcap import`");
 
                 break;
@@ -2503,12 +2537,12 @@ partial class WatchCommand(
         return result;
     }
 
-    static void SetFirstUserText(WatchState state, string userText) {
+    static void SetFirstUserText(WatchState state, string userText, TimeProvider time) {
         var cmdMatch = CommandNameRegex.Match(userText);
 
         if (cmdMatch.Success) {
             // Skip slash commands — wait for the next real user prompt to generate the title
-            Log($"Skipping slash command /{cmdMatch.Groups[1].Value} for title generation");
+            Log(time, $"Skipping slash command /{cmdMatch.Groups[1].Value} for title generation");
 
             return;
         }
@@ -2664,15 +2698,15 @@ partial class WatchCommand(
         }
     }
 
-    internal static string? TryExtractUserText(string line, string vendor = "claude") =>
+    internal static string? TryExtractUserText(string line, TimeProvider time, string vendor = "claude") =>
         vendor switch {
-            "codex"    => TryExtractCodexUserText(line),
+            "codex"    => TryExtractCodexUserText(line, time),
             "copilot"  => TryExtractCopilotUserText(line),
             "kiro"     => TryExtractKiroUserText(line),
             "pi"       => TryExtractPiUserText(line),
             "opencode" => TryExtractOpenCodeText(line, "user"),
             "antigravity" => TryExtractAntigravityText(line, "user"),
-            _          => TryExtractClaudeUserText(line)
+            _          => TryExtractClaudeUserText(line, time)
         };
 
     // ── OpenCode extractors ───────────────────────────────────────────
@@ -2760,7 +2794,7 @@ partial class WatchCommand(
     /// rows next drain. The db is the sibling of the transcript (its path carries the real
     /// conversation id, even when the session id is the canonical dashless form).
     /// </summary>
-    static long AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath, string? createdAt) {
+    static long AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath, string? createdAt, TimeProvider time) {
         var maxIdx = -1L;
         try {
             if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return -1L;
@@ -2773,7 +2807,7 @@ partial class WatchCommand(
             }
         } catch (Exception ex) {
             // Cost is always best-effort — never let a db read break the drain.
-            Log($"Antigravity usage poll failed: {ex.Message}");
+            Log(time, $"Antigravity usage poll failed: {ex.Message}");
         }
         return maxIdx;
     }
@@ -2817,7 +2851,7 @@ partial class WatchCommand(
     /// missing/malformed sidecar or when every turn's anchor is already emitted) — never throws;
     /// usage is always best-effort.
     /// </summary>
-    internal static long AppendKiroUsageBackfillLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath) {
+    internal static long AppendKiroUsageBackfillLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath, TimeProvider time) {
         state.KiroUsagePendingAnchors.Clear();
         var staged = 0L;
         try {
@@ -2842,7 +2876,7 @@ partial class WatchCommand(
             }
         } catch (Exception ex) {
             // Usage is always best-effort — never let a sidecar read break the drain.
-            Log($"Kiro usage backfill poll failed: {ex.Message}");
+            Log(time, $"Kiro usage backfill poll failed: {ex.Message}");
         }
         return staged;
     }
@@ -2854,7 +2888,7 @@ partial class WatchCommand(
     /// derived from the transcript path (dashed on disk), not the dashless <c>sessionId</c>.
     /// Best-effort, order-preserving — never throws, never drops a line. See the design spec.
     /// </summary>
-    internal static List<string> EnrichKiroContextUsage(List<string> lines, string transcriptPath) {
+    internal static List<string> EnrichKiroContextUsage(List<string> lines, string transcriptPath, TimeProvider time) {
         // Nothing to enrich unless the batch has an AssistantMessage line — skip the file read entirely.
         if (!lines.Any(static l => l.Contains("AssistantMessage", StringComparison.Ordinal))) return lines;
         try {
@@ -2870,7 +2904,7 @@ partial class WatchCommand(
             // spam one line per flush and drown out real warnings.
             if (!_kiroEnrichWarned) {
                 _kiroEnrichWarned = true;
-                Log($"Kiro context-% enrichment failed (further failures suppressed): {ex.Message}");
+                Log(time, $"Kiro context-% enrichment failed (further failures suppressed): {ex.Message}");
             }
             return lines;
         }
@@ -2936,12 +2970,12 @@ partial class WatchCommand(
     /// POST is left un-posted so a later scan retries. Pure over its inputs for unit testing.
     /// </summary>
     internal static async Task ExtractAndPostSubagentLinks(
-            IEnumerable<string> lines, HashSet<string> posted, Func<string, Task<bool>> post) {
+            IEnumerable<string> lines, HashSet<string> posted, Func<string, Task<bool>> post, TimeProvider time) {
         foreach (var line in lines) {
             var children = AntigravitySubagents.ChildConversationIdsFromLine(line);
             if (children.Count == 0) {
                 if (AntigravitySubagents.IsInvokeSubagentLine(line))
-                    Log("Antigravity INVOKE_SUBAGENT step had no parseable child conversationId (format drift?)");
+                    Log(time, "Antigravity INVOKE_SUBAGENT step had no parseable child conversationId (format drift?)");
                 continue;
             }
             foreach (var child in children) {
@@ -2964,7 +2998,7 @@ partial class WatchCommand(
             string sessionId, IReadOnlyList<string> drainedLines,
             HashSet<string> posted, CancellationToken ct) =>
         ExtractAndPostSubagentLinks(drainedLines, posted,
-            child => PostAntigravitySubagentLinkAsync(sessionId, child, ct));
+            child => PostAntigravitySubagentLinkAsync(sessionId, child, ct), time);
 
     async Task<bool> PostAntigravitySubagentLinkAsync(
         string sessionId, string childId, CancellationToken ct
@@ -2977,13 +3011,13 @@ partial class WatchCommand(
                 ["agent_id"]        = childId,
             };
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/antigravity/subagent-link", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/antigravity/subagent-link", content, time, ct: ct);
 
             return resp.IsSuccessStatusCode;
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
-            Log($"Antigravity subagent-link POST failed for child {childId}: {ex.Message}");
+            Log(time, $"Antigravity subagent-link POST failed for child {childId}: {ex.Message}");
             return false;
         }
     }
@@ -3114,7 +3148,7 @@ partial class WatchCommand(
         return null;
     }
 
-    static string? TryExtractClaudeUserText(string line) {
+    static string? TryExtractClaudeUserText(string line, TimeProvider time) {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
@@ -3146,14 +3180,14 @@ partial class WatchCommand(
         } catch (Exception ex) {
             if (!parseErrorLogged) {
                 parseErrorLogged = true;
-                Log($"TryExtractUserText parse error (further errors suppressed): {ex.Message}");
+                Log(time, $"TryExtractUserText parse error (further errors suppressed): {ex.Message}");
             }
         }
 
         return null;
     }
 
-    static string? TryExtractCodexUserText(string line) {
+    static string? TryExtractCodexUserText(string line, TimeProvider time) {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
@@ -3174,7 +3208,7 @@ partial class WatchCommand(
         } catch (Exception ex) {
             if (!parseErrorLogged) {
                 parseErrorLogged = true;
-                Log($"TryExtractUserText (codex) parse error (further errors suppressed): {ex.Message}");
+                Log(time, $"TryExtractUserText (codex) parse error (further errors suppressed): {ex.Message}");
             }
         }
 
@@ -3202,16 +3236,18 @@ partial class WatchCommand(
 
     async Task GenerateTitleAsync(HubConnection hubConnection, string sessionId, WatchState state, string vendor) {
         try {
-            var result = await TitleGeneration.GenerateAsync(state.FirstUserText!, state.FirstAssistantText, Log, profiles.Resolution.Profile, harnesses, vendor);
+            var result = await TitleGeneration.GenerateAsync(
+                state.FirstUserText!, state.FirstAssistantText, time, m => Log(time, m), profiles.Resolution.Profile,
+                harnesses, vendor);
 
             if (result is null) {
-                Log($"Title generation attempt {state.TitleAttempts}/5 returned no usable result (CLI failure, refusal-like output, or empty title)");
+                Log(time, $"Title generation attempt {state.TitleAttempts}/5 returned no usable result (CLI failure, refusal-like output, or empty title)");
                 state.TitleInFlight = false;
 
                 return;
             }
 
-            Log($"Title usage: model={result.Model} input={result.InputTokens} output={result.OutputTokens} cost=${result.CostUsd:F4}");
+            Log(time, $"Title usage: model={result.Model} input={result.InputTokens} output={result.OutputTokens} cost=${result.CostUsd:F4}");
 
             await PostTitleAsync(
                 hubConnection,
@@ -3223,19 +3259,19 @@ partial class WatchCommand(
                 result.CacheReadTokens,
                 result.CacheWriteTokens,
                 state
-            );
+            , time);
         } catch (Exception ex) {
-            Log($"Title generation failed: {ex.Message}");
+            Log(time, $"Title generation failed: {ex.Message}");
             state.TitleInFlight = false;
         }
     }
 
-    static async Task SendInitialTitleAsync(HubConnection hubConnection, string sessionId, string title) {
+    static async Task SendInitialTitleAsync(HubConnection hubConnection, string sessionId, string title, TimeProvider time) {
         try {
             await hubConnection.InvokeAsync("SendTitle", sessionId, title, null, 0L, 0L, 0L, 0L);
-            Log($"Initial title sent: {title}");
+            Log(time, $"Initial title sent: {title}");
         } catch (Exception ex) {
-            Log($"Initial title send failed: {ex.Message}");
+            Log(time, $"Initial title send failed: {ex.Message}");
         }
     }
 
@@ -3249,13 +3285,13 @@ partial class WatchCommand(
             long          cacheReadTokens,
             long          cacheWriteTokens,
             WatchState    state
-        ) {
+        , TimeProvider time) {
         try {
             await hubConnection.InvokeAsync("UpdateTitle", sessionId, title, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
-            Log($"LLM title generated: {title}");
+            Log(time, $"LLM title generated: {title}");
             state.TitleGenerated = true;
         } catch (Exception ex) {
-            Log($"LLM title send failed: {ex.Message}");
+            Log(time, $"LLM title send failed: {ex.Message}");
         }
 
         state.TitleInFlight = false;
@@ -3313,6 +3349,112 @@ partial class WatchCommand(
         }
     }
 
+    /// <summary>
+    /// Probes every checkout the agent mutated outside its launch cwd and links each PR found
+    /// there to the session. The PR is linked under the repository its URL names, not the
+    /// checkout's origin: in a fork checkout <c>gh pr view</c> resolves the base repository's PR
+    /// while origin names the fork. A PR is posted once per (owner, repo, number); a failed post
+    /// is retried on the next pass. Only github.com PRs are linked: the server endpoint rebuilds
+    /// the remote URL from owner and repo on github.com, so any other host would hash to the
+    /// wrong repository. Detection takes no cancellation token, so a cancelled pass abandons an
+    /// in-flight probe (its child process dies on its own cap) rather than waiting for it. Each
+    /// pass starts after the root the previous one last attempted, so a slow root cannot shadow
+    /// the roots behind it every time, and <paramref name="beat"/> is called before every probe
+    /// because the caller's heartbeat is otherwise untouched for the whole pass.
+    /// </summary>
+    internal static async Task LinkSecondaryPullRequestsAsync(
+            WatchState                                          state,
+            Func<string, TimeSpan, Task<RepositoryPayload?>>    detect,
+            Func<RepositoryPayload, CancellationToken, Task<bool>> post,
+            TimeSpan                                            budget,
+            TimeProvider                                        time,
+            CancellationToken                                   ct,
+            Action                                              beat
+        ) {
+        if (state.SecondaryRoots is null || budget <= TimeSpan.Zero) return;
+
+        var roots = state.SecondaryRoots.Roots.ToArray();
+        if (roots.Length == 0) return;
+
+        var started = time.GetTimestamp();
+        using var deadline = new CancellationTokenSource(budget, time);
+        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        var first = Math.Max(0, Array.IndexOf(roots, state.NextSecondaryRoot));
+
+        for (var i = 0; i < roots.Length; i++) {
+            var remaining = budget - time.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero || linked.IsCancellationRequested) return;
+
+            // Advanced only once this root is actually attempted, so a root the check above
+            // skips is the one the next pass starts with.
+            var root = roots[(first + i) % roots.Length];
+            state.NextSecondaryRoot = roots[(first + i + 1) % roots.Length];
+
+            beat();
+
+            RepositoryPayload? repo;
+            try { repo = await detect(root, remaining).WaitAsync(linked.Token); }
+            catch (OperationCanceledException) { return; }
+            catch { repo = null; }
+
+            if (repo is not { PrNumber: { } number, PrUrl: { } url }) continue;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !string.Equals(uri.IdnHost, "github.com", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!PrRefParser.TryParse(url, out var owner, out var name, out var urlNumber) || urlNumber != number) continue;
+
+            var key = (owner, name, number);
+            if (state.LinkedPullRequests.Contains(key)) continue;
+
+            bool accepted;
+            try { accepted = await post(repo with { Owner = owner, RepoName = name }, linked.Token); } catch (OperationCanceledException) { return; }
+            if (accepted) state.LinkedPullRequests.Add(key);
+        }
+    }
+
+    Task LinkSecondaryPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct, Action beat) =>
+        LinkSecondaryPullRequestsAsync(state,
+            (root, remaining) => RepositoryDetection.DetectRepositoryAsync(router, config, root, time, remaining),
+            (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, token),
+            budget, time, ct, beat);
+
+    // Half of WatcherHeartbeat.Threshold: the heartbeat is touched before each probe, so one
+    // probe bounded by this budget is the longest the pass can leave it untouched. The pass is
+    // retried every minute, so a lost post costs a minute, not the PR.
+    static readonly TimeSpan SecondaryProbeBudget = TimeSpan.FromSeconds(10);
+
+    // The watcher is killed 5s after it is told to stop. The final-line wait, the final drain and
+    // the PR probe share this much of it, leaving the rest for the drain-complete signal.
+    static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
+
+    async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
+        try {
+            using var client  = await http.ForBackgroundAsync(ct);
+            var       payload = new JsonObject {
+                ["owner"]       = pr.Owner,
+                ["repo_name"]   = pr.RepoName,
+                ["pr_number"]   = pr.PrNumber,
+                ["pr_title"]    = pr.PrTitle,
+                ["pr_url"]      = pr.PrUrl,
+                ["pr_head_ref"] = pr.PrHeadRef,
+                ["branch"]      = pr.Branch,
+            };
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            // The server dedupes by (owner, repo, number), so retrying a throttled or 5xx status is safe.
+            using var resp    = await client.PostWithRetryAsync(
+                $"{Url}/api/sessions/{Uri.EscapeDataString(sessionId)}/pull-requests", content, time, ct: ct, retryStatuses: true);
+
+            if (resp.IsSuccessStatusCode) Log(time, $"Linked {pr.Owner}/{pr.RepoName}#{pr.PrNumber} from a secondary checkout");
+            else Log(time, $"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: HTTP {(int)resp.StatusCode}");
+
+            return resp.IsSuccessStatusCode;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            Log(time, $"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: {ex.Message}");
+            return false;
+        }
+    }
+
     static string TruncateForTitle(string text, int maxLength) {
         // Take first line only, then truncate
         var firstLine  = text.AsSpan();
@@ -3337,7 +3479,8 @@ partial class WatchCommand(
         return $"{truncated.ToString().Trim()}...";
     }
 
-    static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [watch] {message}");
+    static void Log(TimeProvider time, string message) =>
+        Console.Error.WriteLine($"[{time.GetLocalNow():HH:mm:ss.fff}] [watch] {message}");
 
     /// <summary>
     /// Result of a transcript drain read: the new non-blank <see cref="Lines"/> (beyond the

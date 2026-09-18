@@ -81,4 +81,21 @@ public class PermissionCardViewModelTests {
             await Assert.That(fallback.ShowsAllowAlways).IsFalse();
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_acp_permission_offers_its_options_and_a_pick_names_the_option_id() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var permissions = new FakePermissionService();
+            permissions.Queue(PermissionResolveKind.Applied);
+            var entry = PendingPermissionRequest.FromServer(new ServerPermissionRequest("s1", "p1", "fs/write", null,
+                [new() { OptionId = "allow-once", Label = "Allow once", Kind = "allow_once" }, new() { OptionId = "reject", Label = "Reject", Kind = "reject_once" }]), "", DateTimeOffset.UtcNow);
+            var card = new PermissionCardViewModel(entry, permissions, System.Reactive.Linq.Observable.Return<string?>(null));
+            await Assert.That(card.HasOptions).IsTrue();
+            await Assert.That(card.ShowsAllowAlways).IsFalse();
+            card.Options[1].PickCommand.Execute().Subscribe();
+            await WaitUntilAsync(() => permissions.Picked.Count == 1, what: "picked");
+            await Assert.That(permissions.Picked[0].OptionId).IsEqualTo("reject");
+        });
+    }
 }

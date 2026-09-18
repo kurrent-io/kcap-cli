@@ -5,10 +5,13 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// CLI surface for managing <see cref="ProfileConfig.CwdRemap"/> — the
-/// path-prefix rewrites that <c>kcap import</c> applies before repository
-/// detection, so historic transcripts referencing since-renamed local repo
-/// directories can still match an <c>--org</c>/<c>--repo</c> scope.
+/// CLI surface for managing <see cref="ProfileConfig.CwdRemap"/> — the path
+/// rewrites that <c>kcap import</c> applies before repository detection, so
+/// historic transcripts referencing since-renamed or since-deleted local repo
+/// directories can still match an <c>--org</c>/<c>--repo</c> scope. A
+/// <c>from</c> is a literal prefix or carries one <c>*</c> segment; either way
+/// it is stored and matched verbatim, so <c>--list</c> and <c>--remove</c>
+/// name the pattern as typed.
 ///
 /// Entries are stored at the top of <c>~/.config/kcap/config.json</c>
 /// (global, not per-profile) — the same rename affects every profile's
@@ -40,16 +43,20 @@ public sealed class RemapCommand(ConfigRoot root) {
 
                 return 1;
             case "--remove":
-                return await Remove(args[2]);
+                return args.Length > 3
+                    ? await TooManyArguments("--remove takes exactly one path")
+                    : await Remove(args[2]);
             default:
                 if (args.Length < 3) return Usage();
 
-                return await Add(args[1], args[2]);
+                return args.Length > 3
+                    ? await TooManyArguments("takes exactly two paths")
+                    : await Add(args[1], args[2]);
         }
     }
 
     async Task<int> Add(string from, string to) {
-        if (!TryNormalize(from, out var nFrom, out var fromError)) {
+        if (!TryNormalizeFrom(from, out var nFrom, out var fromError)) {
             await Console.Error.WriteLineAsync($"Invalid from path '{from}': {fromError}");
 
             return 1;
@@ -57,6 +64,13 @@ public sealed class RemapCommand(ConfigRoot root) {
 
         if (!TryNormalize(to, out var nTo, out var toError)) {
             await Console.Error.WriteLineAsync($"Invalid to path '{to}': {toError}");
+
+            return 1;
+        }
+
+        if (nTo.Contains('*')) {
+            await Console.Error.WriteLineAsync(
+                $"Invalid to path '{to}': '*' matches in the from path only; the to path is literal");
 
             return 1;
         }
@@ -76,6 +90,9 @@ public sealed class RemapCommand(ConfigRoot root) {
         return 0;
     }
 
+    // Removal is keyed by the stored string, and deliberately skips the
+    // wildcard grammar: an entry hand-written into the config that no import
+    // can use still has to be removable through the CLI.
     async Task<int> Remove(string from) {
         if (!TryNormalize(from, out var nFrom, out var error)) {
             await Console.Error.WriteLineAsync($"Invalid from path '{from}': {error}");
@@ -165,6 +182,20 @@ public sealed class RemapCommand(ConfigRoot root) {
     static bool SameFrom(string stored, string input, StringComparison comparison) =>
         string.Equals(Normalize(stored), Normalize(input), comparison);
 
+    /// <summary>
+    /// <see cref="TryNormalize"/> plus the wildcard grammar, so a pattern that
+    /// could never match is rejected at the point it is typed rather than
+    /// silently ignored by every import that reads it back.
+    /// </summary>
+    internal static bool TryNormalizeFrom(string path, out string normalized, out string error) {
+        if (!TryNormalize(path, out normalized, out error)) return false;
+        if (CwdRemapper.TryParseFrom(normalized, out _, out error)) return true;
+
+        normalized = "";
+
+        return false;
+    }
+
     static bool TryNormalize(string path, out string normalized, out string error) {
         var n = Normalize(path);
 
@@ -199,10 +230,27 @@ public sealed class RemapCommand(ConfigRoot root) {
         return trimmed[..end];
     }
 
+    /// <summary>
+    /// The extra arguments are usually a pattern the shell expanded, in which
+    /// case no <c>*</c> survives into <c>args</c> to detect it by — so the
+    /// quoting advice is offered rather than diagnosed. Taking the first two
+    /// arguments anyway would silently store, or remove, one worktree's rule.
+    /// </summary>
+    static async Task<int> TooManyArguments(string expected) {
+        await Console.Error.WriteLineAsync($"Too many arguments: kcap remap {expected}.");
+        await Console.Error.WriteLineAsync("If you meant a wildcard pattern, quote it so the shell doesn't expand it:");
+        await Console.Error.WriteLineAsync("  kcap remap '~/dev/repo/worktrees/*' ~/dev/repo");
+
+        return 1;
+    }
+
     static int Usage() {
         Console.Error.WriteLine("Usage: kcap remap <from> <to>");
         Console.Error.WriteLine("       kcap remap --list");
         Console.Error.WriteLine("       kcap remap --remove <from>");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("<from> may carry one '*' standing for a single path segment:");
+        Console.Error.WriteLine("       kcap remap '~/dev/repo/worktrees/*' ~/dev/repo");
 
         return 1;
     }

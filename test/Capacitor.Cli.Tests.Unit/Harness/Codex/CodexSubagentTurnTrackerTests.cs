@@ -137,7 +137,7 @@ public class CodexSubagentTurnTrackerTests {
 
         var state = new WatchState();
         await WatchCommand.BackfillCodexWatcherStateAsync(
-            state, path, isChildWatcher, upToLine ?? lines.Length, CancellationToken.None);
+            state, path, isChildWatcher, upToLine ?? lines.Length, CancellationToken.None, TimeProvider.System);
 
         return state;
     }
@@ -223,7 +223,7 @@ public class CodexSubagentTurnTrackerTests {
         var state = new WatchState();
 
         await WatchCommand.BackfillCodexWatcherStateAsync(
-            state, "/nonexistent/rollout.jsonl", isChildWatcher: true, upToLine: 5, CancellationToken.None);
+            state, "/nonexistent/rollout.jsonl", isChildWatcher: true, upToLine: 5, CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(state.CodexSubagentTurn.TurnCompleted).IsFalse();
         await Assert.That(state.PendingCodexToolCalls).IsEmpty();
@@ -240,7 +240,7 @@ public class CodexSubagentTurnTrackerTests {
         await cancelled.CancelAsync();
 
         await WatchCommand.BackfillCodexWatcherStateAsync(
-            state, path, isChildWatcher: true, upToLine: 1, cancelled.Token);
+            state, path, isChildWatcher: true, upToLine: 1, cancelled.Token, time: TimeProvider.System);
 
         await Assert.That(state.PendingCodexToolCalls).IsEmpty();
     }

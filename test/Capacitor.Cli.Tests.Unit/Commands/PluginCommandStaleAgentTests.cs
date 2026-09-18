@@ -1,6 +1,8 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -18,9 +20,6 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// one is a re-install.
 /// </para>
 /// </remarks>
-// PATH is process-global: the fresh-install precheck resolves `kcap` through it, and every spawned
-// child inherits it.
-[NotInParallel]
 public sealed class PluginCommandStaleAgentTests {
     static readonly StaleAgentProcess Running = new("kiro", 4821, "/home/dev/gaffer");
 
@@ -29,10 +28,10 @@ public sealed class PluginCommandStaleAgentTests {
         using var onPath   = new KcapOnPath();
         using var home     = new TempHome();
         using var pipe     = new StringWriter();
-        var env = Env(home.Path, pipe, found: [Running]);
+        var env = Env(home.Path, pipe, found: [Running], onPath.Probe);
         SeedAgent(env, installed: false);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(pipe.ToString()).Contains("4821");
@@ -43,10 +42,10 @@ public sealed class PluginCommandStaleAgentTests {
         using var onPath   = new KcapOnPath();
         using var home     = new TempHome();
         using var pipe     = new StringWriter();
-        var env = Env(home.Path, pipe, found: [Running]);
+        var env = Env(home.Path, pipe, found: [Running], onPath.Probe);
         SeedAgent(env, installed: true);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(pipe.ToString())
@@ -61,10 +60,10 @@ public sealed class PluginCommandStaleAgentTests {
         using var onPath   = new KcapOnPath();
         using var home     = new TempHome();
         using var pipe     = new StringWriter();
-        var env = Env(home.Path, pipe, found: []);
+        var env = Env(home.Path, pipe, found: [], onPath.Probe);
         SeedAgent(env, installed: false);
 
-        await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(pipe.ToString()).DoesNotContain("already running");
     }
@@ -74,14 +73,14 @@ public sealed class PluginCommandStaleAgentTests {
         using var onPath   = new KcapOnPath();
         using var home     = new TempHome();
         using var pipe     = new StringWriter();
-        var env = Env(home.Path, pipe, found: [Running]);
+        var env = Env(home.Path, pipe, found: [Running], onPath.Probe);
 
         // A directory where the agent JSON belongs: the clone can't write it, the command exits
         // non-zero, and live capture was never installed — so naming a session that "isn't being
         // captured" would be true but useless, and blaming this install for it would be a lie.
         Directory.CreateDirectory(env.Harnesses.Of<KiroHarness>().Paths.KcapAgentJson);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(pipe.ToString()).DoesNotContain("4821");
@@ -99,33 +98,24 @@ public sealed class PluginCommandStaleAgentTests {
 
     /// <summary>The fresh install refuses unless `kcap` resolves — the agent it writes invokes it.</summary>
     sealed class KcapOnPath : IDisposable {
-        readonly TempDir  _bin = new();
-        readonly EnvScope _path;
+        readonly TempDir _bin = new();
 
-        public KcapOnPath() {
-            var exe = _bin.CreateFile("kcap");
+        public BinaryProbe Probe { get; }
 
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(exe, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        public KcapOnPath() => Probe = TestBinaries.Searching(_bin, "kcap");
 
-            _bin.CreateFile("kcap.exe");
-            _path = EnvScope.Exclusive("PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
-        }
-
-        public void Dispose() {
-            _path.Dispose();
-            _bin.Dispose();
-        }
+        public void Dispose() => _bin.Dispose();
     }
 
-    static PluginEnvironment Env(string home, TextWriter stdout, StaleAgentProcess[] found) => new(
+    static PluginEnvironment Env(string home, TextWriter stdout, StaleAgentProcess[] found, BinaryProbe binaries) => new(
         Home:     new(home),
         Profiles:          new ProfileConfig(),
         ResolvePluginPath: () => null,
         Stdout:            stdout,
         Stderr:            TextWriter.Null
     ) {
-        Harnesses = TestHarnesses.Under(new(home)),
+        Harnesses = TestHarnesses.Under(new(home), binaries),
+        Binaries  = binaries,
         ResolveMcpBinaryPath = () => "/usr/local/bin/kcap",
         // Never the real process table: what a CI box happens to be running must not decide a result.
         FindStaleAgents      = _ => found,

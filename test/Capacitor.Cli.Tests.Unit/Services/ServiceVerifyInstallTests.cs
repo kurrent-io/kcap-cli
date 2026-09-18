@@ -804,7 +804,7 @@ public class ServiceVerifyInstallTests {
             Directory.CreateDirectory(Daemons.Store.StateDirectory(id));
             BootRefusalMarker.TryWrite(
                 Daemons.Store, id, "server_expectation_mismatch",
-                "https://s.example", "https://resolved.example", "inst-1", attemptId: null);
+                "https://s.example", "https://resolved.example", "inst-1", attemptId: null, time: TimeProvider.System);
         };
 
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>

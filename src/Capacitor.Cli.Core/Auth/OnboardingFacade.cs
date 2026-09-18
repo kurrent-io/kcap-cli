@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Duende.IdentityModel.OidcClient.Browser;
@@ -148,6 +149,9 @@ public sealed class OnboardingFacade(
         IBrowserLauncher                                            launcher,
         ITenantPicker                                               picker,
         ITenantProvisioner?                                         provisioner,
+        CliTelemetry                                                telemetry,
+        AuthEndpoints                                               endpoints,
+        TimeProvider                                                time,
         Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit) {
     /// <summary>Test seam for the one WorkOS effect with no HTTP surface (loopback browser + OidcClient).</summary>
     internal Func<CancellationToken, Task<WorkOSAuthResponse?>>? WorkOSOrglessLogin { get; init; }
@@ -227,12 +231,13 @@ public sealed class OnboardingFacade(
     async Task<AuthResult> LoginGitHubAsync(
             HttpClient http, AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
         var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
-            github, config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice, launcher, ct, progress);
+            github, config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice, launcher,
+            telemetry.Join, time, ct, progress);
 
         if (accessToken is null) return Stop("GitHub sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
         var exchanged = await OAuthLoginFlow.ExchangeAsync(
-            http, target.ServerUrl, accessToken, config.Provider, target.Profile, progress, ct);
+            http, target.ServerUrl, accessToken, config.Provider, target.Profile, progress, time, ct);
 
         if (exchanged is null) return Stop("Token exchange failed.", ct);
 
@@ -241,12 +246,11 @@ public sealed class OnboardingFacade(
 
     async Task<AuthResult> LoginWorkOSAsync(
             AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
-        // No local browser any more: construction moved into OAuthLoginFlow.AcquireWorkOSAsync, which
-        // is where the join collaborator is attached and where the instance is owned. One site instead
-        // of three — see the ownership guard, which enumerates them.
+        // The loopback browser is owned by OAuthLoginFlow.AcquireWorkOSAsync, which is where the join
+        // collaborator is attached — see the ownership guard, which enumerates every site.
         var authenticated = await OAuthLoginFlow.WorkOSTokensForServerAsync(
             workos, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice, launcher,
-            WorkOSBrowser, ct, progress,
+            telemetry.Join, WorkOSBrowser, ct, progress, time,
             WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase, KeyWatcher);
 
         if (authenticated is null) return Stop("WorkOS sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
@@ -275,8 +279,86 @@ public sealed class OnboardingFacade(
         return result;
     }
 
+    /// <summary>
+    /// Sign in and report the workspaces this account can reach, without choosing one. Publishes
+    /// nothing: no profile, no activation, no token, and no workspace created — the commit boundary
+    /// is never entered, and no provisioner is consulted.
+    ///
+    /// <para>Not <see cref="DiscoverAsync"/> with a declining picker: a sole workspace is selected
+    /// before any picker is asked, so that route would configure the machine in the one case a
+    /// report is most needed, and an account with none would fail rather than answer.</para>
+    /// </summary>
+    public async Task<DiscoveryReport> DiscoverOnlyAsync(string provider, bool forceDevice, CancellationToken ct) {
+        try {
+            return await DiscoverOnlyCoreAsync(provider, forceDevice, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return DiscoveryReport.Cancelled(provider);
+        }
+    }
+
+    async Task<DiscoveryReport> DiscoverOnlyCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
+        var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
+
+        if (proxyConfig is null) return Halted(provider, "Cannot reach the Kurrent auth service.", ct);
+
+        return provider switch {
+            AuthProvider.WorkOS    => await ListWorkOSAsync(proxyConfig, forceDevice, ct),
+            AuthProvider.GitHubApp => await ListGitHubAsync(proxyConfig, forceDevice, ct),
+            _                      => DiscoveryReport.Failure(provider, $"Unknown auth provider '{provider}'."),
+        };
+    }
+
+    async Task<DiscoveryReport> ListWorkOSAsync(
+            ProxyConfigResponse proxyConfig, bool forceDevice, CancellationToken ct) {
+        if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId))
+            return DiscoveryReport.Failure(AuthProvider.WorkOS, "This server isn't configured for WorkOS sign-in.");
+
+        var auth = WorkOSOrglessLogin is not null
+            ? await WorkOSOrglessLogin(ct)
+            : await OAuthLoginFlow.AcquireWorkOSAsync(
+                  workos, proxyConfig.WorkOSClientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
+                  browser: null, apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
+                  ct: ct, progress: progress, keys: KeyWatcher);
+
+        if (auth is null) return Halted(AuthProvider.WorkOS, "WorkOS sign-in failed.", ct);
+
+        var result = await proxy.DiscoverWorkOSTenantsAsync(endpoints.ProxyUrl, auth.AccessToken, ct);
+
+        if (result.Error != DiscoveryError.None)
+            return Halted(AuthProvider.WorkOS, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
+
+        // The hosted lane is the only one that can provision, and only for an account with none.
+        return new DiscoveryReport(result.Tenants, AuthProvider.WorkOS, CanCreate: result.Tenants.Length == 0);
+    }
+
+    async Task<DiscoveryReport> ListGitHubAsync(
+            ProxyConfigResponse proxyConfig, bool forceDevice, CancellationToken ct) {
+        if (string.IsNullOrEmpty(proxyConfig.GitHubClientId))
+            return DiscoveryReport.Failure(AuthProvider.GitHubApp, "Cannot reach the Kurrent auth service.");
+
+        var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
+            github, proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice, launcher,
+            telemetry.Join, time, ct, progress);
+
+        if (accessToken is null) return Halted(AuthProvider.GitHubApp, "GitHub sign-in did not complete.", ct);
+
+        var result = await proxy.DiscoverTenantsAsync(endpoints.ProxyUrl, accessToken, ct);
+
+        if (result.Error != DiscoveryError.None)
+            return Halted(AuthProvider.GitHubApp, TenantDiscovery.Describe(result.Error, AuthProvider.GitHubApp), ct);
+
+        // GitHub-App discovery has nothing to create with: a workspace arrives by having the app
+        // installed on an org, so reporting that this account may create one would be a dead end.
+        return new DiscoveryReport(result.Tenants, AuthProvider.GitHubApp, CanCreate: false);
+    }
+
+    // The proxy client and the sign-ins answer a cancelled request as a failed one, and reporting an
+    // outage for it sends the reader to look at a service that is fine.
+    static DiscoveryReport Halted(string provider, string error, CancellationToken ct) =>
+        ct.IsCancellationRequested ? DiscoveryReport.Cancelled(provider) : DiscoveryReport.Failure(provider, error);
+
     async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
-        var proxyConfig = await proxy.GetConfigAsync(AuthProxyEndpoint.Url, ct);
+        var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
 
         if (proxyConfig is null) {
             return Fail("Cannot reach the Kurrent auth service.", ct, AuthFailureReason.Unreachable);
@@ -294,12 +376,13 @@ public sealed class OnboardingFacade(
         var clientId = proxyConfig.WorkOSClientId ?? "";
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
-            AuthProxyEndpoint.Url, proxyConfig, proxy, picker,
+            endpoints.ProxyUrl, proxyConfig, proxy, picker, telemetry.Funnel,
             orglessLogin: () => WorkOSOrglessLogin is not null
                 ? WorkOSOrglessLogin(ct)
                 // Org-less: the sign-in picks the organization, and discovery reconciles it afterwards.
                 : OAuthLoginFlow.AcquireWorkOSAsync(
-                    workos, clientId, organizationId: null, forceDevice, launcher, browser: null,
+                    workos, clientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
+                    browser: null,
                     apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
                     ct: ct, progress: progress, keys: KeyWatcher),
             orgSwitch: (refreshToken, organizationId) =>
@@ -307,17 +390,19 @@ public sealed class OnboardingFacade(
             orglessRefresh: async (refreshToken, refreshCt) =>
                 (await workos.RefreshAsync(clientId, refreshToken, refreshCt)).Response,
             provisioner: provisioner,
+            time: time,
             ct: ct,
             progress: progress,
             // Bearer and channel are filled in by discovery once the login has answered; only the
             // proxy half is knowable here.
             pickContext: new TenantPickContext(
                 Proxy: proxy,
-                ProxyUrl: AuthProxyEndpoint.Url,
+                ProxyUrl: endpoints.ProxyUrl,
                 PickerVersion: proxyConfig.CliPickerVersion));
 
         return flow switch {
-            WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(root, store, ready, progress, beforeCommit, ct),
+            WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(
+                                                        root, store, ready, progress, beforeCommit, time, ct),
             WorkOSDiscoveryFlow.Retarget retarget => new AuthResult.Retarget(retarget.ServerInput),
             WorkOSDiscoveryFlow.Failed failed     => Stop(failed.Message, ct, failed.Reason),
             _                                     => Stop("No Capacitor tenants are linked to your account.", ct,
@@ -333,11 +418,11 @@ public sealed class OnboardingFacade(
 
         var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
             github, proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice, launcher,
-            ct, progress);
+            telemetry.Join, time, ct, progress);
 
         if (accessToken is null) return Stop("GitHub sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
-        var outcome = await new TenantDiscovery(proxy, picker).RunAsync(AuthProxyEndpoint.Url, accessToken, ct);
+        var outcome = await new TenantDiscovery(proxy, picker).RunAsync(endpoints.ProxyUrl, accessToken, ct);
 
         if (outcome.ErrorMessage is not null) {
             var reason = outcome.NoTenantsFound ? AuthFailureReason.NoTenantsFound : AuthFailureReason.Other;
@@ -380,7 +465,7 @@ public sealed class OnboardingFacade(
             try {
                 var exchanged = await OAuthLoginFlow.ExchangeAsync(
                     http, AppConfig.NormalizeUrl(tenant.Origin), githubAccessToken, AuthProvider.GitHubApp,
-                    tenant.ProfileName, progress, CancellationToken.None);
+                    tenant.ProfileName, progress, time, CancellationToken.None);
 
                 if (exchanged is null) {
                     WarnExchangeFailed(tenant.ProfileName);

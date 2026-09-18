@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Collections.Specialized;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -13,6 +15,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -21,6 +24,8 @@ namespace Capacitor.App.Tests.Unit;
 /// headless something to Show(); session setup and control lookup otherwise copy
 /// MainWindowSmokeTests exactly (see that file's own header comment).
 public class HomeViewSmokeTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     /// Real-shaped agent ids (Guid("N"), 32 hex digits): a Started outcome carrying anything else
     /// is HomeViewModel's "launched but unopenable" error, which would keep StartErrorText visible.
     const string LaunchedId = "0123456789abcdef0123456789abcdef";
@@ -43,7 +48,7 @@ public class HomeViewSmokeTests {
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         var launch = new RecordingLaunchClient();
-        var vm = new HomeViewModel(service, new AppStateStore(path), launch, () => Task.FromResult(Array.Empty<string>()));
+        var vm = new HomeViewModel(service, new AppStateStore(path), launch, () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
         return (new HomeView { DataContext = vm }, vm, service, launch, tmp);
     }
 
@@ -91,10 +96,36 @@ public class HomeViewSmokeTests {
         await Assert.That(subtitleAfter).IsEqualTo("Kurrent-Capacitor-New-Machine");
     }
 
+    /// The launcher goal box is the same kcapEmbedded composer as chat: a local FontSize would
+    /// split the line box from the style that owns it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Goal_box_uses_the_embedded_composer_line_box() {
+        var (size, line, tracking) = await AvaloniaSession.DispatchAsync(() => {
+            var (_, vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var goal = Find<TextBox>(window, "GoalInput")!;
+            var seen = (goal.FontSize, goal.LineHeight, goal.LetterSpacing);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return seen;
+        });
+
+        await Assert.That(size).IsEqualTo(15);
+        await Assert.That(line).IsEqualTo(24);
+        await Assert.That(tracking).IsEqualTo(0.2);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_notice_and_sign_in_button_follow_the_server_connection() {
-        var (noticeBefore, signInBefore, noticeAfter, noticeText, signInAfter) = await AvaloniaSession.DispatchAsync(() => {
+        var (noticeBefore, signInBefore, noticeAfter, noticeText, signInAfter, busyAfter) = await AvaloniaSession.DispatchAsync(() => {
             var (_, vm, service, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
@@ -103,18 +134,19 @@ public class HomeViewSmokeTests {
 
             var notice = Find<TextBlock>(window, "BannerMessageText")!;
             var signIn = Find<Button>(window, "HomeSignInButton")!;
+            var busy = Find<ProgressBar>(window, "BannerBusyBar")!;
             // The banner Border owns visibility; the text/button stay in the tree.
             var banner = notice.FindAncestorOfType<Border>()!;
             var before = (banner.IsVisible, signIn.IsVisible);
 
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             Dispatcher.UIThread.RunJobs();
-            var after = (banner.IsVisible, notice.Text, signIn.IsVisible);
+            var after = (banner.IsVisible, notice.Text, signIn.IsVisible, busy.IsVisible);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
             vm.Dispose();
-            return (before.Item1, before.Item2, after.Item1, after.Item2, after.Item3);
+            return (before.Item1, before.Item2, after.Item1, after.Item2, after.Item3, after.Item4);
         });
 
         await Assert.That(noticeBefore).IsFalse();
@@ -122,6 +154,78 @@ public class HomeViewSmokeTests {
         await Assert.That(noticeAfter).IsTrue();
         await Assert.That(noticeText).IsEqualTo(HomeViewModel.ServerLostNotice);
         await Assert.That(signInAfter).IsTrue();
+        await Assert.That(busyAfter).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task After_sign_in_the_banner_shows_a_loader_until_the_daemon_reconnects() {
+        var (text, signIn, busy) = await AvaloniaSession.DispatchAsync(() => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, laneStatus: lane.Status,
+                appServerUrl: "http://localhost:9999");
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
+            try {
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+
+                vm.NotifySignInCompleted();
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+                Dispatcher.UIThread.RunJobs();
+
+                var notice = Find<TextBlock>(window, "BannerMessageText")!;
+                var signInBtn = Find<Button>(window, "HomeSignInButton")!;
+                var bar = Find<ProgressBar>(window, "BannerBusyBar")!;
+                return (notice.Text, signInBtn.IsVisible, bar.IsVisible);
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+
+        await Assert.That(text).IsEqualTo(HomeViewModel.FinishingSignInNotice);
+        await Assert.That(signIn).IsFalse();
+        await Assert.That(busy).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Connection_banner_overlays_without_shifting_the_composer() {
+        var (yBefore, yAfter, bannerVisible, bannerAbove) = await AvaloniaSession.DispatchAsync(() => {
+            var (_, vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var headline = Find<TextBlock>(window, "LauncherHeadline")!;
+            double Y(Visual c) => c.TranslatePoint(new Point(0, 0), window)!.Value.Y;
+            var before = Y(headline);
+
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            Dispatcher.UIThread.RunJobs();
+
+            var banner = Find<Border>(window, "ConnectionBanner")!;
+            var after = Y(headline);
+            var bannerAbove = Y(banner) < after;
+            var visible = banner.IsVisible;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (before, after, visible, bannerAbove);
+        });
+
+        await Assert.That(bannerVisible).IsTrue();
+        await Assert.That(yAfter).IsEqualTo(yBefore);
+        await Assert.That(bannerAbove).IsTrue();
     }
 
     [Test]
@@ -307,6 +411,46 @@ public class HomeViewSmokeTests {
         await Assert.That(goalAfter).IsEqualTo("ship it");
     }
 
+    /// Shift+Enter inserts a newline instead of launching — even when Start could run — matching
+    /// the chat composer. Bare Enter still launches (covered above).
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Shift_Enter_in_the_goal_box_inserts_a_newline_and_does_not_start() {
+        var (goalText, acceptsReturn, startCount) = await AvaloniaSession.DispatchAsync(async () => {
+            var (_, vm, _, launch, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            await vm.SelectRepositoryAsync("/repos/kcap-cli");
+            Dispatcher.UIThread.RunJobs();
+
+            var goal = Find<TextBox>(window, "GoalInput")!;
+            var accepts = goal.AcceptsReturn;
+            goal.Focus();
+            Dispatcher.UIThread.RunJobs();
+            window.KeyTextInput("line one");
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.Shift);
+            window.KeyTextInput("line two");
+            Dispatcher.UIThread.RunJobs();
+
+            var text = goal.Text;
+            var count = launch.StartCount;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (text, accepts, count);
+        });
+
+        await Assert.That(acceptsReturn).IsTrue();
+        await Assert.That(startCount).IsEqualTo(0);
+        await Assert.That(goalText).Contains("line one");
+        await Assert.That(goalText).Contains("line two");
+        await Assert.That(goalText!.Contains('\n')).IsTrue();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task StartErrorText_visibility_follows_StartError() {
@@ -404,7 +548,7 @@ public class HomeViewSmokeTests {
             var opened = new List<string>();
             var vm = new HomeViewModel(
                 service, new AppStateStore(path), new RecordingLaunchClient(),
-                () => Task.FromResult(Array.Empty<string>()), openSession: opened.Add);
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, openSession: opened.Add);
             var window = new Window { Content = new HomeView { DataContext = vm } };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -484,5 +628,180 @@ public class HomeViewSmokeTests {
 
         await Assert.That(thickness).IsEqualTo(new Avalonia.Thickness(0));
         await Assert.That(transparent).IsTrue();
+    }
+
+    /// A launcher whose attachment gate is open: a connected lane for the credential the upload
+    /// needs, and a local daemon advertising the capability the files ride on.
+    static (HomeViewModel Vm, TempDir Tmp) BuildAttachable(IAttachmentUploader? uploader = null) {
+        var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", "input/2"]));
+        var vm = new HomeViewModel(
+            service, new AppStateStore(path), new RecordingLaunchClient(),
+            () => Task.FromResult(Array.Empty<string>()), TimeProvider.System,
+            laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
+            uploader: uploader);
+        return (vm, tmp);
+    }
+
+    static List<StagedAttachmentViewModel> Chips(Window window) => window.GetVisualDescendants()
+        .OfType<TextBlock>().Where(t => t.Name == "ChipName").Select(t => (StagedAttachmentViewModel)t.DataContext!).ToList();
+
+    static void Settle(Window window) {
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// Real input, not a raised ClickEvent: a Button's Command runs off its own click handling,
+    /// which a synthesized routed event never reaches. Aim at the center — a corner miss is easy.
+    static void Click(Window window, Control target) {
+        Settle(window);
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        var origin = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)
+            ?? throw new InvalidOperationException("Click target is not under the window.");
+        window.MouseDown(origin, MouseButton.Left);
+        window.MouseUp(origin, MouseButton.Left);
+        Settle(window);
+    }
+
+    /// The chip strip's whole wiring on the goal card: collapsed with an empty tray, one chip per
+    /// staged file carrying its name and size, and the chip's own button takes that file back out.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Staged_chips_render_on_the_goal_card_and_a_chip_removes_its_own_file() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, tmp) = BuildAttachable();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+
+            var strip = Find<AttachmentChipStrip>(window, "ChipStrip")!;
+            await Assert.That(strip.IsVisible).IsFalse();
+
+            vm.Tray.AddAll([
+                new StagedAttachment("a.png", "image/png", new byte[] { 1, 2, 3 }),
+                new StagedAttachment("notes.txt", "text/plain", new byte[2048])]);
+            Settle(window);
+
+            await Assert.That(strip.IsVisible).IsTrue();
+            await Assert.That(Chips(window).Select(c => c.FileName)).IsEquivalentTo(["a.png", "notes.txt"], CollectionOrdering.Matching);
+            await Assert.That(Chips(window).Select(c => c.SizeLabel)).IsEquivalentTo(["3 B", "2 KB"], CollectionOrdering.Matching);
+
+            var remove = strip.GetVisualDescendants().OfType<Button>().First(b => b.Name == "ChipRemove");
+            Click(window, remove);
+
+            await Assert.That(vm.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["notes.txt"]);
+            await Assert.That(Chips(window).Select(c => c.FileName)).IsEquivalentTo(["notes.txt"]);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// The view's half of the intake: dragging over the goal card rings it, and dropping there
+    /// reaches the launcher's tray and puts the ring back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_drop_on_the_goal_card_stages_the_file() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, tmp) = BuildAttachable();
+            using var _tmp = tmp;
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+            await Assert.That(vm.CanAttach).IsTrue();
+
+            var card = Find<Border>(window, "GoalCard")!;
+            var resting = card.BorderBrush;
+            await Assert.That(resting).IsNotNull();
+
+            var transfer = new DataTransfer();
+            var item = new DataTransferItem();
+            item.SetFile(FakeStorageFile.Of("dropped.png", new byte[] { 1, 2, 3, 4 }));
+            transfer.Add(item);
+
+            card.RaiseEvent(new DragEventArgs(DragDrop.DragOverEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            Settle(window);
+            // The highlight is a class the card's own style answers; a local brush on the card
+            // would outrank it and the drag would look the same as no drag.
+            await Assert.That(card.Classes.Contains("dragOver")).IsTrue();
+            await Assert.That(card.BorderBrush).IsNotSameReferenceAs(resting);
+
+            card.RaiseEvent(new DragEventArgs(DragDrop.DropEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            await (view.PendingIntakeForTesting ?? Task.CompletedTask);
+            Settle(window);
+
+            await Assert.That(vm.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["dropped.png"]);
+            await Assert.That(card.Classes.Contains("dragOver")).IsFalse();
+            await Assert.That(card.BorderBrush).IsSameReferenceAs(resting);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// A shut gate leaves the "+" reachable but disabled, and the tooltip that says why has to
+    /// survive the disabled state — Avalonia suppresses tips on disabled controls otherwise.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task AttachButton_is_disabled_with_the_hint_when_attaching_is_not_available() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (_, vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+
+            var attach = Find<Button>(window, "AttachButton")!;
+            await Assert.That(attach.IsEnabled).IsFalse();
+            await Assert.That(ToolTip.GetTip(attach) as string).IsEqualTo(HomeViewModel.SignInToAttach);
+            await Assert.That(ToolTip.GetShowOnDisabled(attach)).IsTrue();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// Start is unusable while the files it would carry are still going up, so its tip says so
+    /// rather than leaving the repository-gate wording standing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task StartButton_tooltip_reports_an_upload_in_flight() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var held = new TaskCompletionSource<UploadOutcome>();
+            var (vm, tmp) = BuildAttachable(new ScriptedUploader { Pending = held });
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+
+            var startButton = Find<Button>(window, "StartButton")!;
+            await vm.SelectRepositoryAsync("/repos/kcap-cli");
+            vm.Tray.AddAll([new StagedAttachment("a.png", "image/png", new byte[] { 1, 2, 3 })]);
+            Settle(window);
+            await Assert.That(ToolTip.GetTip(startButton) as string).IsEqualTo("Start");
+
+            var launching = vm.StartCommand.Execute().ToTask();
+            Settle(window);
+            await Assert.That(ToolTip.GetTip(startButton) as string).IsEqualTo("Uploading…");
+
+            held.SetResult(new UploadOutcome(UploadKind.Uploaded, ["u1"], null));
+            await launching;
+            Settle(window);
+            await Assert.That(ToolTip.GetTip(startButton) as string).IsEqualTo("Start");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
     }
 }

@@ -20,14 +20,15 @@ internal interface IAcpTranscriptSource {
     string Cwd { get; }
 
     /// <summary>
-    /// The model id actually resolved AND applied by model selection (i.e. the vendor's
-    /// model-selection RPC — <c>session/set_config_option</c> or <c>session/set_model</c>,
-    /// whichever the descriptor's selector sends — was sent and answered without error) — or
-    /// <see langword="null"/> when no model was requested, resolution found no match in
-    /// <c>session/new</c>'s <c>availableModels</c>, or the agent rejected the option. In every "null"
-    /// case the vendor's own default model applies (Cursor's for a Cursor session, Kiro's for a
-    /// Kiro session, …), which is why this is nullable rather than falling back to the
-    /// requested-but-unconfirmed id.
+    /// The confirmed running model of the ACP session: either the id resolved AND applied by model
+    /// selection (the vendor's model-selection RPC — <c>session/set_config_option</c> or
+    /// <c>session/set_model</c> — was sent and answered without error), OR, when NO model was
+    /// requested, the current model the <c>session/new</c> handshake reported. It is
+    /// <see langword="null"/> in two cases: a REQUESTED model that did not take (no match in
+    /// <c>availableModels</c> / the agent rejected the option), and a no-request launch whose
+    /// <c>session/new</c> published no current-model marker. In both the vendor's own default runs and
+    /// its specific id is unknown — so a non-null value is always a model the session is actually
+    /// running, never a requested-but-unconfirmed or guessed one.
     /// </summary>
     string? ResolvedModel { get; }
 

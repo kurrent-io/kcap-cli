@@ -18,7 +18,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddSession("ses_child", "ses_root", "/work/a", "Child", 1782241513761);
         tmp.AddMessageWithText("ses_root", "msg_1", "hello", 1782241513760);
 
-        var source   = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
+        var source   = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath, TimeProvider.System);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(1);
@@ -37,7 +37,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddMessageWithText("ses_a", "m1", "x", 100);
         tmp.AddMessageWithText("ses_b", "m2", "y", 200);
 
-        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
+        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath, TimeProvider.System);
 
         var byCwd = await source.DiscoverAsync(new DiscoveryFilters("/work/b", null, null, 0), CancellationToken.None);
         await Assert.That(byCwd.Select(s => s.SessionId)).IsEquivalentTo(new[] { "ses_b" });
@@ -49,7 +49,7 @@ public class OpenCodeImportSourceTests {
     [Test]
     public async Task IsAvailable_false_when_db_missing() {
         using var tmp = new TempDir();
-        var source = new OpenCodeImportSource(tmp.PathTo("no-such-kcap.db"), tmp.PathTo("ledger.json"));
+        var source = new OpenCodeImportSource(tmp.PathTo("no-such-kcap.db"), tmp.PathTo("ledger.json"), TimeProvider.System);
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
@@ -61,7 +61,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddMessageWithText("ses_ms",  "m1", "x", 1782241513759);
         tmp.AddMessageWithText("ses_sec", "m2", "x", 1782241513);
 
-        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
+        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath, TimeProvider.System);
         var byId = (await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None))
             .ToDictionary(s => s.SessionId, s => s.FirstTimestamp);
 
@@ -75,7 +75,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddSession("ses_nodir", null, dir: null, "No dir", 100);
         tmp.AddMessageWithText("ses_nodir", "m1", "x", 100);
 
-        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
+        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath, TimeProvider.System);
 
         var all = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(all.Single().Cwd).IsNull();
@@ -95,10 +95,10 @@ public class OpenCodeImportSourceTests {
               .RespondWith(Response.Create().WithStatusCode(404));
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
@@ -119,16 +119,16 @@ public class OpenCodeImportSourceTests {
                                   "/hooks/set-title", "/hooks/session-end/opencode" })
             server.Given(Request.Create().WithPath(p).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
-        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home);
+        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home);
 
         // First run records the ledger (with the internally-computed fingerprint) on session-end.
-        var s1 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var s1 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var c1 = await s1.ClassifyAsync(await s1.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
         await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
         await s1.ImportSessionAsync(c1[0], new ImportContext(client, server.Url!, false), CancellationToken.None);
 
         // Fresh source reloads the ledger → fingerprint matches → AlreadyLoaded.
-        var s2 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var s2 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var c2 = await s2.ClassifyAsync(await s2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
         await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
     }
@@ -147,24 +147,24 @@ public class OpenCodeImportSourceTests {
             server.Given(Request.Create().WithPath(p).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
 
-        var loadCtx = new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home);
+        var loadCtx = new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home);
 
         // First run fully imports and records the ledger.
-        var s1 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var s1 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var c1 = await s1.ClassifyAsync(await s1.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), loadCtx, CancellationToken.None);
         await s1.ImportSessionAsync(c1[0], new ImportContext(client, server.Url!, false), CancellationToken.None);
 
-        var discovered = await new OpenCodeImportSource(fix.DbPath, fix.LedgerPath)
+        var discovered = await new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System)
             .DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         // Control: a fresh source with the default (Reimport: false) context still skips it.
-        var skip = await new OpenCodeImportSource(fix.DbPath, fix.LedgerPath)
+        var skip = await new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System)
             .ClassifyAsync(discovered, loadCtx, CancellationToken.None);
         await Assert.That(skip[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 
         // --reimport bypasses the ledger → the session re-classifies (New here, since the
         // server reports no watermark) and is eligible to re-send.
-        var forced = await new OpenCodeImportSource(fix.DbPath, fix.LedgerPath)
+        var forced = await new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System)
             .ClassifyAsync(discovered, loadCtx with { Reimport = true }, CancellationToken.None);
         await Assert.That(forced[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
     }
@@ -180,10 +180,10 @@ public class OpenCodeImportSourceTests {
               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}"""));
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
@@ -201,10 +201,10 @@ public class OpenCodeImportSourceTests {
               .RespondWith(Response.Create().WithStatusCode(404));
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
@@ -220,10 +220,10 @@ public class OpenCodeImportSourceTests {
               .RespondWith(Response.Create().WithStatusCode(404));
         using var client = new HttpClient();
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
@@ -249,9 +249,9 @@ public class OpenCodeImportSourceTests {
                                   "/hooks/set-title", "/hooks/session-end/opencode" })
             server.Given(Request.Create().WithPath(p).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
-        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home);
+        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home);
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered, ctx, CancellationToken.None);
 
@@ -280,9 +280,9 @@ public class OpenCodeImportSourceTests {
                                   "/hooks/set-title", "/hooks/session-end/opencode" })
             server.Given(Request.Create().WithPath(p).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
-        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home);
+        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home);
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered, ctx, CancellationToken.None);
 

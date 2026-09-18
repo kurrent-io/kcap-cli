@@ -23,6 +23,7 @@
         <PackageReference Include="MarkView.Avalonia" />
         <PackageReference Include="MarkView.Avalonia.SyntaxHighlighting" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+        <PackageReference Include="Eventuous.SignalR.Client" />
         <PackageReference Include="SvcSystems.UI.Terminal" />
         <PackageReference Include="Velopack" />
         <PackageReference Include="XTerm.NET" />

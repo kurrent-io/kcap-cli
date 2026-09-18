@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
 using ReviewCommand = Capacitor.Cli.Commands.ReviewCommand;
 using WatchCommand = Capacitor.Cli.Commands.WatchCommand;
+using Capacitor.Cli.PrDetection;
 
 if (args.Length < 1) {
     await PrintUsage();
@@ -71,12 +72,16 @@ if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
 // Anchored here, before dispatch: every hook ceiling is relative to it, and anchoring inside a
 // handler would inflate the budget by the pre-dispatch work (config load, spool drain) and overshoot
 // the true hook ceiling.
-var clock = new HookClock(TimeProvider.System);
+// The one clock this process runs on: resolved here and registered, so nothing downstream reads
+// the ambient one.
+var time   = TimeProvider.System;
+var clock  = new HookClock(time);
 var isHook = command == "hook";
 
 // Resolved once here and passed onward; nothing downstream resolves a root for itself.
-var config = ConfigRoot.FromEnvironment();
-var home   = UserHome.FromEnvironment();
+var config  = ConfigRoot.FromEnvironment();
+var home    = UserHome.FromEnvironment();
+var workdir = WorkingDirectory.FromProcess();
 
 // Claude kills a SessionEnd hook after 1.5 s (ClaudeSessionEndHandoff), so the hand-off sits
 // ahead of ResolveServerUrl's git probes and the global spool drain, each of which can spend it.
@@ -86,24 +91,37 @@ if (isHook && args.Contains("--claude")) {
 
     if (ClaudeSessionEndHandoff.IsDetached(args)) {
         ClaudeSessionEndHandoff.EnterDetached(claudeHookBody, config);
-    } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config)) {
+    } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config, SystemProcessStarter.Instance)) {
         return 0;
     }
 }
+
+// The refresh continuation was spawned inside a hook's process group and must leave it before the
+// repository probe below, or the host kills it with the hook at the ceiling.
+var isRefreshHandoff = RefreshTokenHandoff.IsDetached(command, args);
+if (isRefreshHandoff) RefreshTokenHandoff.EnterDetached();
 
 // KCAP_DAEMONS_DIR is dead to the process from this line on.
 var daemonPaths = DaemonStore.FromEnvironment();
 
 var serverEnv = ProfileOverrides.FromEnvironment();
 var machineEnv = MachineAuth.FromEnvironment();
+var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook ? 1000 : 5000);
+var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000);
 var baseUrl  = profiles.Resolution.ServerUrl;
+
+// An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
+// notice on an invisible stderr. Consume-and-REMOVE before anything can spawn, so no grandchild
+// (detached daemon, hosted agents) observes the marker.
+var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl, endpoints.SignupUrl);
 
 // Composition root. Every context resolved above is registered once here; the dispatch switch below
 // asks for a command rather than handing each one its arguments.
 var services = new ServiceCollection()
-    .AddCapacitorCli(config, home, daemonPaths, profiles, serverEnv, machineEnv, clock, baseUrl);
+    .AddCapacitorCli(
+        config, home, workdir, daemonPaths, profiles, serverEnv, machineEnv, endpoints, clock, baseUrl,
+        telemetryStartup);
 
 await using var sp = services.BuildValidated();
 
@@ -111,30 +129,18 @@ TCommand Run<TCommand>() where TCommand : notnull => sp.GetRequiredService<TComm
 
 ISessionsApi Api() => sp.GetRequiredService<ISessionsApi>();
 
-// Telemetry: initialised once the server URL is known (it decides the `organization` group) and
+// Telemetry: started once the server URL is known (it decides the `organization` group) and
 // torn down from ProcessExit, which observes the exit code returned by top-level Main. Every
 // call swallows, so nothing here can fail a command.
 //
 // Deliberately ahead of the update-notice try/finally below: this is process setup, and the
 // ProcessExit handler outlives that block anyway.
-var commandStart = System.Diagnostics.Stopwatch.GetTimestamp();
-
-// TokenStore.LoadAsync() is the LOCAL read (src/Capacitor.Cli.Core/Auth/TokenStore.cs:211) —
-// deliberately not GetValidTokensForProfileAsync(), which can refresh over the network. `logged_in` is a
-// cheap fact about disk, never a reason to make a request on the command path.
-//
-// Gated on IsReportable: denylisted commands (chiefly `hook`, thousands of invocations/day on
-// the agent's critical path) never send `logged_in` — CliTelemetry.Initialize below disables
-// itself for them regardless — so the disk read has no consumer and is worth skipping outright.
-var loggedIn = false;
-if (CommandEvents.IsReportable(command)) {
-    try { loggedIn = await sp.GetRequiredService<TokenStore>().LoadForProfileAsync(profiles.Name) is not null; } catch { }
-}
+var commandStart = time.GetTimestamp();
 
 // `kcap config set telemetry off` must never activate telemetry for the very invocation that
-// opts out: without this, Initialize below resolves Enabled from the not-yet-updated persisted
+// opts out: without this, the facade resolves enabled from the not-yet-updated persisted
 // flag, mints a device id, shows the first-run notice, and queues cli_first_run — all before
-// ConfigCommand ever runs. Pre-apply the "off" to disk here so Initialize sees it already
+// ConfigCommand ever runs. Pre-apply the "off" to disk here so the facade sees it already
 // persisted. Value recognition only (no throw on garbage — an invalid value is reported
 // normally once ConfigCommand actually dispatches); KCAP_TELEMETRY=1 still overrides a persisted
 // "off" exactly as it does everywhere else, since Resolve checks the env var first regardless of
@@ -145,14 +151,21 @@ if (args.Length >= 4 && command == "config" && args[1] == "set" && args[2] == "t
     TelemetryState.SetEnabled(false, config);
 }
 
-// spec decision 9: an app-spawned CLI child must not emit CLI-labeled telemetry nor consume
-// the one-time privacy notice on an invisible stderr. Consume-and-REMOVE before dispatch so
-// no grandchild (detached daemon, hosted agents) can observe the marker.
-var telemetrySuppressed = CliTelemetry.ConsumeSpawnMarker(
-    Environment.GetEnvironmentVariable,
-    k => Environment.SetEnvironmentVariable(k, null));
+var telemetry = sp.GetRequiredService<CliTelemetry>();
 
-CliTelemetry.Initialize(command, baseUrl, loggedIn, config, telemetrySuppressed);
+// TokenStore.LoadForProfileAsync is the LOCAL read — deliberately not the refreshing one, which can
+// go to the network. `logged_in` is a cheap fact about disk, never a reason to make a request on the
+// command path, and it is skipped for denylisted commands (chiefly `hook`, thousands of invocations
+// a day on the agent's critical path) whose facade is off anyway.
+if (telemetry.Enabled) {
+    var loggedIn = false;
+    try { loggedIn = await sp.GetRequiredService<TokenStore>().LoadForProfileAsync(profiles.Name) is not null; } catch { }
+    telemetry.AddSharedProperty("logged_in", loggedIn);
+}
+
+// After the bag is complete and before dispatch: this shows the one-time privacy notice and queues
+// cli_first_run, which is once per device — a property missing from it is missing for good.
+telemetry.Announce(config);
 
 AppDomain.CurrentDomain.ProcessExit += (_, _) => {
     // Environment.Exit runs no `finally` and no `using` disposal, so a leg that ends that way has no
@@ -161,8 +174,8 @@ AppDomain.CurrentDomain.ProcessExit += (_, _) => {
     // once, so a leg that already sent stays silent and a process with none armed is a no-op.
     FirstRunInterruptRelinquish.RunBeforeExit(InteractiveLifetime.ExitNoticeBudget);
 
-    CliTelemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart));
-    CliTelemetry.FlushAndClose().GetAwaiter().GetResult();
+    telemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart, time));
+    telemetry.FlushAndClose().GetAwaiter().GetResult();
 };
 
 // Everything from here to the end of command dispatch — including the --help,
@@ -189,7 +202,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 // report-version: a no-server host must still hit ReportVersionCommand.HandleAsync's own
 // fail-open logic and return 0 silently, per its doc comment — never the generic
 // "No server configured" exit 1 this gate would otherwise produce.
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "plugin", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", RefreshTokenHandoff.Command];
 
 // `import --discover` reads local transcripts and never calls the server, so it belongs with the
 // offline commands — and it is most useful before setup has run, which is exactly when there is no
@@ -374,6 +387,8 @@ switch (command) {
         return await Run<ConfigCommand>().HandleAsync(args);
     case "ignore":
         return await Run<IgnoreCommand>().HandleAsync(args);
+    case "allow":
+        return await Run<AllowCommand>().HandleAsync(args);
     case "remap":
         return await Run<RemapCommand>().HandleAsync(args);
     case "repos":
@@ -404,7 +419,7 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|analytics|artefacts …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
@@ -412,6 +427,7 @@ switch (command) {
             Console.Error.WriteLine("  kcap mcp flow-result   (launched by the daemon for hosted reviewers)");
             Console.Error.WriteLine("  kcap mcp memory");
             Console.Error.WriteLine("  kcap mcp workitems");
+            Console.Error.WriteLine("  kcap mcp plans");
             Console.Error.WriteLine("  kcap mcp analytics");
             Console.Error.WriteLine("  kcap mcp artefacts");
 
@@ -453,6 +469,8 @@ switch (command) {
                 return await Run<McpMemoryServer>().RunAsync();
             case "workitems":
                 return await Run<McpWorkItemsServer>().RunAsync();
+            case "plans":
+                return await Run<McpPlansServer>().RunAsync();
             case "analytics":
                 return await Run<McpAnalyticsServer>().RunAsync();
             case "artefacts":
@@ -522,7 +540,7 @@ switch (command) {
         }
 
         // 1. Kill the watcher (and any subagent watchers)
-        var watchers = new WatcherManager(config, profiles, sp.GetRequiredService<ICapacitorHttpClient>());
+        var watchers = sp.GetRequiredService<WatcherManager>();
         await watchers.KillWatcher(sessionId);
 
         // Also kill subagent watchers — scan PID files matching "{sessionId}-*"
@@ -647,7 +665,8 @@ switch (command) {
         // Build sources
         var explicitVendorSelection = vsel.Vendors.Count > 0;
         var sources = SetupCommand.BuildImportSources(
-            config, sp.GetRequiredService<HarnessRegistry>(), explicitVendorSelection ? vsel.Vendors : null);
+            config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(), time,
+            explicitVendorSelection ? vsel.Vendors : null);
 
         // --- Scope resolution ---
         var profileConfig = profiles.Snapshot;
@@ -656,7 +675,7 @@ switch (command) {
         var activeProfile = profiles.Name;
         var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;
 
-        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(config, Environment.CurrentDirectory);
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(sp.GetRequiredService<GitProviderRouter>(), config, workdir.Path, time);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
             : null;
@@ -790,6 +809,13 @@ switch (command) {
     // ReportVersionCommand for why it never surfaces an error.
     case "report-version":
         return await Run<ReportVersionCommand>().HandleAsync();
+    // Spawned detached by a hook that gave up on its own client creation (RefreshTokenHandoff); it
+    // outlives the hook to finish the rotation. Not in PrintUsage — nobody types it by hand.
+    case RefreshTokenHandoff.Command: {
+        try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
+
+        return 0;
+    }
     case "hook": {
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
@@ -803,9 +829,13 @@ switch (command) {
         // spools BEFORE returning. Gating the call would mean a config broken for weeks never reaps
         // anything, and the per-session cap does not bound the number of stale files.
         if (!args.Contains("--codex") && baseUrl is not null) {
-            await new AgentHookPoster(config, profiles, sp.GetRequiredService<ICapacitorHttpClient>()).DrainSpoolsAsync(
-                new HookSpool(config),
-                new TranscriptSpool(config),
+            var poster = new AgentHookPoster(
+                config, profiles,
+                sp.GetRequiredService<ICapacitorHttpClient>(), sp.GetRequiredService<WatcherManager>(), time);
+
+            await poster.DrainSpoolsAsync(
+                new HookSpool(config, time),
+                new TranscriptSpool(config, time),
                 sessionId: null); // current session unknown here — reading stdin now would consume it
         }
         if (args.Contains("--claude")) {
@@ -847,7 +877,7 @@ switch (command) {
     // not in help-usage.txt — run manually against a live Cursor transcript while gathering
     // the D0 evidence; not part of the normal watch/hook/import surface.
     case "cursor-verify-appendonly":
-        return await CursorVerifyAppendOnlyCommand.RunAsync(args);
+        return await CursorVerifyAppendOnlyCommand.RunAsync(args, time);
 }
 
 Console.Error.WriteLine($"Unknown command: {command}");
@@ -863,14 +893,14 @@ return 1;
     // outside 0 and 1 to a blocked session — so a misconfigured URL must not be what blocks one.
     return CrashReporter.IsFailOpenCommand(command) ? 0 : 2;
 } catch (Exception topLevelEx) {
-    CrashReporter.Record(config, command, topLevelEx);
+    CrashReporter.Record(config, command, topLevelEx, time);
 
     return CrashReporter.ExitCode(command);
 }
 
 } finally {
-    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<NpmRegistryClient>);
-    await HarnessSetupNotice.FlushAsync(command, config, profiles, Run<HarnessRegistry>);
+    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<NpmRegistryClient>, time);
+    await HarnessSetupNotice.FlushAsync(command, config, profiles, Run<HarnessRegistry>, time);
 }
 
 static string? GetArg(string[] arguments, string flag) {

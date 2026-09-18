@@ -8,7 +8,7 @@ public class RepoPathStoreTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // Lazy: injection happens after construction, so Config is not readable from an initializer.
-    RepoPathStore Repos => field ??= new RepoPathStore(Config.Root);
+    RepoPathStore Repos => field ??= new RepoPathStore(Config.Root, TimeProvider.System);
 
     string ReposJsonPath => Config.PathTo("repos.json");
 
@@ -270,5 +270,65 @@ public class RepoPathStoreTests {
         // normalizes to "<drive>:\gone\repo".
         var repo = entries.Single(e => e.Path == Path.GetFullPath("/gone/repo"));
         await Assert.That(repo.LastUsed).IsEqualTo(newer);
+    }
+
+    // ── Fingerprint ──────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task Fingerprint_WhenFileDoesNotExist_IsNull() {
+        await Assert.That(Repos.Fingerprint()).IsNull();
+    }
+
+    [Test]
+    public async Task Fingerprint_WithoutAWrite_IsStable() {
+        await Repos.AddAsync("/tmp/project-a");
+
+        await Assert.That(Repos.Fingerprint()).IsEqualTo(Repos.Fingerprint());
+    }
+
+    [Test]
+    public async Task Fingerprint_ChangesWhenAPathIsAdded() {
+        await Repos.AddAsync("/tmp/project-a");
+        var before = Repos.Fingerprint();
+
+        await Repos.AddAsync("/tmp/project-b");
+
+        await Assert.That(Repos.Fingerprint()).IsNotEqualTo(before);
+    }
+
+    [Test]
+    public async Task Fingerprint_ChangesWhenAPathIsRemoved() {
+        await Repos.AddAsync("/tmp/project-a");
+        await Repos.AddAsync("/tmp/project-b");
+        var before = Repos.Fingerprint();
+
+        await Repos.RemoveAsync("/tmp/project-b");
+
+        await Assert.That(Repos.Fingerprint()).IsNotEqualTo(before);
+    }
+
+    // Re-adding a known path rewrites the file at the same length, and on a filesystem with coarse
+    // timestamps the second write can carry the first one's mtime.
+    [Test]
+    public async Task Fingerprint_TellsApartSameLengthWritesWithTheSameTimestamp() {
+        var stamp = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        await File.WriteAllTextAsync(ReposJsonPath, "[a]");
+        File.SetLastWriteTimeUtc(ReposJsonPath, stamp);
+        var before = Repos.Fingerprint();
+
+        await File.WriteAllTextAsync(ReposJsonPath, "[b]");
+        File.SetLastWriteTimeUtc(ReposJsonPath, stamp);
+
+        await Assert.That(Repos.Fingerprint()).IsNotEqualTo(before);
+    }
+
+    [Test]
+    public async Task Fingerprint_IgnoresATouchThatLeavesTheContentAlone() {
+        await Repos.AddAsync("/tmp/project-a");
+        var before = Repos.Fingerprint();
+
+        File.SetLastWriteTimeUtc(ReposJsonPath, DateTime.UtcNow.AddMinutes(1));
+
+        await Assert.That(Repos.Fingerprint()).IsEqualTo(before);
     }
 }

@@ -24,7 +24,7 @@ public class ServerConnectionDisposeTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         logger ?? NullLogger<ServerConnection>.Instance
-    ) {
+    , TimeProvider.System) {
         // Always "ready": ConnectAsync's retry loop returns immediately without ever touching the
         // (never-started) real hub — but only AFTER the terminal-sender CTS has been created,
         // which is exactly the state production disposes from.

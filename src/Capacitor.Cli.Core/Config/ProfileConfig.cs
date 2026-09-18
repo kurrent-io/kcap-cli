@@ -90,6 +90,18 @@ public record Profile {
     [JsonPropertyName("disable_workitems_nudge")]
     public bool? DisableWorkItemsNudge { get; init; }
 
+    /// <summary>when true, kcap skips the one-shot notice the next session after setup carries (that
+    /// setup completed, and the guided tour where it can run). Independent of the other SessionStart
+    /// opt-outs. The marker stays armed while this is set, so clearing it still delivers the notice.</summary>
+    [JsonPropertyName("disable_first_run_notice")]
+    public bool? DisableFirstRunNotice { get; init; }
+
+    /// <summary>when true, kcap skips injecting the SessionStart plans nudge (the guidance to declare
+    /// the plan document and task list through the kcap-plans MCP tools). Independent of the other
+    /// SessionStart opt-outs.</summary>
+    [JsonPropertyName("disable_plans_nudge")]
+    public bool? DisablePlansNudge { get; init; }
+
     /// <summary>
     /// when true, kcap does not advertise the coordination-notices capability at SessionStart, so the
     /// server injects no coordination notices (heads-up about others' in-flight work that may overlap
@@ -127,8 +139,26 @@ public record Profile {
     [JsonPropertyName("excluded_repos")]
     public string[] ExcludedRepos { get; init; } = [];
 
+    /// <summary>
+    /// Repos kcap captures from, as <c>owner/repo</c>. An absent or empty list admits every repo;
+    /// a non-empty one admits only these, with <see cref="ExcludedRepos"/> subtracting within them.
+    /// A session whose repo cannot be resolved — detection failed, or it is not in a repo at all —
+    /// is not captured while this is set.
+    /// </summary>
+    [JsonPropertyName("allowed_repos")]
+    public string[] AllowedRepos { get; init; } = [];
+
     [JsonPropertyName("excluded_paths")]
     public string[] ExcludedPaths { get; init; } = [];
+
+    /// <summary>
+    /// Roots kcap captures from. An absent or empty list admits every path; a non-empty one admits
+    /// only sessions whose cwd is under one of these, with
+    /// <see cref="ExcludedPaths"/> still subtracting within them. A cwd that cannot be placed
+    /// against a non-empty list is not captured.
+    /// </summary>
+    [JsonPropertyName("allowed_paths")]
+    public string[] AllowedPaths { get; init; } = [];
 
     [JsonPropertyName("remotes")]
     public string[] Remotes { get; init; } = [];

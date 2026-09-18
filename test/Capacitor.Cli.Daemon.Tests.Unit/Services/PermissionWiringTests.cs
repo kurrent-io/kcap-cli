@@ -55,6 +55,7 @@ public class PermissionWiringTests {
             Store        = daemons.Store,
             WorktreeRoot = worktrees.PathTo("wt"),
         });
+        services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(Config.Root);
@@ -63,6 +64,7 @@ public class PermissionWiringTests {
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));
         services.AddSingleton<ServerConnection>();
+        services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         services.AddSingleton<WorktreeManager>();
         services.AddSingleton<RepoMatcher>();
         services.AddSingleton<IPtyProcessFactory>(new NoopPtyProcessFactory());
@@ -74,7 +76,7 @@ public class PermissionWiringTests {
             new Dictionary<string, IHostedAgentRuntimeFactory>());
         services.AddSingleton<IHostApplicationLifetime>(new NoopHostLifetime());
         services.AddSingleton(sp => new LaunchConsentGate(
-            new LaunchConsentStore(daemons.Directory, NullLogger.Instance),
+            new LaunchConsentStore(daemons.Directory, NullLogger.Instance, TimeProvider.System),
             new LaunchConsentDecisionLog(daemons.Directory, NullLogger.Instance),
             prompter: null,
             TimeProvider.System,
@@ -85,6 +87,7 @@ public class PermissionWiringTests {
         services.AddSingleton<PermissionIpc>();
         services.AddSingleton(sp => new PermissionDecisionLog(
             Tmp.Path, sp.GetRequiredService<ILogger<PermissionDecisionLog>>()));
+        services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         services.AddSingleton<LocalPermissionBridge>();
         services.AddSingleton<AgentOrchestrator>();
 
@@ -99,6 +102,8 @@ public class PermissionWiringTests {
             await Assert.That(ReferenceEquals(bridge.BrokerForTest, broker)).IsTrue();
             await Assert.That(ReferenceEquals(orchestrator.PermissionBrokerForTest, broker)).IsTrue();
             await Assert.That(ReferenceEquals(ipc.BrokerForTest, broker)).IsTrue();
+            await Assert.That(bridge.InputWaitHandler).IsNotNull();
+            await Assert.That(bridge.ToolSettledHandler).IsNotNull();
 
             await Assert.That(bridge.DecisionLogForTest).IsNotNull();
             await Assert.That(ReferenceEquals(
