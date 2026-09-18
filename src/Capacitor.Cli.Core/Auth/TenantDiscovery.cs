@@ -40,17 +40,6 @@ public interface ITenantPicker {
 
 public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
     /// <summary>
-    /// The rows and nothing else: no pick, and an account with no tenants is an empty list rather
-    /// than an error, because "you belong to none" is an answer a report has to be able to give.
-    /// </summary>
-    public async Task<(DiscoveredTenant[] Tenants, DiscoveryError Error)> ListAsync(
-            string proxyUrl, string githubAccessToken, CancellationToken ct = default) {
-        var result = await proxy.DiscoverTenantsAsync(proxyUrl, githubAccessToken, ct);
-
-        return result.Error != DiscoveryError.None ? ([], result.Error) : (result.Tenants, DiscoveryError.None);
-    }
-
-    /// <summary>
     /// The error in words. A rejected token is the provider's rejection, so the lane names itself:
     /// telling a WorkOS user that GitHub turned them away sends them to the wrong sign-in.
     /// </summary>

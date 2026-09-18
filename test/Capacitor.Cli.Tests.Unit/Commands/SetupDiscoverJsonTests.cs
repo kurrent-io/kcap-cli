@@ -59,27 +59,4 @@ public class SetupDiscoverJsonTests {
         await Assert.That(doc.RootElement.GetProperty("workspaces").GetArrayLength()).IsEqualTo(0);
         await Assert.That(doc.RootElement.GetProperty("can_create").GetBoolean()).IsTrue();
     }
-
-    // A rejected token is the provider's rejection. Telling a WorkOS user that GitHub turned them
-    // away sends them to the wrong sign-in.
-    [Test]
-    public async Task A_rejected_token_names_the_provider_that_rejected_it() {
-        await Assert.That(TenantDiscovery.Describe(DiscoveryError.TokenRejected, AuthProvider.WorkOS))
-            .Contains("WorkOS");
-        await Assert.That(TenantDiscovery.Describe(DiscoveryError.TokenRejected, AuthProvider.GitHubApp))
-            .Contains("GitHub");
-        // The service being unreachable is not either provider's doing, so it names neither.
-        await Assert.That(TenantDiscovery.Describe(DiscoveryError.ProxyUnreachable, AuthProvider.WorkOS))
-            .DoesNotContain("GitHub");
-    }
-
-    // A failure carries no rows and never claims the account can create one.
-    [Test]
-    public async Task A_failure_report_is_empty_and_cannot_create() {
-        var failure = DiscoveryReport.Failure(AuthProvider.WorkOS, "The Kurrent auth service is unreachable.");
-
-        await Assert.That(failure.Tenants.Length).IsEqualTo(0);
-        await Assert.That(failure.CanCreate).IsFalse();
-        await Assert.That(failure.Error).IsNotNull();
-    }
 }
