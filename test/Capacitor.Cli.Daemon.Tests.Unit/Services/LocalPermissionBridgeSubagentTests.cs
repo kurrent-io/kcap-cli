@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -32,14 +33,19 @@ public class LocalPermissionBridgeSubagentTests {
         }
 
         public async ValueTask DisposeAsync() {
-            // StopAsync's drain polls the bridge's own clock, which the fake one above never advances.
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (Bridge.InFlightHandlersForTest != 0) {
-                if (DateTime.UtcNow > deadline) throw new TimeoutException($"{Bridge.InFlightHandlersForTest} handler(s) still in flight");
-                await Task.Delay(10);
-            }
+            await WaitUntilIdleAsync(Bridge);
             await Bridge.DisposeAsync();
             Client.Dispose();
+        }
+    }
+
+    // StopAsync's drain polls the bridge's own clock, which a FakeTimeProvider never advances on
+    // its own.
+    static async Task WaitUntilIdleAsync(LocalPermissionBridge bridge) {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (bridge.InFlightHandlersForTest != 0) {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException($"{bridge.InFlightHandlersForTest} handler(s) still in flight");
+            await Task.Delay(10);
         }
     }
 
@@ -142,5 +148,52 @@ public class LocalPermissionBridgeSubagentTests {
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.RequestEntityTooLarge);
         await Assert.That(h.Seen).IsEmpty();
+    }
+
+    /// One FakeTimeProvider for the orchestrator and its clocks: a live report the bridge admitted
+    /// early and ran late is dead on both sides of the stamp-retention boundary — released after
+    /// 45 s it is overtaken by its own stop, released after 11 min, once the stop's stamp is no
+    /// longer honoured, it is dropped as stale before it reaches the clock.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeSubagentTests))]
+    [Arguments(45)]
+    [Arguments(660)]
+    public async Task A_live_report_held_across_its_own_stop_stays_dead_however_long_it_was_held(int heldSeconds) {
+        var time = new FakeTimeProvider();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(), timeProvider: time);
+        var             agent  = orch.SeedAgentForTest("agent-1");
+        var             bridge = orch.PermissionBridgeForTest;
+        var hold    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls   = 0;
+        bridge.BeforeHandlerRunsForTest = () => {
+            if (Interlocked.Increment(ref calls) != 2) return Task.CompletedTask;
+            entered.TrySetResult();
+            return hold.Task;
+        };
+        await bridge.StartAsync(CancellationToken.None);
+        try {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            Task<HttpResponseMessage> Post(bool live) => client.PostAsync($"{bridge.BaseUrl}/claude/subagent",
+                JsonContent.Create(new { session_id = Session, agent_id = "agent-1", subagent_id = "sub-1", live, sent_at = time.GetUtcNow().ToUnixTimeMilliseconds() }));
+
+            (await Post(live: true)).EnsureSuccessStatusCode();
+            await Assert.That(agent.ActivityClock.LiveSubagents).IsEqualTo(1);
+
+            time.Advance(TimeSpan.FromSeconds(1));
+            var held = Post(live: true);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            time.Advance(TimeSpan.FromSeconds(1));
+            (await Post(live: false)).EnsureSuccessStatusCode();
+            await Assert.That(agent.ActivityClock.LiveSubagents).IsEqualTo(0);
+
+            time.Advance(TimeSpan.FromSeconds(heldSeconds));
+            hold.SetResult();
+            await Assert.That((await held).StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+            await Assert.That(agent.ActivityClock.LiveSubagents).IsEqualTo(0);
+        } finally {
+            await WaitUntilIdleAsync(bridge);
+            await bridge.DisposeAsync();
+        }
     }
 }
