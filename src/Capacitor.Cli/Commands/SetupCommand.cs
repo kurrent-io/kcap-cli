@@ -1034,9 +1034,9 @@ public sealed class SetupCommand(
         if (restartTip is not null) {
             AnsiConsole.MarkupLine($"\n  {restartTip}");
 
-            // The same reminder, left for the session that can prove it: this one has no hooks, so
-            // it cannot say "you are being recorded" truthfully and the next one can. Armed on the
-            // same condition as the tip — with nothing wired up there is nothing to announce.
+            // The same reminder, left for the next session to deliver through the hooks this run
+            // installed. Armed on the same condition as the tip — with nothing wired up there is
+            // nothing to announce.
             new FirstRunNoticeStore(config).Arm();
         }
 

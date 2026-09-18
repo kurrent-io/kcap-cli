@@ -16,12 +16,11 @@ public class FirstRunNoticeTests {
         using var dir = new TempDir();
         var (store, _) = Fresh(dir);
 
-        await Assert.That(store.IsArmed()).IsFalse();
         await Assert.That(store.TryClaim()).IsFalse();
 
         store.Arm();
 
-        await Assert.That(store.IsArmed()).IsTrue();
+        await Assert.That(store.TryClaim()).IsTrue();
     }
 
     // The point of the marker: one session takes it, and no later session repeats it.
@@ -33,18 +32,17 @@ public class FirstRunNoticeTests {
 
         await Assert.That(store.TryClaim()).IsTrue();
         await Assert.That(store.TryClaim()).IsFalse();
-        await Assert.That(store.IsArmed()).IsFalse();
     }
 
-    // Two sessions starting together both try; the rename decides, and only one notice is delivered.
+    // Sessions starting together all try; the lock decides, and only one notice is delivered.
     [Test]
     public async Task Concurrent_sessions_share_one_claim() {
         using var dir = new TempDir();
         var (store, _) = Fresh(dir);
         store.Arm();
 
-        // A real race: every session waits for the lock rather than skipping on contention, so the
-        // test asserts that exactly one takes it, not that the others happened to arrive late.
+        // A real race: a session that sees the marker waits for the lock rather than skipping on
+        // contention, so exactly one takes it and the rest find it gone — none merely arrived late.
         var wait   = TimeSpan.FromSeconds(5);
         var claims = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => store.TryClaim(wait))));
 
@@ -81,7 +79,16 @@ public class FirstRunNoticeTests {
         await Assert.That(FirstRunNoticeEmitter.Build(offerTour: true)).Contains("kcap-guided-tour");
         await Assert.That(FirstRunNoticeEmitter.Build(offerTour: false)).DoesNotContain("kcap-guided-tour");
         // The rest of the notice stands on its own without it.
-        await Assert.That(FirstRunNoticeEmitter.Build(offerTour: false)).Contains("first session");
+        await Assert.That(FirstRunNoticeEmitter.Build(offerTour: false)).Contains("set up");
+    }
+
+    // Every setup run that installs hooks arms the marker, a re-run on a long-recorded machine
+    // included, so the session that takes it may be far from the first one wired in.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task The_notice_never_calls_this_the_first_session(bool offerTour) {
+        await Assert.That(FirstRunNoticeEmitter.Build(offerTour)).DoesNotContain("first session");
     }
 
     [Test]
@@ -103,7 +110,7 @@ public class FirstRunNoticeTests {
         await Assert.That(FirstRunNoticeEmitter.Resolve(false, config, HarnessId.Claude, TestHarnesses.All())).IsNull();
     }
 
-    // Opting out must not consume the marker: turning the notice back on before the first session
+    // Opting out must not consume the marker: turning the notice back on before the next session
     // should still deliver it, and a silent consume here would lose it for good.
     [Test]
     public async Task Opting_out_leaves_the_notice_where_it_is() {
@@ -112,6 +119,6 @@ public class FirstRunNoticeTests {
         store.Arm();
 
         await Assert.That(FirstRunNoticeEmitter.Resolve(true, config, HarnessId.Claude, TestHarnesses.All())).IsNull();
-        await Assert.That(store.IsArmed()).IsTrue();
+        await Assert.That(store.TryClaim()).IsTrue();
     }
 }
