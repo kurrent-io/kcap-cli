@@ -8,9 +8,14 @@ public enum SkillDeletionResult {
     /// write.</summary>
     Settled,
 
-    /// <summary>Nothing was deleted: a guard refused the path, or the file there is not one this
-    /// row ever confirmed writing.</summary>
+    /// <summary>Nothing was deleted and nothing was established: a guard refused the path, the file
+    /// is a link, or it could not be read. Whatever this row holds is still the best evidence there
+    /// is, and a later run retries.</summary>
     Refused,
+
+    /// <summary>The file was read, and no receipt this row holds accounts for it. Unlike a refusal
+    /// this is an answer, and the only one that may cost a row its evidence.</summary>
+    Unvouched,
 }
 
 /// <summary>
@@ -36,7 +41,7 @@ public static class SkillsDeletion {
         if (file.Exists) {
             if (file.LinkTarget is not null) return SkillDeletionResult.Refused;
             if (SkillsMaterializer.HashOf(file.FullName) is not { } hash) return SkillDeletionResult.Refused;
-            if (!row.Receipts.Any(r => r.Matches(hash))) return SkillDeletionResult.Refused;
+            if (!row.Receipts.Any(r => r.Matches(hash))) return SkillDeletionResult.Unvouched;
 
             File.Delete(file.FullName);
         }

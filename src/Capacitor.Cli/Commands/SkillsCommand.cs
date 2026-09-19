@@ -262,6 +262,11 @@ class SkillsCommand(
         foreach (var copy in retirement.Unvouched)
             await Console.Error.WriteLineAsync(
                 $"The global copy {copy} holds bytes no receipt kcap kept accounts for; it is reported and left alone.");
+        // Never actionable, so never counted as work left undone — but the operator is the only one
+        // who can decide what to do with a copy kcap will not touch again.
+        foreach (var copy in retirement.Unverifiable)
+            await Console.Error.WriteLineAsync(
+                $"The global copy {copy} is a claim kcap cannot vouch for; it is never deleted.");
 
         return retirement.Incomplete ? Failed : 0;
     }
@@ -316,18 +321,28 @@ class SkillsCommand(
     /// carries out before the fetch — leaving the previous account's global copies loadable.
     /// </summary>
     static bool Retiring(SkillsLedger? local, SkillsLedger? legacy, SkillsIdentity identity) =>
-        Superseded(local, identity) || Superseded(legacy, identity) || local?.LegacyRetirement is not null
-        || (local?.Rows ?? []).Any(row => row.Prepared is { } op && !Equals(op.Identity, identity));
+        (Recorded(local) is { } recorded && !Equals(recorded, identity))
+        || Superseded(legacy, identity)
+        || local?.LegacyRetirement is not null;
+
+    /// <summary>The credential a ledger's catalogue belongs to: what the envelope recorded, or —
+    /// for a ledger interrupted before it did — what an operation still in flight was authorised
+    /// under.</summary>
+    internal static SkillsIdentity? Recorded(SkillsLedger? ledger) =>
+        ledger?.Identity
+        ?? (ledger?.Rows ?? []).Select(row => row.Prepared?.Identity).FirstOrDefault(i => i is not null);
 
     /// <summary>A ledger recording no identity is adopted rather than retired: its files are still
     /// this profile's, and nothing contradicts them.</summary>
     static bool Superseded(SkillsLedger? ledger, SkillsIdentity identity) =>
         ledger?.Identity is not null && !Equals(ledger.Identity, identity);
 
-    /// <summary>A repository row written for an anchor that is not this run's — including a
-    /// converted row, which records none at all.</summary>
+    /// <summary>A repository row holding a copy written for an anchor that is not this run's —
+    /// including a converted row, which records none at all. A settled or unverified row is never
+    /// one: relocation will not move it and no run will ever finish it, so counting it would make
+    /// the target outstanding at every session for good.</summary>
     static bool Moved(OwnedSkillRow row, string anchor) =>
-        row.Origin == SkillOrigin.Repository
+        row is { Origin: SkillOrigin.Repository, State: OwnedSkillState.Published or OwnedSkillState.Owed }
         && (row.Anchor is null
             || !PathComparison.Equal(CanonicalPath.Resolve(row.Anchor), CanonicalPath.Resolve(anchor)));
 

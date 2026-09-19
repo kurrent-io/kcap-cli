@@ -1,17 +1,22 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Capacitor.Cli.Core.Skills;
 
-/// <summary>Publishes a file by write-then-rename, refusing to write through a symlink planted at
-/// the temp name a plain write would otherwise follow.</summary>
+/// <summary>Publishes a file by write-then-rename through a temporary name this call establishes
+/// exclusively: the name carries random bytes and the file is created with <c>CreateNew</c>, so
+/// nothing can be planted at it and nothing but this call's own temporary is ever removed. A
+/// predictable name would be both: a link to follow, and somebody else's file to delete.</summary>
 public static class AtomicFile {
-    public static void Replace(string path, string contents) {
-        var tmp = path + ".tmp";
+    public static void Replace(string path, string contents) => Replace(path, Encoding.UTF8.GetBytes(contents));
+
+    public static void Replace(string path, byte[] contents) {
+        var tmp = $"{path}.{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}.tmp";
+
         try {
-            // Delete unlinks rather than follows; the exclusive create (O_CREAT|O_EXCL) then
-            // refuses a link re-planted in the gap.
-            File.Delete(tmp);
             using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
-            using (var writer = new StreamWriter(stream))
-                writer.Write(contents);
+                stream.Write(contents);
+
             File.Move(tmp, path, overwrite: true);
         } catch {
             try { File.Delete(tmp); } catch { /* preserve the original exception */ }

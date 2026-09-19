@@ -6,18 +6,21 @@ namespace Capacitor.Cli.Core.Skills;
 /// arbitrary.</summary>
 public sealed record LegacyHandoff(OwnedSkillRow Row, IReadOnlyList<string> Survivors);
 
-/// <summary>What migration may do to one repository's legacy ledger. <paramref name="Actionable"/>
-/// is false when nothing can be proven — the ledger is there but will not parse, or a sibling that
-/// could be hiding the only other owner will not — in which case the files stay and the next sync
-/// retries.</summary>
+/// <summary>What migration may do to one repository's legacy ledger. <paramref name="Unverifiable"/>
+/// is every claim it holds and can never act on — a converted entry with no file hash, a row the
+/// validator refuses — which the operator is told about rather than left to discover.
+/// <paramref name="Actionable"/> is false when nothing can be proven: the ledger is there but will
+/// not parse, or a sibling that could be hiding the only other owner will not.</summary>
 public sealed record LegacyMigrationPlan(
     string LedgerPath, IReadOnlyList<OwnedSkillRow> Delete, IReadOnlyList<LegacyHandoff> Relinquish,
-    bool Actionable = true);
+    IReadOnlyList<string> Unverifiable, bool Actionable = true);
 
-/// <summary>The outcome of one retirement: paths it could not remove, and paths whose bytes no
-/// receipt it holds accounts for.</summary>
-public sealed record LegacyRetirement(IReadOnlyList<string> Refused, IReadOnlyList<string> Unvouched) {
-    public static readonly LegacyRetirement Nothing = new([], []);
+/// <summary>The outcome of one retirement: paths it could not remove, paths whose bytes no receipt
+/// it holds accounts for, and claims it will never be able to act on. Only the first two are work a
+/// later run can finish, so only they leave it incomplete.</summary>
+public sealed record LegacyRetirement(
+    IReadOnlyList<string> Refused, IReadOnlyList<string> Unvouched, IReadOnlyList<string> Unverifiable) {
+    public static readonly LegacyRetirement Nothing = new([], [], []);
 
     public bool Incomplete => Refused.Count > 0 || Unvouched.Count > 0;
 }
@@ -38,17 +41,24 @@ public static class SkillsLegacyMigration {
         var mine = ManifestPathFor(configRoot, repoHash, targetKey);
         var read = SkillsLedgerFile.Read(mine, SkillOrigin.Legacy, out var ledger);
 
-        if (read == SkillsLedgerRead.Missing) return new LegacyMigrationPlan(mine, [], []);
-        if (read != SkillsLedgerRead.Loaded) return new LegacyMigrationPlan(mine, [], [], Actionable: false);
+        if (read == SkillsLedgerRead.Missing) return new LegacyMigrationPlan(mine, [], [], []);
+        if (read != SkillsLedgerRead.Loaded) return new LegacyMigrationPlan(mine, [], [], [], Actionable: false);
 
         var retired = ledger!.Identity;
+
+        List<string> unverifiable = [];
+        var          rows         = OwnedSkillRows.Adopt(
+            ledger, (row, reason) => unverifiable.Add($"{row.Path} ({reason})"));
+
+        unverifiable.AddRange(
+            rows.Live.Where(r => r.State == OwnedSkillState.Unverified).Select(r => r.Path));
 
         List<Sibling> siblings = [];
         foreach (var candidate in Candidates(configRoot, mine)) {
             // One that exists but will not parse could be hiding the only other owner of any owned
             // path; nothing can be proven safe to delete until it is readable or gone.
             if (SkillsLedgerFile.Read(candidate, SkillOrigin.Legacy, out var sibling) != SkillsLedgerRead.Loaded)
-                return new LegacyMigrationPlan(mine, [], [], Actionable: false);
+                return new LegacyMigrationPlan(mine, [], [], unverifiable, Actionable: false);
 
             siblings.Add(Sibling.Of(candidate, sibling!));
         }
@@ -56,7 +66,7 @@ public static class SkillsLegacyMigration {
         List<OwnedSkillRow> delete     = [];
         List<LegacyHandoff> relinquish = [];
 
-        foreach (var row in OwnedSkillRows.Adopt(ledger, (_, _) => { }).Live.Where(Claims)) {
+        foreach (var row in rows.Live.Where(Claims)) {
             List<Sibling> others = [.. siblings.Where(s => s.Owns(row.Path))];
             // A remaining owner under the same retired identity is not serving it either.
             var live = others.Any(s => s.Identity is null
@@ -67,7 +77,7 @@ public static class SkillsLegacyMigration {
             else relinquish.Add(new LegacyHandoff(row, [.. others.Select(s => s.Path)]));
         }
 
-        return new LegacyMigrationPlan(mine, delete, relinquish);
+        return new LegacyMigrationPlan(mine, delete, relinquish, unverifiable);
     }
 
     /// <summary>Carries out one retirement; the caller holds the machine-wide migration lock. The
@@ -78,18 +88,25 @@ public static class SkillsLegacyMigration {
             SkillDeletionCause cause, SkillsIdentity? retired) {
         var plan = Plan(configRoot, repoHash, target.Key, current);
         if (!plan.Actionable || (plan.Delete.Count == 0 && plan.Relinquish.Count == 0))
-            return LegacyRetirement.Nothing;
+            return new LegacyRetirement([], [], plan.Unverifiable);
 
         if (SkillsLedgerFile.Read(plan.LedgerPath, SkillOrigin.Legacy, out var ledger) != SkillsLedgerRead.Loaded)
-            return LegacyRetirement.Nothing;
+            return new LegacyRetirement([], [], plan.Unverifiable);
 
         var rows      = OwnedSkillRows.Adopt(ledger!, (_, _) => { });
         var authority = new SkillAuthority(target.LegacyRoot, target.LegacyRoot);
 
-        foreach (var handoff in plan.Relinquish) {
-            foreach (var survivor in handoff.Survivors) HandOver(survivor, handoff.Row);
+        List<string> refused   = [];
+        List<string> unvouched = [];
 
-            rows.Remove(handoff.Row.Path);
+        foreach (var handoff in plan.Relinquish) {
+            var handed = true;
+
+            foreach (var survivor in handoff.Survivors) handed &= HandOver(survivor, handoff.Row);
+
+            // The evidence has to be somewhere else before this row stops holding it: dropping it
+            // first leaves the file with no receipt that could ever retire it.
+            if (handed) rows.Remove(handoff.Row.Path); else refused.Add(handoff.Row.Path);
         }
 
         foreach (var row in plan.Delete)
@@ -100,30 +117,33 @@ public static class SkillsLegacyMigration {
 
         Persist(plan.LedgerPath, ledger!, rows);
 
-        List<string> refused   = [];
-        List<string> unvouched = [];
-
         foreach (var row in rows.Live.Where(r => r.State == OwnedSkillState.Owed).ToList()) {
             var result = SkillsDeletion.Delete(row, authority);
 
-            if (result != SkillDeletionResult.Refused) { SkillsOwnership.Discharge(rows, row, result); continue; }
+            if (result is SkillDeletionResult.Removed or SkillDeletionResult.Settled) {
+                SkillsOwnership.Discharge(rows, row, result);
+                continue;
+            }
 
-            // A merged row that matches none of the receipts it holds has had its evidence handed
-            // over and still cannot account for the bytes: never deleted, and reported.
-            if (row.Inherited is { Length: > 0 }) {
+            // Only an answer may cost a row its evidence. A merged row whose file matches none of
+            // the receipts it holds has been given everything there is and still cannot account for
+            // the bytes. A refusal establishes nothing — a link, a file that would not read, a root
+            // that moved — and must leave the receipts a later attempt needs.
+            if (result == SkillDeletionResult.Unvouched && row.Inherited is { Length: > 0 }) {
                 unvouched.Add(row.Path);
                 rows.Put(row with {
                     State = OwnedSkillState.Unverified, Confirmed = null, Inherited = null,
                     Prepared = null, Cause = null, IdentityRetired = null,
                 });
-            } else {
-                refused.Add(row.Path);
+                continue;
             }
+
+            refused.Add(row.Path);
         }
 
         Persist(plan.LedgerPath, ledger!, rows);
 
-        return new LegacyRetirement(refused, unvouched);
+        return new LegacyRetirement(refused, unvouched, plan.Unverifiable);
     }
 
     /// <summary>Whether a legacy ledger still holds work a later run owes. A settled or unverified
@@ -139,20 +159,33 @@ public static class SkillsLegacyMigration {
     /// directory that is not its owner's to remove.</summary>
     static bool Serves(OwnedSkillRow row) => row.State != OwnedSkillState.Settled;
 
-    static void HandOver(string survivorPath, OwnedSkillRow leaving) {
+    /// <summary>Hands one row's receipts to a surviving owner, answering whether they are durably
+    /// there. A survivor that holds none of its own — a converted claim with no file hash — takes
+    /// the leaver's as its own: evidence kcap recorded about that path is what a deletion needs,
+    /// whichever owner wrote it down.</summary>
+    static bool HandOver(string survivorPath, OwnedSkillRow leaving) {
         if (SkillsLedgerFile.Read(survivorPath, SkillOrigin.Legacy, out var survivor) != SkillsLedgerRead.Loaded)
-            return;
+            return false;
 
-        var rows    = OwnedSkillRows.Adopt(survivor, (_, _) => { });
+        var rows    = OwnedSkillRows.Adopt(survivor!, (_, _) => { });
         var holding = rows.At(leaving.Path);
-        if (holding?.Confirmed is null) return;
 
-        var known    = holding.Receipts.Select(r => r.FileHash).ToHashSet(StringComparer.Ordinal);
-        var incoming = leaving.Receipts.Where(r => known.Add(r.FileHash)).ToArray();
-        if (incoming.Length == 0) return;
+        if (holding is null || holding.State == OwnedSkillState.Settled) return false;
 
-        rows.Put(holding with { Inherited = [.. holding.Inherited ?? [], .. incoming] });
+        SkillReceipt[] merged = [.. holding.Receipts.Concat(leaving.Receipts)
+            .GroupBy(r => r.FileHash, StringComparer.Ordinal).Select(g => g.First())];
+
+        // Nothing left to hand over is a handover that has already happened.
+        if (merged.Length == holding.Receipts.Count()) return true;
+
+        rows.Put(holding with {
+            State     = holding.State == OwnedSkillState.Owed ? OwnedSkillState.Owed : OwnedSkillState.Published,
+            Confirmed = merged[0],
+            Inherited = merged.Length > 1 ? merged[1..] : null,
+        });
         Persist(survivorPath, survivor!, rows);
+
+        return true;
     }
 
     static void Persist(string path, SkillsLedger ledger, OwnedSkillRows rows) {

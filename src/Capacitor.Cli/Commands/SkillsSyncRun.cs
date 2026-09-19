@@ -54,24 +54,26 @@ sealed class SkillsSyncRun(
         if (await LoadAsync() is { } refusal) return refusal;
 
         // The migration lock is what owns this file; read under it whenever this attempt holds it.
-        // Without it the answer only decides whether to ask for a retry, never a write.
-        var legacy = SkillsLedgerFile.ReadQuietly(_legacyPath, SkillOrigin.Legacy);
+        // Without it the answer only decides whether to ask for a retry, never a write. The status
+        // is kept because a ledger that cannot be read is not evidence of anything.
+        var legacyRead = SkillsLedgerFile.Read(_legacyPath, SkillOrigin.Legacy, out var legacy);
 
-        // An operation carries the account it was authorised under and keeps it until it is
-        // resolved, so a run interrupted before the ledger recorded one is still attributable.
-        var recorded = _ledger.Identity
-                    ?? _rows.Live.Select(r => r.Prepared?.Identity).FirstOrDefault(i => i is not null);
+        // The envelope's credential is what the catalogue belongs to; an operation's is a fallback
+        // for a ledger interrupted before the envelope recorded one. A retained operation under
+        // another account is protected by its own refusal and must not retire rows this account has
+        // since published.
+        var recorded = SkillsCommand.Recorded(_ledger);
 
         // Two ledgers, two decisions. A legacy retirement that cannot finish stays due on every
         // start, and folding the two together would delete and re-materialize the local catalogue
         // every session and leave nothing behind whenever the replacement fetch failed.
-        var retiringLocal = Superseded(recorded)
-                         || _rows.Live.Any(r => r.Prepared is { } op && Superseded(op.Identity));
-        // A global ledger written before identities were recorded carries none, and absent is not
-        // evidence that its copies are the current account's.
+        var retiringLocal = Superseded(recorded);
+        // A global ledger written before identities were recorded carries none, and one that will
+        // not parse says nothing at all. Neither is evidence that its copies are this account's.
         var retiringLegacy = Superseded(legacy?.Identity)
                           || _ledger.LegacyRetirement is not null
-                          || (retiringLocal && legacy is { Identity: null });
+                          || (retiringLocal && legacyRead != SkillsLedgerRead.Missing
+                              && legacy?.Identity is null);
 
         if ((retiringLocal || retiringLegacy) && !migrationHeld) return (0, false, true);
 
@@ -159,11 +161,14 @@ sealed class SkillsSyncRun(
     }
 
     async Task<int> PublishAsync(SkillsSyncPlan plan, string? etag, IReadOnlyList<SkillSnapshotItem> snapshot) {
-        List<(PlannedSkillWrite Write, string Rendered, SkillReceipt Receipt)> pending = [];
+        List<(PlannedSkillWrite Write, byte[] Content, SkillReceipt Receipt)> pending = [];
         foreach (var write in plan.Writes) {
-            var rendered = SkillsRendering.RenderSkillFile(write.Item);
-            pending.Add((write, rendered, new SkillReceipt {
-                FileHash = SkillsMaterializer.FileHash(rendered),
+            // The receipt is taken over the same bytes the write publishes, never over the text
+            // they encode.
+            var content = SkillsMaterializer.Encode(SkillsRendering.RenderSkillFile(write.Item));
+
+            pending.Add((write, content, new SkillReceipt {
+                FileHash = SkillsMaterializer.FileHash(content),
                 Document = SkillDocument.Of(write.Item, repoHome),
             }));
         }
@@ -178,8 +183,8 @@ sealed class SkillsSyncRun(
         if (pending.Count > 0) Save();
 
         List<OwnedSkillRow> attempted = [];
-        foreach (var (write, rendered, _) in pending) {
-            if (SkillsMaterializer.Write(write.At.Path, anchor, rendered)) {
+        foreach (var (write, content, _) in pending) {
+            if (SkillsMaterializer.Write(write.At.Path, anchor, content)) {
                 if (_rows.At(write.At.Path) is { } row) attempted.Add(row);
                 continue;
             }
@@ -387,8 +392,7 @@ sealed class SkillsSyncRun(
                 config.Directory, hash, target, identity, SkillDeletionCause.Retired, obligation)) != 0)
             _failed = true;
 
-        var discharged = !SkillsLegacyMigration.HoldsOutstandingWork(
-            SkillsLedgerFile.ReadQuietly(_legacyPath, SkillOrigin.Legacy));
+        var discharged = LegacyDischarged();
 
         if (local) {
             // The local ledger owns nothing but the deletions that were refused, and carries no
@@ -403,6 +407,16 @@ sealed class SkillsSyncRun(
             _ledger = _ledger with { LegacyRetirement = null };
             Save();
         }
+    }
+
+    /// <summary>Whether the obligation to settle the global copies can be let go of. Only absence
+    /// or a readable ledger with nothing left in it establishes that: a ledger that will not read
+    /// is exactly the case the obligation exists to survive.</summary>
+    bool LegacyDischarged() {
+        var read = SkillsLedgerFile.Read(_legacyPath, SkillOrigin.Legacy, out var ledger);
+
+        return read == SkillsLedgerRead.Missing
+            || (read == SkillsLedgerRead.Loaded && !SkillsLegacyMigration.HoldsOutstandingWork(ledger));
     }
 
     /// <summary>Carries out every deletion owed and releases every reservation whose reason has gone
@@ -427,11 +441,13 @@ sealed class SkillsSyncRun(
                 ? SkillsDeletion.Release(row, authority)
                 : SkillsDeletion.Delete(row, authority);
 
-            if (result == SkillDeletionResult.Refused) {
+            if (result is SkillDeletionResult.Refused or SkillDeletionResult.Unvouched) {
                 Stick();
                 await ReportAsync(row.Path, $"Could not remove {SkillsMaterializer.SkillFileFor(row.Path)}: "
-                                          + "it is not the file kcap recorded writing there; it stays recorded "
-                                          + "for the next sync.");
+                                          + (result == SkillDeletionResult.Unvouched
+                                              ? "it is not the file kcap recorded writing there"
+                                              : "it could not be read or does not resolve to a kcap directory")
+                                          + "; it stays recorded for the next sync.");
                 continue;
             }
 

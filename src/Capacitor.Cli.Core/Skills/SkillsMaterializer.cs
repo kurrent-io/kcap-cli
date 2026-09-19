@@ -31,38 +31,65 @@ public static class SkillsMaterializer {
 
     public static string SkillFileFor(string dir) => Path.Combine(dir, "SKILL.md");
 
-    public static string FileHash(string rendered) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(rendered)));
+    /// <summary>The bytes a rendered skill is published as, and the only thing a receipt is ever
+    /// taken over.</summary>
+    public static byte[] Encode(string rendered) => Encoding.UTF8.GetBytes(rendered);
+
+    /// <summary>A receipt is taken over the bytes on disk, never over decoded text: a file
+    /// re-encoded, or given a byte-order mark, decodes to the same characters and would otherwise
+    /// hash equal to a receipt it does not match.</summary>
+    public static string FileHash(ReadOnlySpan<byte> content) =>
+        Convert.ToHexStringLower(SHA256.HashData(content));
+
+    public static string FileHash(string rendered) => FileHash(Encode(rendered));
 
     /// <summary>The hash of a file that is there and readable, or null when it is neither.</summary>
     public static string? HashOf(string file) {
         try {
-            return FileHash(File.ReadAllText(file));
+            return FileHash(File.ReadAllBytes(file));
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return null;
         }
     }
 
     /// <summary>What a materialized directory holds, and its hash when that is answerable. A
-    /// <c>SKILL.md</c> that is itself a link is not readable evidence of anything we wrote.
-    /// </summary>
+    /// <c>SKILL.md</c> that is itself a link is not readable evidence of anything we wrote, and a
+    /// directory we cannot search answers "not found" for everything inside it — which is a refusal
+    /// to answer, not absence.</summary>
     public static (SkillFileProbe Probe, string? Hash) Inspect(string dir) {
         if (!CanonicalPath.TryResolve(dir, out _)) return (SkillFileProbe.Unresolvable, null);
 
         var file = new FileInfo(SkillFileFor(dir));
 
-        if (!Directory.Exists(dir) || !file.Exists) return (SkillFileProbe.Absent, null);
-        if (file.LinkTarget is not null) return (SkillFileProbe.Unreadable, null);
+        if (file.Exists) {
+            if (file.LinkTarget is not null) return (SkillFileProbe.Unreadable, null);
 
-        return HashOf(file.FullName) is { } hash
-            ? (SkillFileProbe.Present, hash)
-            : (SkillFileProbe.Unreadable, null);
+            return HashOf(file.FullName) is { } hash
+                ? (SkillFileProbe.Present, hash)
+                : (SkillFileProbe.Unreadable, null);
+        }
+
+        // Listed but not answerable, or a directory that refused to be listed at all: either way
+        // nothing here establishes that the file is gone.
+        return Listed(dir) is not false ? (SkillFileProbe.Unreadable, null) : (SkillFileProbe.Absent, null);
+    }
+
+    /// <summary>Whether the managed file appears in the directory listing, or null when the
+    /// directory could not be listed for any reason other than not being there.</summary>
+    static bool? Listed(string dir) {
+        try {
+            return Directory.EnumerateFileSystemEntries(dir, "SKILL.md").Any();
+        } catch (DirectoryNotFoundException) {
+            return false;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
+        }
     }
 
     /// <summary>Writes one skill, refusing a destination that leaves the anchor through a link: a
     /// vendor directory inside the repository may be a symlink to the user-global tree, which would
     /// publish repository content globally again.</summary>
-    public static bool Write(string dir, string anchor, string rendered) {
+    public static bool Write(string dir, string anchor, byte[] content) {
         if (!CanonicalPath.IsWithin(dir, anchor)) return false;
 
         Directory.CreateDirectory(dir);
@@ -71,7 +98,7 @@ public static class SkillsMaterializer {
 
         if (File.Exists(file) && new FileInfo(file).LinkTarget is not null) return false;
 
-        AtomicFile.Replace(file, rendered);
+        AtomicFile.Replace(file, content);
 
         return true;
     }
