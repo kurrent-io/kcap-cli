@@ -637,8 +637,9 @@ class SkillsCommand(
 
     /// <summary>Retires the user-global copies this repository owns, returning the ones it could not
     /// remove; the caller holds the migration lock. A path that is kept — or whose deletion was
-    /// refused — stays recorded, because a directory no manifest owns is one nothing can ever
-    /// prune.</summary>
+    /// refused — stays recorded, because a directory no manifest owns is one nothing can ever prune.
+    /// A path another live ledger owns is not kept: a copy every owner goes on claiming is one
+    /// nobody is ever last out of.</summary>
     IReadOnlyList<string> RetireLegacy(string hash, SkillsTarget target, SkillsIdentity identity) {
         if (PlanLegacy(hash, target, identity) is not { } plan) return [];
 

@@ -580,6 +580,41 @@ public class SkillsSyncFlowTests {
         await Assert.That(File.Exists(secondFx.LegacyManifestPath)).IsFalse();
     }
 
+    /// <summary>Two repositories owning one global copy under the current credential each give up
+    /// their own claim as they migrate, so the second finds itself the last owner and the files go.
+    /// A claim neither ever relinquished would leave each seeing the other as an owner forever.
+    /// </summary>
+    [Test]
+    public async Task Two_repositories_sharing_a_global_copy_relinquish_it_until_one_can_delete() {
+        using var first    = Checkout("first");
+        using var second   = Checkout("second");
+        var       alpha    = SkillsSyncFixture.Skill("alpha");
+        var       firstFx  = new SkillsSyncFixture(Tmp, first.Path, StubSkillsApi.Serving("etag-a", alpha),
+                                                   repoName: "first");
+        var       secondFx = new SkillsSyncFixture(Tmp, second.Path, StubSkillsApi.Serving("etag-b", alpha),
+                                                   repoName: "second");
+        var       shared   = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-shared");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-shared", "SKILL.md"], "owned twice");
+        foreach (var fx in (SkillsSyncFixture[])[firstFx, secondFx]) {
+            fx.WriteManifest(Owning(fx, fx.Materialize(alpha)));
+            fx.WriteLegacyManifest(new SkillsManifest {
+                Identity = fx.Identity, Skills = [Entry(alpha, shared)],
+            });
+        }
+
+        await Assert.That(await firstFx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        // The second repository still owns it, so the files stay — but this one no longer claims it.
+        await Assert.That(Directory.Exists(shared)).IsTrue();
+        await Assert.That(File.Exists(firstFx.LegacyManifestPath)).IsFalse();
+
+        await Assert.That(await secondFx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        await Assert.That(Directory.Exists(shared)).IsFalse();
+        await Assert.That(File.Exists(secondFx.LegacyManifestPath)).IsFalse();
+    }
+
     /// <summary>A checkout whose recorded account is no longer the current one, owning one local
     /// copy and the given global ones.</summary>
     static void Retiring(SkillsSyncFixture fx, SkillSnapshotItem item, SkillsIdentity retired,

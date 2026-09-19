@@ -21,22 +21,25 @@ public class SkillsLegacyMigrationTests {
             JsonSerializer.Serialize(manifest, CapacitorJsonContext.Default.SkillsManifest));
     }
 
+    /// <summary>Ownership another live ledger also holds is given up rather than retained: the last
+    /// owner out is what deletes the files, and a claim nobody drops leaves no last owner.</summary>
     [Test]
-    public async Task A_path_another_repository_still_owns_is_kept() {
-        var shared = Tmp.PathTo("global/kcap-shared");
-        var mine   = Tmp.PathTo("global/kcap-mine");
+    public async Task A_path_another_repository_still_owns_is_relinquished_not_kept() {
+        var shared = Tmp.PathTo("global", "kcap-shared");
+        var mine   = Tmp.PathTo("global", "kcap-mine");
         WriteLegacy("aaaa", "agents", "acct-1", shared, mine);
         WriteLegacy("bbbb", "agents", "acct-1", shared);
 
         var plan = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "aaaa", "agents", Id("acct-1"));
 
         await Assert.That(plan.Delete).IsEquivalentTo([mine]);
-        await Assert.That(plan.Keep).IsEquivalentTo([shared]);
+        await Assert.That(plan.Relinquish).IsEquivalentTo([shared]);
+        await Assert.That(plan.Keep).IsEmpty();
     }
 
     [Test]
     public async Task A_path_whose_every_owner_is_retired_is_deleted() {
-        var shared = Tmp.PathTo("global/kcap-shared");
+        var shared = Tmp.PathTo("global", "kcap-shared");
         WriteLegacy("aaaa", "agents", "acct-1", shared);
         WriteLegacy("bbbb", "agents", "acct-1", shared);
 
@@ -45,17 +48,19 @@ public class SkillsLegacyMigrationTests {
 
         await Assert.That(plan.Delete).IsEquivalentTo([shared]);
         await Assert.That(plan.Keep).IsEmpty();
+        await Assert.That(plan.Relinquish).IsEmpty();
     }
 
     [Test]
     public async Task A_path_a_live_other_account_owns_survives_a_retirement() {
-        var shared = Tmp.PathTo("global/kcap-shared");
+        var shared = Tmp.PathTo("global", "kcap-shared");
         WriteLegacy("aaaa", "agents", "acct-1", shared);
         WriteLegacy("bbbb", "agents", "acct-2", shared);
 
         var plan = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "aaaa", "agents", Id("acct-2"));
 
-        await Assert.That(plan.Keep).IsEquivalentTo([shared]);
+        await Assert.That(plan.Delete).IsEmpty();
+        await Assert.That(plan.Relinquish).IsEquivalentTo([shared]);
     }
 
     /// <summary>The ledger is the only record of the directories it owns, so a copy of it that will
@@ -79,14 +84,14 @@ public class SkillsLegacyMigrationTests {
 
     [Test]
     public async Task A_path_is_kept_when_a_sibling_manifest_fails_to_parse() {
-        var shared = Tmp.PathTo("global/kcap-shared");
+        var shared = Tmp.PathTo("global", "kcap-shared");
         WriteLegacy("aaaa", "agents", "acct-1", shared);
-        var broken = Tmp.CreateDir("config/skills/bbbb/agents");
-        File.WriteAllText(Path.Combine(broken, "manifest.json"), "not json");
+        Tmp.CreateFile(["config", "skills", "bbbb", "agents", "manifest.json"], "not json");
 
         var plan = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "aaaa", "agents", Id("acct-1"));
 
         await Assert.That(plan.Keep).IsEquivalentTo([shared]);
         await Assert.That(plan.Delete).IsEmpty();
+        await Assert.That(plan.Relinquish).IsEmpty();
     }
 }
