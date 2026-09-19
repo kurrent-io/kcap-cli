@@ -66,6 +66,21 @@ public class SkillsLedgerValidationTests {
             await Assert.That(SkillsLedgerValidation.Reject(row)).IsNotNull();
     }
 
+    /// <summary>The converter admits a number for any of these, so a value outside the table
+    /// reaches the row. Nothing may fall through a shape rule's default branch and be acted on as a
+    /// state that is inside it.</summary>
+    [Test]
+    public async Task A_value_outside_the_table_is_refused_rather_than_defaulted() {
+        OwnedSkillRow[] undefined = [
+            Row((OwnedSkillState)99),
+            Row(OwnedSkillState.Published) with { Confirmed = Receipt(), Origin = (SkillOrigin)7 },
+            Row(OwnedSkillState.Owed) with { Confirmed = Receipt(), Cause = (SkillDeletionCause)99 },
+        ];
+
+        foreach (var row in undefined)
+            await Assert.That(SkillsLedgerValidation.Reject(row)).IsNotNull();
+    }
+
     /// <summary>A corrupt row is carried into the next save untouched: dropping it would leave the
     /// directory it names with nothing able to remove it.</summary>
     [Test]

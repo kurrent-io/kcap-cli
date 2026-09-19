@@ -6,8 +6,10 @@ namespace Capacitor.Cli.Core.Skills;
 /// partially updated group is never visible.
 /// </summary>
 public static class SkillsOwnership {
-    /// <summary>Records the write before any byte of it exists, leaving whatever was confirmed
-    /// exactly as it was.</summary>
+    /// <summary>Records the write before any byte of it exists, leaving whatever was confirmed —
+    /// and whatever deletion is owed — exactly as it was. Requesting a replacement is not
+    /// publishing one, and only a completion may discharge the obligation a row already
+    /// carries.</summary>
     public static void Prepare(OwnedSkillRows rows, SkillDestination at, SkillReceipt intended,
                                SkillsIdentity identity) {
         var existing = rows.At(at.Path);
@@ -17,8 +19,11 @@ public static class SkillsOwnership {
                   Origin = SkillOrigin.Repository, State = OwnedSkillState.Reserved,
               }
             : at.Place(existing with {
-                  Cause = null, IdentityRetired = null,
-                  State = existing.Confirmed is null ? OwnedSkillState.Reserved : OwnedSkillState.Published,
+                  State = existing.State switch {
+                      OwnedSkillState.Owed              => OwnedSkillState.Owed,
+                      _ when existing.Confirmed is null => OwnedSkillState.Reserved,
+                      _                                 => OwnedSkillState.Published,
+                  },
               });
 
         rows.Put(placed with {

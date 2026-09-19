@@ -134,6 +134,55 @@ public class SkillsReconcilerTests {
         await Assert.That(SkillsReconciler.Serves(Publish(item), item, Anchor)).IsTrue();
     }
 
+    /// <summary>Requesting a replacement is not publishing one. A preparation that discharged the
+    /// obligation up front would leave two published rows serving one document the moment the write
+    /// was refused, which is a state with no recorded direction between them.</summary>
+    [Test]
+    public async Task Preparing_a_replacement_leaves_the_deletion_it_owes_in_place() {
+        var item = Item("back");
+        var owed = Publish(item) with {
+            State = OwnedSkillState.Owed, Cause = SkillDeletionCause.Superseded,
+        };
+        var rows = Rows(owed);
+        var at   = SkillDestination.For(Target, Anchor, item.Slug);
+
+        SkillsOwnership.Prepare(rows, at, owed.Confirmed!, new SkillsIdentity("acct", "https://s"));
+
+        var prepared = rows.At(at.Path)!;
+
+        await Assert.That(prepared.State).IsEqualTo(OwnedSkillState.Owed);
+        await Assert.That(prepared.Cause).IsEqualTo(SkillDeletionCause.Superseded);
+        await Assert.That(SkillsLedgerValidation.Reject(prepared)).IsNull();
+
+        // Abandoning the attempt leaves it owed; only a completion may discharge it.
+        rows.Put(SkillsRecovery.Abandon(prepared));
+
+        await Assert.That(rows.At(at.Path)!.Cause).IsEqualTo(SkillDeletionCause.Superseded);
+
+        SkillsOwnership.Complete(rows, at, owed.Confirmed!);
+
+        await Assert.That(rows.At(at.Path)!.State).IsEqualTo(OwnedSkillState.Published);
+        await Assert.That(rows.At(at.Path)!.Cause).IsNull();
+    }
+
+    /// <summary>An unverified row carries no receipt, so preparing over it is a reservation rather
+    /// than a claim it never earned.</summary>
+    [Test]
+    public async Task Preparing_over_an_unverified_row_reserves_it() {
+        var item = Item("claimed");
+        var rows = Rows(Publish(item) with {
+            State = OwnedSkillState.Unverified, Confirmed = null,
+        });
+        var at = SkillDestination.For(Target, Anchor, item.Slug);
+
+        SkillsOwnership.Prepare(rows, at, new SkillReceipt {
+            FileHash = "f", Document = SkillDocument.Of(item, "repo:o/n"),
+        }, new SkillsIdentity("acct", "https://s"));
+
+        await Assert.That(rows.At(at.Path)!.State).IsEqualTo(OwnedSkillState.Reserved);
+        await Assert.That(SkillsLedgerValidation.Reject(rows.At(at.Path)!)).IsNull();
+    }
+
     [Test]
     public async Task A_document_the_snapshot_withholds_is_neither_written_nor_reported_again() {
         var held = Item("held");
