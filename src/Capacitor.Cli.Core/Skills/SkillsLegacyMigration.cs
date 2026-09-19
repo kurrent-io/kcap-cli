@@ -3,10 +3,9 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core.Skills;
 
 /// <summary>What migration may do to one repository's legacy ledger. <paramref name="Keep"/> is
-/// ownership migration could not give up, because something stopped it proving what it needed;
+/// ownership it could not give up, something having stopped it proving what it needed;
 /// <paramref name="Relinquish"/> is ownership it gives up without deleting, another live ledger
-/// having the same path. The two are separate because every owner must let go for the last one out
-/// to be able to delete the files, while a claim retained on a hidden owner has to survive.
+/// having the same path — every owner must let go for the last one out to delete the files.
 /// <paramref name="Unreadable"/> means the ledger is there but will not parse: it names paths
 /// nothing else can, so empty lists are not "owns nothing".</summary>
 public sealed record LegacyMigrationPlan(
@@ -55,9 +54,8 @@ public static class SkillsLegacyMigration {
         return new LegacyMigrationPlan(mine, delete, [], relinquish);
     }
 
-    /// <summary>Every other ledger under the config root. Compared canonically, because a ledger
-    /// this repository failed to recognise as its own would read as another owner of everything it
-    /// owns and migration would stop with nothing failing.</summary>
+    /// <summary>Every other ledger under the config root, compared canonically so a difference of
+    /// spelling cannot hide this repository's own from the exclusion.</summary>
     static List<string> Candidates(string configRoot, string minePath) {
         var skills = Path.Combine(configRoot, "skills");
         if (!Directory.Exists(skills)) return [];
