@@ -20,7 +20,8 @@ public static class HubMethods {
     public const string ResolveAttribution     = "ResolveAttribution";
 }
 
-/// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest are group-scoped.
+/// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest follow the join or
+/// subscribe they belong to. The app registers a handler for every one, whether it uses it or not.
 public static class HubBroadcasts {
     public const string AgentInstancesChanged  = "AgentInstancesChanged";
     public const string DaemonsChanged         = "DaemonsChanged";
@@ -36,7 +37,16 @@ public static class HubBroadcasts {
     public const string ActiveSessionAdded     = "ActiveSessionAdded";
     public const string ActiveSessionChanged   = "ActiveSessionChanged";
     public const string ActiveSessionRemoved   = "ActiveSessionRemoved";
+    public const string SessionDeleted         = "SessionDeleted";
+    public const string SessionEvalCompleted   = "SessionEvalCompleted";
+    public const string SessionWhatsDoneGenerated = "SessionWhatsDoneGenerated";
+    public const string SubagentAdopted        = "SubagentAdopted";
+    public const string FlowsChanged           = "FlowsChanged";
+    public const string WorkItemsChanged       = "WorkItemsChanged";
+    public const string ProjectsChanged        = "ProjectsChanged";
+    public const string WelcomeStateChanged    = "WelcomeStateChanged";
     public const string SessionAccessChanged   = "SessionAccessChanged";
+    public const string RawStreamAccessRevoked = "RawStreamAccessRevoked";
 }
 
 public static class ApiRoutes {

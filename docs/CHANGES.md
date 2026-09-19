@@ -23,6 +23,19 @@ The stop hook normally reaches the server before the watcher ships the notificat
 `done` were final, a failed background agent would read as done. `SubagentStarted` is not read: it
 names no call either, so it can neither start a row nor bind one.
 
+## The desktop app binds every server push, used or not
+
+The app's hub connection sits in the server's UI-clients group, so it receives every org-wide push
+the web UI does. SignalR binds a push with no handler against an empty parameter list, so one that
+carries an argument is dropped only after the client throws and catches an `InvalidDataException` on
+its receive loop. `ServerConnectionService` therefore registers a no-op handler, at the wire arity
+and taking any argument as a `JsonElement`, for each push it has no use for, and `HubBroadcasts`
+names every push a UI client can receive. A test broadcasts each one and fails on any the client
+could not bind. Keeping the app out of the group is not the alternative it looks like: permission
+pings, launch failures and the agent and daemon nudges all reach it that way. A push's arity is as
+frozen as a hub method's: one that gains an argument fails to bind in every app already installed,
+and for a push the app consumes that means it is lost, not just noisy.
+
 ## The daemon counts live subagents beside the wait verdict, never instead of it
 
 Claude's hooks cannot tell "I will wait for my agents" from "I asked you something": both are the
@@ -166,6 +179,11 @@ nothing more will arrive, a real finish in the final drain still settles it, and
 comes back turns the presentation off again. A repeated notification for an earlier execution never
 ends a later launch of the same agent id: a known call id decides alone, and an agent-id-only finish
 dated before the row started belongs to an earlier execution.
+
+A notification that lands while the parent is mid-turn is not a user line at all: Claude Code writes
+it as a `queued_command` attachment in `commandMode: task-notification`, so the leaf projects that
+shape into the user line it would otherwise have been. A notification delivered both ways — mid-turn
+and again once the parent goes idle — settles its row once and shows its note twice.
 
 ## The pull request reader renders GitHub-flavoured markdown
 

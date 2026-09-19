@@ -107,8 +107,11 @@ public class ClaudeChatRulesTests {
 
     [Test]
     public async Task Every_other_record_type_and_malformed_input_project_to_nothing() {
-        foreach (var type in new[] { "attachment", "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" })
+        foreach (var type in new[] { "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" })
             await Assert.That(P($$$"""{"type":"{{{type}}}","message":{"content":"x"}}""")).IsEmpty().Because(type);
+
+        await Assert.That(P("""{"type":"attachment","message":{"content":"x"}}""")).IsEmpty();
+        await Assert.That(P("""{"type":"attachment","attachment":{"type":"queued_command","prompt":"go","commandMode":"prompt"}}""")).IsEmpty();
 
         await Assert.That(P("not json")).IsEmpty();
         await Assert.That(P("[1,2]")).IsEmpty();
@@ -228,6 +231,35 @@ public class ClaudeChatRulesTests {
 
         var failed = (SubagentSignal.Finished)R(Notification(originKind, status: "killed")).Subagents.Single();
         await Assert.That(failed.Outcome).IsEqualTo(SubagentOutcome.Failed);
+    }
+
+    /// Claude Code delivers a notification that lands mid-turn as a queued_command attachment
+    /// rather than the user line the rules above read; the leaf projects it as that line, so it
+    /// finishes the subagent and shows its note the same way.
+    [Test]
+    public async Task An_attachment_delivered_notification_finishes_the_subagent_and_shows_its_note() {
+        var line = """{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a8c6e38f425550515</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"Trace subagent data to desktop\" finished</summary>\n</task-notification>"}}""";
+        var result = R(line);
+        await Assert.That(result.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo("**Agent \"Trace subagent data to desktop\" finished**");
+        var finished = (SubagentSignal.Finished)result.Subagents.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a8c6e38f425550515");
+        await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
+
+        var prompt = R("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"go do x"}}""");
+        await Assert.That(prompt.Envelopes).IsEmpty();
+        await Assert.That(prompt.Subagents).IsEmpty();
+    }
+
+    /// Meta hides a notification's row on either delivery: the flag rides the attachment as it
+    /// rides the user line, and the finish lands either way.
+    [Test]
+    public async Task A_meta_attachment_notification_yields_its_finish_but_neither_row_nor_input() {
+        var meta = R("""{"type":"attachment","isMeta":true,"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"X\" finished</summary>\n</task-notification>"}}""");
+        await Assert.That(meta.Envelopes).IsEmpty();
+        await Assert.That(meta.SubmittedInputs).IsEmpty();
+        await Assert.That(meta.Subagents.Single()).IsTypeOf<SubagentSignal.Finished>();
     }
 
     [Test]

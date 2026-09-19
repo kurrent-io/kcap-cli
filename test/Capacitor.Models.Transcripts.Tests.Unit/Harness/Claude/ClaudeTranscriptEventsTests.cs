@@ -152,13 +152,71 @@ public class ClaudeTranscriptEventsTests {
 
     [Test]
     public async Task Every_other_record_type_is_ignored_not_rejected() {
-        foreach (var type in new[] { "attachment", "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" }) {
+        foreach (var type in new[] { "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" }) {
             var r = P($$$"""{"type":"{{{type}}}","message":{"content":"x"}}""");
             await Assert.That(r.Events).IsEmpty().Because(type);
             await Assert.That(r.Rejected).IsNull().Because(type);
         }
         await Assert.That(P("""{"type":"user","message":{"content":42}}""").Events).IsEmpty();
         await Assert.That(P("""{"type":"assistant","message":{"content":[{"type":"text","text":7}]}}""").Events).IsEmpty();
+    }
+
+    [Test]
+    public async Task An_attachment_that_is_not_a_task_notification_queued_command_is_ignored() {
+        foreach (var line in new[] {
+            """{"type":"attachment","message":{"content":"x"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","prompt":"go","commandMode":"prompt"}}""",
+            """{"type":"attachment","attachment":{"type":"prompt_snapshot","prompt":"x","commandMode":"task-notification"}}""",
+            """{"type":"attachment","attachment":{"type":"file","prompt":"x","commandMode":"task-notification"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification"}}""",
+        }) {
+            var r = P(line);
+            await Assert.That(r.Events).IsEmpty().Because(line);
+            await Assert.That(r.Rejected).IsNull().Because(line);
+        }
+    }
+
+    [Test]
+    public async Task A_queued_command_task_notification_attachment_projects_one_user_message() {
+        var line = $$$"""{"parentUuid":"p1","isSidechain":false,"attachment":{"type":"queued_command","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Agent \"X\" finished</summary>\n</task-notification>","source_uuid":"s1","commandMode":"task-notification","timestamp":"2026-09-17T11:53:57.948Z"},"type":"attachment","uuid":"{{{Uuid}}}","timestamp":"2026-09-17T11:53:58.000Z"}""";
+        var e = E(line);
+        await Assert.That(e).Count().IsEqualTo(1);
+        await Assert.That(e[0].EventType).IsEqualTo(CanonicalEventTypes.UserMessageReceived);
+        await Assert.That(((UserMessageReceived)e[0].Payload).Content).IsEqualTo("<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Agent \"X\" finished</summary>\n</task-notification>");
+        await Assert.That(e[0].EventId).IsEqualTo(Guid.Parse(Uuid));
+        await Assert.That(e[0].CausedBy).IsEqualTo("p1");
+        await Assert.That(e[0].RecordTimestamp).IsEqualTo("2026-09-17T11:53:58.000Z");
+
+        var slug = SchemaExtensions.Slug(e[0].Payload, "claude_code");
+        await Assert.That(SchemaExtensions.Text(slug, "origin_kind")).IsEqualTo("task-notification");
+        await Assert.That(slug!.Fields.ContainsKey("is_meta")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_sidechain_attachment_notification_carries_is_sidechain() {
+        var line = """{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":"<task-notification></task-notification>","commandMode":"task-notification"}}""";
+        var e = E(line);
+        await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_sidechain")).IsTrue();
+    }
+
+    [Test]
+    public async Task A_meta_attachment_notification_carries_is_meta() {
+        var line = """{"type":"attachment","isMeta":true,"attachment":{"type":"queued_command","prompt":"<task-notification></task-notification>","commandMode":"task-notification"}}""";
+        var e = E(line);
+        await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_meta")).IsTrue();
+    }
+
+    /// The id contract binds the records the projection reads: an attachment carrying anything but
+    /// a notification is settled before the uuid is looked at, so a malformed one costs it nothing.
+    [Test]
+    public async Task A_uuid_matters_only_on_the_attachment_the_projection_reads() {
+        var ignored = P("""{"type":"attachment","uuid":42,"attachment":{"type":"file","filename":"x"}}""");
+        await Assert.That(ignored.Rejected).IsNull();
+        await Assert.That(ignored.Events).IsEmpty();
+
+        var notification = P("""{"type":"attachment","uuid":42,"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification></task-notification>"}}""");
+        await Assert.That(notification.Rejected).IsNotNull();
+        await Assert.That(notification.Events).IsEmpty();
     }
 
     [Test]
