@@ -6,6 +6,7 @@ using Capacitor.App.Services;
 using Capacitor.Remote.Models;
 using Eventuous.SignalR;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
@@ -50,6 +51,62 @@ public class ServerConnectionServiceTests {
         var f = await failure.WaitAsync(TimeSpan.FromSeconds(10));
         await Assert.That(f.AgentId).IsEqualTo("a1");
         await Assert.That(f.Reason).Contains("launch_denied_by_owner");
+    }
+
+    /// Each push as the server sends it, one entry per HubBroadcasts name.
+    static readonly Dictionary<string, object?[]> WirePushes = new() {
+        [HubBroadcasts.AgentInstancesChanged]   = [],
+        [HubBroadcasts.DaemonsChanged]          = [],
+        [HubBroadcasts.LaunchFailed]            = ["a1", "reason"],
+        [HubBroadcasts.PermissionPending]       = ["s1"],
+        [HubBroadcasts.PermissionResponded]     = ["s1", "r1"],
+        [HubBroadcasts.PermissionRequested]     = ["s1", "r1", "Bash", new { command = "ls" }, null],
+        [HubBroadcasts.AcpElicitationRequested] = ["s1", "q1", "Pick one", null, false],
+        [HubBroadcasts.PendingInputChanged]     = ["a1", "s1", Array.Empty<QueuedInputItem>()],
+        [HubBroadcasts.TerminalOutput]          = ["a1", "aGk="],
+        [HubBroadcasts.TerminalDimensions]      = ["a1", 80, 24],
+        [HubBroadcasts.SessionTitleChanged]     = ["s1"],
+        [HubBroadcasts.ActiveSessionAdded]      = ["s1"],
+        [HubBroadcasts.ActiveSessionChanged]    = ["s1"],
+        [HubBroadcasts.ActiveSessionRemoved]    = ["s1"],
+        [HubBroadcasts.SessionDeleted]          = ["s1"],
+        [HubBroadcasts.SessionEvalCompleted]    = ["s1"],
+        [HubBroadcasts.SessionWhatsDoneGenerated] = ["s1"],
+        [HubBroadcasts.SubagentAdopted]         = ["s1"],
+        [HubBroadcasts.FlowsChanged]            = [],
+        [HubBroadcasts.WorkItemsChanged]        = [],
+        [HubBroadcasts.ProjectsChanged]         = [],
+        [HubBroadcasts.SessionAccessChanged]    = ["s1"],
+        [HubBroadcasts.RawStreamAccessRevoked]  = ["AgentSession-s1"],
+    };
+
+    /// A push carrying arguments that no handler binds is dropped only after the client throws and
+    /// catches a binding exception on its receive loop, so every push the server can send the app
+    /// needs a handler of its arity, whether or not the app has a use for it.
+    [Test]
+    public async Task EveryServerPushBindsToAHandler() {
+        var names = typeof(HubBroadcasts).GetFields().Where(f => f.IsLiteral).Select(f => (string)f.GetRawConstantValue()!);
+        await Assert.That(WirePushes.Keys).IsEquivalentTo(names);
+
+        var recorder = new UnboundPushRecorder();
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = new ServerConnectionService(
+            TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), hubLogging: b => b.AddProvider(recorder));
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        // One unbound push of each kind, or the recorder's silence about the rest proves nothing.
+        await host.BroadcastAsync("UnknownPing", "s1");
+        await host.BroadcastAsync("UnknownNudge");
+        foreach (var (name, args) in WirePushes) await host.BroadcastAsync(name, args);
+        // The client binds and dispatches in arrival order, so this landing means every push above has.
+        var drained = Next(lane.LaunchFailures, f => f.AgentId == "drain");
+        await host.BroadcastAsync(HubBroadcasts.LaunchFailed, "drain", "");
+        await drained;
+
+        await Assert.That(recorder.Failures).IsEquivalentTo(new[] {
+            "MissingHandler:UnknownPing", "ArgumentBindingFailure:UnknownPing", "MissingHandler:UnknownNudge",
+        });
     }
 
     [Test]

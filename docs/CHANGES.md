@@ -6,6 +6,19 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The desktop app binds every server push, used or not
+
+The app's hub connection sits in the server's UI-clients group, so it receives every org-wide push
+the web UI does. SignalR binds a push with no handler against an empty parameter list, so one that
+carries an argument is dropped only after the client throws and catches an `InvalidDataException`
+on its receive loop. `ServerConnectionService` therefore registers a no-op handler, at the wire
+arity, for each push it has no use for, and `HubBroadcasts` names every push a UI client can
+receive. A test broadcasts each one and fails on any the client could not bind. Keeping the app out
+of the group is not the alternative it looks like: permission pings, launch failures and the agent
+and daemon nudges all reach it that way. A push's arity is as frozen as a hub method's: one that
+gains an argument fails to bind in every app already installed, and for a push the app consumes
+that means it is lost, not just noisy.
+
 ## The daemon counts live subagents beside the wait verdict, never instead of it
 
 Claude's hooks cannot tell "I will wait for my agents" from "I asked you something": both are the

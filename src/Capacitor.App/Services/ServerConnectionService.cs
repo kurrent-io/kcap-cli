@@ -11,6 +11,7 @@ using Eventuous.SignalR.Client;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Capacitor.App.Services;
 
@@ -31,6 +32,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly Func<Task<string?>> _token;
     /// SignalR's own reconnect ladder, which a test shortens; null keeps the client's default.
     readonly TimeSpan[]? _reconnectDelays;
+    /// The client's own logging, which a test records; null leaves the client unlogged.
+    readonly Action<ILoggingBuilder>? _hubLogging;
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
@@ -75,11 +78,12 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
 
     internal ServerConnectionService(
             TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,
-            TimeSpan[]? reconnectDelays = null) {
+            TimeSpan[]? reconnectDelays = null, Action<ILoggingBuilder>? hubLogging = null) {
         _time = time;
         _serverUrl = string.IsNullOrEmpty(serverUrl) ? null : serverUrl.TrimEnd('/');
         _token = accessTokenProvider;
         _reconnectDelays = reconnectDelays;
+        _hubLogging = hubLogging;
     }
 
     public IObservable<ServerLaneStatus> Status => _status.AsObservable();
@@ -247,6 +251,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     HubConnection Build() {
         var builder = new HubConnectionBuilder()
             .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token);
+        if (_hubLogging is { } logging) builder.ConfigureLogging(logging);
         var hub = (_reconnectDelays is { } delays ? builder.WithAutomaticReconnect(delays) : builder.WithAutomaticReconnect())
             .AddJsonProtocol(o => o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower)
             .Build();
@@ -268,8 +273,19 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         });
         hub.On<string, string>(HubBroadcasts.TerminalOutput, (agentId, base64) => _terminalOutput.OnNext(new(agentId, base64)));
         hub.On<string, int, int>(HubBroadcasts.TerminalDimensions, (agentId, cols, rows) => _terminalDimensions.OnNext(new(agentId, cols, rows)));
+        foreach (var name in UnusedNudges) hub.On(name, static () => { });
+        foreach (var name in UnusedPings) hub.On<string>(name, static _ => { });
         return hub;
     }
+
+    /// Pushes the app has no use for, by arity. Each still gets a handler: SignalR binds a push with
+    /// none against no parameters, so one carrying an argument costs a thrown and caught exception.
+    static readonly string[] UnusedNudges = [HubBroadcasts.FlowsChanged, HubBroadcasts.WorkItemsChanged, HubBroadcasts.ProjectsChanged];
+    static readonly string[] UnusedPings = [
+        HubBroadcasts.SessionTitleChanged, HubBroadcasts.ActiveSessionAdded, HubBroadcasts.ActiveSessionChanged,
+        HubBroadcasts.ActiveSessionRemoved, HubBroadcasts.SessionDeleted, HubBroadcasts.SessionEvalCompleted,
+        HubBroadcasts.SessionWhatsDoneGenerated, HubBroadcasts.SubagentAdopted, HubBroadcasts.RawStreamAccessRevoked,
+    ];
 
     /// Connected additionally requires `hub` to still be the live connection and still be connected
     /// at publish time: DiagnoseAsync's await can outlast either, and a Connected published over a
