@@ -504,6 +504,44 @@ public class SkillsOwnershipRecoveryTests {
         await Assert.That(resumed.HasSkill("beta")).IsFalse();
     }
 
+    /// <summary>A deletion that finishes ends the row that owed it, whatever the path resolved to
+    /// while it stood. A row that outlives its own deletion is later found at a path the user has
+    /// since made their own, and the drift rewrite it then authorises overwrites their file — with
+    /// no concurrent writer, no matching bytes, and containment never breached.</summary>
+    [Test]
+    public async Task A_finished_deletion_leaves_no_row_to_claim_the_path_again() {
+        using var repo      = Checkout("repo");
+        var       alpha     = SkillsSyncFixture.Skill("alpha");
+        var       first     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha));
+
+        await Assert.That(await first.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        // The destination becomes a link to somewhere else inside the same anchor, still holding
+        // the bytes kcap wrote: the row is admitted under where that leads, not under its own path.
+        var elsewhere = Tmp.CreateDir("repo", "elsewhere");
+
+        File.Move(first.SkillFile("alpha"), elsewhere.PathTo("SKILL.md"));
+        Directory.Delete(first.SkillDir("alpha"));
+        Directory.CreateSymbolicLink(first.SkillDir("alpha"), elsewhere.Path);
+
+        var revoking = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2"));
+
+        await Assert.That(await revoking.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        // The file and the link are both gone, and so is every claim on that path.
+        await Assert.That(Directory.Exists(first.SkillDir("alpha"))).IsFalse();
+        await Assert.That(Directory.GetFileSystemEntries(elsewhere)).IsEmpty();
+        await Assert.That(first.Rows()).IsEmpty();
+
+        // The user makes that path their own before the document comes back.
+        var authored = new TempDirHandle(first.SkillDir("alpha")).CreateFile("SKILL.md", "the user's own skill");
+        var again    = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-3", alpha));
+
+        await Assert.That(await again.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(File.ReadAllText(authored)).IsEqualTo("the user's own skill");
+    }
+
     /// <summary>A row the validator refused is not a row that may order a retirement. Letting one
     /// supply the account deletes a catalogue the current account published.</summary>
     [Test]

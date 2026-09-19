@@ -39,7 +39,7 @@ public sealed class OwnedSkillRows {
     public OwnedSkillRow[] All => [.. Live, .. _asideRows];
 
     public OwnedSkillRow? At(string path) =>
-        Key(path) is { } key && _live.TryGetValue(key, out var row) ? row : null;
+        Entry(path) is { } key && _live.TryGetValue(key, out var row) ? row : null;
 
     /// <summary>Records a row at its own path, replacing whatever that location held.</summary>
     public void Put(OwnedSkillRow row) {
@@ -48,9 +48,18 @@ public sealed class OwnedSkillRows {
     }
 
     public void Remove(string path) {
-        if (Key(path) is not { } key || !_live.Remove(key)) return;
+        if (Entry(path) is not { } key || !_live.Remove(key)) return;
         _order.Remove(key);
     }
+
+    /// <summary>The entry this path was admitted as. A key is resolved through the filesystem, and
+    /// the filesystem changes underneath a run that deletes: a destination reached through a link
+    /// resolves to its target while it stands and to itself once it is gone. So a row is found by
+    /// the path it records first, and only then by where that path currently leads — a key
+    /// recomputed after the mutation finds nothing, and the row outlives the deletion that ended
+    /// it.</summary>
+    string? Entry(string path) =>
+        _order.FirstOrDefault(key => PathComparison.Equal(_live[key].Path, path)) ?? Key(path);
 
     /// <summary>Moves a row to the location it was found at, keeping nothing behind at the old
     /// one.</summary>
