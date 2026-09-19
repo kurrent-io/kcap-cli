@@ -30,11 +30,13 @@ public class SettingsViewModelTests {
             Func<LifecyclePrompt, CancellationToken, Task<bool>>? confirm = null,
             Func<CancellationToken, Task<bool>>? relaunch = null, bool mac = true,
             Task? startup = null, bool nameOverride = false, bool needsRestart = false,
-            Func<MutationRequest, CancellationToken, Task<bool>>? canRetire = null) =>
+            Func<MutationRequest, CancellationToken, Task<bool>>? canRetire = null,
+            NotificationSettingsService? notificationSettings = null) =>
         new(store, service, ops ?? new ScriptedLocalControlOps(), target ?? ((_, _) => Task.FromResult(false)),
             run ?? ((_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded())),
             confirm ?? ((_, _) => Task.FromResult(true)), relaunch ?? (_ => Task.FromResult(false)), mac,
-            startup ?? Task.CompletedTask, canRetire ?? ((_, _) => Task.FromResult(true)), nameOverride, needsRestart);
+            startup ?? Task.CompletedTask, canRetire ?? ((_, _) => Task.FromResult(true)), nameOverride, needsRestart,
+            notificationSettings: notificationSettings);
 
     static FakeDaemonClientService Connected(int active = 0, bool supportsSettings = true) {
         var service = new FakeDaemonClientService();
@@ -256,6 +258,67 @@ public class SettingsViewModelTests {
         await Assert.That(vm.CanRename).IsFalse();
         await Assert.That(vm.RenameHint!).Contains("macOS");
     });
+
+    [Test]
+    public Task Notification_switches_are_unavailable_without_the_app_lifetime_service() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var vm = Make(Seed(), Connected());
+
+        await Assert.That(vm.CanManageNotifications).IsFalse();
+        await Assert.That(vm.NotifyOnPermissions).IsTrue();
+        await Assert.That(vm.NotifyOnQuestions).IsTrue();
+        await Assert.That(vm.NotifyOnIdle).IsTrue();
+    });
+
+    [Test]
+    public Task Rapid_notification_switches_keep_the_latest_shared_and_persisted_values() => AvaloniaSession.RunOnUiAsync(async () => {
+        var path = Config.PathTo("notifications.json");
+        using var notifications = new NotificationSettingsService(path);
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications);
+
+        vm.NotifyOnPermissions = false;
+        vm.NotifyOnQuestions = false;
+        vm.NotifyOnIdle = false;
+
+        await Assert.That(notifications.Current).IsEqualTo(new NotificationPreferences(false, false, false));
+        await Assert.That(vm.NotifyOnPermissions).IsFalse();
+        await Assert.That(vm.NotifyOnQuestions).IsFalse();
+        await Assert.That(vm.NotifyOnIdle).IsFalse();
+        await WaitUntilAsync(() => {
+            using var current = new NotificationSettingsService(path);
+            return current.Current == new NotificationPreferences(false, false, false);
+        });
+        using var reopened = new NotificationSettingsService(path);
+        await Assert.That(reopened.Current).IsEqualTo(new NotificationPreferences(false, false, false));
+    });
+
+    [Test]
+    public Task Notification_write_failure_is_visible_while_the_live_setting_changes() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var notifications = new NotificationSettingsService(Config.CreateDir("notifications.json").Path);
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications);
+
+        vm.NotifyOnIdle = false;
+
+        await WaitUntilAsync(() => vm.NotificationMessage is not null);
+        await Assert.That(notifications.Current).IsEqualTo(new NotificationPreferences(true, true, false));
+        await Assert.That(vm.NotificationMessage!).Contains("Could not save");
+        await Assert.That(vm.NotificationMessage!).Contains("this run");
+    });
+
+    [Test]
+    public Task Disposed_settings_stop_following_shared_notification_changes() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        var vm = Make(Seed(), Connected(), notificationSettings: notifications);
+        vm.Dispose();
+
+        await notifications.SaveAsync(new NotificationPreferences(false, true, true));
+
+        await Assert.That(vm.NotifyOnPermissions).IsTrue();
+    });
+
+    static async Task WaitUntilAsync(Func<bool> ready) {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!ready()) await Task.Delay(10, timeout.Token);
+    }
 
     [Test]
     [Arguments("collision")]

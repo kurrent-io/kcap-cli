@@ -20,6 +20,8 @@ public sealed class PendingPermissionRequest {
         SessionId = dto.SessionId;
         _agentId = dto.AgentId;
         Vendor = dto.Vendor;
+        CanAllowOnce = dto.SupportsAllowOnce ?? dto.Vendor == "claude";
+        CanAllowAlways = dto.SupportsAllowAlways ?? dto.Vendor == "claude";
         ToolName = dto.ToolName;
         ToolInputJson = dto.ToolInput?.GetRawText();
         ToolInputOmitted = dto.ToolInputOmitted;
@@ -38,6 +40,8 @@ public sealed class PendingPermissionRequest {
         SessionId = sessionId;
         _agentId = "";
         Vendor = vendor;
+        CanAllowOnce = vendor == "claude";
+        CanAllowAlways = vendor == "claude";
         ToolName = toolName;
         ToolInputJson = toolInputJson;
         RequestedAt = requestedAt;
@@ -85,6 +89,8 @@ public sealed class PendingPermissionRequest {
     public string SessionId { get; }
     public string AgentId { get => Volatile.Read(ref _agentId); internal set => Volatile.Write(ref _agentId, value); }
     public string Vendor { get; }
+    public bool CanAllowOnce { get; }
+    public bool CanAllowAlways { get; }
     public string ToolName { get; }
     public string? ToolInputJson { get; }
     public bool ToolInputOmitted { get; }

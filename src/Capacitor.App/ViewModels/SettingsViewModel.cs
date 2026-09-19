@@ -22,6 +22,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     readonly Task _startupSettled;
     readonly bool _nameOverridden;
     readonly Func<MutationRequest, CancellationToken, Task<bool>> _canRetire;
+    readonly NotificationSettingsService? _notificationSettings;
     readonly CancellationTokenSource _lifetime;
     readonly CompositeDisposable _subscriptions = new();
     AttachStatus _status = new(AttachState.Connecting, null, null);
@@ -31,7 +32,11 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     decimal? _capacity;
     bool _isBusy;
     bool _needsAppRestart;
+    bool _notifyOnPermissions = true;
+    bool _notifyOnQuestions = true;
+    bool _notifyOnIdle = true;
     string? _message;
+    string? _notificationMessage;
 
     public SettingsViewModel(
             SettingsProfileStore settings, IDaemonClientService service, ILocalControlOps ops,
@@ -40,7 +45,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Func<LifecyclePrompt, CancellationToken, Task<bool>> confirm,
             Func<CancellationToken, Task<bool>> relaunch, bool canRenameOnPlatform,
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
-            bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default) {
+            bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
+            NotificationSettingsService? notificationSettings = null) {
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -51,6 +57,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         _canRenameOnPlatform = canRenameOnPlatform;
         _startupSettled = startupSettled;
         _canRetire = canRetire;
+        _notificationSettings = notificationSettings;
         _nameOverridden = nameOverridden;
         _needsAppRestart = needsAppRestart;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
@@ -73,6 +80,11 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             _snapshot = snapshot;
             Refresh();
         }).DisposeWith(_subscriptions);
+        if (notificationSettings is not null) {
+            ApplyNotificationPreferences(notificationSettings.Current);
+            notificationSettings.Changes.Skip(1).ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(ApplyNotificationPreferences).DisposeWith(_subscriptions);
+        }
     }
 
     public string Name {
@@ -93,6 +105,40 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
+    }
+
+    public string? NotificationMessage {
+        get => _notificationMessage;
+        private set => this.RaiseAndSetIfChanged(ref _notificationMessage, value);
+    }
+
+    public bool CanManageNotifications => _notificationSettings is not null;
+
+    public bool NotifyOnPermissions {
+        get => _notifyOnPermissions;
+        set {
+            if (!CanManageNotifications || value == _notifyOnPermissions) return;
+            this.RaiseAndSetIfChanged(ref _notifyOnPermissions, value);
+            PersistNotificationPreferences();
+        }
+    }
+
+    public bool NotifyOnQuestions {
+        get => _notifyOnQuestions;
+        set {
+            if (!CanManageNotifications || value == _notifyOnQuestions) return;
+            this.RaiseAndSetIfChanged(ref _notifyOnQuestions, value);
+            PersistNotificationPreferences();
+        }
+    }
+
+    public bool NotifyOnIdle {
+        get => _notifyOnIdle;
+        set {
+            if (!CanManageNotifications || value == _notifyOnIdle) return;
+            this.RaiseAndSetIfChanged(ref _notifyOnIdle, value);
+            PersistNotificationPreferences();
+        }
     }
 
     public bool CanEdit => !IsBusy && !_needsAppRestart;
@@ -215,6 +261,26 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         } catch (Exception ex) {
             Message = $"Could not finish renaming: {ex.Message} Restart the app to reload the saved settings.";
         } finally { IsBusy = false; }
+    }
+
+    void ApplyNotificationPreferences(NotificationPreferences preferences) {
+        this.RaiseAndSetIfChanged(ref _notifyOnPermissions, preferences.Permissions, nameof(NotifyOnPermissions));
+        this.RaiseAndSetIfChanged(ref _notifyOnQuestions, preferences.Questions, nameof(NotifyOnQuestions));
+        this.RaiseAndSetIfChanged(ref _notifyOnIdle, preferences.Idle, nameof(NotifyOnIdle));
+    }
+
+    void PersistNotificationPreferences() {
+        var preferences = new NotificationPreferences(_notifyOnPermissions, _notifyOnQuestions, _notifyOnIdle);
+        _ = PersistNotificationPreferencesAsync(preferences);
+    }
+
+    async Task PersistNotificationPreferencesAsync(NotificationPreferences preferences) {
+        try {
+            if (_notificationSettings is null || await _notificationSettings.SaveAsync(preferences)) return;
+        } catch {
+        }
+        if (_lifetime.IsCancellationRequested) return;
+        NotificationMessage = "Could not save notification settings. The change still applies for this run.";
     }
 
     void Refresh() {

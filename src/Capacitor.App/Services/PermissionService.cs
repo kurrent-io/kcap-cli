@@ -75,7 +75,14 @@ public sealed class PermissionService : IPermissionService {
     }
 
     public Task<PermissionResolveOutcome> ResolveAsync(PendingPermissionRequest target, PermissionAnswer answer, CancellationToken ct) {
-        var apply = answer == PermissionAnswer.AllowAlways ? ClaudePermissions.AlwaysAllow(target.ToolName) : (JsonElement?)null;
+        JsonElement? apply = null;
+        if (answer == PermissionAnswer.AllowAlways) {
+            if (target.Vendor == "claude") apply = ClaudePermissions.AlwaysAllow(target.ToolName);
+            else {
+                using var marker = JsonDocument.Parse("true");
+                apply = marker.RootElement.Clone();
+            }
+        }
         if (target.Lane == PermissionLane.Local) {
             var decision = answer == PermissionAnswer.Deny ? PermissionResolveDecisions.Deny : PermissionResolveDecisions.Allow;
             return SendResolveAsync(target, new PermissionResolveDto(target.RequestId, decision, apply, null), ct);
@@ -285,14 +292,16 @@ public sealed class PermissionService : IPermissionService {
     void DropLocalLane() {
         lock (_lock) {
             if (_disposed) return;
-            foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Local).ToList()) _cache.Remove(item.Key);
-            foreach (var (key, twin) in _shadowed.ToList()) {
-                _shadowed.Remove(key);
-                if (_tombstones.Contains(key)) continue;
-                // The map moved on while the twin was out of the cache, where nothing restamps it.
-                twin.AgentId = _sessionAgents.GetValueOrDefault(twin.SessionId, "");
-                _cache.AddOrUpdate(twin);
-            }
+            // Replacing a local handle with its server twin must not announce a settled request.
+            _cache.Edit(cache => {
+                foreach (var item in cache.Items.Where(i => i.Lane == PermissionLane.Local).ToList()) cache.Remove(item.Key);
+                foreach (var (key, twin) in _shadowed.ToList()) {
+                    _shadowed.Remove(key);
+                    if (_tombstones.Contains(key)) continue;
+                    twin.AgentId = _sessionAgents.GetValueOrDefault(twin.SessionId, "");
+                    cache.AddOrUpdate(twin);
+                }
+            });
         }
     }
 

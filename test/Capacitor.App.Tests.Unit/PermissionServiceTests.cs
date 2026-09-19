@@ -1,4 +1,5 @@
 using System.Reactive.Subjects;
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -130,6 +131,34 @@ public class PermissionServiceTests {
         h.Stream.EmitPending(Dto("r1"));
         await Task.Delay(50);
         await Assert.That(h.View.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments("claude", null, null, true, true)]
+    [Arguments("copilot", null, null, false, false)]
+    [Arguments("copilot", true, false, true, false)]
+    [Arguments("copilot", false, true, false, true)]
+    [Arguments("claude", false, false, false, false)]
+    public async Task Local_grants_require_advertised_capabilities_except_legacy_claude(
+            string vendor, bool? once, bool? always, bool expectedOnce, bool expectedAlways) {
+        var request = new PendingPermissionRequest(Dto() with {
+            Vendor = vendor, SupportsAllowOnce = once, SupportsAllowAlways = always,
+        });
+        await Assert.That(request.CanAllowOnce).IsEqualTo(expectedOnce);
+        await Assert.That(request.CanAllowAlways).IsEqualTo(expectedAlways);
+    }
+
+    [Test]
+    public async Task Acp_always_sends_the_boolean_apply_marker() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var entry = await h.EmitAsync(Dto() with { Vendor = "copilot", SupportsAllowOnce = false, SupportsAllowAlways = true });
+        h.Ops.QueuePermissionResolve(true);
+
+        var outcome = await h.Service.ResolveAsync(entry, PermissionAnswer.AllowAlways, CancellationToken.None);
+
+        await Assert.That(outcome.Kind).IsEqualTo(PermissionResolveKind.Applied);
+        await Assert.That(h.Ops.PermissionResolvePayloads.Single().ApplyPermissions!.Value.GetRawText()).IsEqualTo("true");
     }
 
     [Test]
@@ -343,6 +372,19 @@ public class PermissionServiceTests {
         var twin = h.View.Lookup("server:srv-1").Value;
         await Assert.That(twin.Lane).IsEqualTo(PermissionLane.Server);
         await Assert.That(twin.RequestId).IsEqualTo("srv-1");
+    }
+
+    [Test]
+    public async Task A_local_to_server_handover_never_announces_that_the_request_has_settled() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        var counts = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        using var subscription = h.Service.Pending.QueryWhenChanged(q => q.Count).Subscribe(counts.Enqueue);
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "server handle restored");
+        await Assert.That(counts).DoesNotContain(0);
     }
 
     /// A socket closing under a daemon the status feed still calls healthy is the same loss: the

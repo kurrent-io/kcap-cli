@@ -13,6 +13,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
+using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.Services.Update;
 using Capacitor.App.ViewModels;
@@ -131,6 +132,10 @@ public partial class App : Application {
     PauseController? _pause;
     ConsentService? _consent;
     PermissionService? _permissions;
+    NotificationSettingsService? _notificationSettings;
+    IDesktopNotificationSink? _notificationSink;
+    DesktopNotificationCoordinator? _desktopNotifications;
+    NotificationSessionSubscriptions? _notificationSessions;
     // The server lane's half of the permission graph. Disposed as a group with _permissions: the
     // feed and the tracker first (both push into the cache and hold timers), the access service
     // last, since its transitions are what the feed subscribes to.
@@ -308,7 +313,8 @@ public partial class App : Application {
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
-                [_tray, _trayVm, _promptCoordinator, _consent, _permissionFeed, _attention, _permissions, _sessionAccess,
+                [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
@@ -323,6 +329,10 @@ public partial class App : Application {
             _trayVm = null;
             _promptCoordinator = null;
             _consent = null;
+            _desktopNotifications = null;
+            _notificationSink = null;
+            _notificationSessions = null;
+            _notificationSettings = null;
             _permissionFeed = null;
             _attention = null;
             _permissions = null;
@@ -679,6 +689,23 @@ public partial class App : Application {
         _home = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Home;
         _rail = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Rail;
 
+        if (!_shutdownStarted) {
+            var notificationSettings = new NotificationSettingsService(_config.Path("notifications.json"));
+            _notificationSettings = notificationSettings;
+            _notificationSink = new NativeDesktopNotificationSink();
+            _desktopNotifications = new DesktopNotificationCoordinator(
+                permissions, directory, notificationSettings.Changes, _notificationSink,
+                () => _shutdownStarted || desktop.Windows.Any(window => window.IsActive),
+                row => {
+                    if (_shutdownStarted) return;
+                    _coordinator.ShowMainWindow();
+                    (_coordinator.Window?.DataContext as MainWindowViewModel)?.OpenSession(row.Id, row.Origin);
+                }, notifier, ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler);
+            _notificationSessions = new NotificationSessionSubscriptions(
+                directory.SessionAgents, sessionAccess.Acquire,
+                ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler);
+        }
+
         Action? openSettings = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
             ? () => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier, lifecycle.PhaseClosed)
             : null;
@@ -715,7 +742,8 @@ public partial class App : Application {
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
                 ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
-                needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token);
+                needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
+                notificationSettings: _notificationSettings);
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -1705,6 +1733,7 @@ public partial class App : Application {
     // teardown REGISTERED here, so the drain below can only ever seal a set that already contains
     // it. The gate is latched even with no window ever built — a window built later still sees it.
     void LatchNavigation() {
+        _desktopNotifications?.Dispose();
         (_coordinator?.Window?.DataContext as MainWindowViewModel)?.LatchShutdown();
         _navigation.Latch();
     }
@@ -1741,7 +1770,8 @@ public partial class App : Application {
             // disposed one. A resolve already in flight was cancelled by _shutdown at the top of
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
-                [_tray, _trayVm, _promptCoordinator, _consent, _permissionFeed, _attention, _permissions, _sessionAccess,
+                [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => _updates?.ApplyPendingOnExit());
