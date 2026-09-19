@@ -158,8 +158,8 @@ class SkillsCommand(
     async Task<int> SyncTargetAsync(
             SkillsTarget target, string anchor, string gitDir, string hash, string repoHome,
             SkillsIdentity identity, bool dryRun, bool auto) {
-        var retiring = LoadQuietly(ManifestPath(gitDir, target.Key)) is { } peeked
-                       && Retiring(peeked, identity);
+        var retiring = Retiring(LoadQuietly(ManifestPath(gitDir, target.Key)),
+                                LoadQuietly(LegacyManifestPath(hash, target.Key)), identity);
 
         var attempt = await AttemptTargetAsync(
             target, anchor, gitDir, hash, repoHome, identity, dryRun, auto, takeMigration: retiring);
@@ -244,7 +244,11 @@ class SkillsCommand(
         try {
             if (!TryLoadManifest(manifestPath, out manifest)) return (Failed, false, false);
 
-            if (manifest is not null && Retiring(manifest, identity) && migrationLock is null)
+            // The migration lock is what owns this file; read under it whenever this attempt holds
+            // it. Without it the answer only decides whether to ask for a retry, never a write.
+            var legacy = LoadQuietly(LegacyManifestPath(hash, target.Key));
+
+            if (Retiring(manifest, legacy, identity) && migrationLock is null)
                 return (0, false, true);
 
             if (auto && AutoThrottled(manifest, time.GetUtcNow()) && !Owed(manifest, identity, anchor))
@@ -254,7 +258,7 @@ class SkillsCommand(
             lastSynced = manifest?.SyncedAt;
             anchors    = TrustedAnchors(manifest, anchor);
 
-            if (manifest is not null && Retiring(manifest, identity)) {
+            if (Retiring(manifest, legacy, identity)) {
                 // Ahead of the fetch and unconditional: a replacement that fails must leave nothing
                 // of the previous account behind, locally or in the global trees. The ledger is then
                 // saved owning nothing but the deletions that were refused — dropping those rows
@@ -263,7 +267,7 @@ class SkillsCommand(
                 if (!dryRun) {
                     List<PendingPrune> refusedPrunes = [];
                     var owning = OldRoot(manifest, target, anchor);
-                    foreach (var entry in manifest.Skills ?? []) {
+                    foreach (var entry in manifest?.Skills ?? []) {
                         var recorded = new PendingPrune(entry.Path, owning);
                         if (!PruneRecorded(recorded, target, anchors)) refusedPrunes.Add(recorded);
                     }
@@ -288,9 +292,9 @@ class SkillsCommand(
                     // The deletion is the most destructive thing this command does and it happens
                     // before the fetch, so a preview that listed only the writes would show none
                     // of it.
-                    Info($"[{target.Key}] the recorded account ({manifest.Identity!.Account}) is no "
-                       + $"longer {identity.Account}; its catalogue goes before a replacement is fetched:");
-                    foreach (var entry in manifest.Skills ?? []) Info($"{"would retire",-12} {entry.Path}");
+                    Info($"[{target.Key}] the recorded account ({RetiredAccount(manifest, legacy, identity)}) "
+                       + $"is no longer {identity.Account}; its catalogue goes before a replacement is fetched:");
+                    foreach (var entry in manifest?.Skills ?? []) Info($"{"would retire",-12} {entry.Path}");
                     foreach (var outstanding in journal) Info($"{"would retire",-12} {outstanding.Path}");
                     foreach (var copy in PlanLegacy(hash, target, identity)?.Delete ?? [])
                         Info($"{"would retire",-12} {copy}");
@@ -527,14 +531,24 @@ class SkillsCommand(
         manifest is not null
         && (manifest.Pending
             || manifest.PendingPrunes is { Length: > 0 }
-            || Retiring(manifest, identity)
+            || Superseded(manifest, identity)
             || Moved(manifest, anchor));
 
-    /// <summary>The recorded credential is not the current one. A manifest recording no identity is
-    /// adopted rather than retired: its files are still this profile's, and nothing contradicts
-    /// them.</summary>
-    static bool Retiring(SkillsManifest manifest, SkillsIdentity identity) =>
-        manifest.Identity is not null && !Equals(manifest.Identity, identity);
+    /// <summary>Whether either ledger records a credential that is not the current one. The legacy
+    /// one counts because a target can be adopted on it alone, and a retirement nothing sees is one
+    /// nothing carries out before the fetch — leaving the previous account's global copies
+    /// loadable.</summary>
+    static bool Retiring(SkillsManifest? local, SkillsManifest? legacy, SkillsIdentity identity) =>
+        Superseded(local, identity) || Superseded(legacy, identity);
+
+    /// <summary>A ledger recording no identity is adopted rather than retired: its files are still
+    /// this profile's, and nothing contradicts them.</summary>
+    static bool Superseded(SkillsManifest? manifest, SkillsIdentity identity) =>
+        manifest?.Identity is not null && !Equals(manifest.Identity, identity);
+
+    /// <summary>The account a retirement is leaving, for the line that reports it.</summary>
+    static string RetiredAccount(SkillsManifest? local, SkillsManifest? legacy, SkillsIdentity identity) =>
+        (Superseded(local, identity) ? local : legacy)!.Identity!.Account;
 
     static bool Moved(SkillsManifest manifest, string anchor) =>
         manifest.Anchor is not null

@@ -295,6 +295,29 @@ public class SkillsSyncFlowTests {
         await Assert.That(Exclude(fx)).Contains("/.claude/skills/kcap-*/");
     }
 
+    /// <summary>A target is adopted on a legacy global ledger alone, so a retirement recorded only
+    /// there is still one this run owes before the fetch — a replacement that fails must leave none
+    /// of the previous account's skills loadable.</summary>
+    [Test]
+    public async Task A_retirement_known_only_to_the_legacy_ledger_runs_before_the_fetch() {
+        using var repo    = Checkout("repo");
+        var       alpha   = SkillsSyncFixture.Skill("alpha");
+        var       fx      = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+        var       retired = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl);
+        var       global  = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        fx.WriteLegacyManifest(new SkillsManifest {
+            Identity = retired, Skills = [Entry(alpha, global)],
+        });
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(Directory.Exists(global)).IsFalse();
+        await Assert.That(File.Exists(fx.LegacyManifestPath)).IsFalse();
+        await Assert.That(fx.ReadManifest().Identity).IsEqualTo(fx.Identity);
+    }
+
     [Test]
     public async Task An_anchor_change_rewrites_the_paths_even_under_an_unchanged_etag() {
         using var repo     = Checkout("repo");
@@ -580,6 +603,13 @@ public class SkillsSyncFlowTests {
     }
 
     static string Rendered(SkillSnapshotItem item) => SkillsSyncPlanner.RenderSkillFile(item);
+
+    /// <summary>A ledger row for a path nothing local materialized — a global copy this checkout
+    /// owns without holding a copy of its own.</summary>
+    static SkillsManifestEntry Entry(SkillSnapshotItem item, string path) => new() {
+        DocId = item.DocId, Slug = item.Slug, Version = item.Version,
+        ContentHash = item.ContentHash, Path = path, FileHash = "f",
+    };
 
     static IEnumerable<string> Materialized(string root) =>
         Directory.GetDirectories(root).Select(d => Path.GetFileName(d)!);
