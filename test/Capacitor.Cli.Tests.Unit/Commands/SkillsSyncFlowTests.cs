@@ -454,6 +454,33 @@ public class SkillsSyncFlowTests {
                 "/" + root.RelativePath.Replace(Path.DirectorySeparatorChar, '/') + "/kcap-*/");
     }
 
+    /// <summary>A local sync stamps a fresh refresh while its tail can still leave a global copy
+    /// behind. The stamp is not evidence that cleanup finished, so the throttle must not read it as
+    /// one — outstanding legacy ownership is owed work, and the local ledger cannot see it.
+    /// </summary>
+    [Test]
+    public async Task An_auto_run_retries_legacy_cleanup_the_throttle_would_otherwise_skip() {
+        using var repo   = Checkout("repo");
+        var       alpha  = SkillsSyncFixture.Skill("alpha");
+        var       fx     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Unchanged());
+        var       global = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        // A stamp well inside the refresh interval, over a local ledger with nothing left to do.
+        fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with {
+            Etag = "etag-1", SyncedAt = SkillsSyncFixture.Now.AddMinutes(-1),
+        });
+        fx.WriteLegacyManifest(new SkillsManifest {
+            Identity = fx.Identity, Skills = [Entry(alpha, global)],
+        });
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false, auto: true)).IsEqualTo(0);
+
+        await Assert.That(Directory.Exists(global)).IsFalse();
+        await Assert.That(File.Exists(fx.LegacyManifestPath)).IsFalse();
+        await Assert.That(fx.HasSkill("alpha")).IsTrue();
+    }
+
     /// <summary>The lock-free peek that decides whether to take the migration lock can be
     /// superseded by a peer between the peek and the locked read. The attempt then hands both locks
     /// back for one retry rather than holding a shared lock across a fetch — so nothing is

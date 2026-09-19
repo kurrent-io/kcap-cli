@@ -183,6 +183,9 @@ class SkillsCommand(
         var manifestPath = ManifestPath(gitDir, target.Key);
         var root         = target.Root(anchor);
         var reported     = new HashSet<string>(StringComparer.Ordinal);
+        // One read for both throttle questions. A peer that retires it in between costs this run
+        // one refresh it did not need, where missing it would strand the copies for the interval.
+        var legacyOwned  = File.Exists(LegacyManifestPath(hash, target.Key));
 
         // One line per refused deletion per run: an intent refused before the fetch is retried after
         // it, and refusing twice says nothing the first line did not.
@@ -202,7 +205,7 @@ class SkillsCommand(
         // nobody reads.
         bool owed;
         try {
-            owed = auto && Owed(LoadQuietly(manifestPath), identity, anchor);
+            owed = auto && Owed(LoadQuietly(manifestPath), identity, anchor, legacyOwned);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
             return (Failed, false, false);
@@ -251,7 +254,7 @@ class SkillsCommand(
             if (Retiring(manifest, legacy, identity) && migrationLock is null)
                 return (0, false, true);
 
-            if (auto && AutoThrottled(manifest, time.GetUtcNow()) && !Owed(manifest, identity, anchor))
+            if (auto && AutoThrottled(manifest, time.GetUtcNow()) && !Owed(manifest, identity, anchor, legacyOwned))
                 return (0, false, false);
 
             journal    = [.. manifest?.PendingPrunes ?? []];
@@ -525,14 +528,18 @@ class SkillsCommand(
             && age >= TimeSpan.Zero && age < AutoSyncInterval;
 
     /// <summary>Work the refresh throttle must not suppress: an interrupted publication, a deletion
-    /// still owed, a retired credential or a moved anchor. The throttle exists to collapse a burst of
-    /// periodic refreshes, and none of these is one.</summary>
-    internal static bool Owed(SkillsManifest? manifest, SkillsIdentity identity, string anchor) =>
-        manifest is not null
-        && (manifest.Pending
-            || manifest.PendingPrunes is { Length: > 0 }
-            || Superseded(manifest, identity)
-            || Moved(manifest, anchor));
+    /// still owed, a retired credential, a moved anchor, or a legacy global ledger still standing.
+    /// The throttle exists to collapse a burst of periodic refreshes, and none of these is one — a
+    /// refresh stamp is written before the tail that retires the global copies, so the local ledger
+    /// on its own cannot tell a finished migration from an interrupted one.</summary>
+    internal static bool Owed(SkillsManifest? manifest, SkillsIdentity identity, string anchor,
+                              bool legacyOwnership) =>
+        legacyOwnership
+        || (manifest is not null
+            && (manifest.Pending
+                || manifest.PendingPrunes is { Length: > 0 }
+                || Superseded(manifest, identity)
+                || Moved(manifest, anchor)));
 
     /// <summary>Whether either ledger records a credential that is not the current one. The legacy
     /// one counts because a target can be adopted on it alone, and a retirement nothing sees is one
