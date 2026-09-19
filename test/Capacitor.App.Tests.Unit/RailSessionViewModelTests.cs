@@ -272,8 +272,8 @@ public class RailSessionViewModelTests {
         });
     }
 
-    /// The wait badge and the pip answer for the parent as before, so a row can read as both
-    /// waiting on the user and busy.
+    /// The wait badge and the pip answer for the parent alone, so a row can read as both waiting
+    /// on the user and busy.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Live_subagents_leave_the_wait_badge_and_the_pip_as_they_are() {
@@ -323,7 +323,7 @@ public class RailSessionViewModelTests {
         });
     }
 
-    /// A remote row carries no count and looks as it did; a pending row still pulses for its start.
+    /// A remote row carries no count, and a pending row pulses for its start.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_remote_row_is_unchanged_and_a_pending_row_still_pulses() {
