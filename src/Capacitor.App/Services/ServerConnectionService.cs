@@ -32,7 +32,6 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly Func<Task<string?>> _token;
     /// SignalR's own reconnect ladder, which a test shortens; null keeps the client's default.
     readonly TimeSpan[]? _reconnectDelays;
-    /// The client's own logging, which a test records; null leaves the client unlogged.
     readonly Action<ILoggingBuilder>? _hubLogging;
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
@@ -274,13 +273,16 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string>(HubBroadcasts.TerminalOutput, (agentId, base64) => _terminalOutput.OnNext(new(agentId, base64)));
         hub.On<string, int, int>(HubBroadcasts.TerminalDimensions, (agentId, cols, rows) => _terminalDimensions.OnNext(new(agentId, cols, rows)));
         foreach (var name in UnusedNudges) hub.On(name, static () => { });
-        foreach (var name in UnusedPings) hub.On<string>(name, static _ => { });
+        foreach (var name in UnusedPings) hub.On<JsonElement>(name, static _ => { });
         return hub;
     }
 
     /// Pushes the app has no use for, by arity. Each still gets a handler: SignalR binds a push with
     /// none against no parameters, so one carrying an argument costs a thrown and caught exception.
-    static readonly string[] UnusedNudges = [HubBroadcasts.FlowsChanged, HubBroadcasts.WorkItemsChanged, HubBroadcasts.ProjectsChanged];
+    /// The argument binds as a JsonElement, so only the count has to match the server's.
+    static readonly string[] UnusedNudges = [
+        HubBroadcasts.FlowsChanged, HubBroadcasts.WorkItemsChanged, HubBroadcasts.ProjectsChanged, HubBroadcasts.WelcomeStateChanged,
+    ];
     static readonly string[] UnusedPings = [
         HubBroadcasts.SessionTitleChanged, HubBroadcasts.ActiveSessionAdded, HubBroadcasts.ActiveSessionChanged,
         HubBroadcasts.ActiveSessionRemoved, HubBroadcasts.SessionDeleted, HubBroadcasts.SessionEvalCompleted,

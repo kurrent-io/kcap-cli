@@ -44,6 +44,7 @@ public static class HubBroadcasts {
     public const string FlowsChanged           = "FlowsChanged";
     public const string WorkItemsChanged       = "WorkItemsChanged";
     public const string ProjectsChanged        = "ProjectsChanged";
+    public const string WelcomeStateChanged    = "WelcomeStateChanged";
     public const string SessionAccessChanged   = "SessionAccessChanged";
     public const string RawStreamAccessRevoked = "RawStreamAccessRevoked";
 }

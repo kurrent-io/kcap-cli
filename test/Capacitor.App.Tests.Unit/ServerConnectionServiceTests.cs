@@ -76,6 +76,7 @@ public class ServerConnectionServiceTests {
         [HubBroadcasts.FlowsChanged]            = [],
         [HubBroadcasts.WorkItemsChanged]        = [],
         [HubBroadcasts.ProjectsChanged]         = [],
+        [HubBroadcasts.WelcomeStateChanged]     = [],
         [HubBroadcasts.SessionAccessChanged]    = ["s1"],
         [HubBroadcasts.RawStreamAccessRevoked]  = ["AgentSession-s1"],
     };
