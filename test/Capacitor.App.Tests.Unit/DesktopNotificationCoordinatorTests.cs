@@ -324,6 +324,45 @@ public class DesktopNotificationCoordinatorTests {
     }
 
     [Test]
+    [Arguments("allow_once", "allow")]
+    [Arguments("allow_always", "always")]
+    [Arguments("reject_once", "decline")]
+    public async Task Ambiguous_acp_kinds_offer_navigation_without_selecting_a_choice(string kind, string action) {
+        using var h = new Harness();
+        h.Permissions.Add(PermissionEntries.AcpPermission(options: [
+            new() { OptionId = "first", Label = "First scope", Kind = kind },
+            new() { OptionId = "second", Label = "Second scope", Kind = kind },
+            new() { OptionId = "other", Label = "Other choice", Kind = kind == "allow_once" ? "reject_once" : "allow_once" },
+        ]));
+        var notification = h.Sink.Shown.Single();
+        await Assert.That(notification.Actions.Any(a => a.Id == action)).IsFalse();
+        await Assert.That(notification.Actions.Select(a => a.Id)).Contains("open");
+        h.Sink.Callbacks[notification.Id](action);
+        await Assert.That(h.Permissions.Picked).IsEmpty();
+        h.Sink.Callbacks[notification.Id]("open");
+        await Assert.That(h.Opened.Single().Id).IsEqualTo("a1");
+    }
+
+    [Test]
+    [Arguments("allow_once", "allow")]
+    [Arguments("allow_always", "always")]
+    [Arguments("reject_once", "decline")]
+    public async Task Acp_actions_require_nonblank_ids_unique_across_every_offered_choice(string kind, string action) {
+        foreach (var id in new string?[] { null, "", " ", "shared" }) {
+            using var h = new Harness();
+            h.Permissions.Add(PermissionEntries.AcpPermission(options: [
+                new() { OptionId = id!, Label = "Target", Kind = kind },
+                new() { OptionId = "shared", Label = "Other choice", Kind = kind == "allow_once" ? "reject_once" : "allow_once" },
+            ]));
+            var notification = h.Sink.Shown.Single();
+            await Assert.That(notification.Actions.Any(a => a.Id == action)).IsFalse();
+            await Assert.That(notification.Actions.Select(a => a.Id)).Contains("open");
+            h.Sink.Callbacks[notification.Id](action);
+            await Assert.That(h.Permissions.Picked).IsEmpty();
+        }
+    }
+
+    [Test]
     public async Task A_local_acp_request_offering_only_a_standing_grant_has_no_once_button() {
         using var h = new Harness();
         h.Permissions.Add(new PendingPermissionRequest(new PermissionPendingDto(
@@ -419,6 +458,20 @@ public class DesktopNotificationCoordinatorTests {
         await Assert.That(h.Sink.Shown.Count).IsEqualTo(1);
         h.Directory.Rows.AddOrUpdate(Row(true));
         await Assert.That(h.Sink.Shown.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task A_server_permission_still_suppresses_idle_while_the_hub_reconnects() {
+        using var h = new Harness();
+        h.Permissions.Add(PermissionEntries.ServerEntry());
+        var permission = h.Sink.Shown.Single();
+        h.Directory.RemoteStale.OnNext(true);
+        h.Directory.Rows.AddOrUpdate(Row(true));
+        await Assert.That(h.Sink.Shown.Count).IsEqualTo(1);
+        await Assert.That(h.Sink.Closed).IsEmpty();
+        h.Permissions.Queue(PermissionResolveKind.Applied);
+        h.Sink.Callbacks[permission.Id]("allow");
+        await Assert.That(h.Permissions.Resolved.Single().RequestId).IsEqualTo("srv-1");
     }
 
     [Test]

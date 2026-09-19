@@ -65,8 +65,8 @@ Interface: IDesktopNotificationSink.Show(DesktopNotification, Action<string?>), 
 
 ## Verification results
 
-- Full desktop assembly after Claude review fixes: 2,622 tests passed with `LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8`; the default Norwegian locale exposed an existing decimal-separator expectation in AttachmentTrayTests.
-- Focused IPC/wire tests: 27 passed. Focused daemon permission tests after review fixes: 116 passed. All 110 focused notification/settings/permission tests passed.
+- Full desktop assembly after PR feedback: 2,636 tests passed with `LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8`; the default Norwegian locale exposed an existing decimal-separator expectation in AttachmentTrayTests.
+- Focused IPC/wire tests: 27 passed. Focused daemon permission tests after initial review fixes: 116 passed; after stricter ACP capability checks, all 62 affected daemon tests passed. All 41 focused coordinator/native category/block tests passed after PR feedback.
 - Release desktop rebuild: zero warnings and errors. macOS self-contained app publish passed.
 - CLI and daemon NativeAOT publishes passed without trimming warnings; both published binaries passed their version command. Clean local AOT checks used `AppleMinOSVersion=26.0` to match installed Homebrew libraries; repository deployment targets are unchanged.
 - Settings smoke tests exercise mouse clicks, dragging, keyboard toggling/focus, selected-tab styling, persistence and reopening at 540 × 580.
@@ -74,3 +74,4 @@ Interface: IDesktopNotificationSink.Show(DesktopNotification, Action<string?>), 
 - Signed isolated macOS smoke confirmed authorization, managed background delivery, withdrawal to zero delivered notifications, and disposal. The bundle must live outside `/tmp` for macOS notification registration.
 - Actual OS notification button/body clicks and foreground presentation remain unverified: the automation could not access Notification Center notifications, and this captured-display environment did not invoke the isolated foreground callback. Those paths have unit/source coverage; no global OS settings were changed.
 - Claude round one found six issues: switch dragging, reconnect alert loss, missing Codex actions, theme placement/accent, ambiguous ACP standing scopes, and persistent save-error text. All are corrected with regressions; Windows action labels now also escape XML. Round two reviewed commit `fa97c18e` and returned clean in flow `7ff25ce97d0145c2ac99d5aa83afaf4d`; the flow is closed.
+- PR #1055 feedback identified ambiguous/unaddressable ACP options on both lanes, stale pending requests failing to suppress idle, and dynamic macOS categories retained until shutdown. These now have regression coverage and fixes. The separate mutation-lane recommendation is inapplicable: permission replies share the broker's atomic settlement path, consistent with the maintainer's decision on PR #770.

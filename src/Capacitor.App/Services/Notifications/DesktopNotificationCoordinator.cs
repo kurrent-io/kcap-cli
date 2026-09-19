@@ -138,7 +138,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
             .OrderBy(r => r.Origin).FirstOrDefault();
     }
 
-    bool HasPending(AgentRow row) => _pending.Any(p => RowFor(p)?.Key == row.Key);
+    bool HasPending(AgentRow row) => _pending.Any(p => RowFor(p, allowStale: true)?.Key == row.Key);
 
     static bool Idle(AgentRow row) => row.Status == "Running" && SessionStatusDots.WaitsOnUser(row) && row.LiveSubagents is not > 0;
 
@@ -181,19 +181,22 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         if (request is null) return [new("open", "Open agent")];
         if (Question(request)) return [new("open", "Respond in app")];
         var actions = new List<DesktopNotificationAction>();
-        if (!CanAnswer(request, "allow")) actions.Add(new("open", "Open agent"));
         foreach (var (id, label) in new[] { ("allow", "Allow"), ("always", "Always"), ("decline", "Decline") })
             if (CanAnswer(request, id)) {
                 var scopeLabel = id == "always" ? request.Options?.FirstOrDefault(o => o.Kind == "allow_always")?.Label : null;
                 actions.Add(new(id, string.IsNullOrWhiteSpace(scopeLabel) ? label : scopeLabel));
             }
-        return actions.Count > 0 ? actions : [new("open", "Open agent")];
+        if (!CanAnswer(request, "allow") || request.Options is { } options && actions.Count < options.Count)
+            actions.Insert(0, new("open", "Open agent"));
+        return actions;
     }
 
     static string? OptionFor(PendingPermissionRequest request, string action) {
         var kind = action switch { "allow" => "allow_once", "always" => "allow_always", "decline" => "reject_once", _ => null };
-        if (action == "always" && request.Options?.Count(o => o.Kind == kind) != 1) return null;
-        return kind is null ? null : request.Options?.FirstOrDefault(o => o.Kind == kind)?.OptionId;
+        if (kind is null || request.Options is not { } options) return null;
+        var matches = options.Where(option => option.Kind == kind).ToArray();
+        return matches is [var selected] && !string.IsNullOrWhiteSpace(selected.OptionId) &&
+            options.Count(option => option.OptionId == selected.OptionId) == 1 ? selected.OptionId : null;
     }
 
     static bool CanAnswer(PendingPermissionRequest request, string action) => !Question(request) &&

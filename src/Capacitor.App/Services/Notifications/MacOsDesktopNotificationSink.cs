@@ -2,8 +2,6 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Security.Cryptography;
-using System.Text;
 using Avalonia.Threading;
 using static Capacitor.App.Services.Notifications.MacNotificationInterop;
 
@@ -18,12 +16,13 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
     static readonly ConcurrentDictionary<nint, WeakReference<MacOsDesktopNotificationSink>> Delegates = new();
     static nint _delegateClass;
     readonly Dictionary<string, Pending> _pending = new(StringComparer.Ordinal);
-    readonly Dictionary<string, nint> _categories = new(StringComparer.Ordinal);
+    readonly MacNotificationCategories _categories;
     readonly nint _center;
     readonly nint _delegate;
     bool _disposed;
 
     public MacOsDesktopNotificationSink() {
+        _categories = new(CreateCategory, RegisterCategories, Release);
         if (!OperatingSystem.IsMacOSVersionAtLeast(11)) return;
         try {
             using var pool = new Pool();
@@ -49,7 +48,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
         Close(notification.Id);
         try {
             using var pool = new Pool();
-            var category = Category(notification.Actions);
+            var category = _categories.Acquire(notification.Actions);
             var pending = new Pending(notification, Guid.NewGuid().ToString("N"), category, activated);
             _pending.Add(notification.Id, pending);
             using var block = MacNotificationBlock.Authorization((granted, error) => {
@@ -93,19 +92,18 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
         } finally { Release(content); }
     }
 
-    string Category(IReadOnlyList<DesktopNotificationAction> actions) {
-        var identity = string.Concat(actions.Select(a => $"{a.Id.Length}:{a.Id}{a.Label.Length}:{a.Label}"));
-        var key = "kcap." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
-        if (_categories.ContainsKey(key)) return key;
+    static nint CreateCategory(string key, IReadOnlyList<DesktopNotificationAction> actions) {
         var nativeActions = Array(actions.Select(a => Send(GetClass("UNNotificationAction"), Selector("actionWithIdentifier:title:options:"),
             String(key + "." + a.Id), String(a.Label), a.Id == "open" ? 4 : 0)));
         var category = Send(GetClass("UNNotificationCategory"), Selector("categoryWithIdentifier:actions:intentIdentifiers:options:"),
             String(key), nativeActions, Array([]), 1); // custom-dismiss callback
-        Send(category, Selector("retain"));
-        _categories.Add(key, category);
-        var set = Send(GetClass("NSSet"), Selector("setWithArray:"), Array(_categories.Values));
+        return Send(category, Selector("retain"));
+    }
+
+    void RegisterCategories(IReadOnlyCollection<nint> categories) {
+        using var pool = new Pool();
+        var set = Send(GetClass("NSSet"), Selector("setWithArray:"), Array(categories));
         SendVoid(_center, Selector("setNotificationCategories:"), set);
-        return key;
     }
 
     bool IsCurrent(Pending pending) => !_disposed && _pending.TryGetValue(pending.Source.Id, out var current) && ReferenceEquals(current, pending);
@@ -126,6 +124,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
     public void Close(string id) {
         if (!_pending.Remove(id, out var pending)) return;
         try { Withdraw(pending.NativeId); } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        try { _categories.Release(pending.Category); } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
     }
 
     void Withdraw(string nativeId) {
@@ -139,12 +138,11 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
         if (_disposed) return;
         _disposed = true;
         foreach (var id in _pending.Keys.ToArray()) Close(id);
+        try { _categories.Dispose(); } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
         if (_delegate == 0) return;
         Delegates.TryRemove(_delegate, out _);
         if (Send(_center, Selector("delegate")) == _delegate) SendVoid(_center, Selector("setDelegate:"), 0);
         Release(_delegate);
-        foreach (var category in _categories.Values) Release(category);
-        _categories.Clear();
     }
 
     static void Post(Action action) {

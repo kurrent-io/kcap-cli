@@ -14,6 +14,9 @@ live pending handle, and retire when the request settles. Local and server handl
 only when the daemon belongs to the app's server. Remote session leases keep permission payloads
 available without holding a terminal attachment.
 
+ACP notification actions require one matching choice with a nonblank, unique option ID. Ambiguous
+choices open the app so a generic button cannot silently pick an agent-supplied scope.
+
 Idle is an observed transition from working to waiting with no pending request or live subagents.
 An initial snapshot and a remote registry row carry insufficient evidence to announce a finished
 turn. Foreground events are consumed without replay when the user leaves the app. Three independent
@@ -22,6 +25,8 @@ preferences live in `notifications.json`, separate from the window and onboardin
 The shipped macOS app uses UserNotifications directly: authorization completion must not escape
 an unmanaged callback, and withdrawal must remove delivered notifications as well as pending ones.
 Unbundled development launches skip this API because macOS requires an application identity.
+Action categories are shared by active notifications and released when their final notification
+closes, so varying agent-supplied labels do not accumulate native categories for the app lifetime.
 
 ## The daemon counts live subagents beside the wait verdict, never instead of it
 

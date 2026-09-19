@@ -50,8 +50,8 @@ public class AcpPermissionSurfaceTests {
     [Test]
     [Arguments("allow_once", true, false)]
     [Arguments("allow_always", false, true)]
-    [Arguments("allow_custom", true, false)]
-    [Arguments(null, true, false)]
+    [Arguments("allow_custom", false, false)]
+    [Arguments(null, false, false)]
     [Arguments("reject_once", false, false)]
     public async Task Local_capabilities_describe_the_offered_grant_scope(string? kind, bool once, bool always) {
         var broker = new PermissionPromptBroker();
@@ -64,6 +64,31 @@ public class AcpPermissionSurfaceTests {
 
         await Assert.That(pending.SupportsAllowOnce).IsEqualTo(once);
         await Assert.That(pending.SupportsAllowAlways).IsEqualTo(always);
+    }
+
+    [Test]
+    [Arguments("allow_once", "first", "second", "allow_once")]
+    [Arguments("allow_always", "first", "second", "allow_always")]
+    [Arguments("allow_once", "shared", "shared", "reject_once")]
+    [Arguments("allow_always", "shared", "shared", "reject_once")]
+    [Arguments("allow_once", "", "reject", "reject_once")]
+    [Arguments("allow_always", "", "reject", "reject_once")]
+    [Arguments("allow_once", "  ", "reject", "reject_once")]
+    [Arguments("allow_always", "  ", "reject", "reject_once")]
+    public async Task Ambiguous_or_unaddressable_grants_offer_no_notification_approval(
+            string kind, string optionId, string otherId, string otherKind) {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System);
+        var task = surface.RequestAsync(Request(options: [
+            new(optionId, "First scope", null, kind), new(otherId, "Other scope", null, otherKind),
+        ]), CancellationToken.None);
+        var pending = await NextPending(reader);
+        broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision, "deny", PermissionSettlements.SourceApp);
+        await task;
+
+        await Assert.That(pending.SupportsAllowOnce).IsFalse();
+        await Assert.That(pending.SupportsAllowAlways).IsFalse();
     }
 
     [Test]

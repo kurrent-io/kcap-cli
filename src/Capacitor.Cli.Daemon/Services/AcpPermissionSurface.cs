@@ -97,9 +97,15 @@ internal sealed class AcpPermissionSurface(
         if (pending is null) return null;
         var options = request.Options ?? [];
         return pending with {
-            SupportsAllowOnce = PickAllow(options, preferAlways: false) is not null,
-            SupportsAllowAlways = options.Count(option => option.Kind == "allow_always") == 1,
+            SupportsAllowOnce = HasSingleAddressableOption(options, "allow_once"),
+            SupportsAllowAlways = HasSingleAddressableOption(options, "allow_always"),
         };
+    }
+
+    static bool HasSingleAddressableOption(IReadOnlyList<AcpInteractionOption> options, string kind) {
+        var matches = options.Where(option => option.Kind == kind).ToArray();
+        return matches is [var selected] && !string.IsNullOrWhiteSpace(selected.OptionId) &&
+            options.Count(option => option.OptionId == selected.OptionId) == 1;
     }
 
     void Record(AcpInteractionRequest request, string outcome, string source) =>
