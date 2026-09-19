@@ -965,11 +965,12 @@ internal sealed partial class LocalPermissionBridge(
 
     /// A Claude subagent's hook reporting the subagent alive or gone: <c>/{token}/claude/subagent</c>
     /// with <c>session_id</c>, <c>subagent_id</c>, <c>live</c>, and the <c>agent_id</c>/<c>cwd</c> the
-    /// attribution ladder reads. Same token rules as input-wait; only Claude's hooks report
-    /// subagents. A missing or non-integer <c>sent_at</c> is stamped on arrival. Answers 204
+    /// attribution ladder reads. Shared token only, like tool-settled: the ladder trusts the body's
+    /// own ids, so a reviewer token buys no say over another session's count. Only Claude's hooks
+    /// report subagents. A missing or non-integer <c>sent_at</c> is stamped on arrival. Answers 204
     /// whether or not the ladder placed the agent.
     async Task HandleSubagentAsync(HttpListenerContext context, string path) {
-        if (await ReadRelayAsync(context, path, SubagentSuffix, reviewerAllowed: true) is not (var node, var sessionId, var vendor)) return;
+        if (await ReadRelayAsync(context, path, SubagentSuffix, reviewerAllowed: false) is not (var node, var sessionId, var vendor)) return;
 
         if (vendor is not "claude") {
             Close(context, 404);

@@ -131,6 +131,21 @@ public class LocalPermissionBridgeSubagentTests {
         await Assert.That(h.Seen).IsEmpty();
     }
 
+    /// A reviewer's token buys it no say over another session's subagent count: the attribution
+    /// ladder trusts the body's own ids, so only the shared token may report one.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeSubagentTests))]
+    public async Task A_reviewer_token_has_no_route() {
+        await using var h = new Harness();
+        await h.StartAsync();
+        var reviewerUrl = h.Bridge.RegisterReviewerToken(["kcap-review"]);
+
+        var response = await h.Client.PostAsync($"{reviewerUrl}/claude/subagent",
+            JsonContent.Create(new { session_id = Session, agent_id = "agent-1", subagent_id = "sub-1", live = true }));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        await Assert.That(h.Seen).IsEmpty();
+    }
+
     [Test, NotInParallel(nameof(LocalPermissionBridgeSubagentTests))]
     public async Task An_unknown_token_has_no_subagent_route() {
         await using var h = new Harness();
