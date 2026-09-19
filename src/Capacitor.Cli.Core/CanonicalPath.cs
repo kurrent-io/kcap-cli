@@ -20,8 +20,11 @@ public static class CanonicalPath {
 
     /// <summary>The fully resolved path, or false with the best-effort one: the walk ran out of
     /// symlink traversals, which is a chain too long to follow or a cycle.</summary>
+    // A rooted path is walked exactly as given: GetFullPath would fold its `..` lexically, before
+    // the component ahead of it has been resolved, which is the escape this walk exists to refuse.
+    // A relative one has no base but the process's own, so it is rooted the only way there is.
     public static bool TryResolve(string path, out string resolved) =>
-        RealPath(Path.GetFullPath(path), out resolved);
+        RealPath(Path.IsPathRooted(path) ? path : Path.GetFullPath(path), out resolved);
 
     /// <summary>Whether <paramref name="candidate"/> resolves to <paramref name="boundary"/> itself
     /// or to something beneath it. A path that could not be fully resolved — either side — is within
@@ -37,10 +40,14 @@ public static class CanonicalPath {
     }
 
     /// <summary>
-    /// Walks the path root-first, resolving each accumulated prefix a single hop at a time: when a
-    /// prefix is a symlink, its target replaces the prefix (an absolute target restarts from its own
-    /// root; a relative one resolves against the already-canonical parent) and resolution continues
-    /// against it, so symlink chains and ancestor symlinks are all followed.
+    /// Walks the path root-first, one component at a time: a component that is a symlink has its
+    /// target spliced in front of whatever is left to walk (an absolute target restarts from its own
+    /// root; a relative one continues from the link's already-resolved parent), so symlink chains
+    /// and ancestor symlinks are all followed.
+    ///
+    /// <para>Nothing is normalized ahead of the walk. <c>..</c> is a step the walk takes, against
+    /// what the components before it were found to point at — folding it lexically instead is how a
+    /// target leading out of a boundary comes back reading as inside it.</para>
     /// </summary>
     static bool RealPath(string fullPath, out string resolved) {
         var root     = Path.GetPathRoot(fullPath) ?? "";
@@ -49,45 +56,50 @@ public static class CanonicalPath {
         var hops     = 0;
 
         while (segments.Count > 0) {
-            var next = Path.Combine(walked, segments.Dequeue());
+            var segment = segments.Dequeue();
 
-            // A component that doesn't exist yet (a materialization destination, say) can't be a
-            // symlink either; ResolveLinkTarget throws for it instead of returning null.
-            FileSystemInfo? target;
+            if (segment == ".") continue;
+            if (segment == "..") { walked = Parent(walked, root); continue; }
+
+            var next = Path.Combine(walked, segment);
+
+            // The raw target as stored, never a normalized rendering of it: a `..` the target itself
+            // contains belongs to this walk, not to string arithmetic. A component that doesn't
+            // exist yet — a materialization destination, say — is not a link either.
+            string? linkTarget;
             try {
-                target = new DirectoryInfo(next).ResolveLinkTarget(returnFinalTarget: false);
+                linkTarget = new DirectoryInfo(next).LinkTarget;
             } catch (IOException) {
-                target = null;
+                linkTarget = null;
             }
 
-            if (target is null) {
+            if (linkTarget is null) {
                 walked = next; // real directory component
                 continue;
             }
 
             if (++hops > MaxSymlinkHops) {
-                resolved = Path.GetFullPath(Path.Combine([next, .. segments]));
+                resolved = Path.Combine([next, .. segments]);
                 return false;
             }
 
-            // One symlink hop. Resolve a relative target against the link's (canonical) parent.
-            var linkPath = target.FullName;
+            var targetRoot = Path.GetPathRoot(linkTarget) ?? "";
 
-            if (!Path.IsPathRooted(linkPath)) {
-                linkPath = Path.GetFullPath(Path.Combine(walked, linkPath));
-            }
-
-            var linkRoot = Path.GetPathRoot(linkPath) ?? "";
-
-            // Re-queue the target's own segments (so ancestor symlinks inside it get resolved too)
-            // ahead of the segments we hadn't reached yet.
-            segments = new Queue<string>(SplitSegments(linkPath[linkRoot.Length..]).Concat(segments));
-            walked   = linkRoot;
+            segments = new Queue<string>(
+                SplitSegments(linkTarget[targetRoot.Length..]).Concat(segments));
+            // An absolute target restarts from its own root; a relative one continues from the
+            // link's parent, which is what `walked` already holds.
+            if (targetRoot.Length > 0) walked = targetRoot;
         }
 
         resolved = walked;
         return true;
     }
+
+    /// <summary>One step up, stopping at the root: a path cannot climb out of its own volume.
+    /// </summary>
+    static string Parent(string walked, string root) =>
+        walked.Length <= root.Length ? root : Path.GetDirectoryName(walked) ?? root;
 
     static Queue<string> SplitSegments(string pathRemainder) => new(
         pathRemainder
