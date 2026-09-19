@@ -98,6 +98,10 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public IAvaloniaReadOnlyList<ToolCallItem> VisibleCalls =>
         _calls.Count <= 1 || _isExpanded ? _calls : _live;
 
+    /// False when a multi-call group is folded and every call has settled — the list would
+    /// otherwise still occupy a StackPanel slot under the summary.
+    public bool HasVisibleCalls => VisibleCalls.Count > 0;
+
     bool _isExpanded;
     public bool IsExpanded {
         get => _isExpanded;
@@ -105,8 +109,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
             if (_isExpanded == value) return;
             _isExpanded = value;
             this.RaisePropertyChanged();
-            this.RaisePropertyChanged(nameof(VisibleCalls));
-            this.RaisePropertyChanged(nameof(SummaryLine));
+            NotifyVisible();
         }
     }
 
@@ -161,11 +164,12 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         _calls.Add(call);
         RefreshLoneChrome();
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
-        this.RaisePropertyChanged(nameof(VisibleCalls));
-        this.RaisePropertyChanged(nameof(SummaryLine));
         if (call.IsSettled) { Recompute(); return; }
         _live.Add(call);
         call.PropertyChanged += OnCallChanged;
+        // After the add: a folded group's VisibleCalls is _live, and HasVisibleCalls read before
+        // the add would publish false for the call's whole run.
+        NotifyVisible();
     }
 
     void RefreshLoneChrome() {
@@ -186,10 +190,18 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     void Recompute() {
         var settled = _calls.Where(c => c.IsSettled).ToList();
         Summary = ToolSummary.Describe(settled.Select(c => c.Category));
-        HasFailure = settled.Any(c => c.IsError);
+        var failed = settled.Any(c => c.IsError);
+        // Rising edge only: the reader can still collapse after this opens the error pills.
+        if (failed && !_hasFailure) IsExpanded = true;
+        HasFailure = failed;
         HasSummary = settled.Count > 0;
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
+        NotifyVisible();
+    }
+
+    void NotifyVisible() {
         this.RaisePropertyChanged(nameof(VisibleCalls));
+        this.RaisePropertyChanged(nameof(HasVisibleCalls));
         this.RaisePropertyChanged(nameof(SummaryLine));
     }
 

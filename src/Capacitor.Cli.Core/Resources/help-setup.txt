@@ -4,6 +4,20 @@ Usage: kcap setup [options]
 
 Options:
   --server-url <url>          Server URL (skip prompt)
+  --discover                  Sign in, report the workspaces this account can reach,
+                              and stop. Configures nothing: no profile is written, no
+                              workspace activated, no token stored, and no workspace
+                              created -- so the run that follows signs in again. For a
+                              tool that has to ask which workspace to use before it can
+                              name one. Add --json for the machine-readable form, which
+                              puts the sign-in narration on stderr; can_create there
+                              means no workspace was found and this sign-in can create
+                              one, not that creating is certain to succeed. Takes only
+                              --json, --github, --device and --no-prompt: a workspace
+                              argument already answers the question, and any other
+                              option has nothing to apply to, so both are refused.
+                              Not `kcap login --discover`, which does pick a workspace
+                              and saves it.
   --daemon-name <name>        Daemon name (skip prompt)
   --default-visibility <vis>  Default visibility: private, project, org_public, public
   --org <name>                Organization name for a workspace to create, instead

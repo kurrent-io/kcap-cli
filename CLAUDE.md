@@ -80,6 +80,16 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **Desktop-app green / orange / yellow are status only.** `KcapSuccess*` is shipped, settled,
+  passing; `KcapWarning*` is blocked, stale, needs-you. Identity must not share them: a work-item
+  key, vendor chip, "this session" mark, or title in success green reads as done, and a Claude chip
+  in warning orange reads as attention. Location uses purple (in-flight, you-are-here); selection
+  uses info blue; labels and keys use text/muted/surface tokens.
+- **Desktop-app chrome is the Kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
+  in `App.axaml`; menus, flyouts, buttons, fields and list rows opt into `kcapPanel`, `kcapGhost`,
+  `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
+  canvas. Copy the launcher pickers and the rail help flyout (`kcapPanel` + ghost rows), do not add
+  an unstyled control.
 - **Skills materialization nests one pair of locks only — migration outside the per-worktree
   manifest lock — and holds no shared lock across a network request.** The repository lock is taken
   alone, before any target starts and while nothing else is held, so it nests with neither and the
@@ -209,6 +219,17 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 **No `InternalsVisibleTo` to a production assembly.** If a shipping project needs a member, that member is not internal — make it public. Test-assembly grants are fine, and most of the grants here are those. `Capacitor.Cli.Core` keeps its grants to `kcap` and `kcap-daemon`, the two shipping executables; that is grandfathered, not a precedent, and **new projects start with none**.
 
 **One type per file, named after the type.** Several types in one file is discouraged, whatever the neighbouring files do — and plenty here do. Three exceptions: an enum plus its extension methods; a closely-related hierarchy (an interface plus many small implementations); a registry of descriptors. The last two are rare — reach for them when splitting would leave files that only make sense read together, not to save a file.
+
+**Desktop app UI** lives under `src/Capacitor.App/`. Palette and control classes are in `App.axaml`.
+
+- Status tokens: `KcapSuccess*` (green) and `KcapWarning*` (orange/yellow) only on badges, pills, and
+  glyphs that mean outcome or attention. Never on keys, titles, vendor/model chips, or "you are here".
+- Location / in-flight: `KcapPurple*`. Selection / open session: `KcapInfo*`. Everything else:
+  `KcapTextBrush`, `KcapMutedBrush`, surface brushes.
+- Controls: `kcapPanel` flyouts, `kcapGhost` rows and icon buttons, `kcapChip` compact buttons,
+  `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
+  Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
+  Kcap class restyles it.
 
 ## Dos and donts
 

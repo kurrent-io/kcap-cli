@@ -104,6 +104,12 @@ internal record AgentInstance(
     /// positional parameter so every existing construction site still sets it.</summary>
     public string? Model { get; set; } = Model;
 
+    /// <summary>The harness's slash commands, learned after launch (an ACP available_commands update,
+    /// a Codex skills/list, a Claude probe). Written only through
+    /// <see cref="AgentOrchestrator.SetCommands"/> so the status pulse and the server report cannot be
+    /// forgotten. Null until a producer reports any.</summary>
+    public IReadOnlyList<HostedAgentCommand>? Commands { get; set; }
+
     /// First non-blank line of the launch prompt, trimmed, capped at 80 chars total (ellipsis when
     /// cut, never splitting a surrogate pair) — the status payload is re-sent on every revision,
     /// so the full prompt never rides it.
@@ -942,6 +948,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal void SetResolvedModel(AgentInstance agent, string model) {
         if (agent.Model == model) return;
         agent.Model = model;
+        _statusNotifier.Pulse();
+    }
+
+    /// The harness's slash commands, learned after launch. Mutate first, pulse second — same ordering
+    /// as SetResolvedModel — so the local status frame re-pushes.
+    internal void SetCommands(AgentInstance agent, IReadOnlyList<HostedAgentCommand> commands) {
+        agent.Commands = commands;
         _statusNotifier.Pulse();
     }
 
@@ -2545,6 +2558,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             await RegisterAgentAsync(agent);
 
+            // Slash commands are reported out of band, and the server drops a report for an agent it
+            // has not yet registered — so attach the callback (which synchronously flushes any list
+            // captured during the ACP/Codex handshake) and fire the Claude probe only AFTER
+            // registration is acknowledged, never right after PublishAgent. Later ACP updates flow the
+            // same way. PTY runtimes never raise the callback; Claude has no live stream, so it is
+            // probed once, off the launch path, and only for an interactive launch (a review-flow
+            // reviewer has no composer).
+            runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
+
+            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
+                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
+
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
             // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
             // a runtime, so without this the agent would sit in "Starting" until the heartbeat's
@@ -2791,6 +2816,34 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _ = _server.ReportAgentResolvedModelAsync(agentId, resolved);
         } catch (Exception ex) {
             LogReportResolvedModelFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: surface a hosted agent's reported slash commands locally and to the server for the
+    /// composer's `/` picker. Invoked from the runtime's OnCommandsAvailable callback — an ACP update
+    /// (on the connection read loop) or a flushed handshake snapshot (on the launch path). A later
+    /// report replaces the list. Never throws: a report failure must not disturb the running agent.
+    /// </summary>
+    void ReportCommands(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
+        try {
+            if (_agents.TryGetValue(agentId, out var agent))
+                SetCommands(agent, commands);
+
+            _ = _server.ReportAgentCommandsAsync(agentId, commands);
+        } catch (Exception ex) {
+            LogReportCommandsFailed(ex, agentId);
+        }
+    }
+
+    async Task ProbeClaudeCommandsAsync(string agentId, string worktreePath) {
+        try {
+            var commands = await Harness.Claude.ClaudeCommandProbe.ProbeAsync(
+                _harnesses, worktreePath, _time, TimeSpan.FromSeconds(30), LogClaudeCommandProbe, _shutdownCts.Token);
+
+            if (commands.Count > 0) ReportCommands(agentId, commands);
+        } catch (Exception ex) {
+            LogReportCommandsFailed(ex, agentId);
         }
     }
 
@@ -4825,6 +4878,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         LogTerminalDimsSendFailed(ex, agent.Id);
                     }
 
+                    // The command list is server-side in-memory only, and the AgentRegistered above
+                    // replaces a same-slot entry with a null-Commands record (and a server restart
+                    // wiped it), so resend the cached list — otherwise the picker vanishes on every
+                    // reconnect until a later update the one-shot Claude probe / handshake-only lists
+                    // never send. Best-effort, like the dims resend above.
+                    if (agent.Commands is { Count: > 0 } commands) {
+                        try {
+                            await _server.ReportAgentCommandsAsync(agent.Id, commands);
+                        } catch (Exception ex) {
+                            LogReportCommandsFailed(ex, agent.Id);
+                        }
+                    }
+
                     // do NOT replay the full output buffer here. The old
                     // replay re-sent the entire 2 MB ring on every reconnect, which
                     // the server appended to its own buffer and live-broadcast on
@@ -5609,6 +5675,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (continuing)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report slash commands for agent {AgentId} (continuing)")]
+    partial void LogReportCommandsFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "claude command probe: {Message}")]
+    partial void LogClaudeCommandProbe(string message);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to launch agent {AgentId}")]
     partial void LogLaunchFailed(Exception ex, string agentId);

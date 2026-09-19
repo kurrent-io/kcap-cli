@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Eval;
+using Capacitor.Cli.Core.Eval.Contracts;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -8,7 +9,7 @@ namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
 /// Task 18: locks in the daemon's V2 wire-format migration. After
-/// migrating <see cref="EvalService.Aggregate"/> to return
+/// migrating <c>EvalService.Aggregate</c> to return
 /// <see cref="SessionEvalCompletedPayloadV2"/>, the persistence step must
 /// POST to <c>/api/sessions/{id}/evals/v2</c> (not the legacy V1 route)
 /// and the body must carry structured suggestions with both
@@ -16,7 +17,7 @@ namespace Capacitor.Cli.Tests.Integration;
 ///
 /// <para>
 /// Drives <see cref="EvalService.PersistAggregateV2Async"/> directly — the
-/// minimal seam extracted from <see cref="EvalService.FinalizeAsync"/> for
+/// minimal seam extracted from <c>EvalService.FinalizeAsync</c> for
 /// testing. Going through FinalizeAsync would require shelling out to the
 /// claude CLI for the retrospective synthesis step, which isn't available
 /// in CI; the persistence step is the load-bearing wire contract here.
@@ -90,13 +91,13 @@ public class EvalRunnerV2PostTests : IDisposable {
         public void OnStarted(string runId, string judgeModel, int totalQuestions) { }
         public void OnContextFetched(int e, int c, int t, int tr, long b) { }
         public void OnQuestionStarted(int i, int t, string c, string q) { }
-        public void OnQuestionCompleted(int i, int t, EvalQuestionVerdict v, long it, long ot) { }
+        public void OnQuestionCompleted(int i, int t, EvalQuestionAssessment v, long it, long ot) { }
         public void OnQuestionFailed(int i, int t, string c, string q, string r) { }
         public void OnFactRetained(string c, string f) { }
         public void OnRetrospectiveStarted() { }
         public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r) { }
         public void OnRetrospectiveFailed(string r) { }
-        public void OnFinished(SessionEvalCompletedPayloadV3 a) { }
+        public void OnFinished(SessionEvalCompletedPayloadV4 a) { }
         public void OnFailed(string r) { }
     }
 }

@@ -69,4 +69,52 @@ public class ImportChainTests {
         await Assert.That(chains.Count).IsEqualTo(2);
         await Assert.That(chains.All(c => c.Count == 1)).IsTrue();
     }
+
+    [Test]
+    public async Task BuildImportChains_dispatches_newest_chain_first_and_keeps_members_ascending() {
+        var t = (string s) => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture);
+        var classifications = new List<ImportCommand.SessionClassification> {
+            Classify("old1", ImportCommand.ClassificationStatus.New, slug: "old", ts: t("2026-01-01T00:00:00Z")),
+            Classify("old2", ImportCommand.ClassificationStatus.New, slug: "old", ts: t("2026-01-02T00:00:00Z")),
+            Classify("new1", ImportCommand.ClassificationStatus.New, slug: "new", ts: t("2026-03-01T00:00:00Z")),
+            Classify("new2", ImportCommand.ClassificationStatus.New, slug: "new", ts: t("2026-03-02T00:00:00Z")),
+            Classify("solo",  ImportCommand.ClassificationStatus.New, ts: t("2026-02-01T00:00:00Z")),
+        };
+
+        var chains = ImportCommand.BuildImportChains(classifications);
+
+        await Assert.That(chains.Select(c => c[0].SessionId).ToList()).IsEquivalentTo(["new1", "solo", "old1"]);
+        await Assert.That(chains[0].Select(c => c.SessionId).ToList()).IsEquivalentTo(["new1", "new2"]);
+        await Assert.That(chains[0][0].SessionId).IsEqualTo("new1");
+        await Assert.That(chains[2][0].SessionId).IsEqualTo("old1");
+    }
+
+    [Test]
+    public async Task BuildImportChains_equal_max_timestamps_break_by_max_session_id_descending() {
+        var ts = DateTimeOffset.Parse("2026-03-01T00:00:00Z", CultureInfo.InvariantCulture);
+        var classifications = new List<ImportCommand.SessionClassification> {
+            Classify("a", ImportCommand.ClassificationStatus.New, slug: "x", ts: ts),
+            Classify("z", ImportCommand.ClassificationStatus.New, slug: "y", ts: ts),
+        };
+
+        var chains = ImportCommand.BuildImportChains(classifications);
+
+        await Assert.That(chains[0][0].SessionId).IsEqualTo("z");
+        await Assert.That(chains[1][0].SessionId).IsEqualTo("a");
+    }
+
+    [Test]
+    public async Task BuildImportChains_same_corpus_twice_yields_identical_order() {
+        var rnd = new Random(7);
+        var classifications = Enumerable.Range(0, 40).Select(i => Classify(
+            $"s{i:00}", ImportCommand.ClassificationStatus.New,
+            slug: i % 5 == 0 ? null : $"slug{i % 7}",
+            ts: DateTimeOffset.UnixEpoch.AddMinutes(rnd.Next(0, 5000)))).ToList();
+
+        var first  = ImportCommand.BuildImportChains(classifications).SelectMany(c => c).Select(c => c.SessionId).ToList();
+        var second = ImportCommand.BuildImportChains([.. classifications.AsEnumerable().Reverse()]).SelectMany(c => c).Select(c => c.SessionId).ToList();
+
+        await Assert.That(first).IsEquivalentTo(second);
+        for (var i = 0; i < first.Count; i++) await Assert.That(first[i]).IsEqualTo(second[i]);
+    }
 }

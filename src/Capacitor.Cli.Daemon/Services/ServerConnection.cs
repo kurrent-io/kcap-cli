@@ -7,6 +7,7 @@ using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Eval.Contracts;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -77,6 +78,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<RunQuestionCommand,  Task<QuestionResult>>? RunQuestionHandler  { get; set; }
     public Func<FinalizeEvalCommand, Task<FinalizeResult>>? FinalizeEvalHandler { get; set; }
     public Func<CancelEvalCommand,   Task>?                 CancelEvalHandler   { get; set; }
+
+    // Eval protocol 2 (outcomes + coded failures) client-result invocations, registered beside
+    // the protocol-1 ones above. Null (early startup / an unwired test) fails closed with a
+    // server-authored chat_error rather than silently answering as protocol 1.
+    public Func<RunQuestionCommand,    Task<QuestionResultV2>>? RunQuestionV2Handler  { get; set; }
+    public Func<FinalizeEvalV2Command, Task<FinalizeResult>>?   FinalizeEvalV2Handler { get; set; }
 
     /// <summary>Task 8: handler for the server's <c>ResolveReviewerModel</c> client-result
     /// invocation — the side-effect-free reviewer-model preflight. Set by <see cref="AgentOrchestrator"/>
@@ -283,6 +290,17 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         _hub.On<CancelEvalCommand>("CancelEval",
             cmd => CancelEvalHandler?.Invoke(cmd) ?? Task.CompletedTask);
+
+        // Eval protocol 2.
+        _hub.On<RunQuestionCommand, QuestionResultV2>("RunQuestionV2",
+            cmd => RunQuestionV2Handler?.Invoke(cmd)
+                ?? Task.FromResult(new QuestionResultV2(null,
+                    new EvalQuestionFailure { Category = cmd.Question.Category, QuestionId = cmd.Question.Id, Code = EvalFailureCodes.ChatError },
+                    "no handler", 0, 0)));
+
+        _hub.On<FinalizeEvalV2Command, FinalizeResult>("FinalizeEvalV2",
+            cmd => FinalizeEvalV2Handler?.Invoke(cmd)
+                ?? Task.FromResult(new FinalizeResult(false, "no handler", null)));
 
         // Task 8: side-effect-free reviewer-model preflight (server→daemon client-result
         // invocation). When the orchestrator hasn't wired the handler (early startup), fail closed with
@@ -695,7 +713,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // Read off the handler, never asserted: an unwired connection (early startup,
                     // a test, a second ServerConnection) would otherwise invite RequestStatusReport2
                     // frames that its null-conditional invoke answers with silence.
-                    SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports
+                    SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports,
+                    // This daemon always speaks eval protocol 2 (RunQuestionV2/FinalizeEvalV2 with
+                    // outcomes and coded failures); the InstanceId this connect already carries is
+                    // what protocol 2 requires.
+                    EvalProtocolVersion: 2
                 ),
                 cancellationToken: _ct
             );
@@ -898,6 +920,21 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             await _hub.SendAsync("ReportAgentResolvedModel", agentId, model, cancellationToken: _ct);
         } catch (Exception ex) {
             LogReportResolvedModelFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: report the slash commands a hosted agent's harness offers, for the composer's `/`
+    /// picker. A single-record (arity 1) payload so the wire shape evolves additively; a later report
+    /// supersedes the previous list. Fire-and-forget over the persistent connection, swallowed when
+    /// the connected server is older and has no <c>ReportAgentCommands</c> hub method, so a
+    /// mixed-version rollout never surfaces this as a failure. Virtual so tests can capture it.
+    /// </summary>
+    public virtual async Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
+        try {
+            await _hub.SendAsync("ReportAgentCommands", new ReportAgentCommandsArgs(agentId, commands), cancellationToken: _ct);
+        } catch (Exception ex) {
+            LogReportCommandsFailed(ex, agentId);
         }
     }
 
@@ -1596,33 +1633,33 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
 
-    public Task EvalStartedAsync(string evalRunId, string sessionId, string judgeModel, int totalQuestions)
+    public virtual Task EvalStartedAsync(string evalRunId, string sessionId, string judgeModel, int totalQuestions)
         => _hub.SendAsync("EvalStarted", new EvalStarted(evalRunId, sessionId, judgeModel, totalQuestions), cancellationToken: _ct);
 
-    public Task EvalQuestionStartedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId)
+    public virtual Task EvalQuestionStartedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId)
         => _hub.SendAsync("EvalQuestionStarted", new EvalQuestionStarted(evalRunId, sessionId, index, total, category, questionId), cancellationToken: _ct);
 
-    public Task EvalQuestionCompletedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, int score, string verdict)
-        => _hub.SendAsync("EvalQuestionCompleted", new EvalQuestionCompleted(evalRunId, sessionId, index, total, category, questionId, score, verdict), cancellationToken: _ct);
+    public virtual Task EvalQuestionCompletedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string outcome, int? score, string? verdict)
+        => _hub.SendAsync("EvalQuestionCompleted", new EvalQuestionCompleted(evalRunId, sessionId, index, total, category, questionId, score, verdict, outcome), cancellationToken: _ct);
 
-    public Task EvalQuestionFailedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string reason)
+    public virtual Task EvalQuestionFailedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string reason)
         => _hub.SendAsync("EvalQuestionFailed", new EvalQuestionFailed(evalRunId, sessionId, index, total, category, questionId, reason), cancellationToken: _ct);
 
-    public Task EvalFinishedAsync(string evalRunId, string sessionId, int overallScore, string summary)
+    public virtual Task EvalFinishedAsync(string evalRunId, string sessionId, int? overallScore, string summary)
         => _hub.SendAsync("EvalFinished", new EvalFinished(evalRunId, sessionId, overallScore, summary), cancellationToken: _ct);
 
-    public Task EvalFailedAsync(string evalRunId, string sessionId, string reason)
+    public virtual Task EvalFailedAsync(string evalRunId, string sessionId, string reason)
         => _hub.SendAsync("EvalFailed", new EvalFailed(evalRunId, sessionId, reason), cancellationToken: _ct);
 
     // ── Retrospective progress events (DEV-1470) ───────────────────────────
 
-    public Task EvalRetrospectiveStartedAsync(string sessionId, string evalRunId)
+    public virtual Task EvalRetrospectiveStartedAsync(string sessionId, string evalRunId)
         => _hub.SendAsync("EvalRetrospectiveStarted", new EvalRetrospectiveStarted(sessionId, evalRunId), cancellationToken: _ct);
 
-    public Task EvalRetrospectiveCompletedAsync(string sessionId, string evalRunId)
+    public virtual Task EvalRetrospectiveCompletedAsync(string sessionId, string evalRunId)
         => _hub.SendAsync("EvalRetrospectiveCompleted", new EvalRetrospectiveCompleted(sessionId, evalRunId), cancellationToken: _ct);
 
-    public Task EvalRetrospectiveFailedAsync(string sessionId, string evalRunId, string reason)
+    public virtual Task EvalRetrospectiveFailedAsync(string sessionId, string evalRunId, string reason)
         => _hub.SendAsync("EvalRetrospectiveFailed", new EvalRetrospectiveFailed(sessionId, evalRunId, reason), cancellationToken: _ct);
 
     public virtual Task AppendAgentRunEventAsync(string agentId, object evt) {
@@ -1835,6 +1872,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (server may not support it)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report slash commands for agent {AgentId} (server may not support it)")]
+    partial void LogReportCommandsFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to send ACP auto-approval audit for agent {AgentId} (server may not support it)")]
     partial void LogNotifyAcpAutoApprovalFailed(Exception ex, string agentId);

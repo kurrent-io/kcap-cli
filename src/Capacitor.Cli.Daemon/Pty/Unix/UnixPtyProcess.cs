@@ -15,13 +15,15 @@ public sealed class UnixPtyProcess : IPtyProcess {
     static readonly TimeSpan ExitPollGap    = TimeSpan.FromMilliseconds(100);
     static readonly TimeSpan ExitConfirmGap = TimeSpan.FromMilliseconds(50);
 
-    readonly TimeProvider _time;
+    readonly TimeProvider        _time;
+    readonly UnixPtyReaderThread _reader;
 
     UnixPtyProcess(int masterFd, int childPid, string startIdentity, TimeProvider time) {
         _time         = time;
         _masterFd     = masterFd;
         Pid           = childPid;
         StartIdentity = startIdentity;
+        _reader       = new(masterFd, childPid, _cts.Token);
     }
 
     /// <summary>Executable resolution is PRE-FORK, in the parent (spec §4.2(a), pinned): resolves
@@ -163,55 +165,54 @@ public sealed class UnixPtyProcess : IPtyProcess {
                     $"pty_spawn failed: step {result.FailedStep}, errno {result.ErrNo}");
             }
 
-            return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
+            try {
+                return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
+            } catch {
+                Abandon(result.MasterFd, result.Pid);
+
+                throw;
+            }
         } finally {
             UnixPtyInterop.pty_plan_free(ref plan); // the plan is spent whether spawn succeeded or failed
         }
+    }
+
+    /// <summary>Takes down a spawned child that no <see cref="UnixPtyProcess"/> came to own: with
+    /// nobody holding its pid, nothing could ever stop or reap it. The child is still unreaped here,
+    /// which pins its pid and pgid, so the group signal cannot land on a recycled id.</summary>
+    internal static void Abandon(int masterFd, int pid) {
+        if (pid > 0) { // kill(0) signals the caller's own group and kill(-1) broadcasts
+            if (UnixPtyInterop.kill(-pid, UnixPtyInterop.SIGKILL) != 0) UnixPtyInterop.kill(pid, UnixPtyInterop.SIGKILL);
+
+            // SIGKILL cannot be refused, so this only waits out the kernel's teardown — bounded,
+            // because a launch must not hang on a child stuck in an uninterruptible sleep.
+            for (var i = 0; i < 100 && UnixPtyInterop.waitpid(pid, out _, UnixPtyInterop.WNOHANG) == 0; i++) Thread.Sleep(10);
+        }
+
+        UnixPtyInterop.close(masterFd);
     }
 
     public async IAsyncEnumerable<byte[]> ReadOutputAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default
         ) {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
-        var       buf    = new byte[4096];
 
         while (!linked.Token.IsCancellationRequested && !HasExited) {
-            var bytesRead = await Task.Run(
-                () => {
-                    var pfd = new UnixPtyInterop.PollFd { fd = _masterFd, events = UnixPtyInterop.POLLIN };
+            byte[]? chunk;
 
-                    while (!linked.Token.IsCancellationRequested) {
-                        var pollResult = UnixPtyInterop.poll(ref pfd, 1, 200);
+            try {
+                chunk = await _reader.ReadAsync(linked.Token);
+            } catch (OperationCanceledException) {
+                chunk = null;
+            }
 
-                        switch (pollResult) {
-                            case > 0 when (pfd.revents & UnixPtyInterop.POLLIN) != 0: {
-                                var n = UnixPtyInterop.read(_masterFd, buf, buf.Length);
-
-                                return (int)n;
-                            }
-                            case > 0 when (pfd.revents & (UnixPtyInterop.POLLHUP | UnixPtyInterop.POLLERR)) != 0:
-                                // Slave side closed or errored without buffered data — EOF
-                                return 0;
-                            case < 0:
-                                return -1;
-                        }
-                    }
-
-                    return 0;
-                },
-                CancellationToken.None
-            );
-
-            if (bytesRead <= 0) {
+            if (chunk is null) {
                 CheckExited();
 
                 yield break;
             }
 
-            var data = new byte[bytesRead];
-            Array.Copy(buf, data, bytesRead);
-
-            yield return data;
+            yield return chunk;
         }
     }
 
@@ -332,6 +333,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
             await TerminateAsync();
         }
 
+        await _reader.Stopped;
         UnixPtyInterop.close(_masterFd);
         _cts.Dispose();
     }

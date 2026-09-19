@@ -11,6 +11,9 @@ public interface IChatDisplayRules {
     /// injected prompts and background notifications must never acknowledge submitted input.
     string? SubmittedInput(CanonicalEvent evt, AcpEventEnvelope raw, AcpEventEnvelope? displayed) =>
         displayed is { Kind: AcpEventKind.UserMessage } user ? user.Text : null;
+
+    /// Subagent facts read off the raw envelope, whatever Filter decides for it.
+    IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) => [];
 }
 
 /// The chat's view of a transcript: the leaf projection, the envelope mapping, one vendor's rules.
@@ -22,15 +25,17 @@ public sealed class TranscriptChatProjection(ITranscriptProjection projection, I
 
     public ChatProjectionResult ProjectWithInputs(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) {
         var result = projection.Project(line, lineNumber, receivedAt, context);
-        if (result.Events.Count == 0) return new([], []);
+        if (result.Events.Count == 0) return new([], [], []);
         var shown = new List<AcpEventEnvelope>(result.Events.Count);
         var submitted = new List<string>();
+        var subagents = new List<SubagentSignal>();
         foreach (var evt in result.Events) {
             var projected = TranscriptChat.Project(evt, rules);
             shown.AddRange(projected.Envelopes);
             submitted.AddRange(projected.SubmittedInputs);
+            subagents.AddRange(projected.Subagents);
         }
-        return new(shown, submitted);
+        return new(shown, submitted, subagents);
     }
 }
 
@@ -55,9 +60,10 @@ public static class TranscriptChat {
     /// message is the submitted input.
     public static ChatProjectionResult Project(CanonicalEvent evt, IChatDisplayRules? rules) {
         var envelopes = TranscriptEnvelopes.From(evt);
-        if (envelopes.Count == 0) return new([], []);
+        if (envelopes.Count == 0) return new([], [], []);
         var shown = new List<AcpEventEnvelope>(envelopes.Count);
         var submitted = new List<string>();
+        var subagents = new List<SubagentSignal>();
         foreach (var envelope in envelopes) {
             var kept = rules is null ? envelope : rules.Filter(evt, envelope);
             if (kept is { } visible) shown.Add(visible);
@@ -65,7 +71,8 @@ public static class TranscriptChat {
                 ? kept is { Kind: AcpEventKind.UserMessage } user ? user.Text : null
                 : rules.SubmittedInput(evt, envelope, kept);
             if (text is { Length: > 0 }) submitted.Add(text);
+            if (rules is not null) subagents.AddRange(rules.Subagents(evt, envelope));
         }
-        return new(shown, submitted);
+        return new(shown, submitted, subagents);
     }
 }

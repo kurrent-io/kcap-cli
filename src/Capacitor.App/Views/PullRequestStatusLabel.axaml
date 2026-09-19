@@ -6,17 +6,19 @@
     <UserControl.Styles>
         <Style Selector="TextBlock.statusText">
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontSize" Value="13" />
         </Style>
         <Style Selector="TextBlock.statusText.success"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
         <Style Selector="TextBlock.statusText.warning"><Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" /></Style>
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
         <Style Selector="TextBlock.statusText.purple"><Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" /></Style>
     </UserControl.Styles>
-    <Grid ColumnDefinitions="16,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
-        <Path Width="14" Height="14" Stretch="Uniform" Data="{Binding IconData}"
-              Stroke="{Binding #StatusText.Foreground}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
-              VerticalAlignment="Center" />
+    <Grid ColumnDefinitions="18,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
+        <Panel Width="16" Height="16" VerticalAlignment="Center">
+            <Path Width="12" Height="12" Stretch="Uniform" Data="{Binding IconData}"
+                  Stroke="{Binding #StatusText.Foreground}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
+                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Panel>
         <TextBlock x:Name="StatusText" Grid.Column="1" Classes="statusText" Text="{Binding Text}" TextWrapping="Wrap"
                    Classes.success="{Binding IsSuccess}" Classes.warning="{Binding IsWarning}"
                    Classes.danger="{Binding IsDanger}" Classes.purple="{Binding IsPurple}" VerticalAlignment="Center" />

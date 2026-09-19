@@ -83,7 +83,8 @@ public class SetupFacadeParityTests {
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(),
             Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
             Provisioning, Discovery, telemetry, AuthEndpoints.Defaults, facades,
-            FakeImportRunner.Throwing(new InvalidOperationException("these tests stop before the import step")),
+            FakeImportRunner.Of(_ => throw new InvalidOperationException("these tests stop before the import step")),
+            FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(),
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System,
             TestBinaries.None);
 

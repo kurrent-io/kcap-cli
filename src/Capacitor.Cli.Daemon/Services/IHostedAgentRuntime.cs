@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core;
+
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
@@ -113,6 +115,17 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// <summary>Viewer resize. PTY runtimes resize the winsize; the ACP runtime no-ops until
     /// a follow-up adds a terminal capability.</summary>
     void Resize(ushort cols, ushort rows);
+
+    /// <summary>Set by the orchestrator after the runtime starts. The runtime invokes it whenever it
+    /// learns the harness's slash commands — an ACP <c>available_commands_update</c> or
+    /// <c>session/new</c> result, a Codex <c>skills/list</c>. A snapshot captured during start is
+    /// delivered the moment the callback attaches (see <see cref="HostedAgentCommandsRelay"/>), so
+    /// nothing races the attach. PTY runtimes never raise it — the orchestrator probes Claude
+    /// separately.</summary>
+    Action<IReadOnlyList<HostedAgentCommand>>? OnCommandsAvailable {
+        get => null;
+        set { }
+    }
 
     /// <summary>
     /// Request a graceful stop <b>before</b> <see cref="TerminateAsync"/>. PTY runtimes send the

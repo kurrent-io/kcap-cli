@@ -12,7 +12,7 @@ public static class VendorChipPalette {
 
     static readonly FrozenDictionary<string, ChipColors> Map =
         new Dictionary<string, ChipColors>(StringComparer.OrdinalIgnoreCase) {
-            ["claude"] = new("#C87B3A", "#1E1E1E"),
+            ["claude"] = new("#2E2C2A", "#EDE8E1"), // orange is the warning token; a vendor chip must not share it
             ["codex"] = new("#10A37F", "#1E1E1E"),
             ["copilot"] = new("#8957E5", "#F5F1FB"),
             ["gemini"] = new("#1A73E8", "#FFFFFF"),

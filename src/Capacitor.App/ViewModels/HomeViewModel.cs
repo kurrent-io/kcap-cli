@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -72,6 +73,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string DaemonNeedsAttachments = "attachments need the daemon updated";
 
     internal const string ConnectingNotice     = "Connecting to the server…";
+    /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
+    internal static readonly TimeSpan CatchUpLimit = TimeSpan.FromSeconds(60);
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
@@ -208,6 +211,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// True after a successful re-auth until the daemon reports server-connected (or goes down).
     /// Keeps the banner from still asking to Sign in while the daemon catches up.
     readonly BehaviorSubject<bool> _awaitingServerAfterSignIn = new(false);
+    /// True once a Connecting/Finishing notice has lasted CatchUpLimit — Sign in is then the remaining affordance.
+    readonly BehaviorSubject<bool> _catchUpTimedOut = new(false);
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -355,6 +360,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly IAttachmentUploader _uploader;
     readonly TimeProvider _time;
     readonly ITimer _retentionTimer;
+    readonly ITimer _catchUpTimer;
+    bool _catchUpArmed;
+    long _catchUpGeneration;
+    DateTimeOffset _catchUpDeadline;
 
     // Live mirrors of the attachment gate's inputs, read (never bound) by the in-method re-check
     // StartAsync runs against the captured draft rather than the current selection.
@@ -429,6 +438,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _machineSelectionChanges = new((daemon.DaemonName, false));
         _retentionTimer = _time.CreateTimer(
             _ => ReleaseExpired(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+        _catchUpTimer = _time.CreateTimer(
+            _ => OnCatchUpElapsed(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
         // Never starts empty: a null SupportedVendors means "daemon
         // capability unknown", not "hosts nothing" — Build(null) offers everything until the first
@@ -589,10 +600,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
                 (status, connection, expired, awaiting, lane) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State));
-        var notices = localNoticeInputs
+        var rawNotices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
                 (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
+        rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
+        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -614,7 +627,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         _signInVisible = signInState
-            .Select(t => !t.Awaiting && (t.Expired || (
+            .CombineLatest(_catchUpTimedOut, (t, timedOut) => !t.Awaiting && (t.Expired || timedOut || (
                 t.Availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
@@ -691,6 +704,42 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public void NotifySignInCompleted() {
         _signInRequired.OnNext(false);
         _awaitingServerAfterSignIn.OnNext(true);
+        RestartCatchUp();
+    }
+
+    void ArmOrResetCatchUp(string? rawNotice) {
+        if (!BusyNotice(rawNotice)) {
+            StopCatchUp();
+            return;
+        }
+        if (_catchUpTimedOut.Value || _catchUpArmed) return;
+        RestartCatchUp();
+    }
+
+    void StopCatchUp() {
+        _catchUpArmed = false;
+        _catchUpGeneration++;
+        _catchUpTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        if (_catchUpTimedOut.Value) _catchUpTimedOut.OnNext(false);
+    }
+
+    void RestartCatchUp() {
+        if (_disposed) return;
+        _catchUpTimedOut.OnNext(false);
+        _catchUpArmed = true;
+        _catchUpGeneration++;
+        _catchUpDeadline = _time.GetUtcNow().Add(CatchUpLimit);
+        _catchUpTimer.Change(CatchUpLimit, Timeout.InfiniteTimeSpan);
+    }
+
+    void OnCatchUpElapsed() {
+        var generation = _catchUpGeneration;
+        RxSchedulers.MainThreadScheduler.Schedule(() => {
+            if (_disposed || generation != _catchUpGeneration || !_catchUpArmed) return;
+            if (_time.GetUtcNow() < _catchUpDeadline) return;
+            _awaitingServerAfterSignIn.OnNext(false);
+            _catchUpTimedOut.OnNext(true);
+        });
     }
 
     /// Local attach state is checked FIRST — the upstream word is only meaningful once the attach
@@ -749,6 +798,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool BusyNotice(string? notice) =>
         notice is ConnectingNotice or FinishingSignInNotice;
 
+    /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up.
+    internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
+        timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
+
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>
         string.IsNullOrEmpty(repoPath) ? "Select a repository to start"
@@ -762,6 +815,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _daemonStartMessageFeed.Dispose();
         _uploadingChanges.Dispose();
         _retentionTimer.Dispose();
+        _catchUpTimer.Dispose();
+        _catchUpTimedOut.Dispose();
         Tray.Clear();
         lock (_launchTrackingLock) _retainedDraft = null;
     }

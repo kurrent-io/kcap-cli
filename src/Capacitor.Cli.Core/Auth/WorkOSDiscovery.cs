@@ -73,12 +73,7 @@ public static class WorkOSDiscovery {
 
         var result = await proxy.DiscoverWorkOSTenantsAsync(proxyUrl, auth.AccessToken, ct);
         if (result.Error != DiscoveryError.None) {
-            return Failed(progress, result.Error switch {
-                DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
-                DiscoveryError.TokenRejected    => "WorkOS rejected the authentication token. Please sign in again.",
-                DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
-                _                               => "Tenant discovery failed."
-            }, ct);
+            return Failed(progress, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
         }
 
         if (result.Tenants.Length == 0) {

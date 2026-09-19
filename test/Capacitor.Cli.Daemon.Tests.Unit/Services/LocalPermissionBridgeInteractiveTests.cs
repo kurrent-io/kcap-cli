@@ -146,11 +146,15 @@ public class LocalPermissionBridgeInteractiveTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
     public async Task Respond_reporting_not_pending_is_logged_not_treated_as_a_conflict() {
         await using var h = new Harness();
-        h.Server.AwaitScript = (_, ct) => new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);
+        var awaiting = new TaskCompletionSource();
+        h.Server.AwaitScript = (_, ct) => { awaiting.TrySetResult(); return new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct); };
         h.Server.RespondScript = () => new ServerConnection.RespondOutcome(ServerConnection.RespondOutcomeKind.NotPending, "Permission request is no longer pending.");
         await h.StartAsync();
         var response = h.PostAsync();
         var pending = await h.WaitPendingAsync();
+        // A settle that lands before Begin abandons the server leg, and then no server request
+        // exists to respond to. The respond under test needs one, so the leg has to hold it first.
+        await awaiting.Task.WaitAsync(TimeSpan.FromSeconds(30));
         h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
         await WaitUntil(() => h.Server.Responds.Count == 1, "respond attempted");

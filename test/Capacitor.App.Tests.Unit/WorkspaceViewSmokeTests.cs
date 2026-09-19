@@ -1,5 +1,7 @@
 using System.Reactive.Linq;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
@@ -102,11 +104,13 @@ public class WorkspaceViewSmokeTests {
 
             var names = new[] {
                 "WorkspaceTitle", "WorkspaceSubtitle", "ChatTabButton",
-                "TerminalTabButton", "TerminalHost", "TerminalBanners",
+                "TerminalTabButton", "StopButton", "SurfaceSwitch", "TerminalHost", "TerminalBanners",
                 "DetachButton", "ReattachButton", "SessionEndedNote", "ChatHost", "WorkContextHost",
             };
             foreach (var name in names)
                 await Assert.That(Find<Control>(window, name)).IsNotNull().Because($"{name} should resolve");
+            await Assert.That(ToolTip.GetTip(Find<TextBlock>(window, "WorkspaceTitle")!))
+                .IsEqualTo(vm.Title);
 
             var chatHost = Find<ChatTabView>(window, "ChatHost")!;
             foreach (var name in new[] { "ChatItems", "ChatPhaseNote", "ComposerInput", "SendButton" })
@@ -115,10 +119,13 @@ public class WorkspaceViewSmokeTests {
             var pane = Find<WorkContextView>(window, "WorkContextHost")!;
             foreach (var name in new[] {
                 "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
-                "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton", "LinkCards", "IssueCard",
-                "WhoToggle", "ContributorStack", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts",
+                "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton",
+                "PullRequestSection", "PullRequestToggle", "PullRequestNumberText", "PullRequestTitleButton", "PullRequestTitleText", "PullRequestEmptyText", "IssueCard",
+                "WhoToggle", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts", "SessionIdButton", "OpenWorkItemButton", "PaneScroll",
             })
                 await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
+            await Assert.That(pane.FindControl<ScrollViewer>("PaneScroll")!.HorizontalScrollBarVisibility)
+                .IsEqualTo(Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -148,9 +155,8 @@ public class WorkspaceViewSmokeTests {
     }
 
     /// Run-and-observe: drives ONE workspace through both has_terminal values for the same agent
-    /// id. Chat is offered either way; only the Terminal button and pane follow the PTY gate, and
-    /// nothing stands in their place. The tab buttons share one IsVisible-bound strip, so a button
-    /// is read through IsEffectivelyVisible.
+    /// id. Chat is the default surface either way; the Chat/Terminal switch and the Terminal pane
+    /// follow the PTY gate, and nothing stands in their place.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Chat_is_always_offered_and_the_terminal_pair_follows_ShowsTerminalTab() {
@@ -170,8 +176,8 @@ public class WorkspaceViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             await Assert.That(vm.ShowsTerminalTab).IsFalse();
-            await Assert.That(chatButton.IsEffectivelyVisible).IsTrue();
-            await Assert.That(chatHost.IsVisible).IsTrue(); // Chat is the default tab
+            await Assert.That(vm.ShowsSurfaceSwitch).IsFalse();
+            await Assert.That(chatHost.IsVisible).IsTrue(); // Chat is the default surface
             await Assert.That(tabButton.IsEffectivelyVisible).IsFalse();
             await Assert.That(terminalHost.IsVisible).IsFalse();
             await Assert.That(Find<Control>(window, "NoTerminalNote")).IsNull();
@@ -184,6 +190,7 @@ public class WorkspaceViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             await Assert.That(vm.ShowsTerminalTab).IsTrue();
+            await Assert.That(vm.ShowsSurfaceSwitch).IsTrue();
             await Assert.That(chatButton.IsEffectivelyVisible).IsTrue();
             await Assert.That(tabButton.IsEffectivelyVisible).IsTrue();
             await Assert.That(terminalHost.IsVisible).IsTrue();
@@ -461,6 +468,31 @@ public class WorkspaceViewSmokeTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
             await vm.TeardownAsync();
+        });
+    }
+
+    /// Fluent hover paints PART_ContentPresenter near-white; Stop must keep the danger colour.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Stop_keeps_danger_foreground_on_hover() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, _, _) = await ShowPtyAsync();
+            try {
+                var stop = Find<Button>(window, "StopButton")!;
+                await Assert.That(stop.Classes.Contains("kcapDanger")).IsTrue();
+                var centre = stop.TranslatePoint(new Point(stop.Bounds.Width / 2, stop.Bounds.Height / 2), window)!.Value;
+                window.MouseMove(centre);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(stop.Classes.Contains(":pointerover")).IsTrue()
+                    .Because("the hover must register for the assertion to mean anything");
+
+                var presenter = stop.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
+                await Assert.That(ReferenceEquals(presenter.Foreground, window.FindResource("KcapDangerBrush"))).IsTrue();
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                await vm.TeardownAsync();
+            }
         });
     }
 }

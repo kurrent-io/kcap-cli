@@ -11,27 +11,27 @@
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-paragraph">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        <Setter Property="FontSize" Value="13.5" />
-        <Setter Property="LineHeight" Value="21.6" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="24" />
         <Setter Property="Margin" Value="0" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-list-marker">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        <Setter Property="FontSize" Value="13.5" />
-        <Setter Property="LineHeight" Value="21.6" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="24" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h1, mv|MarkdownViewer :is(TextBlock).markdown-h2, mv|MarkdownViewer :is(TextBlock).markdown-h3, mv|MarkdownViewer :is(TextBlock).markdown-h4, mv|MarkdownViewer :is(TextBlock).markdown-h5, mv|MarkdownViewer :is(TextBlock).markdown-h6">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="FontSize" Value="14.5" />
+        <Setter Property="FontSize" Value="16" />
         <Setter Property="Margin" Value="0,4,0,0" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h1">
-        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontSize" Value="20" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h2">
-        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontSize" Value="17.5" />
     </Style>
     <Style Selector="mv|MarkdownViewer Run.markdown-code-inline">
         <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
@@ -48,7 +48,7 @@
     </Style>
     <Style Selector="mv|MarkdownViewer Border.markdown-code-block > TextBlock">
         <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
-        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontSize" Value="13.5" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
     </Style>
     <!-- Resting code carries no chrome. The strip hides by going transparent and untouchable rather
@@ -110,7 +110,7 @@
         <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
     </Style>
     <Style Selector="mv|MarkdownViewer mri|MarkdownHyperlink.markdown-link">
-        <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
         <Setter Property="TextDecorations" Value="{x:Null}" />
     </Style>
     <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-pre-text">

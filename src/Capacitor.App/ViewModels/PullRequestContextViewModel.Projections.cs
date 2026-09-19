@@ -6,7 +6,7 @@ namespace Capacitor.App.ViewModels;
 
 public sealed partial class PullRequestContextViewModel {
     public string Title => CanDisplay && _overview?.Title is { } title ? title
-        : _selected is { IsAvailable: true } choice ? choice.Link.Title ?? choice.Label : _selected?.Label ?? "Pull requests";
+        : _selected is { IsAvailable: true } choice ? choice.Link.Title ?? choice.Label : _selected?.Label ?? "";
     public string Lifecycle => CanDisplay ? _overview?.Lifecycle switch { "draft" => "Draft", "open" => "Open", "merged" => "Merged", "closed" => "Closed", _ => "Unknown" } : "";
     public string Branches => CanDisplay ? (_overview?.HeadRef ?? "?") + " → " + (_overview?.BaseRef ?? "?") : "";
     public string FetchedLabel => CanDisplay && _overviewRead?.FetchedAt is { } at ? "Fetched " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
@@ -56,7 +56,7 @@ public sealed partial class PullRequestContextViewModel {
         var rows = CanDisplayReader ? CurrentSection?.Pages.SelectMany(page => page.Rows).ToArray() ?? [] : [];
         if (!_visibleRows.SequenceEqual(rows)) _visibleRows = rows;
         if (!_disposed && _hasPullRequest.Value != HasPullRequest) _hasPullRequest.OnNext(HasPullRequest);
-        foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(IsLegacy), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
+        foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
             nameof(Title), nameof(Lifecycle), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel), nameof(ReviewSummary), nameof(CheckSummary),
             nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
             nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),

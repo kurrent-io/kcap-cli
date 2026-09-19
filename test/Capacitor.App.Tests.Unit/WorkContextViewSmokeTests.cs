@@ -1,13 +1,18 @@
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
@@ -25,11 +30,14 @@ public class WorkContextViewSmokeTests {
     sealed class Host : IAsyncDisposable {
         public BehaviorSubject<AgentStatusDto?> Presence { get; } = new(null);
         public FakeWorkContextSource Source { get; } = new();
+        public FakeTimeProvider Time { get; } = new();
+        public SessionSubagents Subagents { get; }
         public WorkContextViewModel Vm { get; }
         public Window Window { get; }
 
         public Host() {
-            Vm = new WorkContextViewModel(Presence, Source, new FakeTimeProvider(), new RecordingOpener());
+            Subagents = new SessionSubagents(Time);
+            Vm = new WorkContextViewModel(Presence, Source, Time, new RecordingOpener(), Subagents);
             Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
@@ -90,10 +98,14 @@ public class WorkContextViewSmokeTests {
             var key = host.Find<TextBlock>("WorkContextKey");
             await Assert.That(key.Text).IsEqualTo("WK-2198");
             await Assert.That(key.IsEffectivelyVisible).IsTrue();
+            await Assert.That(ReferenceEquals(key.Foreground, host.Window.FindResource("KcapTextBrush"))).IsTrue()
+                .Because("the key is identity, not a status colour");
             await Assert.That(host.Find<TextBlock>("WorkContextTitle").IsEffectivelyVisible).IsFalse();
 
             var issueCard = host.Find<ContentControl>("IssueCard");
-            await Assert.That(host.Find<Button>("OpenWorkItemButton").IsEffectivelyVisible).IsTrue();
+            var open = host.Find<Button>("OpenWorkItemButton");
+            await Assert.That(open.IsEffectivelyVisible).IsTrue();
+            await Assert.That(open.Parent).IsSameReferenceAs(host.Find<Button>("RefreshButton").Parent);
             await Assert.That(issueCard.IsEffectivelyVisible).IsEqualTo(!inline);
             if (!inline) {
                 var linkKey = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkKey");
@@ -132,14 +144,271 @@ public class WorkContextViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_who_row_counts_people_before_sessions() {
+    public async Task The_who_row_shows_sessions_when_every_contributor_is_listed() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
 
             var count = host.Find<TextBlock>("WhoCountText");
-            await Assert.That(count.Text).IsEqualTo("1 person · 2 sessions");
+            await Assert.That(count.Text).IsEqualTo("2 sessions");
             await Assert.That(count.IsEffectivelyVisible).IsTrue();
+
+            var list = host.Find<ItemsControl>("ContributorList");
+            await Assert.That(list.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Vm.PeopleExpanded).IsFalse();
+            var name = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "Ada");
+            await Assert.That(name.IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    /// Who's-on-it initials are identity, not a live/settled status, so they must not paint
+    /// success green. Border ignores alignment on a direct child; the letter lives in a Panel
+    /// so Horizontal/VerticalAlignment actually centre it in the disc.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_avatar_is_neutral_and_centres_the_initial() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            host.Window.UpdateLayout();
+
+            var avatar = host.Find<ItemsControl>("ContributorList")
+                .GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("avatar"));
+            var letter = avatar.GetVisualDescendants().OfType<TextBlock>().Single();
+            var raised = host.Window.FindResource("KcapSurfaceRaisedBrush");
+            var muted = host.Window.FindResource("KcapMutedBrush");
+
+            await Assert.That(ReferenceEquals(avatar.Background, raised)).IsTrue();
+            await Assert.That(ReferenceEquals(letter.Foreground, muted)).IsTrue();
+            await Assert.That(letter.Parent).IsTypeOf<Panel>();
+            await Assert.That(letter.HorizontalAlignment).IsEqualTo(HorizontalAlignment.Center);
+            await Assert.That(letter.VerticalAlignment).IsEqualTo(VerticalAlignment.Center);
+            await Assert.That(letter.TextAlignment).IsEqualTo(TextAlignment.Center);
+
+            var letterMid = letter.TranslatePoint(
+                new Point(letter.Bounds.Width / 2, letter.Bounds.Height / 2), avatar)!.Value;
+            await Assert.That(Math.Abs(letterMid.X - avatar.Bounds.Width / 2)).IsLessThan(1.5);
+            await Assert.That(Math.Abs(letterMid.Y - avatar.Bounds.Height / 2)).IsLessThan(1.5);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task This_session_part_mark_is_purple_and_settled_stays_green() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var primary = new SessionWorkItemAssignmentDto { WorkItemId = "w1", Label = "WK-2198", Source = "mcp", Confidence = 1, IsPrimary = true };
+            var here = new SessionWorkItemAssignmentDto { WorkItemId = "p1", Label = "part", Source = "mcp", Confidence = 1, IsPrimary = false };
+            var item = new WorkItemDto {
+                WorkItemId = "w1",
+                Title = "WK-2198",
+                Key = new WorkItemKeyDto { ShortKey = "WK-2198", Provider = "linear", Kind = "issue", Value = "WK-2198" },
+                State = new WorkItemStateDto { Kind = "in_flight" },
+                Parts = [
+                    new WorkItemPartDto { WorkItemId = "p1", Title = "Here", Ordinal = 0 },
+                    new WorkItemPartDto { WorkItemId = "p2", Title = "Done", Ordinal = 1, IsSettled = true },
+                ],
+            };
+            await host.ShowAsync(new WorkContextRead(WorkContextReadKind.Ready, [primary, here], primary, item, null,
+                new SessionSummaryDto { SessionId = SessionA }, false, false, false, null));
+
+            var purple = host.Window.FindResource("KcapPurpleBrush");
+            var green = host.Window.FindResource("KcapSuccessBrush");
+            var marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Here");
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, purple) || ReferenceEquals(e.Fill, purple))).IsTrue();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, green) || ReferenceEquals(e.Fill, green))).IsFalse();
+
+            marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Done");
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Fill, green))).IsTrue();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, purple) || ReferenceEquals(e.Fill, purple))).IsFalse();
+        });
+    }
+
+    static Ellipse[] MarksBeside(ItemsControl list, string title) {
+        var row = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == title).Parent as StackPanel;
+        return row!.Children.OfType<Panel>().First().Children.OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToArray();
+    }
+
+    static WorkContextRead CrowdedWhoRead() {
+        var read = KeyOnlyRead();
+        var item = read.Item! with {
+            Contributors = [
+                new WorkItemContributorDto { UserId = "u1", DisplayName = "Ada" },
+                new WorkItemContributorDto { UserId = "u2", DisplayName = "Bob" },
+                new WorkItemContributorDto { UserId = "u3", DisplayName = "Cyd" },
+                new WorkItemContributorDto { UserId = "u4", DisplayName = "Dee" },
+                new WorkItemContributorDto { UserId = "u5", DisplayName = "Eve" },
+            ],
+        };
+        return read with { Item = item };
+    }
+
+    static ContentPresenter WhoPresenter(Button button) =>
+        button.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_header_has_no_hover_fill_when_the_list_does_not_overflow() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var button = host.Find<Button>("WhoToggle");
+            await Assert.That(button.Classes.Contains("expandable")).IsFalse();
+
+            var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(centre);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(button.Classes.Contains(":pointerover")).IsTrue()
+                .Because("the hover must register for the assertion to mean anything");
+            await Assert.That(Alpha(WhoPresenter(button).Background)).IsEqualTo((byte)0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_header_does_not_dim_on_press_when_the_list_does_not_overflow() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var button = host.Find<Button>("WhoToggle");
+            var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(centre);
+            host.Window.MouseDown(centre, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(button.Classes.Contains(":pressed")).IsTrue()
+                .Because("the press must register for the assertion to mean anything");
+            await Assert.That(WhoPresenter(button).Opacity).IsEqualTo(1);
+            await Assert.That(Alpha(WhoPresenter(button).Background)).IsEqualTo((byte)0);
+            host.Window.MouseUp(centre, MouseButton.Left);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_header_paints_hover_when_the_list_overflows() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(CrowdedWhoRead());
+
+            var button = host.Find<Button>("WhoToggle");
+            await Assert.That(host.Vm.PeopleOverflows).IsTrue();
+            await Assert.That(button.Classes.Contains("expandable")).IsTrue();
+
+            var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(centre);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(button.Classes.Contains(":pointerover")).IsTrue()
+                .Because("the hover must register for the assertion to mean anything");
+            await Assert.That(ReferenceEquals(WhoPresenter(button).Background, host.Window.FindResource("KcapSurfaceRaisedBrush"))).IsTrue();
+        });
+    }
+
+    /// Each row carries its state in words as well as in the dot, and the failed word is painted
+    /// danger; the section hides whole when the session spawned none and folds on its toggle.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_subagents_section_lists_rows_by_state_and_hides_when_the_session_spawned_none() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var section = host.Find<StackPanel>("SubagentsSection");
+            await Assert.That(section.IsEffectivelyVisible).IsFalse();
+
+            var now = host.Time.GetUtcNow();
+            host.Subagents.Apply(new ChatProjectionResult([], [], [
+                new SubagentSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
+                new SubagentSignal.Started("c2", "Reviewer", "Check the plan", now.AddMinutes(-3)),
+                new SubagentSignal.Detached("c1", "a1"),
+                new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(-132)),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(section.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").Text).IsEqualTo("1 of 2 running");
+            var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            await Assert.That(texts).Contains("Explore");
+            await Assert.That(texts).Contains("running in background · 18s");
+            await Assert.That(texts).Contains("Map desktop chat UI surfaces");
+            await Assert.That(texts).Contains("Reviewer");
+            await Assert.That(texts).Contains("failed · 48s");
+
+            var failed = section.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "failed · 48s");
+            var danger = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapDangerBrush")!;
+            await Assert.That(((ISolidColorBrush)failed.Foreground!).Color).IsEqualTo(danger.Color);
+            await Assert.That(section.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
+
+            await host.Vm.ToggleSubagentsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    /// The name trims to the pane and the state line sits beneath it, so a long name can push
+    /// neither off the pane.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_subagent_name_trims_and_keeps_the_state_line_beneath_it() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var now = host.Time.GetUtcNow();
+            var longName = new string('x', 80);
+            host.Subagents.Apply(new ChatProjectionResult([], [], [
+                new SubagentSignal.Started("c1", longName, "", now.AddSeconds(-18)),
+                new SubagentSignal.Detached("c1", "a1"),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var section = host.Find<StackPanel>("SubagentsSection");
+            var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).ToList();
+            var name = texts.Single(t => t.Text == longName);
+            var state = texts.Single(t => t.Text == "running in background · 18s");
+
+            var nameRight = name.TranslatePoint(new Point(name.Bounds.Width, 0), host.Window)!.Value.X;
+            var nameBottom = name.TranslatePoint(new Point(0, name.Bounds.Height), host.Window)!.Value.Y;
+            var stateTop = state.TranslatePoint(new Point(0, 0), host.Window)!.Value.Y;
+            var stateRight = state.TranslatePoint(new Point(state.Bounds.Width, 0), host.Window)!.Value.X;
+            await Assert.That(nameRight).IsLessThanOrEqualTo(host.Window.Bounds.Width);
+            await Assert.That(stateRight).IsLessThanOrEqualTo(host.Window.Bounds.Width);
+            await Assert.That(stateTop).IsGreaterThanOrEqualTo(nameBottom);
+        });
+    }
+
+    /// "Copied" is set as a local tip; leaving the button has to put the full id back, or the
+    /// flash sticks as the tip.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Copying_the_session_id_keeps_the_full_id_on_the_next_hover() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            host.Vm.ToggleSessionCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+
+            var button = host.Find<Button>("SessionIdButton");
+            await Assert.That(button.IsEffectivelyVisible).IsTrue();
+            var origin = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(origin);
+            host.Window.MouseDown(origin, MouseButton.Left);
+            host.Window.MouseUp(origin, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+
+            var whileCopied = ToolTip.GetTip(button) as string;
+            await Assert.That(whileCopied).IsEqualTo("Copied");
+
+            host.Window.MouseMove(new Point(1, 1));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(ToolTip.GetTip(button) as string).IsEqualTo(SessionA);
         });
     }
 }

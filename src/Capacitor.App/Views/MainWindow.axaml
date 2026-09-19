@@ -3,12 +3,16 @@
                      xmlns:rxui="clr-namespace:ReactiveUI.Avalonia;assembly=ReactiveUI.Avalonia"
                      xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
                      xmlns:views="clr-namespace:Capacitor.App.Views"
+                     xmlns:svc="clr-namespace:Capacitor.App.Services"
                      x:Class="Capacitor.App.Views.MainWindow"
                      x:TypeArguments="vm:MainWindowViewModel"
                      x:DataType="vm:MainWindowViewModel"
                      Title="Kurrent Capacitor Desktop"
                      Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
-                     Width="1200" MinWidth="1200" Height="760" MinHeight="560"
+                     Width="{x:Static svc:WindowSizeMemory.DefaultWidth}"
+                     MinWidth="{x:Static svc:WindowSizeMemory.MinWidth}"
+                     Height="{x:Static svc:WindowSizeMemory.DefaultHeight}"
+                     MinHeight="{x:Static svc:WindowSizeMemory.MinHeight}"
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
     <Window.KeyBindings>
