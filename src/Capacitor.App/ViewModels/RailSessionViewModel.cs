@@ -43,6 +43,11 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _needsYou;
     public bool NeedsYou => _needsYou.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _showsStatusDot;
+    /// The badge replaces the dot for a row that needs attention, except that ongoing subagent
+    /// work keeps the pulsing dot beside it.
+    public bool ShowsStatusDot => _showsStatusDot.Value;
+
     readonly ObservableAsPropertyHelper<bool> _isStale;
     /// A remote row greys out while the lane is stale; a local row is never stale.
     public bool IsStale => _isStale.Value;
@@ -90,6 +95,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var byStatus = SessionStatusDots.NeedsAttention(row);
         _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
+            .DisposeWith(_disposables);
+        _showsStatusDot = agentsWithPending.Select(set => !(byStatus || set.Contains(row.Id)) || DotPulses)
+            .ToProperty(this, x => x.ShowsStatusDot, initialValue: !byStatus || DotPulses)
             .DisposeWith(_disposables);
         _showsIdleBadge = agentsWithPending.Select(set =>
                 SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed" && !set.Contains(row.Id))

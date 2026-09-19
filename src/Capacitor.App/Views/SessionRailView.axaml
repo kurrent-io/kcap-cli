@@ -354,7 +354,7 @@
                                                                             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                                                                 <Ellipse Grid.Column="0" Width="7" Height="7" Fill="{Binding StatusDot}"
                                                                                          Classes.pulsing="{Binding DotPulses}"
-                                                                                         IsVisible="{Binding !NeedsYou}"
+                                                                                         IsVisible="{Binding ShowsStatusDot}"
                                                                                          VerticalAlignment="Top" Margin="0,4,0,0" />
                                                                                 <StackPanel Grid.Column="1" Spacing="3">
                                                                                     <!-- Title stands alone on its line; a plain TextBlock in this vertical

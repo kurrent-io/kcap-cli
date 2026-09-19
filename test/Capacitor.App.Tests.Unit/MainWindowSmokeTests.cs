@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -523,14 +524,14 @@ public class MainWindowSmokeTests {
 
     /// A shown MainWindow on the Sessions surface whose rail holds two rows, "Fix the flaky test"
     /// and "Leave this one alone", under one worktree named feature-x.
-    static (MainWindowViewModel Vm, MainWindow Window) RailWindow(bool awaitingInput = false) {
+    static (MainWindowViewModel Vm, MainWindow Window) RailWindow(bool awaitingInput = false, int? liveSubagents = null) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
             null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test",
-            AwaitingInput: awaitingInput ? true : null));
+            AwaitingInput: awaitingInput ? true : null, LiveSubagents: liveSubagents));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
             null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
@@ -596,6 +597,25 @@ public class MainWindowSmokeTests {
             await Assert.That(opened.SelectedAlpha).IsGreaterThan((byte)0); // the highlight actually paints
             await Assert.That(opened.SiblingAlpha).IsEqualTo((byte)0); // an unopened row stays transparent
             await Assert.That(opened.WorktreeAlpha).IsGreaterThan((byte)0);
+        });
+    }
+
+    /// A parent that stopped to wait for the user while its subagents run keeps the pulsing dot
+    /// visible beside the attention badge — the one state the pulse exists to show.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_dot_stays_visible_beside_the_wait_badge_while_subagents_run() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var visible = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(awaitingInput: true, liveSubagents: 2);
+                var row = RailRow(window, "Fix the flaky test");
+                var dot = row.GetVisualDescendants().OfType<Ellipse>().First();
+                var result = dot.IsVisible;
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(visible).IsTrue();
         });
     }
 

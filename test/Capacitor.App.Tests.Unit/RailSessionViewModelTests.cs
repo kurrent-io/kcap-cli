@@ -296,6 +296,33 @@ public class RailSessionViewModelTests {
         });
     }
 
+    /// The badge takes over for a row that needs attention, except that live subagents keep the
+    /// pulsing dot beside it — the one state the pulse exists to show.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Live_subagents_keep_the_dot_visible_beside_the_wait_badge() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var pending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
+            using var waiting     = new RailSessionViewModel(Row(awaitingInput: true, liveSubagents: 2), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            using var waitingOnly = new RailSessionViewModel(Row(awaitingInput: true, liveSubagents: 0), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            using var busy        = new RailSessionViewModel(Row(awaitingInput: false, liveSubagents: 0), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+
+            await Assert.That(waiting.NeedsYou).IsTrue();
+            await Assert.That(waiting.ShowsIdleBadge).IsTrue();
+            await Assert.That(waiting.ShowsStatusDot).IsTrue();
+            await Assert.That(waitingOnly.NeedsYou).IsTrue();
+            await Assert.That(waitingOnly.ShowsStatusDot).IsFalse();
+            await Assert.That(busy.NeedsYou).IsFalse();
+            await Assert.That(busy.ShowsStatusDot).IsTrue();
+
+            using var pendingCard = new RailSessionViewModel(Row(id: "a3", liveSubagents: 2), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            await Assert.That(pendingCard.ShowsStatusDot).IsTrue();
+            pending.OnNext(new HashSet<string> { "a3" });
+            await Assert.That(pendingCard.NeedsYou).IsTrue();
+            await Assert.That(pendingCard.ShowsStatusDot).IsTrue();
+        });
+    }
+
     /// A remote row carries no count and looks as it did; a pending row still pulses for its start.
     [Test]
     [NotInParallel("AvaloniaSession")]
