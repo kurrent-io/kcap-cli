@@ -60,7 +60,7 @@ Interface: IDesktopNotificationSink.Show(DesktopNotification, Action<string?>), 
 
 - [x] Run the full desktop test assembly and inspect failures.
 - [x] Rebuild the desktop app and publish affected shipping projects, clearing warnings.
-- [ ] Finish the user-requested Claude review flow after addressing findings and rerunning affected tests.
+- [x] Finish the user-requested Claude review flow after addressing findings and rerunning affected tests.
 - [x] Record platform smoke-test coverage and any limitations in the delivery report.
 
 ## Verification results
@@ -73,4 +73,4 @@ Interface: IDesktopNotificationSink.Show(DesktopNotification, Action<string?>), 
 - Review findings for delayed directory rows, reconnect handover, shutdown cleanup, duplicate ACP grant scopes and stale native action tokens have regression coverage.
 - Signed isolated macOS smoke confirmed authorization, managed background delivery, withdrawal to zero delivered notifications, and disposal. The bundle must live outside `/tmp` for macOS notification registration.
 - Actual OS notification button/body clicks and foreground presentation remain unverified: the automation could not access Notification Center notifications, and this captured-display environment did not invoke the isolated foreground callback. Those paths have unit/source coverage; no global OS settings were changed.
-- Claude round one found six issues: switch dragging, reconnect alert loss, missing Codex actions, theme placement/accent, ambiguous ACP standing scopes, and persistent save-error text. All are corrected with regressions; Windows action labels now also escape XML. Follow-up review in flow `7ff25ce97d0145c2ac99d5aa83afaf4d` is pending.
+- Claude round one found six issues: switch dragging, reconnect alert loss, missing Codex actions, theme placement/accent, ambiguous ACP standing scopes, and persistent save-error text. All are corrected with regressions; Windows action labels now also escape XML. Round two reviewed commit `fa97c18e` and returned clean in flow `7ff25ce97d0145c2ac99d5aa83afaf4d`; the flow is closed.
