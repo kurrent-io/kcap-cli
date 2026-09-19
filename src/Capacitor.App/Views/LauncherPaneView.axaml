@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.LauncherPaneView"
              x:DataType="vm:HomeViewModel">
     <!-- The Sessions surface's empty state: launching IS the pane — a fixed question over an
@@ -28,8 +29,7 @@
                            IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
 
-            <Border x:Name="GoalCard" Classes="attachTarget" Background="{StaticResource KcapSurfaceBrush}"
-                    BorderThickness="1" CornerRadius="12" Padding="14">
+            <kcap:Surface x:Name="GoalCard" Classes="attachTarget" CornerRadius="12" Padding="14">
                 <StackPanel Spacing="12">
                     <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
                                                IsVisible="{Binding Tray.HasAttachments}" />
@@ -44,10 +44,10 @@
                          long leaf never orphans Permissions alone under the repo pill. -->
                     <StackPanel Spacing="8">
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="RepositoryChip" Classes="kcapChip" Click="OnRepositoryChipClick"
+                            <Button x:Name="RepositoryChip" Classes="kcapChip picker" Click="OnRepositoryChipClick"
                                     HorizontalAlignment="Left" MaxWidth="460"
                                     Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                    Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                                    Foreground="{StaticResource KcapTextBrush}"
                                     ToolTip.Tip="{Binding SelectedRepoPath, Converter={x:Static views:RepositoryChipTipConverter.Instance}}">
                                 <TextBlock Text="{Binding SelectedRepoPath, Converter={x:Static views:RepositoryLabelConverter.Instance}}"
                                            TextTrimming="CharacterEllipsis"
@@ -56,10 +56,10 @@
 
                             <!-- Hidden until the viewer owns at least one remote daemon
                                  (HomeViewModel.MachinePickerVisible) — nothing to pick from otherwise. -->
-                            <Button x:Name="MachineChip" Classes="kcapChip" Click="OnMachineChipClick"
+                            <Button x:Name="MachineChip" Classes="kcapChip picker" Click="OnMachineChipClick"
                                     HorizontalAlignment="Left" MaxWidth="220"
                                     Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                    Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                                    Foreground="{StaticResource KcapTextBrush}"
                                     IsVisible="{Binding MachinePickerVisible}"
                                     ToolTip.Tip="Machine to launch this session on">
                                 <TextBlock Text="{Binding SelectedMachine, Converter={x:Static views:MachineLabelConverter.Instance}}"
@@ -80,9 +80,9 @@
                                         Foreground="{StaticResource KcapMutedBrush}" />
 
                                 <!-- Harness + model picker: built per open in code-behind, like the repo menu. -->
-                                <Button x:Name="AgentChip" Classes="kcapChip" Click="OnAgentChipClick"
+                                <Button x:Name="AgentChip" Classes="kcapChip picker" Click="OnAgentChipClick"
                                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                        Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                                        Foreground="{StaticResource KcapTextBrush}"
                                         ToolTip.Tip="Harness and model">
                                     <StackPanel Orientation="Horizontal" Spacing="7">
                                         <ContentControl VerticalAlignment="Center"
@@ -100,15 +100,15 @@
                                     </StackPanel>
                                 </Button>
 
-                                <Button x:Name="EffortChip" Classes="kcapChip" Click="OnEffortChipClick"
+                                <Button x:Name="EffortChip" Classes="kcapChip picker" Click="OnEffortChipClick"
                                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                        Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                                        Foreground="{StaticResource KcapTextBrush}"
                                         Content="{Binding SelectedEffort, Converter={x:Static views:EffortChipTextConverter.Instance}}"
                                         ToolTip.Tip="Reasoning effort. Default lets the harness decide" />
 
-                                <Button x:Name="PermissionChip" Classes="kcapChip" Click="OnPermissionChipClick"
+                                <Button x:Name="PermissionChip" Classes="kcapChip picker" Click="OnPermissionChipClick"
                                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                        Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                                        Foreground="{StaticResource KcapTextBrush}"
                                         Content="{Binding SelectedPermissionMode, Converter={x:Static views:PermissionChipTextConverter.Instance}}"
                                         IsVisible="{Binding SelectedVendor, Converter={x:Static views:PermissionChipVisibleConverter.Instance}}"
                                         ToolTip.Tip="Permission mode. How much Claude asks before acting" />
@@ -138,7 +138,7 @@
                                TextWrapping="Wrap"
                                IsVisible="{Binding StartError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
-            </Border>
+            </kcap:Surface>
         </StackPanel>
 
         <Border x:Name="ConnectionBanner" VerticalAlignment="Top" HorizontalAlignment="Stretch" MaxWidth="680"

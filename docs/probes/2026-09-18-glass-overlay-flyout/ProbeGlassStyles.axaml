@@ -1,0 +1,49 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:kcap="clr-namespace:Capacitor.App.Controls;assembly=Kurrent Capacitor"
+        xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI">
+    <!-- The opaque chrome App.axaml ships for both classes, so the Opaque frame each arm is
+         compared against is the real one. -->
+    <Style Selector="FlyoutPresenter.kcapPanel, FlyoutPresenter.kcapPanelTemplated">
+        <Setter Property="Background" Value="#12151D" />
+        <Setter Property="BorderBrush" Value="#2A3040" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+
+    <!-- Content placement: the presenter stands back and the content's own Surface draws the glass. -->
+    <Style Selector="FlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=SoftGlass],
+                     FlyoutPresenter.kcapPanel[(kcap|MaterialScope.Material)=LiquidGlass]">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+
+    <!-- Presenter-template placement: the glass layer sits in the presenter's own template. -->
+    <Style Selector="FlyoutPresenter.kcapPanelTemplated[(kcap|MaterialScope.Material)=SoftGlass],
+                     FlyoutPresenter.kcapPanelTemplated[(kcap|MaterialScope.Material)=LiquidGlass]">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel glass:LiquidGlassBackdrop.IsExcludedFromCapture="True">
+                    <kcap:GlassLayer Kind="Panel" CornerRadius="{TemplateBinding CornerRadius}" />
+                    <Border CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}"
+                            ClipToBounds="True">
+                        <ContentPresenter Name="PART_ContentPresenter" Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Border>
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- The panel a flyout's content wraps itself in: the presenter owns the opaque chrome, so
+         only the glass is the content's. -->
+    <Style Selector="kcap|Surface.panel">
+        <Setter Property="GlassKind" Value="Panel" />
+        <Setter Property="GlassCornerRadius" Value="12" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+</Styles>

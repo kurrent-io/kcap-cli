@@ -6,6 +6,36 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The desktop app has a surface material
+
+Opaque, Soft glass or Liquid glass, chosen under Settings → Appearance. Material is a second axis
+beside palette, not a theme variant: `ThemeVariant` stays pinned to `Dark`, so a light palette
+later does not multiply the glass variants. An inherited `MaterialScope.Material` property carries
+it down the logical tree, which is how the workspace host pins itself opaque and how any subtree
+can: glass is for navigation and controls, never for a reading surface.
+
+Glass is a control, not a brush — a brush cannot sample what is behind it — so a card is a
+`Surface` whose template changes, and all glass drawing sits in one `GlassLayer`. The chat view's
+own cards stay `Border`s: two are rows of the virtualised list, where a templated control triples
+the visuals, and the view is always opaque. A `Surface`'s content joins the visual tree on first
+measure rather than on assignment, so content under a collapsed ancestor is reached through the
+name scope, never by a visual-tree walk. Three traps shaped it. Content drawn beside the glass is
+captured into the glass's own backdrop and blurred under itself, so every glass template's root
+sets `IsExcludedFromCapture`. The panel flyouts stay opaque: glass in a `Flyout`'s popup never
+receives a backdrop snapshot — in the presenter's template or wrapped around the content alike —
+while a bare overlay-layer popup with the same layer blurs, and the probe under
+`docs/probes/2026-09-18-glass-overlay-flyout/` is the record and the starting point for the
+follow-up. And Fluent's per-state `Button` fills target `PART_ContentPresenter` and survive a
+`Template` swap, so the glass chip names its presenter `ChipContent`, as `RadioButton.kcapChoice`
+already does.
+
+`LiquidGlassAvaloniaUI` is vendored as source under `src/ThirdParty/` because it is not on
+NuGet.org. It reports nothing when its shader pipeline cannot run, so the copy carries one patch,
+`LiquidGlassPipeline.Unavailable`; on it the app latches Opaque for the session and keeps the stored
+choice. The opaque template holds no glass element, so that fallback cannot itself fail. Opaque is
+the default; a glass material is always an explicit choice, and macOS "Reduce transparency"
+does not override it.
+
 ## An idle PTY costs the thread pool nothing
 
 The Unix PTY read blocked in native `poll` on a pool worker, and an idle agent never gave it back.

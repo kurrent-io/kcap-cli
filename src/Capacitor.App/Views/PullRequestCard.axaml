@@ -2,10 +2,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.PullRequestCard"
              x:DataType="vm:PullRequestContextViewModel">
-    <Border Margin="0" Padding="14" CornerRadius="8" BorderThickness="1"
-            Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
+    <kcap:Surface Margin="0" Padding="14" CornerRadius="8" Classes="raised">
         <StackPanel Spacing="9">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                 <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
@@ -68,5 +68,5 @@
             <Button Content="Sign in" Command="{Binding SignInCommand}" IsVisible="{Binding ShowsSignIn}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
             <Button Content="Link GitHub" Command="{Binding LinkGitHubCommand}" IsVisible="{Binding ShowsLinkGitHub}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
         </StackPanel>
-    </Border>
+    </kcap:Surface>
 </UserControl>

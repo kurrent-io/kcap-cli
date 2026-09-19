@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.WorkContextView"
              x:DataType="vm:WorkContextViewModel"
              Background="{StaticResource KcapSurfaceBrush}">
@@ -177,14 +178,11 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Opacity" Value="0.4" />
         </Style>
-        <Style Selector="Border.card">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+        <Style Selector="kcap|Surface.card">
             <Setter Property="CornerRadius" Value="10" />
             <Setter Property="Padding" Value="13" />
         </Style>
-        <Style Selector="Button.toggle:pointerover Border.card">
+        <Style Selector="Button.toggle:pointerover kcap|Surface.card">
             <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
         </Style>
         <Style Selector="Path.chevron">
@@ -206,7 +204,7 @@
     <UserControl.Resources>
         <DataTemplate x:Key="LinkCard" x:DataType="vm:WorkContextLinkViewModel">
             <Button Command="{Binding OpenCommand}" Classes="toggle" ToolTip.Tip="{Binding Url}">
-                <Border Classes="card" Padding="13,11">
+                <kcap:Surface Classes="card raised" Padding="13,11">
                     <StackPanel Spacing="6">
                         <TextBlock Text="{Binding Eyebrow}" Classes="cardEyebrow" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -215,7 +213,7 @@
                                        IsVisible="{Binding Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
                     </StackPanel>
-                </Border>
+                </kcap:Surface>
             </Button>
         </DataTemplate>
     </UserControl.Resources>
@@ -249,7 +247,7 @@
                 </Grid>
 
                 <!-- Work item card. -->
-                <Border Classes="card" Margin="0,16,0,0" Background="Transparent" BorderThickness="0" Padding="0">
+                <Border Margin="0,16,0,0" Background="Transparent" BorderThickness="0" Padding="0">
                     <StackPanel Spacing="0">
                         <!-- Ready body. -->
                         <StackPanel IsVisible="{Binding IsReady}" Spacing="22">

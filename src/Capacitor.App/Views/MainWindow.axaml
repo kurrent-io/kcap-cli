@@ -4,6 +4,7 @@
                      xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
                      xmlns:views="clr-namespace:Capacitor.App.Views"
                      xmlns:svc="clr-namespace:Capacitor.App.Services"
+                     xmlns:kcap="clr-namespace:Capacitor.App.Controls"
                      x:Class="Capacitor.App.Views.MainWindow"
                      x:TypeArguments="vm:MainWindowViewModel"
                      x:DataType="vm:MainWindowViewModel"
@@ -36,10 +37,12 @@
             </ScrollViewer>
         </Grid>
 
-        <Grid x:Name="SessionsSurface" ColumnDefinitions="310,*"
+        <Grid x:Name="SessionsSurface" ColumnDefinitions="Auto,*" ClipToBounds="True"
+              kcap:MaterialScope.Material="{Binding Material}"
               IsVisible="{Binding IsSessionsView}">
+            <kcap:MaterialBackdrop x:Name="MaterialBackdrop" Grid.ColumnSpan="2" IsVisible="{Binding IsGlass}" />
             <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
-            <Panel Grid.Column="1">
+            <Panel Grid.Column="1" ClipToBounds="True">
                 <!-- The launcher pane: daemon status top-left, Activity top-right, the composer
                      centered. Visible exactly while no workspace is open. -->
                 <Grid x:Name="LauncherPane" RowDefinitions="Auto,*" Margin="24,20,24,24"
@@ -161,6 +164,8 @@
                 </Grid>
 
                 <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
+                                kcap:MaterialScope.Material="Opaque"
+                                Background="{StaticResource KcapCanvasBrush}"
                                 IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNotNull}}">
                     <ContentControl.DataTemplates>
                         <DataTemplate x:DataType="vm:WorkspaceViewModel">

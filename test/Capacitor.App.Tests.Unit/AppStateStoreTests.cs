@@ -126,4 +126,23 @@ public class AppStateStoreTests {
         await Assert.That(reloaded.WindowY).IsEqualTo(80);
         await Assert.That(reloaded.WindowMaximized).IsTrue();
     }
+
+    [Test]
+    public async Task Material_round_trips() {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        await new AppStateStore(path).UpdateAsync(s => s with { Material = "soft_glass" });
+        var state = await new AppStateStore(path).LoadAsync();
+        await Assert.That(state.Material).IsEqualTo("soft_glass");
+    }
+
+    /// A value this build does not know must not cost the rest of the file: Read degrades any
+    /// deserialization failure to defaults, which is why the field is a string and not an enum.
+    [Test]
+    public async Task An_unknown_material_leaves_every_other_field_intact() {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        File.WriteAllText(path, """{"shim_offered":true,"material":"frosted_titanium"}""");
+        var state = await new AppStateStore(path).LoadAsync();
+        await Assert.That(state.ShimOffered).IsTrue();
+        await Assert.That(state.Material).IsEqualTo("frosted_titanium");
+    }
 }

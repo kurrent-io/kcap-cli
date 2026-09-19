@@ -10,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Capacitor.App.Controls;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
@@ -718,7 +719,7 @@ public class HomeViewSmokeTests {
             Settle(window);
             await Assert.That(vm.CanAttach).IsTrue();
 
-            var card = Find<Border>(window, "GoalCard")!;
+            var card = Find<Surface>(window, "GoalCard")!;
             var resting = card.BorderBrush;
             await Assert.That(resting).IsNotNull();
 

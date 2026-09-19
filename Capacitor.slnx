@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src\Capacitor.App\Capacitor.App.csproj" />
+    <Project Path="src\ThirdParty\LiquidGlassAvaloniaUI\LiquidGlassAvaloniaUI.csproj" />
     <Project Path="src\Capacitor.Cli.Core\Capacitor.Cli.Core.csproj" />
     <Project Path="src\Capacitor.Cli.Daemon\Capacitor.Cli.Daemon.csproj" />
     <Project Path="src\Capacitor.Cli\Capacitor.Cli.csproj" />

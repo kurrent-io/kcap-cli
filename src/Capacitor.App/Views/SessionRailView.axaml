@@ -3,6 +3,7 @@
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
+             xmlns:kcap="clr-namespace:Capacitor.App.Controls"
              x:Class="Capacitor.App.Views.SessionRailView"
              x:DataType="vm:MainWindowViewModel">
     <UserControl.Resources>
@@ -120,16 +121,37 @@
             <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
+
+        <!-- The glass row fills belong HERE, not in GlassRailStyles.axaml: a control's own styles
+             are applied after the application's and win an equal-priority tie, so a glass fill
+             declared at application level loses to the opaque row styles above. -->
+        <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow,
+                         views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow">
+            <Setter Property="CornerRadius" Value="9" />
+        </Style>
+        <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.selected,
+                         views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.selected,
+                         views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.holdsSelected,
+                         views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.holdsSelected">
+            <Setter Property="Background" Value="{StaticResource KcapGlassRailRowBrush}" />
+        </Style>
+        <Style Selector="views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         views|SessionRailView[(kcap|MaterialScope.Material)=SoftGlass] Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                         views|SessionRailView[(kcap|MaterialScope.Material)=LiquidGlass] Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapGlassRailRowBrush}" />
+        </Style>
     </UserControl.Styles>
 
-    <Border Background="{StaticResource KcapSurfaceBrush}"
-            BorderThickness="0,0,1,0" BorderBrush="{StaticResource KcapBorderBrush}">
+    <kcap:Surface x:Name="RailSurface" Classes="rail" BorderThickness="0,0,1,0" CornerRadius="0">
         <DockPanel Margin="0">
             <StackPanel DockPanel.Dock="Top">
-                <!-- 44px chrome row: the macOS traffic lights overlay its left end (the window
+                <!-- The chrome row: the macOS traffic lights overlay its left end (the window
                      extends the client area into the title bar). Empty space here drags the
-                     window — wired in code-behind. -->
-                <Grid Height="44" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+                     window — wired in code-behind. Its height is a material parameter, so it comes
+                     from a style: a local value would outrank the glass one. -->
+                <Grid x:Name="RailChrome" Classes="railChrome" Background="Transparent"
+                      PointerPressed="OnChromePointerPressed" />
 
                 <!-- Deselects the workspace: the pane's empty state IS the launcher. -->
                 <Button x:Name="RailNewSessionButton" Classes="kcapChip" HorizontalAlignment="Stretch" Margin="10,0,10,10"
@@ -414,5 +436,5 @@
                 </Panel>
             </ScrollViewer>
         </DockPanel>
-    </Border>
+    </kcap:Surface>
 </UserControl>

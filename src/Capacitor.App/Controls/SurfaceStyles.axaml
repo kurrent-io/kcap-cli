@@ -1,0 +1,43 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:kcap="clr-namespace:Capacitor.App.Controls"
+        xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI">
+    <Style Selector="kcap|Surface.raised">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="kcap|Surface.rail">
+        <Setter Property="GlassKind" Value="Rail" />
+        <Setter Property="GlassCornerRadius" Value="22" />
+    </Style>
+
+    <!-- The root excludes the whole surface from the window snapshot: content drawn beside the
+         glass would otherwise be blurred underneath itself. -->
+    <Style Selector="kcap|Surface[(kcap|MaterialScope.Material)=SoftGlass],
+                     kcap|Surface[(kcap|MaterialScope.Material)=LiquidGlass]">
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel x:Name="PART_GlassRoot" glass:LiquidGlassBackdrop.IsExcludedFromCapture="True">
+                    <kcap:GlassLayer x:Name="PART_GlassLayer" Kind="{TemplateBinding GlassKind}"
+                                     CornerRadius="{TemplateBinding GlassCornerRadius}"
+                                     BorderBrush="{TemplateBinding BorderBrush}" />
+                    <Border CornerRadius="{TemplateBinding GlassCornerRadius}" Padding="{TemplateBinding Padding}"
+                            ClipToBounds="True">
+                        <ContentPresenter Name="PART_ContentPresenter" Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Border>
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="kcap|Surface.rail[(kcap|MaterialScope.Material)=SoftGlass],
+                     kcap|Surface.rail[(kcap|MaterialScope.Material)=LiquidGlass]">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapGlassRimBrush}" />
+    </Style>
+
+    <Style Selector="kcap|Surface.attachTarget.dragOver">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
+    </Style>
+</Styles>

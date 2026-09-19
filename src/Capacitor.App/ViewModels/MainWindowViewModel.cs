@@ -4,6 +4,7 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Media;
+using Capacitor.App.Materials;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Commands;
@@ -175,6 +176,18 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public bool IsHomeView => CurrentView == ShellView.Home;
     public bool IsSessionsView => CurrentView == ShellView.Sessions;
 
+    SurfaceMaterial _material = SurfaceMaterial.Opaque;
+
+    public SurfaceMaterial Material {
+        get => _material;
+        private set {
+            this.RaiseAndSetIfChanged(ref _material, value);
+            this.RaisePropertyChanged(nameof(IsGlass));
+        }
+    }
+
+    public bool IsGlass => _material.IsGlass();
+
     public ReactiveCommand<Unit, Unit> ShowHomeCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowSessionsCommand { get; }
 
@@ -310,7 +323,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
-            Action? requestSignIn = null) {
+            Action? requestSignIn = null, IObservable<MaterialState>? material = null) {
         _service = service;
         _time = time;
         Activity = activity;
@@ -497,6 +510,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             BindStartMessage(lifecycleStatus);
             BindStartMessage(lifecycleAttention);
+
+            (material ?? Observable.Return(MaterialState.Opaque))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(state => Material = state.Effective)
+                .DisposeWith(disposables);
         });
     }
 
