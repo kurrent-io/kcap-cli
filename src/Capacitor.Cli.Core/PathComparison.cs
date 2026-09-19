@@ -20,4 +20,8 @@ public static class PathComparison {
         IgnoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     public static bool Equal(string? left, string? right) => string.Equals(left, right, Comparison);
+
+    /// <summary>The form two spellings of one path share — for a hash or a key, where a comparer
+    /// cannot be handed in.</summary>
+    public static string Key(string path) => IgnoreCase ? path.ToLowerInvariant() : path;
 }

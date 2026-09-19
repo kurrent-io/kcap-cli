@@ -14,4 +14,13 @@ public class SkillsLocksTests {
         await Assert.That(SkillsLocks.Manifest("/a/.git", "claude"))
             .IsNotEqualTo(SkillsLocks.Manifest("/b/.git", "claude"));
     }
+
+    /// <summary>Two launches through two spellings of one checkout must take the SAME lock, or the
+    /// serialization the key exists for does not happen at all.</summary>
+    [Test]
+    public async Task The_manifest_key_agrees_with_the_path_comparer() {
+        var same = SkillsLocks.Manifest("/A/.git", "claude") == SkillsLocks.Manifest("/a/.git", "claude");
+
+        await Assert.That(same).IsEqualTo(PathComparison.Equal("/A/.git", "/a/.git"));
+    }
 }

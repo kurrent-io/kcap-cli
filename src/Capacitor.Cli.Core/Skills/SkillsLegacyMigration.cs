@@ -32,9 +32,9 @@ public static class SkillsLegacyMigration {
         var owned   = mineManifest?.Skills?.Select(e => e.Path).ToList() ?? [];
         var retired = mineManifest?.Identity;
 
-        List<SkillsManifest> siblings = [];
+        List<Sibling> siblings = [];
         foreach (var candidate in Candidates(configRoot, mine)) {
-            if (Load(candidate) is { } sibling) { siblings.Add(sibling); continue; }
+            if (Load(candidate) is { } sibling) { siblings.Add(Sibling.Of(sibling)); continue; }
             // One that exists but will not parse could be hiding the only other owner of any owned
             // path; nothing can be proven safe to delete until it is readable or gone.
             if (File.Exists(candidate)) return new LegacyMigrationPlan(mine, [], owned, []);
@@ -46,9 +46,9 @@ public static class SkillsLegacyMigration {
         foreach (var path in owned) {
             var others = Others(siblings, path);
             // A remaining owner under the same retired identity is not serving it either.
-            var liveOwner = others.Any(m => m.Identity is null
-                                            || Equals(m.Identity, current)
-                                            || !Equals(m.Identity, retired));
+            var liveOwner = others.Any(m => m.Manifest.Identity is null
+                                            || Equals(m.Manifest.Identity, current)
+                                            || !Equals(m.Manifest.Identity, retired));
             if (others.Count == 0 || !liveOwner) delete.Add(path); else relinquish.Add(path);
         }
         return new LegacyMigrationPlan(mine, delete, [], relinquish);
@@ -64,13 +64,20 @@ public static class SkillsLegacyMigration {
             .Where(f => !PathComparison.Equal(CanonicalPath.Resolve(f), mine))];
     }
 
-    /// <summary>The ledgers that also own <paramref name="path"/>. Two ledgers reach one physical
-    /// directory through casing, a symlink or a normalization alias, so recorded strings are
-    /// resolved before they are compared: a co-owner missed here has its copy deleted.</summary>
-    static List<SkillsManifest> Others(List<SkillsManifest> siblings, string path) {
+    /// <summary>One sibling ledger beside the set of paths it owns, resolved once. Two ledgers reach
+    /// one physical directory through casing, a symlink or a normalization alias, so the recorded
+    /// strings are resolved before they are compared: a co-owner missed here has its copy deleted.
+    /// The resolution walks the filesystem, so it happens per ledger rather than per ledger per
+    /// owned path — this whole scan runs under the machine-wide migration lock.</summary>
+    readonly record struct Sibling(SkillsManifest Manifest, HashSet<string> Owns) {
+        public static Sibling Of(SkillsManifest manifest) =>
+            new(manifest, (manifest.Skills ?? []).Select(e => CanonicalPath.Resolve(e.Path))
+                .ToHashSet(PathComparison.Comparer));
+    }
+
+    static List<Sibling> Others(List<Sibling> siblings, string path) {
         var wanted = CanonicalPath.Resolve(path);
-        return [.. siblings.Where(m => (m.Skills ?? [])
-            .Any(e => PathComparison.Equal(CanonicalPath.Resolve(e.Path), wanted)))];
+        return [.. siblings.Where(s => s.Owns.Contains(wanted))];
     }
 
     static SkillsManifest? Load(string path) {

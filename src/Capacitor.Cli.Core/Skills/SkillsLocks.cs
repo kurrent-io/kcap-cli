@@ -15,6 +15,12 @@ public static class SkillsLocks {
 
     public static string Repository(string repoHash) => $"skills/{repoHash}/repository";
 
+    /// <summary>One key per (worktree, target). The git directory is reduced to the form two
+    /// spellings of it share before it is hashed: without that, two launches through different
+    /// casings of one checkout take two locks and do not serialize at all.</summary>
     public static string Manifest(string gitDir, string targetKey) =>
-        $"skills/manifest/{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(gitDir)))[..16]}/{targetKey}";
+        $"skills/manifest/{Digest(PathComparison.Key(gitDir))}/{targetKey}";
+
+    static string Digest(string value) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..16];
 }
