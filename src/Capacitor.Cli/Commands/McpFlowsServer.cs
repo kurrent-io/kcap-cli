@@ -529,15 +529,17 @@ class McpFlowsServer(
     /// <summary>The coded 409s the settlement lane retries transparently. The two settlement-layer
     /// conflicts are native to the lane; the rest are daemon-flap signals the server declares
     /// retryable and a bounded retry genuinely resolves — a reconnected/re-selected daemon
-    /// (<c>reviewer_certification_changed</c>) or a relaunched participant
+    /// (<c>reviewer_certification_transient</c>) or a relaunched participant
     /// (<c>participant_launch_transient</c>). All are 409 and carry no round consumption, so the
-    /// retry is round-safe. <c>participant_unreachable</c> is NOT here — it is scoped to the
-    /// round-submit lane via the extra-code parameter, see below.</summary>
+    /// retry is round-safe. The permanent <c>reviewer_certification_changed</c> (a CLI or launcher
+    /// policy the operator must update) is NOT here — retrying it only delays the required update.
+    /// <c>participant_unreachable</c> is NOT here either — it is scoped to the round-submit lane via
+    /// the extra-code parameter, see below.</summary>
     static readonly HashSet<string> SettlementRetryableCodes =
         new(StringComparer.Ordinal) {
             "flow_settlement_busy",
             "reviewer_launch_incarnation_superseded",
-            "reviewer_certification_changed",
+            "reviewer_certification_transient",
             "participant_launch_transient",
         };
 

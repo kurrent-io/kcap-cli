@@ -253,12 +253,11 @@ public class ParticipantUnreachableRetryTests {
 
     [Test]
     public async Task Daemon_flap_codes_are_retried_from_the_global_set_without_an_extra_code() {
-        // AI-3001: reviewer_certification_changed and participant_launch_transient are global
-        // retryables — a bare start (no extraRetryableCode) must ride out a daemon flap, since a
-        // re-selection/relaunch is exactly what resolves them. The first 409 heals into success.
+        // The two codes are global retryables (not scoped via extraRetryableCode), so a bare start
+        // rides out a daemon flap; the first 409 heals into success.
         foreach (var (code, body) in new[] {
-            ("reviewer_certification_changed",
-                """{"error":"reviewer_certification_changed","message":"daemon connection changed"}"""),
+            ("reviewer_certification_transient",
+                """{"error":"reviewer_certification_transient","message":"daemon connection changed"}"""),
             ("participant_launch_transient",
                 """{"error":"participant_launch_transient","message":"connection is not active"}"""),
         }) {
