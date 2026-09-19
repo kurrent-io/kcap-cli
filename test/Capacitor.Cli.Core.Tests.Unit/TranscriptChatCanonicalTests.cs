@@ -39,6 +39,24 @@ public class TranscriptChatCanonicalTests {
         await Assert.That(result.SubmittedInputs).IsEmpty();
     }
 
+    /// The server writes it from the subagent-stop hook, which says the subagent ended but not how.
+    [Test]
+    public async Task A_subagent_completion_finishes_by_agent_id_with_no_outcome_under_any_rules() {
+        var at = new DateTimeOffset(2026, 9, 17, 10, 1, 0, TimeSpan.Zero);
+        foreach (var rules in new IChatDisplayRules?[] { null, ClaudeChatRules.Instance }) {
+            var result = TranscriptChat.Project(
+                new CanonicalEvent(CanonicalEventTypes.SubagentCompleted, new SubagentCompleted { AgentId = "a1" }, Guid.NewGuid(), at), rules);
+            await Assert.That(result.Envelopes).IsEmpty();
+            await Assert.That(result.SubmittedInputs).IsEmpty();
+            var finished = (SubagentSignal.Finished)result.Subagents.Single();
+            await Assert.That(finished.CallId).IsNull();
+            await Assert.That(finished.AgentId).IsEqualTo("a1");
+            await Assert.That(finished.Outcome).IsNull();
+            await Assert.That(finished.At).IsEqualTo(at);
+        }
+        await Assert.That(TranscriptChat.Project(Event(CanonicalEventTypes.SubagentCompleted, new SubagentCompleted()), ClaudeChatRules.Instance).Subagents).IsEmpty();
+    }
+
     [Test]
     public async Task RulesFor_names_the_two_vendors_with_chat_rules() {
         await Assert.That(TranscriptChat.RulesFor("Claude")).IsSameReferenceAs(ClaudeChatRules.Instance);

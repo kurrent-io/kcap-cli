@@ -6,7 +6,7 @@ using TUnit.Assertions.Enums;
 namespace Capacitor.App.Tests.Unit;
 
 /// The per-workspace tracker as a pure state machine over projection results: signals first,
-/// then envelopes; an ended row is never reopened or re-ended.
+/// then envelopes; an ended row is never reopened, and only an end with no outcome is revised.
 public class SessionSubagentsTests {
     static readonly DateTimeOffset T0 = new(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
 
@@ -24,7 +24,7 @@ public class SessionSubagentsTests {
 
     static SubagentSignal.Detached Detached(string callId, string agentId) => new(callId, agentId);
 
-    static SubagentSignal.Finished Finished(string? callId, string? agentId, SubagentOutcome outcome = SubagentOutcome.Done, DateTimeOffset? at = null) =>
+    static SubagentSignal.Finished Finished(string? callId, string? agentId, SubagentOutcome? outcome = SubagentOutcome.Done, DateTimeOffset? at = null) =>
         new(callId, agentId, outcome, at ?? T0.AddMinutes(2));
 
     static SubagentRow Only(SessionSubagents s) => s.Rows.Single();
@@ -90,6 +90,55 @@ public class SessionSubagentsTests {
         await Assert.That(Only(s).State).IsEqualTo(SubagentState.Stopped);
         await Assert.That(Only(s).StateText).IsEqualTo("stopped · 1m 02s");
         await Assert.That(s.RunningCount).IsEqualTo(0);
+    }
+
+    /// The server's stop lands ahead of the notification, which alone says how the run went.
+    [Test]
+    public async Task A_bare_stop_ends_a_background_row_as_done_until_a_notification_says_how() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddSeconds(62))));
+        await Assert.That(Only(s).State).IsEqualTo(SubagentState.Done);
+        await Assert.That(Only(s).StateText).IsEqualTo("1m 02s");
+        await Assert.That(s.RunningCount).IsEqualTo(0);
+
+        s.Apply(Signals(Finished("c1", "a1", SubagentOutcome.Failed, at: T0.AddSeconds(90))));
+        await Assert.That(Only(s).State).IsEqualTo(SubagentState.Failed);
+        await Assert.That(Only(s).EndedAt).IsEqualTo(T0.AddSeconds(62));
+        await Assert.That(Only(s).StateText).IsEqualTo("failed · 1m 02s");
+    }
+
+    /// The server dates a stop when it heard it: an import or a spooled hook lands it long after
+    /// the run ended, and the notification's own time is the truer end.
+    [Test]
+    public async Task A_late_stamped_bare_stop_yields_to_the_earlier_end_that_says_how() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddDays(3))));
+        s.Apply(Signals(Finished("c1", "a1", SubagentOutcome.Done, at: T0.AddSeconds(90))));
+        await Assert.That(Only(s).EndedAt).IsEqualTo(T0.AddSeconds(90));
+        await Assert.That(Only(s).StateText).IsEqualTo("1m 30s");
+    }
+
+    [Test]
+    public async Task An_end_that_says_how_is_final_and_a_repeated_bare_stop_changes_nothing() {
+        var said = new SessionSubagents(Clock());
+        said.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        said.Apply(Signals(Finished("c1", "a1", SubagentOutcome.Failed, at: T0.AddSeconds(10))));
+        said.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddSeconds(20))));
+        await Assert.That(Only(said).State).IsEqualTo(SubagentState.Failed);
+        await Assert.That(Only(said).EndedAt).IsEqualTo(T0.AddSeconds(10));
+
+        var bare = new SessionSubagents(Clock());
+        bare.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        bare.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddSeconds(10))));
+        bare.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddSeconds(20))));
+        await Assert.That(Only(bare).EndedAt).IsEqualTo(T0.AddSeconds(10));
+        bare.Apply(Signals(Finished(null, "a1", SubagentOutcome.Stopped, at: T0.AddSeconds(30))));
+        await Assert.That(Only(bare).State).IsEqualTo(SubagentState.Stopped);
+        bare.Apply(Signals(Finished("c1", "a1", SubagentOutcome.Done, at: T0.AddSeconds(40))));
+        await Assert.That(Only(bare).State).IsEqualTo(SubagentState.Stopped);
+        await Assert.That(Only(bare).EndedAt).IsEqualTo(T0.AddSeconds(10));
     }
 
     [Test]

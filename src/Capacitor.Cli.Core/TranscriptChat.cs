@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Kurrent.Agent.Schema.Events;
 
 namespace Capacitor.Cli.Core;
 
@@ -59,6 +60,10 @@ public static class TranscriptChat {
     /// vendor's rules when it has any. Without rules every envelope shows, and a visible user
     /// message is the submitted input.
     public static ChatProjectionResult Project(CanonicalEvent evt, IChatDisplayRules? rules) {
+        // Written by the server from the vendor's subagent-stop hook: it says the subagent ended,
+        // never how, and carries no call id.
+        if (evt.Payload is SubagentCompleted { AgentId.Length: > 0 } completed)
+            return new([], [], [new SubagentSignal.Finished(null, completed.AgentId, null, evt.Timestamp)]);
         var envelopes = TranscriptEnvelopes.From(evt);
         if (envelopes.Count == 0) return new([], [], []);
         var shown = new List<AcpEventEnvelope>(envelopes.Count);

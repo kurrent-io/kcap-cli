@@ -99,12 +99,19 @@ sealed class FakeServerLane : IServerLane {
         return AccessWatchHandler(sessionId);
     }
 
+    /// The channel is in place before the tail shows in Tails, which is the moment tests start
+    /// pushing to it.
     public async IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, [EnumeratorCancellation] CancellationToken ct) {
-        Append(ref _tails, (stream, fromPosition));
-        Append(ref _calls, $"tail:{stream}@{fromPosition?.ToString(CultureInfo.InvariantCulture) ?? "start"}");
-        if (TailHandler(stream, fromPosition) is { } error) throw error;
         var channel = Channel.CreateUnbounded<StreamEventEnvelope>();
         lock (_tailLock) _tailChannels[stream] = channel;
+        Append(ref _tails, (stream, fromPosition));
+        Append(ref _calls, $"tail:{stream}@{fromPosition?.ToString(CultureInfo.InvariantCulture) ?? "start"}");
+        if (TailHandler(stream, fromPosition) is { } error) {
+            lock (_tailLock) {
+                if (_tailChannels.TryGetValue(stream, out var current) && current == channel) _tailChannels.Remove(stream);
+            }
+            throw error;
+        }
         await foreach (var envelope in channel.Reader.ReadAllAsync(ct)) yield return envelope;
     }
 

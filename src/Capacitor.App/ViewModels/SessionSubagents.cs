@@ -55,7 +55,7 @@ public sealed class SessionSubagents(TimeProvider time) {
             // The launch acknowledgement arrives beside its Detached and must not end the row; a
             // later result for the same call, an error included, does.
             if (detachedHere?.Contains(callId) == true) continue;
-            if (_byCall.TryGetValue(callId, out var row) && !row.IsEnded)
+            if (_byCall.TryGetValue(callId, out var row))
                 row.End(envelope.ToolIsError ? SubagentState.Failed : SubagentState.Done, Stamp(envelope.TimestampIso));
         }
         Refresh();
@@ -88,17 +88,18 @@ public sealed class SessionSubagents(TimeProvider time) {
     /// notification for a first execution must not end a second one holding the same id.
     void Finish(SubagentSignal.Finished finished) {
         var outcome = finished.Outcome switch {
+            null                    => (SubagentState?)null,
             SubagentOutcome.Failed  => SubagentState.Failed,
             SubagentOutcome.Stopped => SubagentState.Stopped,
             _                       => SubagentState.Done,
         };
         if (finished.CallId is { } callId && _byCall.TryGetValue(callId, out var byCall)) {
-            if (!byCall.IsEnded) byCall.End(outcome, finished.At);
+            byCall.End(outcome, finished.At);
             return;
         }
         // A completion dated before the row started belongs to an earlier execution.
         if (finished.AgentId is { } agentId && _byAgent.TryGetValue(agentId, out var byAgent)
-            && !byAgent.IsEnded && finished.At >= byAgent.StartedAt)
+            && finished.At >= byAgent.StartedAt)
             byAgent.End(outcome, finished.At);
     }
 
