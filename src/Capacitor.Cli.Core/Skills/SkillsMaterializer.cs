@@ -53,8 +53,8 @@ public static class SkillsMaterializer {
     /// resolves inside the anchor.</summary>
     public static bool Prune(string root, string anchor, string path) {
         var full = Path.GetFullPath(path);
-        if (!string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(root), StringComparison.Ordinal)) return false;
-        if (!Path.GetFileName(full).StartsWith(OwnedPrefix, StringComparison.Ordinal)) return false;
+        if (!PathComparison.Equal(Path.GetDirectoryName(full), Path.GetFullPath(root))) return false;
+        if (!Path.GetFileName(full).StartsWith(OwnedPrefix, PathComparison.Comparison)) return false;
         if (!CanonicalPath.IsWithin(full, anchor)) return false;
         if (!Directory.Exists(full)) return false;
         Directory.Delete(full, recursive: true);

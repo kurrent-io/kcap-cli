@@ -307,6 +307,29 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.Api.Requests.Single().Etag).IsNull();
     }
 
+    /// <summary>Where the filesystem is case-insensitive, two casings of one checkout are one
+    /// checkout: the second launch must not read as an anchor move and settle a deletion against
+    /// the directory the same run has just republished.</summary>
+    [Test]
+    public async Task A_launch_through_another_casing_keeps_what_the_first_published() {
+        using var repo = Checkout("repo");
+        var       other = Tmp.PathTo("REPO");
+
+        Skip.When(!Directory.Exists(other), "the volume under the test root is case-sensitive");
+
+        var alpha  = SkillsSyncFixture.Skill("alpha");
+        var first  = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha));
+
+        await Assert.That(await first.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        var second = new SkillsSyncFixture(Tmp, other, StubSkillsApi.Serving("etag-1", alpha));
+
+        await Assert.That(await second.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(first.SkillFile("alpha"))).IsEqualTo(Rendered(alpha));
+        await Assert.That(second.ReadManifest().PendingPrunes!).IsEmpty();
+    }
+
     /// <summary>The other half of an anchor change: the checkout moved and took its materialized
     /// directories with it, while the ledger — which lives in the git directory — came along
     /// recording the anchor it was written at. Every destination therefore exists before the run

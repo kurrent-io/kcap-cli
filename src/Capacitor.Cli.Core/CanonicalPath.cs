@@ -29,11 +29,11 @@ public static class CanonicalPath {
     public static bool IsWithin(string candidate, string boundary) {
         if (!TryResolve(boundary, out var resolvedBoundary)) return false;
         if (!TryResolve(candidate, out var resolved)) return false;
-        if (string.Equals(resolved, resolvedBoundary, StringComparison.Ordinal)) return true;
+        if (PathComparison.Equal(resolved, resolvedBoundary)) return true;
         var prefix = resolvedBoundary.EndsWith(Path.DirectorySeparatorChar)
             ? resolvedBoundary
             : resolvedBoundary + Path.DirectorySeparatorChar;
-        return resolved.StartsWith(prefix, StringComparison.Ordinal);
+        return resolved.StartsWith(prefix, PathComparison.Comparison);
     }
 
     /// <summary>

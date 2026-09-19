@@ -12,11 +12,10 @@ public sealed record LegacyMigrationPlan(
 /// identity, so two repositories can own the same directory — a project-homed skill does exactly
 /// that — and deleting one repository's copy would take the other's with it.</summary>
 public static class SkillsLegacyMigration {
-    /// <summary>The user-global ledger for one (repo, target). Built here for every caller, because
-    /// the sibling scan below excludes a repository from its own candidate list by comparing this
-    /// path as an ordinal string: a second construction that differed by a separator would make a
-    /// repository read itself as another owner of everything it owns, and migration would stop with
-    /// nothing failing.</summary>
+    /// <summary>The user-global ledger for one (repo, target). Built here for every caller: the
+    /// sibling scan below excludes a repository from its own candidate list by comparing this path,
+    /// and a repository that failed to recognise its own ledger would read itself as another owner
+    /// of everything it owns, stopping migration with nothing failing.</summary>
     public static string ManifestPathFor(string configRoot, string repoHash, string targetKey) =>
         Path.Combine(configRoot, "skills", repoHash, targetKey, "manifest.json");
 
@@ -53,12 +52,12 @@ public static class SkillsLegacyMigration {
         var skills = Path.Combine(configRoot, "skills");
         if (!Directory.Exists(skills)) return [];
         return [.. Directory.EnumerateFiles(skills, "manifest.json", SearchOption.AllDirectories)
-            .Where(f => !string.Equals(f, minePath, StringComparison.Ordinal))];
+            .Where(f => !PathComparison.Equal(f, minePath))];
     }
 
     static List<SkillsManifest> Others(List<string> candidates, string path) =>
         [.. candidates.Select(Load).OfType<SkillsManifest>()
-            .Where(m => (m.Skills ?? []).Any(e => string.Equals(e.Path, path, StringComparison.Ordinal)))];
+            .Where(m => (m.Skills ?? []).Any(e => PathComparison.Equal(e.Path, path)))];
 
     static SkillsManifest? Load(string path) {
         try {

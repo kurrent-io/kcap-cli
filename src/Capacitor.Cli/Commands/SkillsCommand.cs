@@ -411,7 +411,7 @@ class SkillsCommand(
             // the destinations an anchor change carried over.
             var ledger = (manifest?.Skills ?? []).Select(e => e.Path)
                 .Concat(merged.Select(p => p.Path)).Concat(carried)
-                .Select(CanonicalPath.Resolve).ToHashSet(StringComparer.Ordinal);
+                .Select(CanonicalPath.Resolve).ToHashSet(PathComparison.Comparer);
             foreach (var w in writes) {
                 var dir = SkillsMaterializer.SkillDirFor(root, w.Slug);
                 if (!Directory.Exists(dir) || ledger.Contains(CanonicalPath.Resolve(dir))) continue;
@@ -535,8 +535,7 @@ class SkillsCommand(
 
     static bool Moved(SkillsManifest manifest, string anchor) =>
         manifest.Anchor is not null
-        && !string.Equals(CanonicalPath.Resolve(manifest.Anchor), CanonicalPath.Resolve(anchor),
-                          StringComparison.Ordinal);
+        && !PathComparison.Equal(CanonicalPath.Resolve(manifest.Anchor), CanonicalPath.Resolve(anchor));
 
     /// <summary>The credential a snapshot is fetched under, and the problem to report when there is
     /// none to name. Read from what is already on disk and never refreshed: the subject claim belongs
@@ -601,7 +600,7 @@ class SkillsCommand(
     static bool PruneRecorded(PendingPrune recorded, SkillsTarget target) {
         var root = Path.GetFullPath(recorded.Root);
         var tree = Path.DirectorySeparatorChar + target.RelativePath;
-        if (root.Length <= tree.Length || !root.EndsWith(tree, StringComparison.Ordinal)) return false;
+        if (root.Length <= tree.Length || !root.EndsWith(tree, PathComparison.Comparison)) return false;
         return !Directory.Exists(Path.GetFullPath(recorded.Path))
                || SkillsMaterializer.Prune(root, root[..^tree.Length], recorded.Path);
     }
@@ -630,9 +629,10 @@ class SkillsCommand(
             }
             return refused;
         }
+        var retained = keep.ToHashSet(PathComparison.Comparer);
         if (LoadQuietly(plan.ManifestPath) is { Skills: not null } kept)
             SaveManifest(plan.ManifestPath,
-                         kept with { Skills = [.. kept.Skills.Where(e => keep.Contains(e.Path))] });
+                         kept with { Skills = [.. kept.Skills.Where(e => retained.Contains(e.Path))] });
         return refused;
     }
 
