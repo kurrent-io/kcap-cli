@@ -526,8 +526,20 @@ class McpFlowsServer(
     /// </summary>
     internal static readonly TimeSpan ToolCallBudget = TimeSpan.FromMinutes(9);
 
+    /// <summary>The coded 409s the settlement lane retries transparently. The two settlement-layer
+    /// conflicts are native to the lane; the rest are daemon-flap signals the server declares
+    /// retryable and a bounded retry genuinely resolves — a reconnected/re-selected daemon
+    /// (<c>reviewer_certification_changed</c>) or a relaunched participant
+    /// (<c>participant_launch_transient</c>). All are 409 and carry no round consumption, so the
+    /// retry is round-safe. <c>participant_unreachable</c> is NOT here — it is scoped to the
+    /// round-submit lane via the extra-code parameter, see below.</summary>
     static readonly HashSet<string> SettlementRetryableCodes =
-        new(StringComparer.Ordinal) { "flow_settlement_busy", "reviewer_launch_incarnation_superseded" };
+        new(StringComparer.Ordinal) {
+            "flow_settlement_busy",
+            "reviewer_launch_incarnation_superseded",
+            "reviewer_certification_changed",
+            "participant_launch_transient",
+        };
 
     /// <summary>The coded, eventually-retryable 409 a round-submit POST returns when a role's prior
     /// reviewer agent isn't durably proven absent yet (e.g. inactivity-stopped) — the server declares
@@ -535,7 +547,7 @@ class McpFlowsServer(
     /// proves the old agent gone. Passed as <see cref="SendWithSettlementRetryAsync"/>'s
     /// <c>extraRetryableCode</c> only by round-submit call sites, never start_review_flow/start_flow:
     /// the server can only return this for a PREVIOUSLY-ASSIGNED role with a completed settlement, a
-    /// shape a start never has. Not in <see cref="SettlementRetryableCodes"/> — unlike those two, it
+    /// shape a start never has. Not in <see cref="SettlementRetryableCodes"/> — unlike those, it
     /// carries no sequenced-lane watermark to observe progress from.</summary>
     internal const string ParticipantUnreachableCode = "participant_unreachable";
 
