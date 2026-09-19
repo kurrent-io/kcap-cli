@@ -23,7 +23,7 @@ namespace Capacitor.Cli.Commands;
 class SkillsCommand(
         ConfigRoot config, HarnessRegistry harnesses, IRepositoriesApi repositories,
         GitProviderRouter router, WorkingDirectory workdir, TokenStore tokens,
-        ProfileContext profiles, MachineAuth machine, TimeProvider time) {
+        ProfileContext profiles, MachineAuth machine, UserHome home, TimeProvider time) {
     // The background refresh keys off each manifest's synced_at, so a burst of session starts
     // costs one network round-trip per interval per target, not one per session.
     static readonly TimeSpan AutoSyncInterval = TimeSpan.FromHours(6);
@@ -235,6 +235,7 @@ class SkillsCommand(
         List<PendingPrune> journal    = [];
         DateTimeOffset?    lastSynced = null;
         var                failed     = false;
+        string[]           anchors    = [anchor];
 
         // Destinations at THIS anchor that the ledger about to be emptied still vouches for: a
         // checkout moved with its files carries them along, so they exist before the run starts
@@ -251,6 +252,7 @@ class SkillsCommand(
 
             journal    = [.. manifest?.PendingPrunes ?? []];
             lastSynced = manifest?.SyncedAt;
+            anchors    = TrustedAnchors(manifest, anchor);
 
             if (manifest is not null && Retiring(manifest, identity)) {
                 // Ahead of the fetch and unconditional: a replacement that fails must leave nothing
@@ -263,10 +265,10 @@ class SkillsCommand(
                     var owning = OldRoot(manifest, target, anchor);
                     foreach (var entry in manifest.Skills ?? []) {
                         var recorded = new PendingPrune(entry.Path, owning);
-                        if (!PruneRecorded(recorded, target)) refusedPrunes.Add(recorded);
+                        if (!PruneRecorded(recorded, target, anchors)) refusedPrunes.Add(recorded);
                     }
                     foreach (var outstanding in journal)
-                        if (!PruneRecorded(outstanding, target)) refusedPrunes.Add(outstanding);
+                        if (!PruneRecorded(outstanding, target, anchors)) refusedPrunes.Add(outstanding);
 
                     foreach (var copy in RetireLegacy(hash, target, identity)) {
                         failed = true;
@@ -345,7 +347,7 @@ class SkillsCommand(
                 // deletion still owed, so it settles like any other outcome.
                 var stale = Settle(manifestPath, manifest with {
                     Anchor = anchor, Identity = identity, Exposure = Exposure(target),
-                }, target, completed: time.GetUtcNow());
+                }, target, anchors, completed: time.GetUtcNow());
                 await ReportStuckAsync(stale);
                 return (failed || stale.Length > 0 ? Failed : 0, true, false);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
@@ -449,6 +451,7 @@ class SkillsCommand(
                 BuildManifest(refusedIds.Count == 0 ? dto.Etag : null, published, anchor, identity,
                               target, repoHome, lastSynced, pending: false, owedPrunes),
                 target,
+                anchors,
                 completed: refusedIds.Count == 0 ? time.GetUtcNow() : lastSynced);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
@@ -589,20 +592,33 @@ class SkillsCommand(
         return Directory.Exists(main) ? main : gitDir;
     }
 
-    static string OldRoot(SkillsManifest manifest, SkillsTarget target, string anchor) =>
-        target.Root(manifest.Anchor ?? anchor);
+    static string OldRoot(SkillsManifest? manifest, SkillsTarget target, string anchor) =>
+        target.Root(manifest?.Anchor ?? anchor);
 
-    /// <summary>Deletes one recorded directory, authorised by the root recorded beside it. The anchor
-    /// is recovered by stripping the target's tree back off that root, because the current anchor
-    /// cannot contain a path left behind at another one, and a root that does not end in this
-    /// target's tree is not a root this target ever wrote. A directory already gone is the intent
-    /// satisfied; any other refusal has to survive so a later run retries it.</summary>
-    static bool PruneRecorded(PendingPrune recorded, SkillsTarget target) {
-        var root = Path.GetFullPath(recorded.Root);
-        var tree = Path.DirectorySeparatorChar + target.RelativePath;
-        if (root.Length <= tree.Length || !root.EndsWith(tree, PathComparison.Comparison)) return false;
-        return !Directory.Exists(Path.GetFullPath(recorded.Path))
-               || SkillsMaterializer.Prune(root, root[..^tree.Length], recorded.Path);
+    /// <summary>The anchors a deletion may be aimed at: this run's own, and the one the ledger
+    /// records having been written at, so a path left behind by a move is still prunable. Nothing
+    /// else, because every other candidate would come from the record being checked.</summary>
+    static string[] TrustedAnchors(SkillsManifest? manifest, string anchor) =>
+        manifest?.Anchor is { Length: > 0 } previous && !PathComparison.Equal(previous, anchor)
+            ? [anchor, previous]
+            : [anchor];
+
+    /// <summary>Deletes one recorded directory, authorised by trusted state rather than by the
+    /// record: the root beside the path only selects which trusted anchor answers for it, and the
+    /// deletion itself is held to a direct kcap-owned child of that anchor's own target tree. A root
+    /// matching none of them is refused and survives, so a later run retries it; a directory already
+    /// gone is the intent satisfied.</summary>
+    static bool PruneRecorded(PendingPrune recorded, SkillsTarget target, IReadOnlyList<string> anchors) {
+        if (!Directory.Exists(Path.GetFullPath(recorded.Path))) return true;
+
+        foreach (var anchor in anchors) {
+            var root = target.Root(anchor);
+            if (!PathComparison.Equal(CanonicalPath.Resolve(root), CanonicalPath.Resolve(recorded.Root)))
+                continue;
+            return SkillsMaterializer.Prune(root, anchor, recorded.Path);
+        }
+
+        return false;
     }
 
     /// <summary>Retires the user-global copies this repository owns, returning the ones it could not
@@ -615,7 +631,7 @@ class SkillsCommand(
         List<string> refused = [];
         List<string> keep    = [.. plan.Keep];
         foreach (var path in plan.Delete)
-            if (!PruneGlobal(path)) {
+            if (!PruneGlobal(target, path)) {
                 refused.Add(path);
                 keep.Add(path);
             }
@@ -650,15 +666,14 @@ class SkillsCommand(
         return plan.Delete.Count == 0 && plan.Keep.Count > 0 ? null : plan;
     }
 
-    /// <summary>Deletes one user-global directory. Its authorising root is the parent recorded in the
-    /// ledger — an absolute path written under a home that may since have moved — so the
-    /// <c>kcap-</c> leaf rule, not containment, is what holds the deletion to a directory kcap
-    /// created. A directory already gone counts as removed.</summary>
-    static bool PruneGlobal(string path) {
-        var full = Path.GetFullPath(path);
-        if (!Directory.Exists(full)) return true;
-        return Path.GetDirectoryName(full) is { } parent
-               && SkillsMaterializer.Prune(parent, parent, path);
+    /// <summary>Deletes one user-global directory: a direct kcap-owned child of the tree this target
+    /// occupied under the user's home, which is the only place a global copy was ever written. A
+    /// ledger naming anywhere else — a hand edit, or a home that has since moved — is refused and
+    /// stays recorded. A directory already gone counts as removed.</summary>
+    bool PruneGlobal(SkillsTarget target, string path) {
+        if (!Directory.Exists(Path.GetFullPath(path))) return true;
+        var root = target.Root(home.Path);
+        return SkillsMaterializer.Prune(root, root, path);
     }
 
     /// <summary>Carries out the deletions a manifest still owes and clears its pending flag, keeping
@@ -667,10 +682,10 @@ class SkillsCommand(
     /// that left nothing undone earns <paramref name="completed"/> as its refresh stamp — a fresh one
     /// otherwise would let the throttle read an incomplete sync as a completed one.</summary>
     static PendingPrune[] Settle(string manifestPath, SkillsManifest manifest, SkillsTarget target,
-                                 DateTimeOffset? completed) {
+                                 IReadOnlyList<string> anchors, DateTimeOffset? completed) {
         List<PendingPrune> stuck = [];
         foreach (var recorded in manifest.PendingPrunes ?? [])
-            if (!PruneRecorded(recorded, target)) stuck.Add(recorded);
+            if (!PruneRecorded(recorded, target, anchors)) stuck.Add(recorded);
         SaveManifest(manifestPath, manifest with {
             Pending = false, PendingPrunes = [.. stuck],
             SyncedAt = stuck.Count == 0 ? completed : manifest.SyncedAt,

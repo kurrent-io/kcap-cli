@@ -153,6 +153,30 @@ public class SkillsSyncFlowTests {
         await Assert.That(manifest.SyncedAt).IsNull();
     }
 
+    /// <summary>A journal row carries a path and the root beside it, so a hand-edited or corrupted
+    /// ledger can name any directory of the same shape. The root selects which anchor answers for a
+    /// deletion and never authorises one itself: a root matching no anchor this ledger records is
+    /// refused, and the row stays for a later run rather than being guessed at.</summary>
+    [Test]
+    public async Task A_recorded_prune_outside_every_trusted_anchor_is_refused() {
+        using var repo   = Checkout("repo");
+        var       alpha  = SkillsSyncFixture.Skill("alpha");
+        var       fx     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", alpha));
+        var       victim = Tmp.CreateFile(["elsewhere", ".claude", "skills", "kcap-victim", "SKILL.md"],
+                                          "not kcap's");
+        var       aimed  = Tmp.PathTo("elsewhere", ".claude", "skills", "kcap-victim");
+
+        fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with {
+            Etag          = "etag-1",
+            PendingPrunes = [new PendingPrune(aimed, Tmp.PathTo("elsewhere", ".claude", "skills"))],
+        });
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(File.ReadAllText(victim)).IsEqualTo("not kcap's");
+        await Assert.That(fx.ReadManifest().PendingPrunes!.Single().Path).IsEqualTo(aimed);
+    }
+
     /// <summary>A global ledger that will not parse names directories nothing else can. Deleting it
     /// would leave them with nothing able to prune them.</summary>
     [Test]

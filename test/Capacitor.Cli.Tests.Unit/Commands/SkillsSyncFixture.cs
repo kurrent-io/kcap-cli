@@ -37,6 +37,7 @@ sealed class SkillsSyncFixture {
         RepoHome = $"repo:{owner}/{repoName}";
         Config   = new ConfigRoot(tmp.CreateDir("config"));
         Identity = new SkillsIdentity(subject, ServerUrl);
+        Home     = tmp.PathTo("home");
 
         SeedDetectionCache(tmp, checkout, owner, repoName);
 
@@ -53,7 +54,7 @@ sealed class SkillsSyncFixture {
         Command = new SkillsCommand(
             Config, TestHarnesses.All(detected: [HarnessId.Claude]), api, new GitProviderRouter(),
             new WorkingDirectory(checkout), tokens, Resolutions.At(ServerUrl, Config),
-            MachineAuth.None, time);
+            MachineAuth.None, new UserHome(Home), time);
     }
 
     public SkillsCommand Command { get; }
@@ -65,6 +66,14 @@ sealed class SkillsSyncFixture {
 
     /// <summary>This worktree's own git directory, where its manifest lives.</summary>
     public string GitDir { get; }
+
+    /// <summary>The user home the global trees hang off — the only roots a legacy retirement may
+    /// delete from.</summary>
+    public string Home { get; }
+
+    /// <summary>The user-global skills tree this target occupied before materialization moved into
+    /// the checkout.</summary>
+    public string GlobalSkillsRoot => Path.Combine(Home, ClaudePaths.RepoSkillsRelativePath);
 
     public string         RepoHash { get; }
     public string         RepoHome { get; }
