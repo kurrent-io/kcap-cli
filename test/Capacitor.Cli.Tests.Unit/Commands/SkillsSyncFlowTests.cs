@@ -315,7 +315,37 @@ public class SkillsSyncFlowTests {
 
         await Assert.That(Directory.Exists(global)).IsFalse();
         await Assert.That(File.Exists(fx.LegacyManifestPath)).IsFalse();
-        await Assert.That(fx.ReadManifest().Identity).IsEqualTo(fx.Identity);
+        // Nothing local was owned, so nothing local is retired and no ledger is invented for it.
+        await Assert.That(File.Exists(fx.ManifestPath)).IsFalse();
+    }
+
+    /// <summary>A legacy ledger under a previous account that migration can prove nothing about
+    /// stays superseded on every start. The local catalogue belongs to the current account and is
+    /// not part of that: pruning it here would delete and re-materialize it every session, and a
+    /// fetch that then failed would leave the checkout with no skills at all.</summary>
+    [Test]
+    public async Task A_legacy_retirement_that_cannot_finish_leaves_the_local_catalogue_alone() {
+        using var repo    = Checkout("repo");
+        var       alpha   = SkillsSyncFixture.Skill("alpha");
+        var       fx      = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+        var       retired = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl);
+        var       global  = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with { Etag = "etag-1" });
+        fx.WriteLegacyManifest(new SkillsManifest {
+            Identity = retired, Skills = [Entry(alpha, global)],
+        });
+        // A sibling ledger that will not parse could be hiding the only other owner of that copy,
+        // so migration can prove nothing and the legacy ledger outlives every run.
+        Tmp.CreateFile(["config", "skills", "othersibling", "claude", "manifest.json"], "{ truncated");
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(fx.HasSkill("alpha")).IsTrue();
+        await Assert.That(fx.ReadManifest().Skills!.Single().Slug).IsEqualTo("alpha");
+        await Assert.That(Directory.Exists(global)).IsTrue();
+        await Assert.That(File.Exists(fx.LegacyManifestPath)).IsTrue();
     }
 
     [Test]

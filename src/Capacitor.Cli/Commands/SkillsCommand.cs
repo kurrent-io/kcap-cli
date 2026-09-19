@@ -261,51 +261,70 @@ class SkillsCommand(
             lastSynced = manifest?.SyncedAt;
             anchors    = TrustedAnchors(manifest, anchor);
 
-            if (Retiring(manifest, legacy, identity)) {
-                // Ahead of the fetch and unconditional: a replacement that fails must leave nothing
-                // of the previous account behind, locally or in the global trees. The ledger is then
-                // saved owning nothing but the deletions that were refused — dropping those rows
-                // would leave their directories with nothing able to prune them — and with no
-                // synced_at, so a failed replacement cannot be read as a completed refresh.
+            // Two ledgers, two decisions. A legacy retirement that cannot finish — a sibling it
+            // cannot read, a vendor root that moved — stays due on every start, and folding the
+            // two together would then delete and re-materialize the local catalogue every session
+            // and leave nothing behind whenever the replacement fetch failed.
+            var localRetiring  = Superseded(manifest, identity);
+            var legacyRetiring = Superseded(legacy, identity);
+
+            // Ahead of the fetch and unconditional: a replacement that fails must leave nothing of
+            // the previous account behind, locally or in the global trees. The local ledger is then
+            // saved owning nothing but the deletions that were refused — dropping those rows would
+            // leave their directories with nothing able to prune them — and with no synced_at, so a
+            // failed replacement cannot be read as a completed refresh.
+            if (localRetiring || legacyRetiring) {
                 if (!dryRun) {
                     List<PendingPrune> refusedPrunes = [];
-                    var owning = OldRoot(manifest, target, anchor);
-                    foreach (var entry in manifest?.Skills ?? []) {
-                        var recorded = new PendingPrune(entry.Path, owning);
-                        if (!PruneRecorded(recorded, target, anchors)) refusedPrunes.Add(recorded);
-                    }
-                    foreach (var outstanding in journal)
-                        if (!PruneRecorded(outstanding, target, anchors)) refusedPrunes.Add(outstanding);
-
-                    foreach (var copy in RetireLegacy(hash, target, identity)) {
-                        failed = true;
-                        await Console.Error.WriteLineAsync(
-                            $"Could not remove the global copy {copy}; it stays recorded for the next sync.");
+                    if (localRetiring) {
+                        var owning = OldRoot(manifest, target, anchor);
+                        foreach (var entry in manifest?.Skills ?? []) {
+                            var recorded = new PendingPrune(entry.Path, owning);
+                            if (!PruneRecorded(recorded, target, anchors)) refusedPrunes.Add(recorded);
+                        }
+                        foreach (var outstanding in journal)
+                            if (!PruneRecorded(outstanding, target, anchors)) refusedPrunes.Add(outstanding);
                     }
 
-                    journal = refusedPrunes;
-                    if (refusedPrunes.Count > 0) {
-                        failed = true;
-                        await ReportStuckAsync(refusedPrunes);
+                    if (legacyRetiring)
+                        foreach (var copy in RetireLegacy(hash, target, identity)) {
+                            failed = true;
+                            await Console.Error.WriteLineAsync(
+                                $"Could not remove the global copy {copy}; it stays recorded for the next sync.");
+                        }
+
+                    if (localRetiring) {
+                        journal = refusedPrunes;
+                        if (refusedPrunes.Count > 0) {
+                            failed = true;
+                            await ReportStuckAsync(refusedPrunes);
+                        }
+                        SaveManifest(manifestPath,
+                                     BuildManifest(null, [], anchor, identity, target, repoHome,
+                                                   syncedAt: null, pending: false, journal));
                     }
-                    SaveManifest(manifestPath,
-                                 BuildManifest(null, [], anchor, identity, target, repoHome,
-                                               syncedAt: null, pending: false, journal));
                 } else {
                     // The deletion is the most destructive thing this command does and it happens
                     // before the fetch, so a preview that listed only the writes would show none
                     // of it.
                     Info($"[{target.Key}] the recorded account ({RetiredAccount(manifest, legacy, identity)}) "
                        + $"is no longer {identity.Account}; its catalogue goes before a replacement is fetched:");
-                    foreach (var entry in manifest?.Skills ?? []) Info($"{"would retire",-12} {entry.Path}");
-                    foreach (var outstanding in journal) Info($"{"would retire",-12} {outstanding.Path}");
-                    foreach (var copy in PlanLegacy(hash, target, identity)?.Delete ?? [])
-                        Info($"{"would retire",-12} {copy}");
-                    journal.Clear();
+                    if (localRetiring) {
+                        foreach (var entry in manifest?.Skills ?? []) Info($"{"would retire",-12} {entry.Path}");
+                        foreach (var outstanding in journal) Info($"{"would retire",-12} {outstanding.Path}");
+                        journal.Clear();
+                    }
+                    if (legacyRetiring)
+                        foreach (var copy in PlanLegacy(hash, target, identity)?.Delete ?? [])
+                            Info($"{"would retire",-12} {copy}");
                 }
-                manifest   = null;
-                lastSynced = null;
-            } else if (manifest is not null && Moved(manifest, anchor)) {
+                if (localRetiring) {
+                    manifest   = null;
+                    lastSynced = null;
+                }
+            }
+
+            if (!localRetiring && manifest is not null && Moved(manifest, anchor)) {
                 // Neither the conditional request nor the planner compares destinations, so a
                 // manifest recorded at another anchor is discarded as a cache and kept as a ledger:
                 // every document is rewritten at the new paths, and every old path is queued for
