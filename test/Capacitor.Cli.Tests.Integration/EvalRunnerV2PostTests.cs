@@ -91,11 +91,11 @@ public class EvalRunnerV2PostTests : IDisposable {
         public void OnStarted(string runId, string judgeModel, int totalQuestions) { }
         public void OnContextFetched(int e, int c, int t, int tr, long b) { }
         public void OnQuestionStarted(int i, int t, string c, string q) { }
-        public void OnQuestionCompleted(int i, int t, EvalQuestionAssessment v, long it, long ot) { }
+        public void OnQuestionCompleted(int i, int t, EvalQuestionAssessment v, EvalUsage u, string r, TimeSpan e, int c) { }
         public void OnQuestionFailed(int i, int t, string c, string q, string r) { }
         public void OnFactRetained(string c, string f) { }
         public void OnRetrospectiveStarted() { }
-        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r) { }
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r, EvalUsage u, TimeSpan e) { }
         public void OnRetrospectiveFailed(string r) { }
         public void OnFinished(SessionEvalCompletedPayloadV4 a) { }
         public void OnFailed(string r) { }

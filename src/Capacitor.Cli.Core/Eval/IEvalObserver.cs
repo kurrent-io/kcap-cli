@@ -40,8 +40,10 @@ public interface IEvalObserver {
     void OnQuestionStarted(int index, int total, string category, string questionId);
 
     /// <summary>Fired after a judge question completed and its verdict was parsed — including an
-    /// unassessed outcome, which carries no score.</summary>
-    void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, long inputTokens, long outputTokens);
+    /// unassessed outcome, which carries no score. <paramref name="route"/> is <c>text</c> or
+    /// <c>tools</c>; <paramref name="runnerInvocations"/> counts the runner calls behind this
+    /// result (retries included — 1 today).</summary>
+    void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations);
 
     /// <summary>Fired when a judge question fails (null Claude result, unparseable JSON, etc.); the eval continues.</summary>
     void OnQuestionFailed(int index, int total, string category, string questionId, string reason);
@@ -53,7 +55,7 @@ public interface IEvalObserver {
     void OnRetrospectiveStarted();
 
     /// <summary>Fired after the retrospective completed successfully and its payload was parsed.</summary>
-    void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective);
+    void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed);
 
     /// <summary>Fired when retrospective synthesis failed (null Claude result, unparseable JSON, etc.); the eval still completes.</summary>
     void OnRetrospectiveFailed(string reason);

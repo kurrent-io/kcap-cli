@@ -65,11 +65,11 @@ public class EvalRunnerV3PostTests : IDisposable {
         public void OnStarted(string r, string j, int t) { }
         public void OnContextFetched(int a, int b, int c, int d, long e) { }
         public void OnQuestionStarted(int i, int t, string c, string q) { }
-        public void OnQuestionCompleted(int i, int t, EvalQuestionAssessment v, long it, long ot) { }
+        public void OnQuestionCompleted(int i, int t, EvalQuestionAssessment v, EvalUsage u, string r, TimeSpan e, int c) { }
         public void OnQuestionFailed(int i, int t, string c, string q, string r) { }
         public void OnFactRetained(string c, string f) { }
         public void OnRetrospectiveStarted() { }
-        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r) { }
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r, EvalUsage u, TimeSpan e) { }
         public void OnRetrospectiveFailed(string r) { }
         public void OnFinished(SessionEvalCompletedPayloadV4 a) { }
         public void OnFailed(string r) { }

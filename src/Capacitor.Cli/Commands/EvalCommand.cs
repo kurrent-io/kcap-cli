@@ -14,20 +14,29 @@ namespace Capacitor.Cli.Commands;
 /// the daemon (DEV-1440 milestone 2) can reuse it.
 /// </summary>
 class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitorHttpClient http, TimeProvider time) {
+    /// <summary>Flags Program.cs's eval case must declare value-bearing on <c>ResolveSessionId</c> —
+    /// referenced from there and from the arg-parser test, so the two can't drift apart.</summary>
+    internal static readonly string[] ValueFlags = ["--model", "--threshold", "--questions", "--skip", "--baseline-out"];
+
     public async Task<int> HandleEval(
             string  sessionId,
             string  model,
             bool    chain,
             int?    thresholdBytes,
             string? questionsCsv,
-            string? skipCsv
+            string? skipCsv,
+            string? baselineOut
         ) {
         var       baseUrl    = profiles.Resolution.ServerUrl!;
         using var httpClient = await http.ForCommandAsync();
 
         // Fetch taxonomy once up-front so --list and --questions/--skip share
         // the same source of truth; the server controls it (PR 1), not the CLI.
-        var observer = new ConsoleEvalObserver(sessionId, time);
+        IEvalObserver observer = new ConsoleEvalObserver(sessionId, time);
+        if (baselineOut is not null) {
+            observer = new BaselineObserver(observer, baselineOut, sessionId, model, chain, time);
+        }
+
         var catalog  = await EvalQuestionCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, CancellationToken.None);
         if (catalog is null || catalog.Length == 0) {
             // FetchAsync emitted OnFailed with a reason already.
@@ -151,8 +160,8 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
         public void OnQuestionStarted(int index, int total, string category, string questionId) =>
             Log($"[{index}/{total}] {category}/{questionId}...");
 
-        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, long inputTokens, long outputTokens) =>
-            Log($"  {assessment.QuestionId} done (input={inputTokens}, output={outputTokens})");
+        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations) =>
+            Log($"  {assessment.QuestionId} done (input={usage.InputTokens}, output={usage.OutputTokens})");
 
         public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) =>
             Log($"  {questionId} failed: {reason}");
@@ -163,7 +172,7 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
         public void OnRetrospectiveStarted() =>
             Log("  Synthesising retrospective…");
 
-        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) =>
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed) =>
             Log($"  Retrospective: {retrospective.OverallSummary}");
 
         public void OnRetrospectiveFailed(string reason) =>
