@@ -40,6 +40,7 @@ public class ClaudeHookSubagentRelayTests {
         var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/claude/subagent").UsingPost()).RespondWith(Response.Create().WithStatusCode(204));
         bridge.Given(Request.Create().WithPath("/tok/claude/input-wait").UsingPost()).RespondWith(Response.Create().WithStatusCode(204));
+        bridge.Given(Request.Create().WithPath("/tok/claude/tool-settled").UsingPost()).RespondWith(Response.Create().WithStatusCode(204));
         return bridge;
     }
 
@@ -51,10 +52,11 @@ public class ClaudeHookSubagentRelayTests {
 
     /// The relay rides ahead of client creation, so it is exercised through HandleWithDeps and
     /// asserted on the bridge itself, never on the server.
-    async Task<int> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string? agentId = SubagentId) {
+    async Task<int> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string? agentId = SubagentId, string? toolUseId = null) {
         using var client = new HttpClient(new OkHandler());
         var agentField = agentId is null ? "" : $",\"agent_id\":\"{agentId}\"";
-        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{agentField}}}}""";
+        var toolField  = toolUseId is null ? "" : $",\"tool_use_id\":\"{toolUseId}\"";
+        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{agentField}}}{{{toolField}}}}""";
         return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .HandleWithDeps(new HookSpool(Config.Root, time: TimeProvider.System), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
     }
@@ -124,6 +126,31 @@ public class ClaudeHookSubagentRelayTests {
         await RunAsync(unhosted, "SubagentStart");
 
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
+    }
+
+    /// The daemon holds a prompt until it hears the tool is done, so retiring it must reach the
+    /// bridge before the count-only heartbeat: a wedged bridge must not let the heartbeat starve
+    /// the notice that frees a prompt, since a stale count instead recovers by its own expiry.
+    [Test, NotInParallel]
+    public async Task A_subagents_stop_retires_its_prompt_before_reporting_it_gone() {
+        using var bridge = Bridge();
+
+        var exit = await RunAsync(HostedOn(bridge), "SubagentStop");
+
+        await Assert.That(exit).IsEqualTo(0);
+        var paths = bridge.LogEntries.Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(paths.IndexOf("/tok/claude/tool-settled")).IsLessThan(paths.IndexOf("/tok/claude/subagent"));
+    }
+
+    [Test, NotInParallel]
+    public async Task A_subagents_finished_tool_retires_its_prompt_before_reporting_it_alive() {
+        using var bridge = Bridge();
+
+        var exit = await RunAsync(HostedOn(bridge), "PostToolUse", toolUseId: "toolu_01X");
+
+        await Assert.That(exit).IsEqualTo(0);
+        var paths = bridge.LogEntries.Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(paths.IndexOf("/tok/claude/tool-settled")).IsLessThan(paths.IndexOf("/tok/claude/subagent"));
     }
 
     [Test, NotInParallel]

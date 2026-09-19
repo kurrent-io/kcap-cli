@@ -86,15 +86,30 @@ public sealed class ClaudeHookCommand(
 
         // Ahead of every gate below: the hosting daemon's hints are local, so neither the server's
         // reachability nor the credential may hold them back. They spend this hook's own budget,
-        // which the clock has been counting since the process started. A subagent's hook (agent_id
-        // set) runs with the parent's environment but is not the parent's turn: it reports the
-        // subagent alive or gone and never touches the parent's wait — a background subagent must
-        // not clear a wait the parent just began.
+        // which the clock has been counting since the process started.
         //
         // Dashless, as NormalizeGuidField leaves the permission hook's agent_id before the bridge
         // stores it; the daemon matches the two exactly.
         var subagentId = agentId?.Replace("-", "");
 
+        // Retiring a held prompt goes first: it and the heartbeat below share this hook's budget
+        // and each post caps at 1s, so a wedged bridge must not let the heartbeat starve the notice
+        // that frees a prompt the daemon still holds — a stale subagent count instead recovers by
+        // its own expiry. A finished tool names itself; a finished turn covers a terminal deny,
+        // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
+        // ending says nothing about a background subagent's.
+        if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining);
+
+        if (command == "stop" && agentId is null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
+
+        if (command == "subagent-stop" && subagentId is not null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget.Remaining);
+
+        // A subagent's hook (agent_id set) runs with the parent's environment but is not the
+        // parent's turn: it reports the subagent alive or gone and never touches the parent's
+        // wait — a background subagent must not clear a wait the parent just began.
         if (subagentId is not null)
             await DaemonBridgeRelay.NotifySubagentAsync(
                 hosted, "claude", sessionId, cwd, subagentId, live: command != "subagent-stop",
@@ -102,23 +117,10 @@ public sealed class ClaudeHookCommand(
         else if (command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
             await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
 
-        // The daemon holds a prompt until it hears the tool is done, and an answer given in the
-        // terminal is invisible to it. A finished tool names itself; a finished turn covers a
-        // terminal deny, which runs no tool; a finished subagent covers its own prompts, since the
-        // parent's turn ending says nothing about a background subagent's. The tool events have no
-        // server route and no other work, so they end here.
-        if (command is "post-tool-use" or "post-tool-use-failure") {
-            if (toolUseId is not null)
-                await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining);
-
+        // The tool events have no server route and no other work, so they end here — after both
+        // notices above have had their chance to post.
+        if (command is "post-tool-use" or "post-tool-use-failure")
             return 0;
-        }
-
-        if (command == "stop" && agentId is null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
-
-        if (command == "subagent-stop" && subagentId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget.Remaining);
 
         var clientCap = budget.Remaining;
 
