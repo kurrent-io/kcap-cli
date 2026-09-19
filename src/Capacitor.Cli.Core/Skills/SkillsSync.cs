@@ -23,12 +23,20 @@ public sealed record SkillsIdentity(
     [property: JsonPropertyName("account")] string Account,
     [property: JsonPropertyName("server")]  string Server);
 
-/// <summary>A directory awaiting deletion and the skills root that authorises deleting it. The root
-/// travels with the path because containment is defined against an anchor, and a path left over
-/// from a previous anchor cannot be authorised by the current one.</summary>
+/// <summary>A directory kcap wrote that is owed a deletion: the document it holds, the path, and
+/// the skills root that authorises deleting it. The root travels with the path because containment
+/// is defined against an anchor, and a path left over from a previous anchor cannot be authorised
+/// by the current one. The document travels with it because the deletion is only due once its
+/// replacement has actually been published, or the snapshot has stopped serving it at all.
+///
+/// <para><paramref name="Retired"/> marks a deletion an account change ordered. It has to outlive
+/// the ledger's identity: the replacement catalogue is saved under the new account, so by the next
+/// run nothing else remembers that these files belong to the previous one.</para></summary>
 public sealed record PendingPrune(
-    [property: JsonPropertyName("path")] string Path,
-    [property: JsonPropertyName("root")] string Root);
+    [property: JsonPropertyName("doc_id")]  Guid   DocId,
+    [property: JsonPropertyName("path")]    string Path,
+    [property: JsonPropertyName("root")]    string Root,
+    [property: JsonPropertyName("retired")] bool   Retired = false);
 
 public sealed record SkillsSnapshotResponse {
     [JsonPropertyName("etag")]   public string?              Etag   { get; init; }

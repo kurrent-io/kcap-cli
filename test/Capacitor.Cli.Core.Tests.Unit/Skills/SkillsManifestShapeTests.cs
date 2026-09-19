@@ -10,7 +10,8 @@ public class SkillsManifestShapeTests {
             Etag = "e1", SyncedAt = DateTimeOffset.UnixEpoch,
             Anchor = "/repo", Identity = new SkillsIdentity("acct-1", "https://server"),
             Exposure = ["claude", "copilot"], Pending = true,
-            PendingPrunes = [new PendingPrune("/repo/.claude/skills/kcap-x", "/repo/.claude/skills")],
+            PendingPrunes = [new PendingPrune(Guid.Empty, "/repo/.claude/skills/kcap-x",
+                                              "/repo/.claude/skills", Retired: true)],
             PruneAnchors = ["/previous"],
             Skills = [new SkillsManifestEntry {
                 DocId = Guid.Empty, Slug = "x", Version = 1, ContentHash = "h", Path = "/repo/.claude/skills/kcap-x",
@@ -27,6 +28,7 @@ public class SkillsManifestShapeTests {
         await Assert.That(again.Exposure).IsEquivalentTo(["claude", "copilot"]);
         await Assert.That(again.Pending).IsTrue();
         await Assert.That(again.PendingPrunes![0].Root).IsEqualTo("/repo/.claude/skills");
+        await Assert.That(again.PendingPrunes[0].Retired).IsTrue();
         await Assert.That(again.PruneAnchors).IsEquivalentTo(["/previous"]);
         await Assert.That(again.Skills![0].Home).IsEqualTo("repo:owner/name");
     }

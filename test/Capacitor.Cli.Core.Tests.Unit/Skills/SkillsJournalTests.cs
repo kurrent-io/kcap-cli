@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Skills;
 namespace Capacitor.Cli.Core.Tests.Unit.Skills;
 
 public class SkillsJournalTests {
-    static PendingPrune P(string path) => new(path, "/repo/.claude/skills");
+    static PendingPrune P(string path) => new(Guid.NewGuid(), path, "/repo/.claude/skills");
 
     [Test]
     public async Task Merging_keeps_what_an_earlier_transition_still_owes() {

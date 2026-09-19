@@ -169,7 +169,7 @@ public class SkillsSyncFlowTests {
 
         fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with {
             Etag          = "etag-1",
-            PendingPrunes = [new PendingPrune(aimed, Tmp.PathTo("elsewhere", ".claude", "skills"))],
+            PendingPrunes = [new PendingPrune(alpha.DocId, aimed, Tmp.PathTo("elsewhere", ".claude", "skills"))],
         });
 
         await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
@@ -210,7 +210,7 @@ public class SkillsSyncFlowTests {
 
         fx.WriteManifest(Owning(fx, fx.Materialize(half)) with {
             Etag          = "etag-2", Pending = true,
-            PendingPrunes = [new PendingPrune(fx.SkillDir("alpha"), fx.SkillsRoot)],
+            PendingPrunes = [new PendingPrune(RenamedDoc, fx.SkillDir("alpha"), fx.SkillsRoot)],
         });
 
         await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
@@ -244,7 +244,7 @@ public class SkillsSyncFlowTests {
         repo.CreateFile([".claude", "skills", "kcap-alpha", "SKILL.md"], "the previous rendering");
         fx.WriteManifest(Owning(fx, fx.Materialize(half)) with {
             Etag          = "etag-2", Pending = true,
-            PendingPrunes = [new PendingPrune(fx.SkillDir("alpha"), fx.SkillsRoot)],
+            PendingPrunes = [new PendingPrune(RenamedDoc, fx.SkillDir("alpha"), fx.SkillsRoot)],
         });
 
         await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
@@ -463,7 +463,7 @@ public class SkillsSyncFlowTests {
         fx.WriteManifest(new SkillsManifest {
             Etag = "etag-0", SyncedAt = SkillsSyncFixture.Now.AddDays(-1),
             Anchor = first, Identity = fx.Identity, Skills = [],
-            PendingPrunes = [new PendingPrune(ghost, target.Root(first))],
+            PendingPrunes = [new PendingPrune(alpha.DocId, ghost, target.Root(first))],
         });
 
         var moved = await fx.Command.AttemptTargetAsync(
@@ -488,6 +488,124 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.ReadManifest().PendingPrunes!).IsEmpty();
         // Dropped once no row needs it, so the history cannot grow without bound.
         await Assert.That(fx.ReadManifest().PruneAnchors ?? []).IsEmpty();
+    }
+
+    /// <summary>A ledger recording a path at one anchor says nothing about a directory that happens
+    /// to carry the same name at another. Claiming it would let the write overwrite the
+    /// repository's own file and a later revocation delete whatever else was kept beside it.
+    /// </summary>
+    [Test]
+    public async Task An_anchor_change_does_not_claim_a_directory_that_did_not_travel() {
+        using var repo     = Checkout("repo");
+        var       previous = Tmp.CreateDir("previous");
+        var       alpha    = SkillsSyncFixture.Skill("alpha");
+        var       fx       = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", alpha));
+        var       theirs   = repo.CreateFile([".claude", "skills", "kcap-alpha", "notes.md"], "committed");
+
+        fx.WriteManifest(Recorded(fx, alpha, previous));
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(File.ReadAllText(theirs)).IsEqualTo("committed");
+        await Assert.That(File.Exists(fx.SkillFile("alpha"))).IsFalse();
+        await Assert.That(fx.ReadManifest().Skills!.Select(e => e.Path))
+            .DoesNotContain(fx.SkillDir("alpha"));
+    }
+
+    /// <summary>A checkout that moved with its files leaves the ledger naming the old anchor's
+    /// paths while the real copies sit at the new one. A revocation that only knows the old paths
+    /// finds them absent, calls the deletion done, and leaves the copies loadable for good.
+    /// </summary>
+    [Test]
+    public async Task A_relocated_copy_is_deleted_when_its_document_is_revoked() {
+        using var repo     = Checkout("repo");
+        var       previous = Tmp.CreateDir("previous");
+        var       alpha    = SkillsSyncFixture.Skill("alpha");
+        var       fx       = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2"));
+
+        // The copy travelled with the checkout; nothing is left at the anchor the ledger records.
+        fx.Materialize(alpha);
+        fx.WriteManifest(Recorded(fx, alpha, previous));
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        await Assert.That(fx.HasSkill("alpha")).IsFalse();
+        await Assert.That(fx.ReadManifest().Skills!).IsEmpty();
+        await Assert.That(fx.ReadManifest().PendingPrunes!).IsEmpty();
+    }
+
+    /// <summary>Copy before delete. A rewrite the destination refuses leaves the old copy the only
+    /// one there is, so settling its deletion anyway leaves the document served from nowhere — and
+    /// a target that could not publish is not one the legacy migration may follow.</summary>
+    [Test]
+    public async Task A_refused_rewrite_keeps_the_copy_it_was_meant_to_replace() {
+        using var repo     = Checkout("repo");
+        var       previous = Tmp.CreateDir("previous");
+        var       away     = Tmp.CreateDir("away");
+        var       alpha    = SkillsSyncFixture.Skill("alpha");
+        var       fx       = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", alpha));
+        var       target   = SkillsCommand.Targets(fx.LegacyRoots)
+            .Single(t => t.Key == SkillsSyncFixture.TargetKey);
+        var       oldDir   = SkillsMaterializer.SkillDirFor(
+            Path.Combine(previous.Path, ClaudePaths.RepoSkillsRelativePath), alpha.Slug);
+
+        // The only working copy, at the anchor the ledger records.
+        Tmp.CreateFile(["previous", ".claude", "skills", "kcap-alpha", "SKILL.md"], Rendered(alpha));
+        // Every destination at the new anchor leaves it through a link, so every write is refused.
+        Directory.CreateDirectory(Path.GetDirectoryName(target.Root(repo.Path))!);
+        Directory.CreateSymbolicLink(target.Root(repo.Path), away.Path);
+        fx.WriteManifest(Recorded(fx, alpha, previous));
+
+        var attempt = await fx.Command.AttemptTargetAsync(
+            target, repo.Path, fx.GitDir, fx.RepoHash, fx.RepoHome, fx.Identity,
+            dryRun: false, auto: false, takeMigration: false);
+
+        await Assert.That(attempt.Code).IsEqualTo(1);
+        await Assert.That(File.ReadAllText(SkillsMaterializer.SkillFileFor(oldDir)))
+            .IsEqualTo(Rendered(alpha));
+        // A target whose write was refused has not migrated, so the tail must not follow it.
+        await Assert.That(attempt.Settled).IsFalse();
+        // Still owned, or a later run reads it as the repository's own and nothing can revoke it.
+        await Assert.That(fx.ReadManifest().Skills!.Select(e => e.Path).Concat(
+                              fx.ReadManifest().PendingPrunes!.Select(p => p.Path)))
+            .Contains(oldDir);
+    }
+
+    /// <summary>A deletion a retirement ordered outlives the ledger's identity: the replacement
+    /// catalogue is saved under the new account, so the next run no longer reads as superseded. The
+    /// row has to remember it, or the previous account's files wait on a fetch that may never
+    /// succeed.</summary>
+    [Test]
+    public async Task A_retirement_deletion_refused_once_is_retried_before_the_next_fetch() {
+        using var repo   = Checkout("repo");
+        var       away   = Tmp.CreateDir("away");
+        var       alpha  = SkillsSyncFixture.Skill("alpha");
+        var       fx     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+        var       target = SkillsCommand.Targets(fx.LegacyRoots)
+            .Single(t => t.Key == SkillsSyncFixture.TargetKey);
+        var       root   = target.Root(repo.Path);
+
+        // The catalogue sits behind a link out of the anchor, so containment refuses its deletion.
+        Directory.CreateDirectory(Path.GetDirectoryName(root)!);
+        Directory.CreateSymbolicLink(root, away.Path);
+        away.CreateFile(["kcap-alpha", "SKILL.md"], Rendered(alpha));
+        fx.WriteManifest(Owning(fx, Entry(alpha, fx.SkillDir("alpha"))) with {
+            Etag = "etag-1", Identity = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl),
+        });
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+        // A precondition: the deletion was genuinely refused and the ledger now reads as current.
+        await Assert.That(Directory.Exists(away.PathTo("kcap-alpha"))).IsTrue();
+        await Assert.That(fx.ReadManifest().Identity).IsEqualTo(fx.Identity);
+
+        // The blocker clears; the same directory is now an ordinary owned one under the anchor.
+        Directory.Delete(root);
+        Tmp.CreateFile(["repo", ".claude", "skills", "kcap-alpha", "SKILL.md"], Rendered(alpha));
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(fx.HasSkill("alpha")).IsFalse();
+        await Assert.That(fx.ReadManifest().PendingPrunes!).IsEmpty();
     }
 
     /// <summary>The other half of an anchor change: the checkout moved and took its materialized
@@ -542,7 +660,7 @@ public class SkillsSyncFlowTests {
         Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
         fx.WriteManifest(Owning(fx, owned) with {
             Etag          = "etag-1", Pending = true,
-            PendingPrunes = [new PendingPrune(fx.SkillDir("gone"), fx.SkillsRoot)],
+            PendingPrunes = [new PendingPrune(Guid.NewGuid(), fx.SkillDir("gone"), fx.SkillsRoot)],
         });
         fx.WriteLegacyManifest(new SkillsManifest {
             Identity = fx.Identity, Skills = [owned with { Path = global }],
@@ -801,6 +919,20 @@ public class SkillsSyncFlowTests {
 
     /// <summary>A path inside a JSON string literal — Windows separators are escapes there.</summary>
     static string JsonPath(string path) => path.Replace("\\", "\\\\");
+
+    /// <summary>A settled ledger written at <paramref name="anchor"/>, recording the file hash a
+    /// completed sync would have — so a run at another anchor has real evidence to weigh.</summary>
+    static SkillsManifest Recorded(SkillsSyncFixture fx, SkillSnapshotItem item, string anchor) => new() {
+        Etag   = "etag-1", SyncedAt = SkillsSyncFixture.Now.AddHours(-1),
+        Anchor = anchor, Identity = fx.Identity,
+        Skills = [new SkillsManifestEntry {
+            DocId       = item.DocId, Slug = item.Slug, Version = item.Version,
+            ContentHash = item.ContentHash, Home = fx.RepoHome,
+            Path        = SkillsMaterializer.SkillDirFor(
+                Path.Combine(anchor, ClaudePaths.RepoSkillsRelativePath), item.Slug),
+            FileHash    = SkillsMaterializer.FileHash(Rendered(item)),
+        }],
+    };
 
     /// <summary>A ledger row for a path nothing local materialized — a global copy this checkout
     /// owns without holding a copy of its own.</summary>

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -238,11 +239,6 @@ class SkillsCommand(
         DateTimeOffset?    lastSynced = null;
         var                failed     = false;
         string[]           anchors    = [anchor];
-
-        // Destinations at THIS anchor that the ledger about to be emptied still vouches for: a
-        // checkout moved with its files carries them along, so they exist before the run starts
-        // and no surviving row names them.
-        List<string> carried = [];
         try {
             if (!TryLoadManifest(manifestPath, out manifest)) return (Failed, false, false);
 
@@ -261,6 +257,14 @@ class SkillsCommand(
             lastSynced = manifest?.SyncedAt;
             anchors    = TrustedAnchors(manifest, anchor);
 
+            // Copies that came along with a checkout that moved. Admitted on evidence — the
+            // destination here holds exactly the file the ledger recorded — because a directory the
+            // repository authored under the same name would otherwise be claimed by a name match,
+            // and a later revocation would delete whatever else was kept beside it. They are
+            // journalled rather than held aside, so the one set that authorises a write is the one
+            // that authorises its deletion.
+            var relocated = Relocated(manifest, target, anchor);
+
             // Two ledgers, two decisions. A legacy retirement that cannot finish — a sibling it
             // cannot read, a vendor root that moved — stays due on every start, and folding the
             // two together would then delete and re-materialize the local catalogue every session
@@ -273,23 +277,22 @@ class SkillsCommand(
             var legacyRetiring = Superseded(legacy, identity)
                               || (localRetiring && legacy is { Identity: null });
 
-            // Ahead of the fetch and unconditional: a replacement that fails must leave nothing of
-            // the previous account behind, locally or in the global trees. The local ledger is then
-            // saved owning nothing but the deletions that were refused — dropping those rows would
-            // leave their directories with nothing able to prune them — and with no synced_at, so a
-            // failed replacement cannot be read as a completed refresh.
-            if (localRetiring || legacyRetiring) {
+            // The deletions a retirement ordered. They run before the fetch — a replacement that
+            // fails must leave nothing of the previous account behind — and a row that survives
+            // one carries the order with it, because the ledger's identity is replaced the moment
+            // the empty catalogue is saved and nothing else would remember.
+            List<PendingPrune> retirementRows = localRetiring
+                ? [.. OwnedRows(manifest, relocated, target, anchor).Concat(journal)
+                        .Select(r => r with { Retired = true })]
+                : [.. journal.Where(r => r.Retired)];
+
+            // The local ledger is saved owning nothing but the deletions that were refused —
+            // dropping those rows would leave their directories with nothing able to prune them —
+            // and with no synced_at, so a failed replacement cannot read as a completed refresh.
+            if (retirementRows.Count > 0 || legacyRetiring) {
                 if (!dryRun) {
-                    List<PendingPrune> refusedPrunes = [];
-                    if (localRetiring) {
-                        var owning = OldRoot(manifest, target, anchor);
-                        foreach (var entry in manifest?.Skills ?? []) {
-                            var recorded = new PendingPrune(entry.Path, owning);
-                            if (!PruneRecorded(recorded, target, anchors)) refusedPrunes.Add(recorded);
-                        }
-                        foreach (var outstanding in journal)
-                            if (!PruneRecorded(outstanding, target, anchors)) refusedPrunes.Add(outstanding);
-                    }
+                    List<PendingPrune> refusedPrunes =
+                        [.. retirementRows.Where(r => !PruneRecorded(r, target, anchors))];
 
                     if (legacyRetiring)
                         foreach (var copy in RetireLegacy(hash, target, identity)) {
@@ -298,27 +301,34 @@ class SkillsCommand(
                                 $"Could not remove the global copy {copy}; it stays recorded for the next sync.");
                         }
 
+                    if (refusedPrunes.Count > 0) {
+                        failed = true;
+                        await ReportStuckAsync(refusedPrunes);
+                    }
+
                     if (localRetiring) {
                         journal = refusedPrunes;
-                        if (refusedPrunes.Count > 0) {
-                            failed = true;
-                            await ReportStuckAsync(refusedPrunes);
-                        }
                         SaveManifest(manifestPath,
                                      BuildManifest(null, [], anchor, identity, target, repoHome,
-                                                   syncedAt: null, pending: false, journal, anchors));
+                                                   syncedAt: null, pending: false, journal, anchors, []));
+                    } else {
+                        journal = [.. journal.Where(r => !r.Retired), .. refusedPrunes];
+                        // The files are gone before a fetch that may not return, so the record
+                        // follows them now rather than outliving what it describes.
+                        if (manifest is not null && refusedPrunes.Count < retirementRows.Count)
+                            SaveManifest(manifestPath, manifest with {
+                                PendingPrunes = [.. journal],
+                                PruneAnchors  = ReferencedAnchors(anchors, target, journal),
+                            });
                     }
-                } else {
+                } else if (localRetiring || legacyRetiring) {
                     // The deletion is the most destructive thing this command does and it happens
                     // before the fetch, so a preview that listed only the writes would show none
                     // of it.
                     Info($"[{target.Key}] the recorded account ({RetiredAccount(manifest, legacy, identity)}) "
                        + $"is no longer {identity.Account}; its catalogue goes before a replacement is fetched:");
-                    if (localRetiring) {
-                        foreach (var entry in manifest?.Skills ?? []) Info($"{"would retire",-12} {entry.Path}");
-                        foreach (var outstanding in journal) Info($"{"would retire",-12} {outstanding.Path}");
-                        journal.Clear();
-                    }
+                    foreach (var row in retirementRows) Info($"{"would retire",-12} {row.Path}");
+                    if (localRetiring) journal.Clear();
                     if (legacyRetiring)
                         foreach (var copy in PlanLegacy(hash, target, identity)?.Delete ?? [])
                             Info($"{"would retire",-12} {copy}");
@@ -332,17 +342,12 @@ class SkillsCommand(
             if (!localRetiring && manifest is not null && Moved(manifest, anchor)) {
                 // Neither the conditional request nor the planner compares destinations, so a
                 // manifest recorded at another anchor is discarded as a cache and kept as a ledger:
-                // every document is rewritten at the new paths, and every old path is queued for
-                // deletion beside the root that authorises deleting it. Nothing has been applied at
-                // the new anchor yet, so the previous stamp does not carry over either.
-                var owning = OldRoot(manifest, target, anchor);
-                journal    = [.. SkillsJournal.Merge(journal, (manifest.Skills ?? [])
-                    .Select(entry => new PendingPrune(entry.Path, owning)))];
-                // Only the anchor changed, so each entry's destination at the new root is
-                // derivable from the slug it owned — and a checkout that moved with its files
-                // already has it on disk.
-                carried    = [.. (manifest.Skills ?? [])
-                    .Select(entry => SkillsMaterializer.SkillDirFor(root, entry.Slug))];
+                // every document is rewritten at the new paths, and every path it owned — at the old
+                // anchor, and at this one where a copy travelled — becomes a row the snapshot then
+                // either writes over or has deleted. Nothing has been applied here yet, so the
+                // previous stamp does not carry over either.
+                journal    = [.. SkillsJournal.Merge(
+                    journal, OwnedRows(manifest, relocated, target, anchor))];
                 manifest   = manifest with { Skills = [], Etag = null };
                 lastSynced = null;
             }
@@ -378,7 +383,7 @@ class SkillsCommand(
                 // deletion still owed, so it settles like any other outcome.
                 var stale = Settle(manifestPath, manifest with {
                     Anchor = anchor, Identity = identity, Exposure = Exposure(target),
-                }, target, anchors, completed: time.GetUtcNow());
+                }, target, anchors, FrozenSet<Guid>.Empty, completed: time.GetUtcNow());
                 await ReportStuckAsync(stale);
                 return (failed || stale.Length > 0 ? Failed : 0, true, false);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
@@ -418,7 +423,8 @@ class SkillsCommand(
         PendingPrune[] merged;
         PendingPrune[] owedPrunes;
         try {
-            merged     = SkillsJournal.Merge(journal, plan.Prunes.Select(e => new PendingPrune(e.Path, root)));
+            merged     = SkillsJournal.Merge(
+                journal, plan.Prunes.Select(e => new PendingPrune(e.DocId, e.Path, root)));
             owedPrunes = SkillsJournal.Reconcile(
                 merged, snapshot.Select(s => SkillsMaterializer.SkillDirFor(root, s.Slug)));
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
@@ -440,10 +446,9 @@ class SkillsCommand(
             // A destination that already exists and no ledger row names is the repository's own,
             // and may be tracked. Recording it would make a later prune delete it whole, so it is
             // refused before ownership is recorded — the journal counts as a ledger row, since a
-            // path awaiting deletion is one kcap wrote and a rename can come back to it, and so do
-            // the destinations an anchor change carried over.
+            // path awaiting deletion is one kcap wrote and a rename can come back to it.
             var ledger = (manifest?.Skills ?? []).Select(e => e.Path)
-                .Concat(merged.Select(p => p.Path)).Concat(carried)
+                .Concat(merged.Select(p => p.Path))
                 .Select(CanonicalPath.Resolve).ToHashSet(PathComparison.Comparer);
             foreach (var w in writes) {
                 var dir = SkillsMaterializer.SkillDirFor(root, w.Slug);
@@ -461,8 +466,9 @@ class SkillsCommand(
             // save leaves every planned path and every owed deletion recorded, so a later sync can
             // finish whichever half was interrupted.
             if (writes.Count > 0 || owedPrunes.Length > 0)
-                SaveManifest(manifestPath, BuildManifest(dto.Etag, claimable, anchor, identity, target,
-                                                         repoHome, lastSynced, pending: true, owedPrunes, anchors));
+                SaveManifest(manifestPath, BuildManifest(
+                    dto.Etag, claimable, anchor, identity, target, repoHome, lastSynced,
+                    pending: true, owedPrunes, anchors, Retained(manifest, unownedIds)));
 
             foreach (var w in writes)
                 if (!unownedIds.Contains(w.DocId) && !SkillsMaterializer.Write(root, anchor, w)) refused.Add(w);
@@ -480,9 +486,11 @@ class SkillsCommand(
             stuck = Settle(
                 manifestPath,
                 BuildManifest(refusedIds.Count == 0 ? dto.Etag : null, published, anchor, identity,
-                              target, repoHome, lastSynced, pending: false, owedPrunes, anchors),
+                              target, repoHome, lastSynced, pending: false, owedPrunes, anchors,
+                              Retained(manifest, refusedIds)),
                 target,
                 anchors,
+                withheld: refusedIds,
                 completed: refusedIds.Count == 0 ? time.GetUtcNow() : lastSynced);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
@@ -495,7 +503,11 @@ class SkillsCommand(
             : $"[{target.Key}] synced {writes.Count - refused.Count - unowned.Count} skill(s), "
             + $"pruned {owedPrunes.Length - stuck.Length}; {published.Length} materialized.");
 
-        return (failed || refused.Count + unowned.Count + stuck.Length > 0 ? Failed : 0, true, false);
+        // Settled is what lets the tail retire the global copies, and a target that could not
+        // publish has not migrated: a stuck deletion is owed work, a refused write is a failure to
+        // have written at all.
+        return (failed || refused.Count + unowned.Count + stuck.Length > 0 ? Failed : 0,
+                refused.Count + unowned.Count == 0, false);
     }
 
     /// <summary>The work that has to outlive the manifest lock: retiring the global copies under the
@@ -642,6 +654,36 @@ class SkillsCommand(
     static string OldRoot(SkillsManifest? manifest, SkillsTarget target, string anchor) =>
         target.Root(manifest?.Anchor ?? anchor);
 
+    /// <summary>Every directory the local catalogue owns, as a deletion intent: what the ledger
+    /// records, plus what a checkout that moved carried to this anchor.</summary>
+    static IEnumerable<PendingPrune> OwnedRows(
+            SkillsManifest? manifest, IReadOnlyList<PendingPrune> relocated, SkillsTarget target,
+            string anchor) =>
+        (manifest?.Skills ?? [])
+            .Select(e => new PendingPrune(e.DocId, e.Path, OldRoot(manifest, target, anchor)))
+            .Concat(relocated);
+
+    /// <summary>The entries whose materialized copy travelled with a checkout that moved, at the
+    /// path each now occupies. Proof is the file hash the ledger recorded: a directory of the same
+    /// name that the repository authored for itself does not hold the bytes kcap wrote, and an
+    /// entry from before file hashes proves nothing, so both are refused rather than claimed — a
+    /// refusal is recoverable and a wrongful recursive delete is not.</summary>
+    static List<PendingPrune> Relocated(SkillsManifest? manifest, SkillsTarget target, string anchor) {
+        if (manifest is null || !Moved(manifest, anchor)) return [];
+        var root = target.Root(anchor);
+        return [.. (manifest.Skills ?? [])
+            .Select(e => (Entry: e, Here: SkillsMaterializer.SkillDirFor(root, e.Slug)))
+            .Where(p => !PathComparison.Equal(p.Entry.Path, p.Here)
+                        && !SkillsMaterializer.HasDrifted(p.Entry with { Path = p.Here }))
+            .Select(p => new PendingPrune(p.Entry.DocId, p.Here, root))];
+    }
+
+    /// <summary>A refused rewrite does not release the copy already owned: dropping its row would
+    /// make a later run read that directory as the repository's own, and nothing could revoke it
+    /// after that.</summary>
+    static SkillsManifestEntry[] Retained(SkillsManifest? manifest, IReadOnlySet<Guid> refusedIds) =>
+        [.. (manifest?.Skills ?? []).Where(e => refusedIds.Contains(e.DocId))];
+
     /// <summary>The anchors a deletion may be aimed at: this run's own, the one the ledger was last
     /// written at, and the ones it recorded occupying while rows were outstanding. All three come
     /// from what kcap itself wrote when that anchor was live; nothing a row asserts about itself is
@@ -742,16 +784,24 @@ class SkillsCommand(
     /// an intent that was refused so a later run retries it. The ledger is saved after the
     /// deletions, so an interruption leaves a path owned rather than orphaned, and only a settlement
     /// that left nothing undone earns <paramref name="completed"/> as its refresh stamp — a fresh one
-    /// otherwise would let the throttle read an incomplete sync as a completed one.</summary>
+    /// otherwise would let the throttle read an incomplete sync as a completed one.
+    ///
+    /// <para>A row whose document is in <paramref name="withheld"/> is not attempted at all: its
+    /// replacement was refused, so this copy is the only one there is. Copy before delete, and a
+    /// deletion that outran its replacement leaves the document served from nowhere.</para></summary>
     static PendingPrune[] Settle(string manifestPath, SkillsManifest manifest, SkillsTarget target,
-                                 IReadOnlyList<string> anchors, DateTimeOffset? completed) {
+                                 IReadOnlyList<string> anchors, IReadOnlySet<Guid> withheld,
+                                 DateTimeOffset? completed) {
         List<PendingPrune> stuck = [];
+        List<PendingPrune> held  = [];
         foreach (var recorded in manifest.PendingPrunes ?? [])
-            if (!PruneRecorded(recorded, target, anchors)) stuck.Add(recorded);
+            if (withheld.Contains(recorded.DocId)) held.Add(recorded);
+            else if (!PruneRecorded(recorded, target, anchors)) stuck.Add(recorded);
+        PendingPrune[] surviving = [.. stuck, .. held];
         SaveManifest(manifestPath, manifest with {
-            Pending = false, PendingPrunes = [.. stuck],
-            PruneAnchors = ReferencedAnchors(anchors, target, stuck),
-            SyncedAt = stuck.Count == 0 ? completed : manifest.SyncedAt,
+            Pending = false, PendingPrunes = surviving,
+            PruneAnchors = ReferencedAnchors(anchors, target, surviving),
+            SyncedAt = surviving.Length == 0 ? completed : manifest.SyncedAt,
         });
         return [.. stuck];
     }
@@ -759,13 +809,14 @@ class SkillsCommand(
     static SkillsManifest BuildManifest(
             string? etag, IReadOnlyList<SkillSnapshotItem> snapshot, string anchor,
             SkillsIdentity identity, SkillsTarget target, string repoHome, DateTimeOffset? syncedAt,
-            bool pending, IReadOnlyList<PendingPrune> journal, IReadOnlyList<string> anchors) {
+            bool pending, IReadOnlyList<PendingPrune> journal, IReadOnlyList<string> anchors,
+            IReadOnlyList<SkillsManifestEntry> retained) {
         var root = target.Root(anchor);
         return new() {
             Etag     = etag, SyncedAt = syncedAt, Anchor = anchor, Identity = identity,
             Exposure = Exposure(target), Pending = pending, PendingPrunes = [.. journal],
             PruneAnchors = ReferencedAnchors(anchors, target, journal),
-            Skills   = [.. snapshot.Select(s => new SkillsManifestEntry {
+            Skills   = [.. retained, .. snapshot.Select(s => new SkillsManifestEntry {
                 DocId = s.DocId, Slug = s.Slug, Version = s.Version, ContentHash = s.ContentHash,
                 Path = SkillsMaterializer.SkillDirFor(root, s.Slug),
                 FileHash = SkillsMaterializer.FileHash(SkillsSyncPlanner.RenderSkillFile(s)),
