@@ -7,7 +7,7 @@ public class SkillsAutoSyncTests {
     [Test]
     public async Task Throttle_skips_within_the_interval_and_runs_past_or_outside_it() {
         var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
-        static SkillsManifest M(DateTimeOffset t) => new() { SyncedAt = t };
+        static SkillsLedger M(DateTimeOffset t) => new() { SyncedAt = t };
 
         await Assert.That(SkillsCommand.AutoThrottled(M(now.AddHours(-1)), now)).IsTrue();
         await Assert.That(SkillsCommand.AutoThrottled(M(now.AddHours(-7)), now)).IsFalse();

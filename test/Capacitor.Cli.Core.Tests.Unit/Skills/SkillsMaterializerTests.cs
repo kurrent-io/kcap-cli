@@ -10,43 +10,37 @@ public class SkillsMaterializerTests {
         Version = 1, ContentHash = "h1",
     };
 
+    static bool Write(string root, string anchor, SkillSnapshotItem item) =>
+        SkillsMaterializer.Write(SkillsMaterializer.SkillDirFor(root, item.Slug), anchor,
+                                 SkillsRendering.RenderSkillFile(item));
+
     [Test]
-    public async Task Drift_detection_covers_missing_edited_and_untracked_files() {
+    public async Task A_probe_tells_present_from_absent_from_unreadable() {
         var root = Tmp.Path;
         var item = Item("retry-rules");
-        SkillsMaterializer.Write(root, root, item);
-        var dir      = SkillsMaterializer.SkillDirFor(root, item.Slug);
-        var rendered = SkillsSyncPlanner.RenderSkillFile(item);
-        var entry = new SkillsManifestEntry {
-            DocId = item.DocId, Slug = item.Slug, Version = 1, ContentHash = "h1",
-            Path = dir, FileHash = SkillsMaterializer.FileHash(rendered),
-        };
 
-        await Assert.That(SkillsMaterializer.HasDrifted(entry)).IsFalse();          // served as written
-        File.AppendAllText(Path.Combine(dir, "SKILL.md"), "tampered");
-        await Assert.That(SkillsMaterializer.HasDrifted(entry)).IsTrue();           // edited
-        Directory.Delete(dir, recursive: true);
-        await Assert.That(SkillsMaterializer.HasDrifted(entry)).IsTrue();           // deleted
-        await Assert.That(SkillsMaterializer.HasDrifted(entry with { FileHash = null })).IsTrue();   // pre-hash manifest
-    }
+        Write(root, root, item);
 
-    [Test]
-    public async Task Prune_deletes_only_direct_kcap_children_of_the_root() {
-        var anchor = Tmp.CreateDir("repo");
-        var root   = Tmp.CreateDir("repo/skills");
-        Tmp.CreateDir("repo/skills/kcap-mine");
-        Tmp.CreateDir("repo/skills/user-owned/kcap-nested");
-        var siblingChild = Tmp.CreateDir("repo/skills-backup/kcap-foo");
-        var owned  = Path.Combine(root, "kcap-mine");
-        var nested = Path.Combine(root, "user-owned", "kcap-nested");
+        var dir = SkillsMaterializer.SkillDirFor(root, item.Slug);
 
-        await Assert.That(SkillsMaterializer.Prune(root, anchor, owned)).IsTrue();
-        await Assert.That(SkillsMaterializer.Prune(root, anchor, nested)).IsFalse();
-        await Assert.That(SkillsMaterializer.Prune(root, anchor, siblingChild)).IsFalse();
+        await Assert.That(SkillsMaterializer.Inspect(dir))
+            .IsEqualTo((SkillFileProbe.Present, SkillsMaterializer.FileHash(SkillsRendering.RenderSkillFile(item))));
 
-        await Assert.That(Directory.Exists(owned)).IsFalse();
-        await Assert.That(Directory.Exists(nested)).IsTrue();        // nested user dir untouched
-        await Assert.That(Directory.Exists(siblingChild)).IsTrue();  // sibling root untouched
+        File.AppendAllText(SkillsMaterializer.SkillFileFor(dir), "tampered");
+
+        var (edited, hash) = SkillsMaterializer.Inspect(dir);
+
+        await Assert.That(edited).IsEqualTo(SkillFileProbe.Present);
+        await Assert.That(hash).IsNotEqualTo(SkillsMaterializer.FileHash(SkillsRendering.RenderSkillFile(item)));
+
+        File.Delete(SkillsMaterializer.SkillFileFor(dir));
+
+        await Assert.That(SkillsMaterializer.Inspect(dir).Probe).IsEqualTo(SkillFileProbe.Absent);
+
+        // A link is not readable evidence of anything kcap wrote, whatever it points at.
+        File.CreateSymbolicLink(SkillsMaterializer.SkillFileFor(dir), Tmp.CreateFile("elsewhere.md", "theirs"));
+
+        await Assert.That(SkillsMaterializer.Inspect(dir).Probe).IsEqualTo(SkillFileProbe.Unreadable);
     }
 
     [Test]
@@ -57,7 +51,7 @@ public class SkillsMaterializerTests {
         Directory.CreateDirectory(Path.GetDirectoryName(root)!);
         Directory.CreateSymbolicLink(root, outside);
 
-        var written = SkillsMaterializer.Write(root, anchor, Item("x"));
+        var written = Write(root, anchor, Item("x"));
 
         await Assert.That(written).IsFalse();
         await Assert.That(Directory.GetDirectories(outside)).IsEmpty();
@@ -68,7 +62,7 @@ public class SkillsMaterializerTests {
         var anchor = Tmp.CreateDir("repo");
         var root   = Tmp.CreateDir("repo/.agents/skills");
 
-        SkillsMaterializer.Write(root, anchor, Item("x"));
+        Write(root, anchor, Item("x"));
 
         var dir = SkillsMaterializer.SkillDirFor(root, "x");
 
@@ -88,25 +82,8 @@ public class SkillsMaterializerTests {
         Directory.CreateSymbolicLink(root, outside.Path);
 
         await Assert.That(Directory.Exists(deep)).IsTrue();
-        await Assert.That(SkillsMaterializer.Write(root, anchor, Item("x"))).IsFalse();
+        await Assert.That(Write(root, anchor, Item("x"))).IsFalse();
         await Assert.That(Directory.GetDirectories(outside)).IsEmpty();
-    }
-
-    [Test]
-    public async Task A_prune_outside_the_anchor_is_refused() {
-        var anchor  = Tmp.CreateDir("repo");
-        var outside = Tmp.CreateDir("global/skills");
-        Tmp.CreateDir("global/skills/kcap-x");
-        var root = Path.Combine(anchor, ".agents", "skills");
-        Directory.CreateDirectory(Path.GetDirectoryName(root)!);
-        Directory.CreateSymbolicLink(root, outside);
-
-        // The root itself is the link, so the lexical parent-equality and kcap- prefix checks both
-        // pass on this path — only the resolved containment check can refuse it.
-        var pruned = SkillsMaterializer.Prune(root, anchor, Path.Combine(root, "kcap-x"));
-
-        await Assert.That(pruned).IsFalse();
-        await Assert.That(Directory.Exists(Path.Combine(outside, "kcap-x"))).IsTrue();
     }
 
     [Test]
@@ -118,10 +95,9 @@ public class SkillsMaterializerTests {
         var outsideFile = Tmp.CreateFile("global/secret.txt", "outside content");
         File.CreateSymbolicLink(SkillsMaterializer.SkillFileFor(dir) + ".tmp", outsideFile);
 
-        SkillsMaterializer.Write(root, anchor, Item("x"));
+        Write(root, anchor, Item("x"));
 
         await Assert.That(File.ReadAllText(outsideFile)).IsEqualTo("outside content");
         await Assert.That(new FileInfo(SkillsMaterializer.SkillFileFor(dir)).LinkTarget).IsNull();
     }
 }
-

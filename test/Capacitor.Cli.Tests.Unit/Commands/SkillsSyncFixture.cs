@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -70,7 +69,7 @@ sealed class SkillsSyncFixture {
     /// <summary>The checkout the sync runs in — the anchor every destination is relative to.</summary>
     public string Anchor { get; }
 
-    /// <summary>This worktree's own git directory, where its manifest lives.</summary>
+    /// <summary>This worktree's own git directory, where its ledger lives.</summary>
     public string GitDir { get; }
 
     /// <summary>The user home the global trees hang off — the only roots a legacy retirement may
@@ -81,11 +80,13 @@ sealed class SkillsSyncFixture {
     public string         RepoHome { get; }
     public SkillsIdentity Identity { get; }
 
-    public string ManifestPath => Path.Combine(GitDir, "kcap", "skills", TargetKey + ".json");
+    public SkillsTarget Target => SkillsCommand.Targets(LegacyRoots).Single(t => t.Key == TargetKey);
+
+    public string LedgerPath => Path.Combine(GitDir, "kcap", "skills", TargetKey + ".json");
 
     public string SkillsRoot => Path.Combine(Anchor, ClaudePaths.RepoSkillsRelativePath);
 
-    public string LegacyManifestPath => Config.Path("skills", RepoHash, TargetKey, "manifest.json");
+    public string LegacyLedgerPath => Config.Path("skills", RepoHash, TargetKey, "manifest.json");
 
     public string SkillDir(string slug) => SkillsMaterializer.SkillDirFor(SkillsRoot, slug);
 
@@ -93,35 +94,85 @@ sealed class SkillsSyncFixture {
 
     public bool HasSkill(string slug) => Directory.Exists(SkillDir(slug));
 
-    public SkillsManifest ReadManifest() =>
-        JsonSerializer.Deserialize(File.ReadAllText(ManifestPath), CapacitorJsonContext.Default.SkillsManifest)!;
+    /// <summary>The saved ledger, refusing any row the validator would not admit — so every test
+    /// that reads one also pins that no run saved an illegal combination.</summary>
+    public SkillsLedger ReadLedger() {
+        var ledger = SkillsLedgerFile.ReadQuietly(LedgerPath, SkillOrigin.Repository)
+                  ?? throw new InvalidOperationException($"no ledger at {LedgerPath}");
 
-    public void WriteManifest(SkillsManifest manifest) => Write(ManifestPath, Serialize(manifest));
+        foreach (var row in ledger.Rows)
+            if (SkillsLedgerValidation.Reject(row) is { } reason)
+                throw new InvalidOperationException($"the run saved an illegal row for {row.Path}: {reason}");
+
+        return ledger;
+    }
+
+    public IReadOnlyList<OwnedSkillRow> Rows() => ReadLedger().Rows;
+
+    public OwnedSkillRow? RowFor(string slug) =>
+        Rows().SingleOrDefault(r => PathComparison.Equal(r.Path, SkillDir(slug)));
+
+    public void WriteLedger(SkillsLedger ledger) => SkillsLedgerFile.Save(LedgerPath, ledger);
 
     /// <summary>The ledger under the config root that owns user-global copies — the one migration
     /// retires, and the one whose existence alone adopts a target.</summary>
-    public void WriteLegacyManifest(SkillsManifest manifest) =>
-        Write(LegacyManifestPath, Serialize(manifest));
+    public void WriteLegacyLedger(SkillsLedger ledger) => SkillsLedgerFile.Save(LegacyLedgerPath, ledger);
 
-    /// <summary>The same ledger verbatim — for a test whose point is one that will not parse.
-    /// </summary>
-    public void WriteLegacyManifest(string json) => Write(LegacyManifestPath, json);
+    /// <summary>The same ledger verbatim — for a test whose point is the shape on disk.</summary>
+    public void WriteLegacyLedger(string json) =>
+        new TempDirHandle(Path.GetDirectoryName(LegacyLedgerPath)!)
+            .CreateFile(Path.GetFileName(LegacyLedgerPath), json);
 
-    /// <summary>Writes one skill and the manifest entry that owns it, exactly as a completed sync
-    /// would — so the entry reads as served rather than drifted.</summary>
-    public SkillsManifestEntry Materialize(SkillSnapshotItem item) {
-        var rendered = SkillsSyncPlanner.RenderSkillFile(item);
-        var dir      = SkillDir(item.Slug);
+    public SkillsLedger ReadLegacyLedger() =>
+        SkillsLedgerFile.ReadQuietly(LegacyLedgerPath, SkillOrigin.Legacy)
+        ?? throw new InvalidOperationException($"no legacy ledger at {LegacyLedgerPath}");
 
-        Write(SkillsMaterializer.SkillFileFor(dir), rendered);
+    /// <summary>A ledger owning the given rows under the current identity — the state a completed
+    /// sync leaves, for a test that starts from one.</summary>
+    public SkillsLedger Owning(params OwnedSkillRow[] rows) => new() {
+        SyncedAt = Now.AddDays(-1), Identity = Identity, Exposure = ["claude"], Owned = rows,
+    };
 
-        return new SkillsManifestEntry {
-            DocId       = item.DocId, Slug = item.Slug, Version = item.Version,
-            ContentHash = item.ContentHash, Path = dir,
-            FileHash    = SkillsMaterializer.FileHash(rendered),
-            Home        = item.Home ?? RepoHome, Applicability = item.Applicability,
-        };
+    /// <summary>Writes one skill and the row that owns it, exactly as a completed sync would — so
+    /// the row reads as served rather than drifted.</summary>
+    public OwnedSkillRow Materialize(SkillSnapshotItem item, string? anchor = null) {
+        var rendered = SkillsRendering.RenderSkillFile(item);
+        var at       = SkillDestination.For(Target, anchor ?? Anchor, item.Slug);
+
+        new TempDirHandle(at.Path).CreateFile("SKILL.md", rendered);
+
+        return Published(item, at, SkillsMaterializer.FileHash(rendered));
     }
+
+    /// <summary>A row for a path nothing local materialized — a global copy this checkout owns
+    /// without holding a copy of its own.</summary>
+    public OwnedSkillRow Global(SkillSnapshotItem item, string path, string body) => new() {
+        Path = path, Root = Path.GetDirectoryName(path)!, Origin = SkillOrigin.Legacy,
+        State = OwnedSkillState.Published,
+        Confirmed = new SkillReceipt {
+            FileHash = SkillsMaterializer.FileHash(body), Document = SkillDocument.Of(item, RepoHome),
+        },
+    };
+
+    public OwnedSkillRow Published(SkillSnapshotItem item, SkillDestination at, string fileHash) => new() {
+        Path = at.Path, Root = at.Root, Anchor = at.Anchor, Origin = SkillOrigin.Repository,
+        State = OwnedSkillState.Published,
+        Confirmed = new SkillReceipt { FileHash = fileHash, Document = SkillDocument.Of(item, RepoHome) },
+    };
+
+    /// <summary>Blocks one destination so a run genuinely aborts part-way through its writes: a
+    /// plain file where the directory has to be created makes the write throw, which ends the run
+    /// after the ownership save and before any outcome is recorded.</summary>
+    public string Block(string slug) {
+        var dir = SkillDir(slug);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
+        File.WriteAllText(dir, "in the way");
+
+        return dir;
+    }
+
+    public void Unblock(string slug) => File.Delete(SkillDir(slug));
 
     /// <summary>One snapshot row. <paramref name="docId"/> is the server's stable key, so a rename
     /// keeps it and passes a new slug.</summary>
@@ -136,14 +187,6 @@ sealed class SkillsSyncFixture {
         };
 
     const string ProfileName = "default";
-
-    static string Serialize(SkillsManifest manifest) =>
-        JsonSerializer.Serialize(manifest, CapacitorJsonContext.Default.SkillsManifest);
-
-    // The destinations come from production, so the directory a test needs is under whichever tree
-    // the code under test chose; the helper is what creates the missing parents.
-    static void Write(string path, string content) =>
-        new TempDirHandle(Path.GetDirectoryName(path)!).CreateFile(Path.GetFileName(path), content);
 
     static Guid DocIdFor(string slug) => new(SHA256.HashData(Encoding.UTF8.GetBytes(slug)).AsSpan(0, 16));
 

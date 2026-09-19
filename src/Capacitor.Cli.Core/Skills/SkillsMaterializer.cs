@@ -3,14 +3,24 @@ using System.Text;
 
 namespace Capacitor.Cli.Core.Skills;
 
+/// <summary>What is at a destination, as far as this run could establish. Absence means we looked
+/// and nothing is there; the other three are each a different outcome and none of them is
+/// absence.</summary>
+public enum SkillFileProbe {
+    Absent,
+    Present,
+    Unreadable,
+    Unresolvable,
+}
+
 /// <summary>
 /// The file half of skills materialization, harness-neutral: how a slug maps to a directory under
-/// a given skills root, and the write/prune/drift operations. Which roots exist and which vendor
+/// a given skills root, and the write and probe operations. Which roots exist and which vendor
 /// each fetches as is the target catalog's business.
 /// </summary>
 public static class SkillsMaterializer {
     /// <summary>What marks a directory as kcap's inside a skills root the repository also uses. The
-    /// write, the prune guard and the Git exclusion glob all spell it through this constant: a
+    /// write, the deletion guard and the Git exclusion glob all spell it through this constant: a
     /// divergence would stop the exclusion matching what the writer creates, with nothing
     /// failing.</summary>
     public const string OwnedPrefix = "kcap-";
@@ -24,40 +34,45 @@ public static class SkillsMaterializer {
     public static string FileHash(string rendered) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(rendered)));
 
-    /// <summary>A manifest entry whose materialized file is missing or edited. A drifted entry means
-    /// metadata alone cannot prove the skill is served — the snapshot must be re-applied.</summary>
-    public static bool HasDrifted(SkillsManifestEntry entry) {
-        var file = SkillFileFor(entry.Path);
-        if (entry.FileHash is null || !File.Exists(file)) return true;
+    /// <summary>The hash of a file that is there and readable, or null when it is neither.</summary>
+    public static string? HashOf(string file) {
         try {
-            return FileHash(File.ReadAllText(file)) != entry.FileHash;
-        } catch {
-            return true;
+            return FileHash(File.ReadAllText(file));
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
         }
+    }
+
+    /// <summary>What a materialized directory holds, and its hash when that is answerable. A
+    /// <c>SKILL.md</c> that is itself a link is not readable evidence of anything we wrote.
+    /// </summary>
+    public static (SkillFileProbe Probe, string? Hash) Inspect(string dir) {
+        if (!CanonicalPath.TryResolve(dir, out _)) return (SkillFileProbe.Unresolvable, null);
+
+        var file = new FileInfo(SkillFileFor(dir));
+
+        if (!Directory.Exists(dir) || !file.Exists) return (SkillFileProbe.Absent, null);
+        if (file.LinkTarget is not null) return (SkillFileProbe.Unreadable, null);
+
+        return HashOf(file.FullName) is { } hash
+            ? (SkillFileProbe.Present, hash)
+            : (SkillFileProbe.Unreadable, null);
     }
 
     /// <summary>Writes one skill, refusing a destination that leaves the anchor through a link: a
     /// vendor directory inside the repository may be a symlink to the user-global tree, which would
     /// publish repository content globally again.</summary>
-    public static bool Write(string root, string anchor, SkillSnapshotItem item) {
-        var dir = SkillDirFor(root, item.Slug);
+    public static bool Write(string dir, string anchor, string rendered) {
         if (!CanonicalPath.IsWithin(dir, anchor)) return false;
-        Directory.CreateDirectory(dir);
-        var file = SkillFileFor(dir);
-        if (File.Exists(file) && new FileInfo(file).LinkTarget is not null) return false;
-        AtomicFile.Replace(file, SkillsSyncPlanner.RenderSkillFile(item));
-        return true;
-    }
 
-    /// <summary>Deletes one owned directory: a DIRECT kcap-* child of the given root that also
-    /// resolves inside the anchor.</summary>
-    public static bool Prune(string root, string anchor, string path) {
-        var full = Path.GetFullPath(path);
-        if (!PathComparison.Equal(Path.GetDirectoryName(full), Path.GetFullPath(root))) return false;
-        if (!Path.GetFileName(full).StartsWith(OwnedPrefix, PathComparison.Comparison)) return false;
-        if (!CanonicalPath.IsWithin(full, anchor)) return false;
-        if (!Directory.Exists(full)) return false;
-        Directory.Delete(full, recursive: true);
+        Directory.CreateDirectory(dir);
+
+        var file = SkillFileFor(dir);
+
+        if (File.Exists(file) && new FileInfo(file).LinkTarget is not null) return false;
+
+        AtomicFile.Replace(file, rendered);
+
         return true;
     }
 }
