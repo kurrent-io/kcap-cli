@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Skills;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -235,23 +236,21 @@ public class SkillsOwnershipRecoveryTests {
         var next = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"),
                                          subject: "someone-else");
 
-        // An authored file at the destination the cancelled operation named, so a replay of it
-        // would leave a SKILL.md beside it that nothing could then account for.
-        var witness = new TempDirHandle(first.SkillDir("beta")).CreateFile("notes.md", "mine");
+        // The destination the cancelled operation named, left as the interrupted attempt would: an
+        // empty directory. A replay publishes into it, and nothing in this run holds a receipt that
+        // could take that file away again — so the file and the row it strands both survive, which
+        // is what distinguishes a replay from the cancellation.
+        Directory.CreateDirectory(first.SkillDir("beta"));
 
         await Assert.That(await next.Command.HandleSync(dryRun: false)).IsEqualTo(1);
 
         // What landed under the old account is recorded, then retired: the file is gone.
         await Assert.That(next.HasSkill("alpha")).IsFalse();
-        // What did not land is cancelled, not replayed.
         await Assert.That(File.Exists(next.SkillFile("beta"))).IsFalse();
-        await Assert.That(File.ReadAllText(witness)).IsEqualTo("mine");
 
         var ledger = next.ReadLedger();
 
-        await Assert.That(ledger.Rows.Single().State).IsEqualTo(OwnedSkillState.Settled);
-        await Assert.That(ledger.Rows.Single().Confirmed).IsNull();
-        await Assert.That(ledger.Rows.Single().Prepared).IsNull();
+        await Assert.That(ledger.Rows).IsEmpty();
         await Assert.That(ledger.Identity!.Account).IsEqualTo("someone-else");
         await Assert.That(ledger.Etag).IsNull();
         await Assert.That(ledger.SyncedAt).IsNull();
@@ -457,6 +456,84 @@ public class SkillsOwnershipRecoveryTests {
         await Assert.That(again.RowFor("beta")!.State).IsEqualTo(OwnedSkillState.Published);
         await Assert.That(File.ReadAllText(again.SkillFile("alpha")))
             .IsEqualTo("written by something that is not kcap");
+    }
+
+    /// <summary>A replacement recovered under the same account publishes and supersedes exactly as
+    /// an ordinary run would. Recovering it as still-owed deletes the copy just recovered and leaves
+    /// the one it replaced serving — an outcome no uninterrupted run could reach.</summary>
+    [Test]
+    public async Task A_replacement_recovered_under_the_same_account_publishes_and_supersedes() {
+        using var repo  = Checkout("repo");
+        var       atX   = SkillsSyncFixture.Skill("alpha", Renamed);
+        var       atY   = SkillsSyncFixture.Skill("beta", Renamed, version: 2);
+        var       backX = SkillsSyncFixture.Skill("alpha", Renamed, version: 3);
+        var       gamma = SkillsSyncFixture.Skill("gamma");
+        var       first = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", atX));
+
+        await Assert.That(await first.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        // The published file stops matching its receipt, so the deletion the rename orders is
+        // refused and the row is still owed when the document comes back to it.
+        File.WriteAllText(first.SkillFile("alpha"), "edited by hand");
+
+        var renaming = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", atY));
+
+        await Assert.That(await renaming.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+        await Assert.That(first.RowFor("alpha")!.State).IsEqualTo(OwnedSkillState.Owed);
+        await Assert.That(first.RowFor("beta")!.State).IsEqualTo(OwnedSkillState.Published);
+
+        var back = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-3", backX, gamma));
+
+        back.Block("gamma");
+
+        await Assert.That(await back.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        // A precondition: the replacement landed at the owed path and the outcome was never saved.
+        await Assert.That(File.ReadAllText(back.SkillFile("alpha"))).IsEqualTo(Rendered(backX));
+        await Assert.That(back.RowFor("alpha")!.Prepared).IsNotNull();
+        await Assert.That(back.RowFor("alpha")!.State).IsEqualTo(OwnedSkillState.Owed);
+
+        back.Unblock("gamma");
+
+        var resumed = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+
+        await Assert.That(await resumed.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(File.ReadAllText(resumed.SkillFile("alpha"))).IsEqualTo(Rendered(backX));
+        await Assert.That(resumed.RowFor("alpha")!.State).IsEqualTo(OwnedSkillState.Published);
+        await Assert.That(resumed.HasSkill("beta")).IsFalse();
+    }
+
+    /// <summary>A row the validator refused is not a row that may order a retirement. Letting one
+    /// supply the account deletes a catalogue the current account published.</summary>
+    [Test]
+    public async Task A_row_nothing_may_act_on_cannot_order_a_retirement() {
+        using var repo  = Checkout("repo");
+        var       alpha = SkillsSyncFixture.Skill("alpha");
+        var       fx    = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+        var       owned = fx.Materialize(alpha);
+
+        // No envelope credential, and the only operation belongs to a row held aside on load.
+        fx.WriteLedger(new SkillsLedger {
+            Etag = "etag-1", SyncedAt = SkillsSyncFixture.Now.AddDays(-1),
+            Owned = [owned, new OwnedSkillRow {
+                Path = fx.SkillDir("broken"), Root = fx.SkillsRoot, Anchor = fx.Anchor,
+                Origin = SkillOrigin.Repository, State = OwnedSkillState.Published,
+                Prepared = new PreparedSkillWrite {
+                    Operation = Guid.NewGuid(), Intended = owned.Confirmed!,
+                    Identity  = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl),
+                },
+            }],
+        });
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(File.ReadAllText(fx.SkillFile("alpha"))).IsEqualTo(Rendered(alpha));
+
+        var rows = SkillsLedgerFile.ReadQuietly(fx.LedgerPath, SkillOrigin.Repository)!.Rows;
+
+        await Assert.That(rows.Single(r => PathComparison.Equal(r.Path, fx.SkillDir("alpha"))).State)
+            .IsEqualTo(OwnedSkillState.Published);
     }
 
     /// <summary>A legacy ledger that will not read is exactly the case the obligation exists to

@@ -156,6 +156,25 @@ public class SkillsMaterializerTests {
         await Assert.That(SkillsMaterializer.Inspect(dir).Probe).IsEqualTo(SkillFileProbe.Present);
     }
 
+    /// <summary>A publication that could not be renamed into place takes its own temporary with it,
+    /// and leaves nothing else behind.</summary>
+    [Test]
+    public async Task A_failed_publication_leaves_no_temporary_behind() {
+        var holder = Tmp.CreateDir("holder");
+        var target = holder.PathTo("target");
+
+        // A directory where the file has to go: the rename cannot happen, and the create did.
+        Directory.CreateDirectory(target);
+
+        try {
+            AtomicFile.Replace(target, "content");
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // The failure is the point; what it leaves behind is what this pins.
+        }
+
+        await Assert.That(Directory.GetFiles(holder)).IsEmpty();
+    }
+
     static void Mode(string path, UnixFileMode mode) {
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, mode);
     }

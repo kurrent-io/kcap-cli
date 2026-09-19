@@ -162,14 +162,25 @@ sealed class SkillsSyncFixture {
 
     /// <summary>Blocks one destination so a run genuinely aborts part-way through its writes: a
     /// plain file where the directory has to be created makes the write throw, which ends the run
-    /// after the ownership save and before any outcome is recorded.</summary>
+    /// after the ownership save and before any outcome is recorded.
+    ///
+    /// <para>The destination is reserved first, because a run refuses one it cannot establish as
+    /// free rather than walking into it — so without a row of its own this would be reported and
+    /// skipped instead of interrupting anything.</para></summary>
     public string Block(string slug) {
-        var dir = SkillDir(slug);
+        var at     = SkillDestination.For(Target, Anchor, slug);
+        var ledger = SkillsLedgerFile.ReadQuietly(LedgerPath, SkillOrigin.Repository) ?? new SkillsLedger();
 
-        Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
-        File.WriteAllText(dir, "in the way");
+        Directory.CreateDirectory(at.Root);
+        File.WriteAllText(at.Path, "in the way");
+        WriteLedger(ledger with {
+            Owned = [.. ledger.Rows, new OwnedSkillRow {
+                Path = at.Path, Root = at.Root, Anchor = at.Anchor,
+                Origin = SkillOrigin.Repository, State = OwnedSkillState.Reserved,
+            }],
+        });
 
-        return dir;
+        return at.Path;
     }
 
     public void Unblock(string slug) => File.Delete(SkillDir(slug));

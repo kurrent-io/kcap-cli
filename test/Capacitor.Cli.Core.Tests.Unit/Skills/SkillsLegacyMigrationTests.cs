@@ -166,41 +166,112 @@ public class SkillsLegacyMigrationTests {
         await Assert.That(Legacy(second)).IsNull();
     }
 
-    /// <summary>The survivor's merged evidence is saved before the leaver's row is removed. This
-    /// interrupts between those two saves for real — the leaver's own ledger cannot be written, so
-    /// its row outlives the handover — and the next run relinquishes again and loses nothing.
-    /// </summary>
+    /// <summary>The survivor's merged evidence reaches disk before the leaver's removal does. The
+    /// leaver's own save is stopped outright here, so the run ends between the two writes: an
+    /// implementation that persisted the removal first would be caught by that same boundary with
+    /// the survivor holding nothing. The next run relinquishes again and loses nothing.</summary>
     [Test]
-    public async Task A_handoff_interrupted_before_the_leaver_saves_loses_nothing() {
-        Skip.When(OperatingSystem.IsWindows(), "file modes are the mechanism this interrupts with");
-
+    public async Task A_handoff_stopped_before_the_leaver_saves_loses_nothing() {
         var shared = Copy("shared", "what aaaa wrote");
+        var mine   = Copy("mine", "aaaa alone");
 
-        WriteLegacy("aaaa", "acct-1", (shared, "what aaaa wrote"));
+        WriteLegacy("aaaa", "acct-1", (shared, "what aaaa wrote"), (mine, "aaaa alone"));
         WriteLegacy("bbbb", "acct-1", (shared, "what bbbb wrote"));
 
-        var leaver = Path.GetDirectoryName(
-            SkillsLegacyMigration.ManifestPathFor(ConfigRoot, "aaaa", "agents"))!;
+        var ledger = SkillsLegacyMigration.ManifestPathFor(ConfigRoot, "aaaa", "agents");
+        var halted = false;
 
-        Mode(leaver, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-
-        try {
-            SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"),
-                                         SkillDeletionCause.Superseded, null);
-        } finally {
-            Mode(leaver, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        using (Stop(ledger)) {
+            try {
+                SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"),
+                                             SkillDeletionCause.Superseded, null);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                halted = true;
+            }
         }
 
-        // A precondition: the survivor took the evidence and the leaver's row outlived the handover.
-        Skip.When(Legacy("aaaa") is null, "this user is not subject to the directory's mode");
+        Skip.When(!halted, "this user is not subject to the block on the leaver's save");
 
+        // The survivor holds the evidence; the leaver still owns everything it did, and the
+        // deletions it planned never ran.
         await Assert.That(Legacy("bbbb")!.Rows.Single().Inherited!.Length).IsEqualTo(1);
-        await Assert.That(Legacy("aaaa")!.Rows.Single().Path).IsEqualTo(shared);
+        await Assert.That(Legacy("aaaa")!.Rows.Select(r => r.Path)).IsEquivalentTo([shared, mine]);
+        await Assert.That(Directory.Exists(mine)).IsTrue();
 
         SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"), SkillDeletionCause.Superseded, null);
 
         await Assert.That(Legacy("bbbb")!.Rows.Single().Inherited!.Length).IsEqualTo(1);
         await Assert.That(Legacy("aaaa")).IsNull();
+        await Assert.That(Directory.Exists(mine)).IsFalse();
+        await Assert.That(Directory.Exists(shared)).IsTrue();
+    }
+
+    /// <summary>A relinquishment whose handover did not durably succeed keeps its claim, and
+    /// nothing else in the run may act on it — the file is the surviving co-owner's only copy, and
+    /// a deletion here takes it from them.</summary>
+    [Test]
+    public async Task A_relinquishment_that_could_not_hand_over_is_not_deleted() {
+        var shared = Copy("shared", "what aaaa wrote");
+        var mine   = Copy("mine", "aaaa alone");
+        var owned  = new SkillReceipt {
+            FileHash = SkillsMaterializer.FileHash("what aaaa wrote"),
+            Document = new SkillDocument {
+                DocId = Guid.NewGuid(), Slug = "shared", Version = 1, ContentHash = "h",
+            },
+        };
+
+        // The shared row is already owed from an earlier interrupted run.
+        SkillsLedgerFile.Save(SkillsLegacyMigration.ManifestPathFor(ConfigRoot, "aaaa", "agents"),
+                              new SkillsLedger {
+            Identity = Id("acct-1"),
+            Owned = [
+                Global(shared, owned) with {
+                    State = OwnedSkillState.Owed, Cause = SkillDeletionCause.Superseded,
+                },
+                Global(mine, owned with { FileHash = SkillsMaterializer.FileHash("aaaa alone") }),
+            ],
+        });
+
+        // A sibling that claims the shared path through a row nothing may act on: it counts as an
+        // owner and it cannot take the evidence.
+        SkillsLedgerFile.Save(SkillsLegacyMigration.ManifestPathFor(ConfigRoot, "bbbb", "agents"),
+                              new SkillsLedger {
+            Identity = Id("acct-1"),
+            Owned    = [Global(shared, owned) with { Confirmed = null },
+        ] });
+
+        var retirement = SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"),
+                                                      SkillDeletionCause.Superseded, null);
+
+        await Assert.That(retirement.Refused).IsEquivalentTo([shared]);
+        await Assert.That(Directory.Exists(shared)).IsTrue();
+        await Assert.That(Directory.Exists(mine)).IsFalse();
+        await Assert.That(Legacy("aaaa")!.Rows.Single().Path).IsEqualTo(shared);
+    }
+
+    static OwnedSkillRow Global(string path, SkillReceipt receipt) => new() {
+        Path = path, Root = Path.GetDirectoryName(path)!, Origin = SkillOrigin.Legacy,
+        State = OwnedSkillState.Published, Confirmed = receipt,
+    };
+
+    /// <summary>Stops the leaver's own save. A directory it cannot write into does that on Unix; on
+    /// Windows the manifest is held open without sharing delete, which refuses the rename the save
+    /// publishes through.</summary>
+    static IDisposable Stop(string ledgerPath) =>
+        OperatingSystem.IsWindows()
+            ? new FileStream(ledgerPath, FileMode.Open, FileAccess.Read, FileShare.Read)
+            : new UnwritableDirectory(Path.GetDirectoryName(ledgerPath)!);
+
+    sealed class UnwritableDirectory : IDisposable {
+        readonly string _path;
+
+        public UnwritableDirectory(string path) {
+            _path = path;
+            Mode(path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        }
+
+        public void Dispose() =>
+            Mode(_path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     /// <summary>A survivor that can vouch for nothing is still an owner, and relinquishing to it

@@ -185,6 +185,39 @@ public class SkillsDeletionTests {
         await Assert.That(Directory.Exists(outside.PathTo("kcap-x"))).IsTrue();
     }
 
+    /// <summary>A directory that cannot be searched answers "not found" for the managed file while
+    /// still listing its name. Reading that as absence settles the row and discharges the receipts
+    /// that were the only way to delete the file still sitting there.</summary>
+    [Test]
+    public async Task A_managed_file_that_cannot_be_answered_for_neither_settles_nor_deletes() {
+        Skip.When(OperatingSystem.IsWindows(), "file modes are the mechanism this inspects");
+
+        var anchor = Tmp.CreateDir("repo");
+        var root   = Tmp.CreateDir("repo", ".agents", "skills");
+        var dir    = root.CreateDir("kcap-x");
+        var file   = dir.CreateFile("SKILL.md", Body);
+        var row    = Row(dir, root, anchor, SkillsMaterializer.FileHash(Body));
+
+        Mode(dir, UnixFileMode.UserRead);
+
+        try {
+            Skip.When(new FileInfo(file).Exists, "this user is not subject to the directory's mode");
+
+            await Assert.That(SkillsDeletion.Delete(row, new SkillAuthority(root, anchor)))
+                .IsEqualTo(SkillDeletionResult.Refused);
+        } finally {
+            Mode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(File.ReadAllText(file)).IsEqualTo(Body);
+        await Assert.That(SkillsDeletion.Delete(row, new SkillAuthority(root, anchor)))
+            .IsEqualTo(SkillDeletionResult.Removed);
+    }
+
+    static void Mode(string path, UnixFileMode mode) {
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, mode);
+    }
+
     [Test]
     public async Task A_release_takes_an_empty_directory_and_leaves_a_used_one() {
         var anchor = Tmp.CreateDir("repo");

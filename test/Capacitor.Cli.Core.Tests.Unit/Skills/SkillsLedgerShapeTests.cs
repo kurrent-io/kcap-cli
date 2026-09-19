@@ -102,6 +102,29 @@ public class SkillsLedgerShapeTests {
         await Assert.That(rows["kcap-beta"].Confirmed).IsNull();
     }
 
+    /// <summary>A ledger that could not be reached is not one this repository stopped owning. It
+    /// carries the obligation to retire what it names, and reading it as missing discharges that
+    /// obligation for good.</summary>
+    [Test]
+    public async Task A_ledger_that_cannot_be_reached_is_unreadable_rather_than_missing() {
+        Skip.When(OperatingSystem.IsWindows(), "file modes are the mechanism this inspects");
+
+        var holder = Tmp.CreateDir("holder");
+        var path   = holder.CreateFile("manifest.json", """{"owned":[]}""");
+
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(holder, UnixFileMode.UserRead);
+
+        try {
+            Skip.When(new FileInfo(path).Exists, "this user is not subject to the directory's mode");
+
+            await Assert.That(SkillsLedgerFile.Read(path, SkillOrigin.Legacy, out _))
+                .IsEqualTo(SkillsLedgerRead.Unreadable);
+        } finally {
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(holder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     [Test]
     public async Task An_unreadable_shape_is_told_from_a_missing_one_and_from_a_corrupt_one() {
         await Assert.That(SkillsLedgerFile.Read(Tmp.PathTo("gone.json"), SkillOrigin.Repository, out _))
