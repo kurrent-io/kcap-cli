@@ -11,15 +11,22 @@ public static class AtomicFile {
     public static void Replace(string path, string contents) => Replace(path, Encoding.UTF8.GetBytes(contents));
 
     public static void Replace(string path, byte[] contents) {
-        var tmp = $"{path}.{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}.tmp";
+        var tmp     = $"{path}.{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}.tmp";
+        var created = false;
 
         try {
-            using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
+            using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write)) {
+                // Set once the exclusive create has returned, so a name that was somehow already
+                // taken is never a name this call cleans up.
+                created = true;
                 stream.Write(contents);
+            }
 
             File.Move(tmp, path, overwrite: true);
         } catch {
-            try { File.Delete(tmp); } catch { /* preserve the original exception */ }
+            if (created) {
+                try { File.Delete(tmp); } catch { /* preserve the original exception */ }
+            }
             throw;
         }
     }
