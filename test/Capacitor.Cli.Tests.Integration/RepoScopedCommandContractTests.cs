@@ -181,10 +181,12 @@ public class RepoScopedCommandContractTests : IDisposable {
     }
 
     /// <summary>Only a target kcap already owns is reconciled, and ownership is the manifest's
-    /// existence — so writing one is what puts a target in the sync set.</summary>
+    /// existence — so writing one is what puts a target in the sync set. It lives in this
+    /// worktree's own git directory, which is also the only place a stored etag is read from.
+    /// </summary>
     void SeedOwnedManifest(string target, string? etag) =>
-        Config.CreateDir("skills", RepoHash, target).CreateFile(
-            "manifest.json",
+        _repo.CreateFile(
+            [".git", "kcap", "skills", $"{target}.json"],
             etag is null ? """{"skills":[]}""" : $$"""{"etag":"{{etag}}","skills":[]}""");
 
     void StubEmptySnapshot() =>

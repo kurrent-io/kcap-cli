@@ -790,15 +790,30 @@ kcap curate apply -y          # shorthand for --yes
 
 ### Skills sync
 
-Materialize the current repo's approved, skill-targeted guidance docs into every present
-harness's skills tree (`kcap-<slug>/SKILL.md` under `~/.claude/skills`, the agent-agnostic
-`~/.agents/skills`, `~/.kiro/skills`, and the `~/.gemini/skills` tree shared by Gemini CLI and
-Antigravity). The server is the canonical source: each sync fetches the repo's versioned snapshot
-per target, writes new or re-approved skills, and prunes ones revoked centrally — a per-target
-manifest under `~/.config/kcap/skills/` records exactly which directories kcap owns, and nothing
-outside it is ever touched. Shared trees are fetched without a vendor, so vendor-restricted docs
-reach only their own harness's tree. Skills are never written into the repository itself. Requires
-`kcap login` and a repo checkout (the repo is detected from the working directory).
+Materialize the current repo's approved, skill-targeted guidance docs into the checkout or
+linked worktree the sync runs in — `kcap-<slug>/SKILL.md` under `.claude/skills`, the
+agent-agnostic `.agents/skills`, `.kiro/skills`, and `.gemini/skills`, which Gemini CLI documents
+but which no harness has been measured reading from a repository. A linked worktree gets its own
+copy, synced independently of the main checkout's. The server is the canonical source: each sync
+fetches the repo's versioned snapshot per target, writes new or re-approved skills, and prunes ones
+revoked centrally. Inside those four directories it touches only its own `kcap-` subdirectories;
+outside them it writes two things — the exclusion block described below, and a ledger of what it
+owns under the worktree's own git directory (`<git-dir>/kcap/skills/`, which Git removes with the
+worktree) — and it deletes the user-global copies earlier versions left. The generated directories
+are kept out of Git through the repository's own `.git/info/exclude` rather than a tracked ignore
+file, so any ignore rules you've committed stay untouched, and one exclusion block covers the main
+checkout and every linked worktree. If this repo's skills already exist under your home directory,
+syncing clears them — unless another repository's sync still owns them, in which case they stay
+until that repository's sync clears its share.
+
+A skill restricted to one vendor still lands only in that vendor's tree — a Claude-only skill
+goes to `.claude/skills` and nowhere else — but Copilot, Cursor, and OpenCode read
+`.claude/skills` too, so any of them working in the same checkout can see a skill approved only
+for Claude Code. Claude and Kiro are also the only vendors whose tree is fetched under their own
+name, so a skill restricted to Codex, Copilot, Cursor, Gemini, OpenCode, Pi, or Antigravity is not
+delivered at all: no request names them, and a request that names no vendor keeps every
+vendor-restricted doc out of what it returns. Requires `kcap login` and a repo checkout (the
+repo is detected from the working directory).
 
 ```bash
 kcap skills sync              # fetch, write and prune this repo's skills
@@ -807,9 +822,11 @@ kcap skills sync --auto       # hook-spawned form: silent, and skipped when sync
 ```
 
 Opt into an automatic background refresh with `kcap config set skills.auto_sync true`: the Claude
-session-start hook then spawns a detached, self-throttling sync (at most one network round-trip
-per ~6 hours per repo), so centrally revoked or re-approved skills reach the machine without a
-manual sync. Off by default.
+session-start hook then spawns a detached, self-throttling sync (at most one network round-trip per
+~6 hours per skills tree, so up to four for a checkout that has all four), so centrally revoked or
+re-approved skills reach the machine without a manual sync. It writes into the checkout it runs in,
+exactly as a manual `kcap skills sync` does — the files land in the repository's own skills trees,
+not under your home directory. Off by default.
 
 
 ### Loading historical sessions
