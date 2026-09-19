@@ -21,6 +21,22 @@ public class ForegroundSelectionTests {
     }
 
     [Test]
+    public async Task A_session_id_in_multiple_dirs_appears_once_in_selected_and_candidate_ids() {
+        static ImportCommand.SessionClassification Dup(string dir) => new() {
+            SessionId = "dup", FilePath = $"/tmp/{dir}/dup.jsonl", EncodedCwd = "-tmp",
+            Status = ImportCommand.ClassificationStatus.New,
+            Meta = new SessionMetadata { Slug = dir, FirstTimestamp = DateTimeOffset.Parse("2026-03-01T00:00:00Z", CultureInfo.InvariantCulture) },
+        };
+        var all = new List<ImportCommand.SessionClassification> { Dup("a"), Dup("b"), File("uniq", "u", "2026-02-01T00:00:00Z") };
+
+        var plan = Select(all, max: 5);
+
+        await Assert.That(plan.Selection.SelectedIds.Count(id => id == "dup")).IsEqualTo(1);
+        await Assert.That(plan.Selection.RunCandidateIds.Count(id => id == "dup")).IsEqualTo(1);
+        await Assert.That(plan.Selection.RunCandidateIds).Contains("uniq");
+    }
+
+    [Test]
     public async Task Takes_whole_chains_newest_first_until_the_cap_and_overshoots_by_the_boundary_chain() {
         var all = new List<ImportCommand.SessionClassification> {
             File("n1", "new", "2026-03-01T00:00:00Z"), File("n2", "new", "2026-03-02T00:00:00Z"),

@@ -26,8 +26,13 @@ internal static class ForegroundSelection {
             count++;
         }
 
+        // The same session id can appear under several project/backup dirs (import tolerates it).
+        // Publish each id once: duplicates would waste the handoff's 500-id cap and, because the
+        // eval-watch cohort size is the list length while analytics returns one row per unique id,
+        // keep the all-complete stop rule from ever firing.
         var selectedIds = selectedChains.SelectMany(c => c).Select(c => c.SessionId)
             .Concat(selectedUnits.Select(u => u.Parent.SessionId))
+            .Distinct(StringComparer.Ordinal)
             .ToList();
         var selectedSet = selectedIds.ToHashSet(StringComparer.Ordinal);
 
@@ -38,6 +43,7 @@ internal static class ForegroundSelection {
             .Where(c => !RoutedUnits.IsCorrelatedChild(c, planIds))
             .OrderBy(c => c, ImportOrdering.Candidate)
             .Select(c => c.SessionId)
+            .Distinct(StringComparer.Ordinal)
             .ToList();
 
         var carried = selectedUnits.SelectMany(u => u.Children).Select(c => c.SessionId).ToHashSet(StringComparer.Ordinal);
