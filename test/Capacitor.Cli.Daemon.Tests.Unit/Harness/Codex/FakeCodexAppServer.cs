@@ -38,6 +38,8 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
     public string      ApprovalMethod = "item/commandExecution/requestApproval";
     public int         Fail32001TimesOnTurnStart;
     public (long input, long output, long total)? EmitUsageOnTurn;
+    public string?     RerouteToModelOnTurn;
+
     // When set, turn/start responds inProgress and does NOT auto-emit turn/completed — the turn stays
     // active so a follow-up input is steered onto it. Complete it with CompleteHeldTurnAsync.
     public bool        HoldTurnOpen;
@@ -179,6 +181,12 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                                 ["inputTokens"] = u.input, ["cachedInputTokens"] = 0, ["outputTokens"] = u.output,
                                 ["reasoningOutputTokens"] = 0, ["totalTokens"] = u.total },
                         },
+                    }, ct);
+
+                if (RerouteToModelOnTurn is { } reroute)
+                    await NotifyAsync("model/rerouted", new JsonObject {
+                        ["threadId"] = ThreadId, ["turnId"] = turnId,
+                        ["fromModel"] = Model, ["toModel"] = reroute, ["reason"] = "highRiskCyberActivity",
                     }, ct);
 
                 await NotifyAsync("turn/completed", new JsonObject {
