@@ -7,8 +7,8 @@ before the implementation PR opens.
 
 The desktop app gets a **material** setting with three values: Opaque, Soft glass and
 Liquid glass. It lives in an Appearance card in the Settings window, applies live and
-persists. On macOS the default is Soft glass; everywhere else, and for anyone with
-macOS "Reduce transparency" switched on, the default is Opaque.
+persists. The default is Opaque everywhere; glass is an explicit choice, and macOS
+"Reduce transparency" does not override it.
 
 Glass covers the navigation and control layer: the session rail, the launcher's goal
 card (`GoalCard`) and chips. The panel flyouts were in scope subject to a render probe,
@@ -25,7 +25,7 @@ The user chose:
 - **every inline card migrated to `Surface` now, except the chat view's own**, over
   migrating only the glass sites; the permission request and the elicitation
   questions migrate even though the chat hosts them;
-- **Soft glass as the macOS default** over Opaque.
+- **Opaque as the default** over Soft glass on macOS: glass is an explicit choice.
 
 Material is a second axis beside palette. `ThemeVariant` stays pinned to `Dark` and
 stays free for a light palette later; nothing here converts `StaticResource` lookups.
@@ -127,8 +127,9 @@ public sealed record MaterialState(
 ```
 
 `Effective` resolves in this order: `NotCapable` → `Opaque`; `PipelineFailed` →
-`Opaque`; explicit choice → that choice; `ReduceTransparency` → `Opaque`; otherwise
-`SoftGlass`. `FailureReason` is set exactly when `Availability` is `PipelineFailed`.
+`Opaque`; explicit choice → that choice; otherwise `Opaque`. `ReduceTransparency` is
+reported on the state but never changes the material. `FailureReason` is set exactly
+when `Availability` is `PipelineFailed`.
 
 **Service.** `IMaterialService`:
 
@@ -408,7 +409,7 @@ than of the window.
 |---|---|---|
 | `NotCapable` | disabled | glass needs macOS |
 | `PipelineFailed` | disabled for the session | glass is off until the next launch, with `FailureReason` |
-| `Available`, no explicit choice, `ReduceTransparency` | enabled | Opaque because Reduce transparency is on; picking a glass material overrides it |
+| `Available`, no explicit choice, `ReduceTransparency` | enabled | Reduce transparency is on; picking a glass material overrides it |
 | `Available`, otherwise | enabled | none |
 
 A pipeline failure never touches the stored choice, so the next launch tries it again.

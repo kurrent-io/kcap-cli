@@ -7,10 +7,10 @@ public class MaterialServiceTests {
     static readonly MaterialEnvironment Mac = new(GlassCapable: true, ReduceTransparency: false);
 
     [Test]
-    public async Task No_choice_on_a_capable_machine_is_soft_glass() {
+    public async Task No_choice_on_a_capable_machine_is_opaque() {
         var service = new MaterialService(new InMemoryAppStateStore(), Mac, requested: null);
         await Assert.That(service.Current).IsEqualTo(
-            new MaterialState(SurfaceMaterial.SoftGlass, null, MaterialAvailability.Available, null, false));
+            new MaterialState(SurfaceMaterial.Opaque, null, MaterialAvailability.Available, null, false));
     }
 
     [Test]
@@ -92,7 +92,7 @@ public class MaterialServiceTests {
         var unknown = await MaterialService.LoadAsync(new InMemoryAppStateStore(new AppState(Material: "frosted_titanium")), Mac);
         await Assert.That(known.Current.Requested).IsEqualTo(SurfaceMaterial.Opaque);
         await Assert.That(unknown.Current.Requested).IsNull();
-        await Assert.That(unknown.Current.Effective).IsEqualTo(SurfaceMaterial.SoftGlass);
+        await Assert.That(unknown.Current.Effective).IsEqualTo(SurfaceMaterial.Opaque);
     }
 
     [Test]

@@ -175,7 +175,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public string? MaterialHint => _materialState switch {
         { Availability: MaterialAvailability.NotCapable } => "Glass materials need macOS.",
         { Availability: MaterialAvailability.PipelineFailed } failed => $"Glass is off until the next launch: {failed.FailureReason}.",
-        { Requested: null, ReduceTransparency: true } => "Opaque because Reduce transparency is on. Picking a glass material overrides it.",
+        { Requested: null, ReduceTransparency: true } => "Reduce transparency is on. Picking a glass material overrides it.",
         _ => null,
     };
 

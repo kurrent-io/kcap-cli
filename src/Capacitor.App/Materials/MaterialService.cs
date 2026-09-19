@@ -58,7 +58,7 @@ public sealed class MaterialService : IMaterialService, IDisposable {
             : _failure is not null ? MaterialAvailability.PipelineFailed
             : MaterialAvailability.Available;
         var effective = availability != MaterialAvailability.Available ? SurfaceMaterial.Opaque
-            : _requested ?? (_environment.ReduceTransparency ? SurfaceMaterial.Opaque : SurfaceMaterial.SoftGlass);
+            : _requested ?? SurfaceMaterial.Opaque;
         var reason = availability == MaterialAvailability.PipelineFailed ? _failure : null;
         return new MaterialState(effective, _requested, availability, reason, _environment.ReduceTransparency);
     }

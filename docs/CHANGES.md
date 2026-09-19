@@ -32,8 +32,9 @@ already does.
 `LiquidGlassAvaloniaUI` is vendored as source under `src/ThirdParty/` because it is not on
 NuGet.org. It reports nothing when its shader pipeline cannot run, so the copy carries one patch,
 `LiquidGlassPipeline.Unavailable`; on it the app latches Opaque for the session and keeps the stored
-choice. The opaque template holds no glass element, so that fallback cannot itself fail. Soft glass
-is the default on macOS unless "Reduce transparency" is on; an explicit choice overrides the flag.
+choice. The opaque template holds no glass element, so that fallback cannot itself fail. Opaque is
+the default; a glass material is always an explicit choice, and macOS "Reduce transparency"
+does not override it.
 
 ## An idle PTY costs the thread pool nothing
 

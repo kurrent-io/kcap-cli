@@ -31,7 +31,7 @@ public class SettingsMaterialTests {
         var store = new InMemoryAppStateStore();
         using var service = new MaterialService(store, Mac, requested: null);
         using var vm = Build(service);
-        await Assert.That(vm.IsSoftGlass).IsTrue();
+        await Assert.That(vm.IsOpaque).IsTrue();
         await Assert.That(vm.MaterialChoicesEnabled).IsTrue();
         await Assert.That(vm.MaterialHint).IsNull();
 
@@ -40,7 +40,7 @@ public class SettingsMaterialTests {
 
         await Assert.That(store.State.Material).IsEqualTo("liquid_glass");
         await Assert.That(vm.IsLiquidGlass).IsTrue();
-        await Assert.That(vm.IsSoftGlass).IsFalse();
+        await Assert.That(vm.IsOpaque).IsFalse();
     });
 
     [Test]
@@ -63,7 +63,7 @@ public class SettingsMaterialTests {
     });
 
     [Test]
-    public Task Reduce_transparency_explains_the_opaque_default_and_leaves_the_choices_on() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Reduce_transparency_is_noted_and_leaves_the_choices_on() => AvaloniaSession.RunOnUiAsync(async () => {
         using var service = new MaterialService(new InMemoryAppStateStore(), Mac with { ReduceTransparency = true }, requested: null);
         using var vm = Build(service);
         await Assert.That(vm.IsOpaque).IsTrue();

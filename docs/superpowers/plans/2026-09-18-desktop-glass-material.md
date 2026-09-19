@@ -2699,7 +2699,7 @@ and the members:
     public string? MaterialHint => _materialState switch {
         { Availability: MaterialAvailability.NotCapable } => "Glass materials need macOS.",
         { Availability: MaterialAvailability.PipelineFailed } failed => $"Glass is off until the next launch: {failed.FailureReason}.",
-        { Requested: null, ReduceTransparency: true } => "Opaque because Reduce transparency is on. Picking a glass material overrides it.",
+        { Requested: null, ReduceTransparency: true } => "Reduce transparency is on. Picking a glass material overrides it.",
         _ => null,
     };
 
@@ -2794,8 +2794,9 @@ already does.
 `LiquidGlassAvaloniaUI` is vendored as source under `src/ThirdParty/` because it is not on
 NuGet.org. It reports nothing when its shader pipeline cannot run, so the copy carries one patch,
 `LiquidGlassPipeline.Unavailable`; on it the app latches Opaque for the session and keeps the stored
-choice. The opaque template holds no glass element, so that fallback cannot itself fail. Soft glass
-is the default on macOS unless "Reduce transparency" is on; an explicit choice overrides the flag.
+choice. The opaque template holds no glass element, so that fallback cannot itself fail. Opaque is
+the default; a glass material is always an explicit choice, and macOS "Reduce transparency"
+does not override it.
 ```
 
 - [ ] **Step 2: Add the README paragraph**
@@ -2803,7 +2804,7 @@ is the default on macOS unless "Reduce transparency" is on; an explicit choice o
 In `README.md`, under `### Desktop app (macOS)`, after the paragraph that begins "Open **Settings…**":
 
 ```markdown
-**Appearance** in the same window sets the material of the session rail and the launcher: **Opaque**, **Soft glass** or **Liquid glass**. It applies at once. Soft glass is the default unless macOS **Reduce transparency** is on; picking a glass material overrides that. Menus, sessions, the pull request reader and every other window stay opaque. If the glass renderer cannot start, the app uses Opaque until the next launch and the Appearance card says why.
+**Appearance** in the same window sets the material of the session rail and the launcher: **Opaque**, **Soft glass** or **Liquid glass**. It applies at once. Opaque is the default; macOS **Reduce transparency** does not override a glass choice. Menus, sessions, the pull request reader and every other window stay opaque. If the glass renderer cannot start, the app uses Opaque until the next launch and the Appearance card says why.
 ```
 
 - [ ] **Step 3: Verify the whole change**
@@ -2833,6 +2834,6 @@ The sandbox cannot launch the GUI, so report this list to the user rather than t
 3. Each chip picker, the Activity panel and the rail's help menu open as the same opaque panels as before, inside the window, dismiss on outside click, and the help menu works from the keyboard.
 4. Opening a session covers the backdrop with an opaque workspace; closing it brings the launcher back over the glow.
 5. Dragging a file over the goal card shows the primary-colour rim under both materials.
-6. With System Settings → Accessibility → Display → Reduce transparency on and no stored choice, the app starts Opaque with the hint shown.
+6. With no stored choice the app starts Opaque; with System Settings → Accessibility → Display → Reduce transparency on, the Appearance card notes it and a glass pick still applies.
 7. Onboarding, Feedback and the Settings window itself look exactly as before.
 
