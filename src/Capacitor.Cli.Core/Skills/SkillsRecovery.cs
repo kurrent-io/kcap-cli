@@ -55,14 +55,19 @@ public static class SkillsRecovery {
         return Discard(row);
     }
 
-    /// <summary>Promotes the operation to the receipt, at the place its bytes were found. A row
-    /// already owed keeps its cause: recording what was written never publishes, and never revives
-    /// a row that has been retired.</summary>
+    /// <summary>Promotes the operation to the receipt, at the place its bytes were found. A
+    /// retirement keeps its cause — recording what was written never publishes, and never revives a
+    /// row an account change retired — but every other completion is the one an ordinary run makes,
+    /// so the replacement a row owed a deletion for publishes and supersedes exactly as it would
+    /// have done had the run not been interrupted.</summary>
     static SkillRecovery Complete(OwnedSkillRow row, string from, SkillDestination? place) {
+        var retiring  = row.Cause == SkillDeletionCause.Retired;
         var completed = row with {
-            Confirmed = row.Prepared!.Intended,
-            Prepared  = null,
-            State     = row.State == OwnedSkillState.Owed ? OwnedSkillState.Owed : OwnedSkillState.Published,
+            Confirmed       = row.Prepared!.Intended,
+            Prepared        = null,
+            State           = retiring ? OwnedSkillState.Owed : OwnedSkillState.Published,
+            Cause           = retiring ? row.Cause : null,
+            IdentityRetired = retiring ? row.IdentityRetired : null,
         };
 
         return new SkillRecovery(place?.Place(completed) ?? completed, from, SkillRecoveryOutcome.Landed);
