@@ -166,23 +166,113 @@ public class SkillsLegacyMigrationTests {
         await Assert.That(Legacy(second)).IsNull();
     }
 
-    /// <summary>A crash between the survivor's save and the leaver's removal leaves the survivor
-    /// already holding the evidence. The next run relinquishes again and loses nothing.</summary>
+    /// <summary>The survivor's merged evidence is saved before the leaver's row is removed. This
+    /// interrupts between those two saves for real — the leaver's own ledger cannot be written, so
+    /// its row outlives the handover — and the next run relinquishes again and loses nothing.
+    /// </summary>
     [Test]
-    public async Task A_handoff_already_saved_is_completed_without_duplicating_it() {
+    public async Task A_handoff_interrupted_before_the_leaver_saves_loses_nothing() {
+        Skip.When(OperatingSystem.IsWindows(), "file modes are the mechanism this interrupts with");
+
         var shared = Copy("shared", "what aaaa wrote");
 
         WriteLegacy("aaaa", "acct-1", (shared, "what aaaa wrote"));
         WriteLegacy("bbbb", "acct-1", (shared, "what bbbb wrote"));
 
-        SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"), SkillDeletionCause.Superseded, null);
-        // Put the leaver's ledger back exactly as it was before its row was removed.
-        WriteLegacy("aaaa", "acct-1", (shared, "what aaaa wrote"));
+        var leaver = Path.GetDirectoryName(
+            SkillsLegacyMigration.ManifestPathFor(ConfigRoot, "aaaa", "agents"))!;
+
+        Mode(leaver, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try {
+            SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"),
+                                         SkillDeletionCause.Superseded, null);
+        } finally {
+            Mode(leaver, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        // A precondition: the survivor took the evidence and the leaver's row outlived the handover.
+        Skip.When(Legacy("aaaa") is null, "this user is not subject to the directory's mode");
+
+        await Assert.That(Legacy("bbbb")!.Rows.Single().Inherited!.Length).IsEqualTo(1);
+        await Assert.That(Legacy("aaaa")!.Rows.Single().Path).IsEqualTo(shared);
 
         SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"), SkillDeletionCause.Superseded, null);
 
         await Assert.That(Legacy("bbbb")!.Rows.Single().Inherited!.Length).IsEqualTo(1);
         await Assert.That(Legacy("aaaa")).IsNull();
+    }
+
+    /// <summary>A survivor that can vouch for nothing is still an owner, and relinquishing to it
+    /// without handing the evidence over would leave the file with no receipt able to retire it.
+    /// It takes the leaver's instead.</summary>
+    [Test]
+    public async Task A_survivor_holding_no_receipt_takes_the_leavers() {
+        var shared = Copy("shared", "what aaaa wrote");
+
+        WriteLegacy("aaaa", "acct-1", (shared, "what aaaa wrote"));
+        // The shape the released version wrote, with no file hash at all.
+        Tmp.CreateFile(["config", "skills", "bbbb", "agents", "manifest.json"], $$"""
+            {"etag":"etag-0",
+             "skills":[{"doc_id":"7c9a1f02-0000-4000-8000-000000000001","slug":"shared","version":1,
+                        "content_hash":"h","path":"{{Json(shared)}}"}]}
+            """);
+
+        SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"), SkillDeletionCause.Superseded, null);
+
+        var survivor = Legacy("bbbb")!.Rows.Single();
+
+        await Assert.That(Legacy("aaaa")).IsNull();
+        await Assert.That(Directory.Exists(shared)).IsTrue();
+        await Assert.That(survivor.State).IsEqualTo(OwnedSkillState.Published);
+        await Assert.That(survivor.Confirmed!.FileHash)
+            .IsEqualTo(SkillsMaterializer.FileHash("what aaaa wrote"));
+
+        // The last owner out can now finish what neither could before.
+        SkillsLegacyMigration.Retire(ConfigRoot, "bbbb", Target, Id("acct-1"), SkillDeletionCause.Superseded, null);
+
+        await Assert.That(Directory.Exists(shared)).IsFalse();
+        await Assert.That(Legacy("bbbb")).IsNull();
+    }
+
+    /// <summary>A refusal establishes nothing — a link, a file that would not read, a root that
+    /// moved — so it must not cost a merged row the receipts a later attempt needs.</summary>
+    [Test]
+    public async Task A_refusal_that_establishes_nothing_keeps_the_merged_receipts() {
+        var shared = Copy("shared", "what bbbb wrote");
+
+        WriteLegacy("aaaa", "acct-1", (shared, "what aaaa wrote"));
+        WriteLegacy("bbbb", "acct-1", (shared, "what bbbb wrote"));
+
+        SkillsLegacyMigration.Retire(ConfigRoot, "bbbb", Target, Id("acct-1"), SkillDeletionCause.Superseded, null);
+
+        // A precondition: the sole remaining owner holds both receipts, and only the inherited one
+        // accounts for the bytes.
+        await Assert.That(Legacy("aaaa")!.Rows.Single().Inherited!.Length).IsEqualTo(1);
+
+        var file = SkillsMaterializer.SkillFileFor(shared);
+
+        File.Delete(file);
+        File.CreateSymbolicLink(file, Tmp.CreateFile("elsewhere.md", "what bbbb wrote"));
+
+        var refused = SkillsLegacyMigration.Retire(ConfigRoot, "aaaa", Target, Id("acct-1"),
+                                                   SkillDeletionCause.Superseded, null);
+
+        await Assert.That(refused.Refused).IsEquivalentTo([shared]);
+        await Assert.That(refused.Unvouched).IsEmpty();
+
+        var kept = Legacy("aaaa")!.Rows.Single();
+
+        await Assert.That(kept.State).IsEqualTo(OwnedSkillState.Owed);
+        await Assert.That(kept.Inherited!.Length).IsEqualTo(1);
+
+        File.Delete(file);
+        new TempDirHandle(shared).CreateFile("SKILL.md", "what bbbb wrote");
+
+        await Assert.That(SkillsLegacyMigration
+            .Retire(ConfigRoot, "aaaa", Target, Id("acct-1"), SkillDeletionCause.Superseded, null)
+            .Incomplete).IsFalse();
+        await Assert.That(Directory.Exists(shared)).IsFalse();
     }
 
     /// <summary>A converted entry with no file hash is a claim nothing can vouch for: reported,
@@ -205,13 +295,25 @@ public class SkillsLegacyMigrationTests {
             ConfigRoot, "aaaa", Target, Id("acct-1"), SkillDeletionCause.Superseded, null);
 
         await Assert.That(retirement.Incomplete).IsFalse();
+        // Reported, not merely preserved: nothing else tells the operator a global copy is being
+        // left behind for good.
+        await Assert.That(retirement.Unverifiable).IsEquivalentTo([claimed]);
         await Assert.That(Directory.Exists(vouched)).IsFalse();
         await Assert.That(Directory.Exists(claimed)).IsTrue();
         await Assert.That(Legacy("aaaa")!.Rows.Single().State).IsEqualTo(OwnedSkillState.Unverified);
         // An unverified row is never deletable, so it is not work a later run owes either.
         await Assert.That(SkillsLegacyMigration.HoldsOutstandingWork(Legacy("aaaa"))).IsFalse();
+
+        // It goes on being reported once there is nothing else left to do.
+        await Assert.That(SkillsLegacyMigration
+            .Retire(ConfigRoot, "aaaa", Target, Id("acct-1"), SkillDeletionCause.Superseded, null)
+            .Unverifiable).IsEquivalentTo([claimed]);
     }
 
     /// <summary>A path inside a JSON string literal — Windows separators are escapes there.</summary>
     static string Json(string path) => path.Replace("\\", "\\\\");
+
+    static void Mode(string path, UnixFileMode mode) {
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, mode);
+    }
 }

@@ -12,7 +12,7 @@ public class SkillsMaterializerTests {
 
     static bool Write(string root, string anchor, SkillSnapshotItem item) =>
         SkillsMaterializer.Write(SkillsMaterializer.SkillDirFor(root, item.Slug), anchor,
-                                 SkillsRendering.RenderSkillFile(item));
+                                 SkillsMaterializer.Encode(SkillsRendering.RenderSkillFile(item)));
 
     [Test]
     public async Task A_probe_tells_present_from_absent_from_unreadable() {
@@ -86,18 +86,77 @@ public class SkillsMaterializerTests {
         await Assert.That(Directory.GetDirectories(outside)).IsEmpty();
     }
 
+    /// <summary>The temporary carries random bytes and is created exclusively, so a link planted at
+    /// the name a write might have used is neither followed nor removed.</summary>
     [Test]
-    public async Task A_symlink_planted_at_the_temp_name_is_not_published_through() {
+    public async Task A_symlink_planted_at_the_predictable_temp_name_is_left_alone() {
         var anchor = Tmp.CreateDir("repo");
         var root   = Tmp.CreateDir("repo/.agents/skills");
         var dir    = SkillsMaterializer.SkillDirFor(root, "x");
         Directory.CreateDirectory(dir);
         var outsideFile = Tmp.CreateFile("global/secret.txt", "outside content");
-        File.CreateSymbolicLink(SkillsMaterializer.SkillFileFor(dir) + ".tmp", outsideFile);
+        var planted     = SkillsMaterializer.SkillFileFor(dir) + ".tmp";
+        File.CreateSymbolicLink(planted, outsideFile);
 
         Write(root, anchor, Item("x"));
 
         await Assert.That(File.ReadAllText(outsideFile)).IsEqualTo("outside content");
+        await Assert.That(new FileInfo(planted).LinkTarget).IsNotNull();
         await Assert.That(new FileInfo(SkillsMaterializer.SkillFileFor(dir)).LinkTarget).IsNull();
+    }
+
+    /// <summary>A write owns the file it creates and nothing else. An authored file that happens to
+    /// carry the name a temporary might have taken has no receipt, so deleting it would be the one
+    /// thing the whole record forbids.</summary>
+    [Test]
+    public async Task An_authored_file_at_the_temp_name_survives_a_write() {
+        var anchor   = Tmp.CreateDir("repo");
+        var root     = Tmp.CreateDir("repo/.agents/skills");
+        var item     = Item("x");
+        var dir      = SkillsMaterializer.SkillDirFor(root, item.Slug);
+        Directory.CreateDirectory(dir);
+        var authored = new TempDirHandle(dir).CreateFile("SKILL.md.tmp", "notes the author keeps here");
+
+        await Assert.That(Write(root, anchor, item)).IsTrue();
+
+        await Assert.That(File.ReadAllText(authored)).IsEqualTo("notes the author keeps here");
+        await Assert.That(File.ReadAllText(SkillsMaterializer.SkillFileFor(dir)))
+            .IsEqualTo(SkillsRendering.RenderSkillFile(item));
+        // Nothing of the write's own is left beside the file it published.
+        await Assert.That(Directory.GetFiles(dir).Select(Path.GetFileName).OfType<string>())
+            .IsEquivalentTo(["SKILL.md", "SKILL.md.tmp"]);
+    }
+
+    /// <summary>A directory that cannot be searched answers "not found" for everything inside it.
+    /// Reading that as absence lets relocation accept matching bytes elsewhere as the same copy
+    /// moved, and a later revocation then deletes an independent one.</summary>
+    [Test]
+    public async Task A_file_that_cannot_be_reached_is_not_absence() {
+        Skip.When(OperatingSystem.IsWindows(), "file modes are the mechanism this inspects");
+
+        var root = Tmp.CreateDir("repo", ".agents", "skills");
+        var item = Item("x");
+
+        Write(root, root, item);
+
+        var dir = SkillsMaterializer.SkillDirFor(root, item.Slug);
+
+        // Listable but not searchable: the entry is there and nothing about it can be answered.
+        Mode(dir, UnixFileMode.UserRead);
+
+        try {
+            Skip.When(new FileInfo(SkillsMaterializer.SkillFileFor(dir)).Exists,
+                      "this user is not subject to the directory's mode");
+
+            await Assert.That(SkillsMaterializer.Inspect(dir).Probe).IsEqualTo(SkillFileProbe.Unreadable);
+        } finally {
+            Mode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(SkillsMaterializer.Inspect(dir).Probe).IsEqualTo(SkillFileProbe.Present);
+    }
+
+    static void Mode(string path, UnixFileMode mode) {
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, mode);
     }
 }

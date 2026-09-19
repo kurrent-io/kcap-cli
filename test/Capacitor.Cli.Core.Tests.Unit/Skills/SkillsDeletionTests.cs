@@ -1,3 +1,4 @@
+using System.Text;
 using Capacitor.Cli.Core.Skills;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Skills;
@@ -52,8 +53,10 @@ public class SkillsDeletionTests {
         await Assert.That(File.ReadAllText(authored)).IsEqualTo("mine");
     }
 
+    /// <summary>Read and matched against everything the row holds is an answer, and the only
+    /// outcome that may later cost a row its evidence.</summary>
     [Test]
-    public async Task A_file_no_receipt_accounts_for_is_refused_and_left_alone() {
+    public async Task A_file_no_receipt_accounts_for_is_unvouched_and_left_alone() {
         var anchor = Tmp.CreateDir("repo");
         var root   = Tmp.CreateDir("repo", ".agents", "skills");
         var dir    = root.CreateDir("kcap-x");
@@ -62,8 +65,25 @@ public class SkillsDeletionTests {
         var result = SkillsDeletion.Delete(Row(dir, root, anchor, SkillsMaterializer.FileHash(Body)),
                                            new SkillAuthority(root, anchor));
 
-        await Assert.That(result).IsEqualTo(SkillDeletionResult.Refused);
+        await Assert.That(result).IsEqualTo(SkillDeletionResult.Unvouched);
         await Assert.That(File.ReadAllText(file)).IsEqualTo("somebody else's");
+    }
+
+    /// <summary>A file that could not be read, or a link where the managed file should be,
+    /// establishes nothing at all — which is a different answer from one that was read and matched
+    /// nothing.</summary>
+    [Test]
+    public async Task A_file_that_cannot_be_read_is_refused_rather_than_unvouched() {
+        var anchor = Tmp.CreateDir("repo");
+        var root   = Tmp.CreateDir("repo", ".agents", "skills");
+        var dir    = root.CreateDir("kcap-x");
+
+        File.CreateSymbolicLink(SkillsMaterializer.SkillFileFor(dir), Tmp.CreateFile("theirs.md", Body));
+
+        await Assert.That(SkillsDeletion.Delete(Row(dir, root, anchor, SkillsMaterializer.FileHash(Body)),
+                                                new SkillAuthority(root, anchor)))
+            .IsEqualTo(SkillDeletionResult.Refused);
+        await Assert.That(File.Exists(SkillsMaterializer.SkillFileFor(dir))).IsTrue();
     }
 
     /// <summary>A row that never landed a write has no receipt at all, so nothing there can be
@@ -76,8 +96,35 @@ public class SkillsDeletionTests {
         var file   = dir.CreateFile("SKILL.md", Body);
 
         await Assert.That(SkillsDeletion.Delete(Row(dir, root, anchor, null), new SkillAuthority(root, anchor)))
-            .IsEqualTo(SkillDeletionResult.Refused);
+            .IsEqualTo(SkillDeletionResult.Unvouched);
         await Assert.That(File.Exists(file)).IsTrue();
+    }
+
+    /// <summary>A receipt is over the bytes, not over the characters they decode to. A file
+    /// re-encoded, or given a byte-order mark, reads back as the same text and must not be taken
+    /// for the one kcap wrote.</summary>
+    [Test]
+    public async Task A_re_encoded_file_does_not_match_the_receipt_it_decodes_to() {
+        var anchor = Tmp.CreateDir("repo");
+        var root   = Tmp.CreateDir("repo", ".agents", "skills");
+        var dir    = root.CreateDir("kcap-x");
+        var file   = SkillsMaterializer.SkillFileFor(dir);
+        var row    = Row(dir, root, anchor, SkillsMaterializer.FileHash(Body));
+
+        File.WriteAllText(file, Body, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        await Assert.That(SkillsDeletion.Delete(row, new SkillAuthority(root, anchor)))
+            .IsEqualTo(SkillDeletionResult.Unvouched);
+
+        File.WriteAllText(file, Body, Encoding.Unicode);
+
+        await Assert.That(SkillsDeletion.Delete(row, new SkillAuthority(root, anchor)))
+            .IsEqualTo(SkillDeletionResult.Unvouched);
+
+        File.WriteAllBytes(file, SkillsMaterializer.Encode(Body));
+
+        await Assert.That(SkillsDeletion.Delete(row, new SkillAuthority(root, anchor)))
+            .IsEqualTo(SkillDeletionResult.Removed);
     }
 
     /// <summary>Whichever receipt the file matches is the one the deletion uses: a co-owner's, when
