@@ -273,6 +273,29 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
     }
 
+    /// The server's lifecycle event ends the row with no notification on the stream at all.
+    [Test]
+    public async Task The_servers_subagent_completion_ends_a_seeded_background_row() {
+        using var h = new Harness(vendor: "claude") {
+            NextDetail = new(Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated,
+                    """{"tool_calls":[{"call_id":"toolu_A","tool_name":"Agent","arguments":{"subagent_type":"Explore","description":"look"}}],"timestamp":"2026-09-17T10:00:00Z"}"""),
+                Event(1, CanonicalEventTypes.ToolResultReceived,
+                    """{"call_id":"toolu_A","result":"launched","timestamp":"2026-09-17T10:00:01Z","extensions":{"claude_code":{"tool_use_result":{"status":"async_launched","agentId":"a9f262478e032f427"}}}}"""))),
+        };
+        var subagents = new SessionSubagents(h.Time);
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
+        await Assert.That(subagents.RunningCount).IsEqualTo(1);
+
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.SubagentCompleted, """{"agent_id":"a9f262478e032f427"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the completion");
+        foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
+        await Assert.That(subagents.RunningCount).IsEqualTo(0);
+        await Assert.That(subagents.Rows.Single().State).IsEqualTo(SubagentState.Done);
+    }
+
     /// The payload's own time is transcript-authoritative; the stream envelope only carries when
     /// the server happened to store it.
     [Test]

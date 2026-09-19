@@ -10,6 +10,7 @@ public abstract record SubagentSignal {
     /// from then on.
     public sealed record Detached(string CallId, string AgentId) : SubagentSignal;
 
-    /// The subagent ended outside its tool result. At least one key is set.
-    public sealed record Finished(string? CallId, string? AgentId, SubagentOutcome Outcome, DateTimeOffset At) : SubagentSignal;
+    /// The subagent ended outside its tool result. At least one key is set. A null outcome means
+    /// the source knows only that it ended.
+    public sealed record Finished(string? CallId, string? AgentId, SubagentOutcome? Outcome, DateTimeOffset At) : SubagentSignal;
 }

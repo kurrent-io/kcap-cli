@@ -6,6 +6,22 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A remote subagent row also ends on the server's stop
+
+On the remote lane the chat reads the session stream, and that stream carries evidence the
+transcript does not: the `SubagentCompleted` the server writes from the vendor's subagent-stop hook.
+The feed parses it and turns it into a finish keyed by agent id alone, since the event names no call.
+So a background row ends when the server heard the stop, whether or not the server's normalizer
+projected the task-notification. The transcript signals stay: a `TaskStop` kill fires no stop hook,
+and only the notification says how the run went.
+
+The stop does not say how it went, so its finish carries no outcome. The row reads as done and keeps
+the stop's time as its end, but a later end that does carry an outcome — a notification, a `TaskStop`
+result, a tool result — replaces the outcome. An end with an outcome is final. The stop
+hook normally reaches the server before the watcher ships the notification; if the stop's `done` were
+final, a failed background agent would read as done. `SubagentStarted` is not read: it names no call
+either, so it can neither start a row nor bind one.
+
 ## The daemon counts live subagents beside the wait verdict, never instead of it
 
 Claude's hooks cannot tell "I will wait for my agents" from "I asked you something": both are the

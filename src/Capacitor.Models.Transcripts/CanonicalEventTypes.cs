@@ -9,6 +9,7 @@ public static class CanonicalEventTypes {
     public const string ToolResultReceived          = "ToolResultReceived";
     public const string SessionStarted              = "SessionStarted";
     public const string UsageApplied                = "UsageApplied";
+    public const string SubagentCompleted           = "SubagentCompleted";
 
     public static string Of(object payload) => payload switch {
         Kurrent.Agent.Schema.Events.UserMessageReceived         => UserMessageReceived,

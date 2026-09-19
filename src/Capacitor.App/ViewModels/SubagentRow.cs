@@ -6,6 +6,7 @@ namespace Capacitor.App.ViewModels;
 /// presents, which reads Stopped for a still-running row once the session is over.
 public sealed class SubagentRow : ReactiveObject {
     bool _isBackground;
+    bool _outcomeUnknown;
     SubagentState _state = SubagentState.Running;
     string _stateText = "";
 
@@ -47,9 +48,13 @@ public sealed class SubagentRow : ReactiveObject {
 
     internal void MarkBackground() => IsBackground = true;
 
-    internal void End(SubagentState outcome, DateTimeOffset at) {
-        Outcome = outcome;
-        EndedAt = at;
+    /// The first end dates the row. An end with no outcome reads as done until one with an
+    /// outcome arrives; an end with one is final.
+    internal void End(SubagentState? outcome, DateTimeOffset at) {
+        if (IsEnded && (!_outcomeUnknown || outcome is null)) return;
+        EndedAt ??= at;
+        Outcome = outcome ?? SubagentState.Done;
+        _outcomeUnknown = outcome is null;
     }
 
     internal void Present(bool sessionOver, DateTimeOffset now) {
