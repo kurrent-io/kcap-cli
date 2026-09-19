@@ -52,7 +52,6 @@ public class BorrowAuthorizer(DaemonConfig config) {
     /// security boundary: an <i>ancestor</i> symlink must not let a directory that physically lives
     /// outside the operator's allowlisted tree textually match <see cref="DaemonConfig.IsRepoAllowed"/>
     /// (e.g. an allowlisted <c>/repos/*</c> containing a symlink <c>proj/linkdir</c> → <c>~/.ssh</c>).
-    /// Also called by <c>WorktreeInfo.Borrowed</c> so both sides of a borrow compare canonical paths.
     /// A path the walk could not finish throws rather than answering with its unresolved remainder,
     /// which the allowlist would match as though it were a location.
     /// </summary>

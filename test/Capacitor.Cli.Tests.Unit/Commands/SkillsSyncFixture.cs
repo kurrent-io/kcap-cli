@@ -71,10 +71,6 @@ sealed class SkillsSyncFixture {
     /// delete from.</summary>
     public string Home { get; }
 
-    /// <summary>The user-global skills tree this target occupied before materialization moved into
-    /// the checkout.</summary>
-    public string GlobalSkillsRoot => Path.Combine(Home, ClaudePaths.RepoSkillsRelativePath);
-
     public string         RepoHash { get; }
     public string         RepoHome { get; }
     public SkillsIdentity Identity { get; }

@@ -481,6 +481,26 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.HasSkill("alpha")).IsTrue();
     }
 
+    /// <summary>A legacy ledger that will not parse names paths nothing can act on, so it is not
+    /// work the throttle owes — counting it would buy a refresh at every session start that never
+    /// clears.</summary>
+    [Test]
+    public async Task An_auto_run_is_still_throttled_by_a_legacy_ledger_that_will_not_parse() {
+        using var repo  = Checkout("repo");
+        var       alpha = SkillsSyncFixture.Skill("alpha");
+        var       fx    = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("never asked"));
+
+        fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with {
+            Etag = "etag-1", SyncedAt = SkillsSyncFixture.Now.AddMinutes(-1),
+        });
+        fx.WriteLegacyManifest("{ truncated");
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false, auto: true)).IsEqualTo(0);
+
+        await Assert.That(fx.Api.Requests).IsEmpty();
+        await Assert.That(File.Exists(fx.LegacyManifestPath)).IsTrue();
+    }
+
     /// <summary>The lock-free peek that decides whether to take the migration lock can be
     /// superseded by a peer between the peek and the locked read. The attempt then hands both locks
     /// back for one retry rather than holding a shared lock across a fetch — so nothing is

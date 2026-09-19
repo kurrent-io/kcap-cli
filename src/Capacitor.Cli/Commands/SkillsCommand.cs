@@ -181,11 +181,9 @@ class SkillsCommand(
         void Info(string line) { if (!auto) Console.WriteLine(line); }
 
         var manifestPath = ManifestPath(gitDir, target.Key);
+        var legacyPath   = LegacyManifestPath(hash, target.Key);
         var root         = target.Root(anchor);
         var reported     = new HashSet<string>(StringComparer.Ordinal);
-        // One read for both throttle questions. A peer that retires it in between costs this run
-        // one refresh it did not need, where missing it would strand the copies for the interval.
-        var legacyOwned  = File.Exists(LegacyManifestPath(hash, target.Key));
 
         // One line per refused deletion per run: an intent refused before the fetch is retried after
         // it, and refusing twice says nothing the first line did not.
@@ -198,14 +196,14 @@ class SkillsCommand(
         }
 
         // What an auto run may skip: a periodic refresh is exactly what a lock holder is already
-        // doing, while recovery, a retired credential and a moved anchor are work only this run
-        // owes. Classified from a read taken without the lock, so it is a hint about how long to
+        // doing. Classified from a read taken without the lock, so it is a hint about how long to
         // wait and never a decision to write. It canonicalizes an anchor, so it reads the
         // filesystem: a refusal there ends this target rather than escaping a run whose streams
         // nobody reads.
         bool owed;
         try {
-            owed = auto && Owed(LoadQuietly(manifestPath), identity, anchor, legacyOwned);
+            owed = auto && Owed(LoadQuietly(manifestPath), identity, anchor,
+                                legacyOwnership: LoadQuietly(legacyPath) is not null);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync(Unwritable(target, anchor, ex));
             return (Failed, false, false);
@@ -249,12 +247,13 @@ class SkillsCommand(
 
             // The migration lock is what owns this file; read under it whenever this attempt holds
             // it. Without it the answer only decides whether to ask for a retry, never a write.
-            var legacy = LoadQuietly(LegacyManifestPath(hash, target.Key));
+            var legacy = LoadQuietly(legacyPath);
 
             if (Retiring(manifest, legacy, identity) && migrationLock is null)
                 return (0, false, true);
 
-            if (auto && AutoThrottled(manifest, time.GetUtcNow()) && !Owed(manifest, identity, anchor, legacyOwned))
+            if (auto && AutoThrottled(manifest, time.GetUtcNow())
+                     && !Owed(manifest, identity, anchor, legacyOwnership: legacy is not null))
                 return (0, false, false);
 
             journal    = [.. manifest?.PendingPrunes ?? []];
@@ -528,10 +527,12 @@ class SkillsCommand(
             && age >= TimeSpan.Zero && age < AutoSyncInterval;
 
     /// <summary>Work the refresh throttle must not suppress: an interrupted publication, a deletion
-    /// still owed, a retired credential, a moved anchor, or a legacy global ledger still standing.
+    /// still owed, a retired credential, a moved anchor, or a readable legacy ledger still standing.
     /// The throttle exists to collapse a burst of periodic refreshes, and none of these is one — a
     /// refresh stamp is written before the tail that retires the global copies, so the local ledger
-    /// on its own cannot tell a finished migration from an interrupted one.</summary>
+    /// on its own cannot tell a finished migration from an interrupted one. Readable, because a
+    /// ledger that will not parse is cleanup nothing can perform: counting it would spend a
+    /// round-trip per session start that never clears.</summary>
     internal static bool Owed(SkillsManifest? manifest, SkillsIdentity identity, string anchor,
                               bool legacyOwnership) =>
         legacyOwnership
