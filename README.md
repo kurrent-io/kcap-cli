@@ -515,6 +515,7 @@ kcap eval --chain <sessionId>              # include the full continuation chain
 kcap eval --threshold 5000 <sessionId>     # keep more of each tool output before truncation
 kcap eval --questions safety <sessionId>   # run only the 4 safety judges
 kcap eval --skip efficiency <sessionId>    # run everything except efficiency
+kcap eval --baseline-out out.json <sessionId>  # also write per-question usage/route/timing
 kcap eval --list-questions                 # print the question taxonomy
 ```
 

@@ -24,6 +24,10 @@ Options:
                       exclusive with --skip.
   --skip <csv>        Run everything except the listed questions/categories.
                       Mutually exclusive with --questions.
+  --baseline-out <path>
+                      Write one JSON record per question (route, judge token
+                      usage/cost, wall time) plus the retrospective and run
+                      totals to <path>.
   --list-questions    Print the question taxonomy (grouped by category) and exit.
   --help, -h          Show this help.
 

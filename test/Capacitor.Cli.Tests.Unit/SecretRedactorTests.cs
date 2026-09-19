@@ -5,6 +5,19 @@ namespace Capacitor.Cli.Tests.Unit;
 
 public class SecretRedactorTests {
     [Test]
+    public async Task IsSecretKey_recognises_a_secret_key_and_passes_an_innocuous_one() {
+        await Assert.That(SecretRedactor.IsSecretKey("api_key")).IsTrue();
+        await Assert.That(SecretRedactor.IsSecretKey("note")).IsFalse();
+    }
+
+    [Test]
+    public async Task RedactValue_redacts_under_a_secret_key_and_a_matching_pattern_only() {
+        await Assert.That(SecretRedactor.RedactValue("hello", keyIsSecret: true)).IsNotNull();
+        await Assert.That(SecretRedactor.RedactValue("hello", keyIsSecret: false)).IsNull();
+        await Assert.That(SecretRedactor.RedactValue("ghp_ABCDEFghijklmnop1234567890abcdef12345678", keyIsSecret: false)).IsNotNull();
+    }
+
+    [Test]
     public async Task RedactsLine_TruncatedPemPrivateKey_DoesNotHangOnBacktracking() {
         // Regression: a tool result containing `-----BEGIN RSA PRIVATE KEY-----` followed by many
         // `\n`-escaped key body lines, then truncated WITHOUT a matching `-----END` marker, used
@@ -234,6 +247,37 @@ public class SecretRedactorTests {
         await Assert.That(result).DoesNotContain("a8f3b2c91d4e7f0123456789abcdef01");
         await Assert.That(result).Contains("client_secret");
         await Assert.That(result).Contains("[REDACTED]");
+    }
+
+    [Test]
+    [Arguments("OAUTH2_TOKEN=tok_abc123def456ghi789jkl", "tok_abc123def456ghi789jkl")]
+    [Arguments("S3_SECRET_KEY=abcdef1234567890abcdef", "abcdef1234567890abcdef")]
+    [Arguments("V2_API_KEY=key_abcdef1234567890xyz", "key_abcdef1234567890xyz")]
+    [Arguments("SHA256_TOKEN=sig_abcdef1234567890abc", "sig_abcdef1234567890abc")]
+    public async Task RedactsLine_EnvVarToken_WhenKeywordFollowsADigit(string kv, string secret) {
+        // `[A-Z_]` stops at a digit, so the keyword run begins right after one. The name-boundary
+        // lookbehind must not treat a digit as inside the name, or these values leak.
+        var line = $$$"""
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"{{{kv}}}","is_error":false}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain(secret);
+        await Assert.That(result).Contains("[REDACTED]");
+    }
+
+    [Test]
+    public async Task RedactValue_OnADigitPrecededLongRun_ReturnsFast() {
+        // The name-boundary lookbehind keeps the env-var scan O(n) on a megabyte-scale value; a run
+        // that begins right after a digit must not reopen the O(n^2) per-character rescan.
+        var value = "0" + new string('y', 3_000_000);
+
+        var sw = Stopwatch.StartNew();
+        SecretRedactor.RedactValue(value, keyIsSecret: false);
+        sw.Stop();
+
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
     [Test]

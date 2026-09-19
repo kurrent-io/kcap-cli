@@ -23,7 +23,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         public void OnQuestionStarted(int index, int total, string category, string questionId) { }
 
-        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, long inputTokens, long outputTokens) { }
+        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations) { }
 
         public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) { }
 
@@ -31,7 +31,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         public void OnRetrospectiveStarted() { }
 
-        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) { }
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed) { }
 
         public void OnRetrospectiveFailed(string reason) { }
 
