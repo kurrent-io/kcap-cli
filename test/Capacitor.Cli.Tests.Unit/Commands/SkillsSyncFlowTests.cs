@@ -28,7 +28,8 @@ public class SkillsSyncFlowTests {
         var       home  = Tmp.CreateDir("home");
         using var pin   = EnvScope.Exclusive("HOME", home);
         using var repo  = Checkout("repo");
-        var       sent  = SkillsSyncFixture.Skill("alpha", home: "project:acme", applicability: "always");
+        var       reach = new SkillApplicability { Vendors = ["claude"], SessionKinds = ["review"] };
+        var       sent  = SkillsSyncFixture.Skill("alpha", home: "project:acme", applicability: reach);
         var       plain = SkillsSyncFixture.Skill("beta");
         var       fx    = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", sent, plain));
 
@@ -50,7 +51,8 @@ public class SkillsSyncFlowTests {
         await Assert.That(entries.Count).IsEqualTo(2);
         await Assert.That(entries["alpha"].Path).IsEqualTo(fx.SkillDir("alpha"));
         await Assert.That(entries["alpha"].Home).IsEqualTo("project:acme");
-        await Assert.That(entries["alpha"].Applicability).IsEqualTo("always");
+        await Assert.That(entries["alpha"].Applicability!.Vendors).IsEquivalentTo(["claude"]);
+        await Assert.That(entries["alpha"].Applicability!.SessionKinds).IsEquivalentTo(["review"]);
         await Assert.That(entries["beta"].Home).IsEqualTo(fx.RepoHome);
 
         await Assert.That(Directory.Exists(new ClaudePaths(new UserHome(home), null).UserSkillsDir)).IsFalse();

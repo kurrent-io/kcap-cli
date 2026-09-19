@@ -112,7 +112,7 @@ sealed class SkillsSyncFixture {
     /// keeps it and passes a new slug.</summary>
     public static SkillSnapshotItem Skill(
             string slug, Guid? docId = null, int version = 1, string? body = null,
-            string? home = null, string? applicability = null) =>
+            string? home = null, SkillApplicability? applicability = null) =>
         new() {
             DocId   = docId ?? DocIdFor(slug), Slug = slug, Title = slug.Replace('-', ' '),
             Body    = body ?? $"# {slug}\n\nWhat {slug} does.\n",

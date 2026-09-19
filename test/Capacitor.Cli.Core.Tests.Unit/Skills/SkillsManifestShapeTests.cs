@@ -13,7 +13,8 @@ public class SkillsManifestShapeTests {
             PendingPrunes = [new PendingPrune("/repo/.claude/skills/kcap-x", "/repo/.claude/skills")],
             Skills = [new SkillsManifestEntry {
                 DocId = Guid.Empty, Slug = "x", Version = 1, ContentHash = "h", Path = "/repo/.claude/skills/kcap-x",
-                FileHash = "f", Home = "repo:owner/name", Applicability = "vendor:claude",
+                FileHash = "f", Home = "repo:owner/name",
+                Applicability = new SkillApplicability { Vendors = ["claude"] },
             }],
         };
 

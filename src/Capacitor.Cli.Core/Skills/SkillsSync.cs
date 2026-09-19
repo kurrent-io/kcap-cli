@@ -13,8 +13,8 @@ public sealed record SkillSnapshotItem {
     [JsonPropertyName("body")]         public required string Body        { get; init; }
     [JsonPropertyName("version")]      public required int    Version     { get; init; }
     [JsonPropertyName("content_hash")]  public required string ContentHash   { get; init; }
-    [JsonPropertyName("home")]          public string?         Home          { get; init; }
-    [JsonPropertyName("applicability")] public string?         Applicability { get; init; }
+    [JsonPropertyName("home")]          public string?              Home          { get; init; }
+    [JsonPropertyName("applicability")] public SkillApplicability?  Applicability { get; init; }
 }
 
 /// <summary>The credential the snapshot was fetched under. A profile name is not identity: signing
@@ -58,8 +58,8 @@ public sealed record SkillsManifestEntry {
     // materialization from a served one. Null (an older manifest) reads as drifted.
     [JsonPropertyName("file_hash")]     public string? FileHash     { get; init; }
     // Server-provided provenance; derived from the request when an older server omits it.
-    [JsonPropertyName("home")]          public string? Home          { get; init; }
-    [JsonPropertyName("applicability")] public string? Applicability { get; init; }
+    [JsonPropertyName("home")]          public string?             Home          { get; init; }
+    [JsonPropertyName("applicability")] public SkillApplicability? Applicability { get; init; }
 }
 
 /// <summary>One harness tree skills materialize into, relative to a session's anchor. A null
