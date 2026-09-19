@@ -48,11 +48,12 @@ public sealed class SubagentRow : ReactiveObject {
 
     internal void MarkBackground() => IsBackground = true;
 
-    /// The first end dates the row. An end with no outcome reads as done until one with an
-    /// outcome arrives; an end with one is final.
+    /// An end with an outcome is final. One without reads as done until one with an outcome
+    /// arrives, and the earlier of the two dates the row: the server stamps a stop when it heard
+    /// it, which an import or a spooled hook puts long after the run ended.
     internal void End(SubagentState? outcome, DateTimeOffset at) {
         if (IsEnded && (!_outcomeUnknown || outcome is null)) return;
-        EndedAt ??= at;
+        EndedAt = EndedAt is { } bare && bare < at ? bare : at;
         Outcome = outcome ?? SubagentState.Done;
         _outcomeUnknown = outcome is null;
     }

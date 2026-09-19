@@ -289,11 +289,13 @@ public class RemoteTranscriptFeedTests {
         foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
         await Assert.That(subagents.RunningCount).IsEqualTo(1);
 
-        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.SubagentCompleted, """{"agent_id":"a9f262478e032f427"}"""));
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.SubagentCompleted,
+            """{"agent_id":"a9f262478e032f427","timestamp":"2026-09-17T10:02:05Z"}"""));
         await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the completion");
         foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
         await Assert.That(subagents.RunningCount).IsEqualTo(0);
         await Assert.That(subagents.Rows.Single().State).IsEqualTo(SubagentState.Done);
+        await Assert.That(subagents.Rows.Single().EndedAt).IsEqualTo(DateTimeOffset.Parse("2026-09-17T10:02:05Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
     }
 
     /// The payload's own time is transcript-authoritative; the stream envelope only carries when

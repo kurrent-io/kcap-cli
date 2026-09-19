@@ -108,6 +108,18 @@ public class SessionSubagentsTests {
         await Assert.That(Only(s).StateText).IsEqualTo("failed · 1m 02s");
     }
 
+    /// The server dates a stop when it heard it: an import or a spooled hook lands it long after
+    /// the run ended, and the notification's own time is the truer end.
+    [Test]
+    public async Task A_late_stamped_bare_stop_yields_to_the_earlier_end_that_says_how() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddDays(3))));
+        s.Apply(Signals(Finished("c1", "a1", SubagentOutcome.Done, at: T0.AddSeconds(90))));
+        await Assert.That(Only(s).EndedAt).IsEqualTo(T0.AddSeconds(90));
+        await Assert.That(Only(s).StateText).IsEqualTo("1m 30s");
+    }
+
     [Test]
     public async Task An_end_that_says_how_is_final_and_a_repeated_bare_stop_changes_nothing() {
         var said = new SessionSubagents(Clock());

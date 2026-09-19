@@ -19,6 +19,7 @@ public static class CanonicalEventTypes {
         Kurrent.Agent.Schema.Events.ToolResultReceived          => ToolResultReceived,
         Kurrent.Agent.Schema.Events.SessionStarted              => SessionStarted,
         Transcripts.UsageApplied                                => UsageApplied,
+        Kurrent.Agent.Schema.Events.SubagentCompleted           => SubagentCompleted,
         _ => throw new ArgumentException($"No canonical event type for {payload.GetType().Name}", nameof(payload)),
     };
 }

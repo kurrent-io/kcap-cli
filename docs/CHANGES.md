@@ -15,12 +15,13 @@ So a background row ends when the server heard the stop, whether or not the serv
 projected the task-notification. The transcript signals stay: a `TaskStop` kill fires no stop hook,
 and only the notification says how the run went.
 
-The stop does not say how it went, so its finish carries no outcome. The row reads as done and keeps
-the stop's time as its end, but a later end that does carry an outcome — a notification, a `TaskStop`
-result, a tool result — replaces the outcome. An end with an outcome is final. The stop
-hook normally reaches the server before the watcher ships the notification; if the stop's `done` were
-final, a failed background agent would read as done. `SubagentStarted` is not read: it names no call
-either, so it can neither start a row nor bind one.
+The stop does not say how it went, so its finish carries no outcome. The row reads as done until an
+end that carries an outcome — a notification, a `TaskStop` result, a tool result — replaces it, and
+the earlier of the two times dates the row: the server stamps the stop when it heard it, which
+`kcap import` or a spooled hook puts long after the run ended. An end with an outcome is final.
+The stop hook normally reaches the server before the watcher ships the notification; if the stop's
+`done` were final, a failed background agent would read as done. `SubagentStarted` is not read: it
+names no call either, so it can neither start a row nor bind one.
 
 ## The daemon counts live subagents beside the wait verdict, never instead of it
 
