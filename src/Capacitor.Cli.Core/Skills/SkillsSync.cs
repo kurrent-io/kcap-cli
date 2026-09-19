@@ -71,6 +71,12 @@ public sealed record SkillsTarget(
     string Key, string RelativePath, string? Vendor,
     IReadOnlyList<HarnessId> Consumers, IReadOnlyList<HarnessId> Readers) {
     public string Root(string anchor) => Path.Combine(anchor, RelativePath);
+
+    /// <summary>The user-global tree this target's copies were written into before materialization
+    /// moved inside the checkout — the one root a legacy retirement may delete from. Required, and
+    /// not derived from <see cref="RelativePath"/>, because two vendors relocate theirs through a
+    /// documented environment override.</summary>
+    public required string LegacyRoot { get; init; }
 }
 
 public sealed record SkillsSyncPlan(

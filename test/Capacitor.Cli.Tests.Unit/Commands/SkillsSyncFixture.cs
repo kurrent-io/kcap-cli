@@ -38,6 +38,8 @@ sealed class SkillsSyncFixture {
         Config   = new ConfigRoot(tmp.CreateDir("config"));
         Identity = new SkillsIdentity(subject, ServerUrl);
         Home     = tmp.PathTo("home");
+        // No override consulted: these tests stage the global copies under the plain home layout.
+        LegacyRoots = new LegacySkillsRoots(new UserHome(Home), kiroHome: null, geminiCliHome: null);
 
         SeedDetectionCache(tmp, checkout, owner, repoName);
 
@@ -54,8 +56,12 @@ sealed class SkillsSyncFixture {
         Command = new SkillsCommand(
             Config, TestHarnesses.All(detected: [HarnessId.Claude]), api, new GitProviderRouter(),
             new WorkingDirectory(checkout), tokens, Resolutions.At(ServerUrl, Config),
-            MachineAuth.None, new UserHome(Home), time);
+            MachineAuth.None, LegacyRoots, time);
     }
+
+    /// <summary>The global trees a retirement may delete from, rooted where these tests stage the
+    /// copies a previous release left behind.</summary>
+    public LegacySkillsRoots LegacyRoots { get; }
 
     public SkillsCommand Command { get; }
     public StubSkillsApi Api     { get; }

@@ -449,7 +449,7 @@ public class SkillsSyncFlowTests {
 
         var exclude = Exclude(fx);
 
-        foreach (var root in SkillsCommand.Targets())
+        foreach (var root in SkillsCommand.Targets(fx.LegacyRoots))
             await Assert.That(exclude).Contains(
                 "/" + root.RelativePath.Replace(Path.DirectorySeparatorChar, '/') + "/kcap-*/");
     }
@@ -510,7 +510,7 @@ public class SkillsSyncFlowTests {
         using var repo   = Checkout("repo");
         var       alpha  = SkillsSyncFixture.Skill("alpha");
         var       fx     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("never asked"));
-        var       target = SkillsCommand.Targets().Single(t => t.Key == SkillsSyncFixture.TargetKey);
+        var       target = SkillsCommand.Targets(fx.LegacyRoots).Single(t => t.Key == SkillsSyncFixture.TargetKey);
 
         fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with {
             Etag = "etag-1", Identity = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl),

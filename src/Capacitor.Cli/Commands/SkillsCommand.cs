@@ -23,7 +23,7 @@ namespace Capacitor.Cli.Commands;
 class SkillsCommand(
         ConfigRoot config, HarnessRegistry harnesses, IRepositoriesApi repositories,
         GitProviderRouter router, WorkingDirectory workdir, TokenStore tokens,
-        ProfileContext profiles, MachineAuth machine, UserHome home, TimeProvider time) {
+        ProfileContext profiles, MachineAuth machine, LegacySkillsRoots legacy, TimeProvider time) {
     // The background refresh keys off each manifest's synced_at, so a burst of session starts
     // costs one network round-trip per interval per target, not one per session.
     static readonly TimeSpan AutoSyncInterval = TimeSpan.FromHours(6);
@@ -45,23 +45,24 @@ class SkillsCommand(
     /// vendor is a SHARED tree (several harnesses read it): its snapshot is fetched vendor-less, so
     /// unknown-excludes keeps vendor-restricted docs out of it — those reach their harness through a
     /// vendored tree instead.</summary>
-    internal static IReadOnlyList<SkillsTarget> Targets() => [
+    internal static IReadOnlyList<SkillsTarget> Targets(LegacySkillsRoots legacy) => [
         new("agents", AgentsPaths.RepoSkillsRelativePath, null,
             [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
              HarnessId.Antigravity],
             [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
-             HarnessId.Antigravity]),
+             HarnessId.Antigravity]) { LegacyRoot = legacy.Agents },
         new("claude", ClaudePaths.RepoSkillsRelativePath, "claude",
             [HarnessId.Claude],
-            [HarnessId.Claude, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode]),
+            [HarnessId.Claude, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode])
+            { LegacyRoot = legacy.Claude },
         new("kiro", KiroPaths.RepoSkillsRelativePath, "kiro",
-            [HarnessId.Kiro], [HarnessId.Kiro]),
+            [HarnessId.Kiro], [HarnessId.Kiro]) { LegacyRoot = legacy.Kiro },
         // No session has confirmed a repository-local .gemini/skills; the tree is kept on the
         // vendor's documentation, which is why it has a consumer and no reader. Antigravity is not
         // that consumer: it was measured reading the shared tree above, so listing it here would
         // send an Antigravity-only machine to a directory nothing reads.
         new("gemini", GeminiPaths.RepoSkillsRelativePath, null,
-            [HarnessId.Gemini], []),
+            [HarnessId.Gemini], []) { LegacyRoot = legacy.Gemini },
     ];
 
     /// <summary>The checkout or linked worktree the session is in. Every write below is relative to
@@ -103,7 +104,7 @@ class SkillsCommand(
         var hash     = RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName);
         var repoHome = $"repo:{repo.Owner}/{repo.RepoName}";
 
-        var adopted = Targets()
+        var adopted = Targets(legacy)
             .Where(t => Adopted(harnesses, t, File.Exists(ManifestPath(gitDir, t.Key)),
                                 File.Exists(LegacyManifestPath(hash, t.Key))))
             .ToList();
@@ -134,7 +135,7 @@ class SkillsCommand(
         using (repository) {
             try {
                 SkillsExclusion.Apply(CommonGitDir(anchor, gitDir), RepoRoot(anchor),
-                                      [.. Targets().Select(t => t.Root(anchor))]);
+                                      [.. Targets(legacy).Select(t => t.Root(anchor))]);
                 return 0;
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 await Console.Error.WriteLineAsync(
@@ -690,14 +691,12 @@ class SkillsCommand(
     }
 
     /// <summary>Deletes one user-global directory: a direct kcap-owned child of the tree this target
-    /// occupied under the user's home, which is the only place a global copy was ever written. A
-    /// ledger naming anywhere else — a hand edit, or a home that has since moved — is refused and
-    /// stays recorded. A directory already gone counts as removed.</summary>
-    bool PruneGlobal(SkillsTarget target, string path) {
-        if (!Directory.Exists(Path.GetFullPath(path))) return true;
-        var root = target.Root(home.Path);
-        return SkillsMaterializer.Prune(root, root, path);
-    }
+    /// occupied, which is the only place a global copy was ever written. A ledger naming anywhere
+    /// else — a hand edit, or a vendor root that has since moved — is refused and stays recorded. A
+    /// directory already gone counts as removed.</summary>
+    static bool PruneGlobal(SkillsTarget target, string path) =>
+        !Directory.Exists(Path.GetFullPath(path))
+        || SkillsMaterializer.Prune(target.LegacyRoot, target.LegacyRoot, path);
 
     /// <summary>Carries out the deletions a manifest still owes and clears its pending flag, keeping
     /// an intent that was refused so a later run retries it. The ledger is saved after the
