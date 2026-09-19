@@ -117,7 +117,12 @@ public static class SkillsLegacyMigration {
 
         Persist(plan.LedgerPath, ledger!, rows);
 
-        foreach (var row in rows.Live.Where(r => r.State == OwnedSkillState.Owed).ToList()) {
+        // Only what this plan decided to delete. A row still present for any other reason — a
+        // relinquishment whose handover did not durably succeed, and which a surviving co-owner is
+        // still counting on — is not this loop's to act on, whatever state it is in.
+        foreach (var planned in plan.Delete) {
+            if (rows.At(planned.Path) is not { State: OwnedSkillState.Owed } row) continue;
+
             var result = SkillsDeletion.Delete(row, authority);
 
             if (result is SkillDeletionResult.Removed or SkillDeletionResult.Settled) {

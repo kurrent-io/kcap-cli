@@ -104,8 +104,10 @@ class SkillsCommand(
         var repoHome = $"repo:{repo.Owner}/{repo.RepoName}";
 
         var adopted = Targets(legacy)
-            .Where(t => Adopted(harnesses, t, File.Exists(LedgerPath(gitDir, t.Key)),
-                                File.Exists(LegacyLedgerPath(hash, t.Key))))
+            // A ledger that could not be reached is not one this repository stopped owning, so the
+            // target is adopted and the read under the lock decides.
+            .Where(t => Adopted(harnesses, t, Holds(LedgerPath(gitDir, t.Key)),
+                                Holds(LegacyLedgerPath(hash, t.Key))))
             .ToList();
         if (adopted.Count == 0) return 0;
 
@@ -321,16 +323,19 @@ class SkillsCommand(
     /// carries out before the fetch — leaving the previous account's global copies loadable.
     /// </summary>
     static bool Retiring(SkillsLedger? local, SkillsLedger? legacy, SkillsIdentity identity) =>
-        (Recorded(local) is { } recorded && !Equals(recorded, identity))
+        (Recorded(local?.Identity, Admitted(local)) is { } recorded && !Equals(recorded, identity))
         || Superseded(legacy, identity)
         || local?.LegacyRetirement is not null;
 
     /// <summary>The credential a ledger's catalogue belongs to: what the envelope recorded, or —
     /// for a ledger interrupted before it did — what an operation still in flight was authorised
-    /// under.</summary>
-    internal static SkillsIdentity? Recorded(SkillsLedger? ledger) =>
-        ledger?.Identity
-        ?? (ledger?.Rows ?? []).Select(row => row.Prepared?.Identity).FirstOrDefault(i => i is not null);
+    /// under. Only a row the validator admitted may answer, because this decides a retirement and a
+    /// refused row must not be able to order one.</summary>
+    internal static SkillsIdentity? Recorded(SkillsIdentity? envelope, IEnumerable<OwnedSkillRow> admitted) =>
+        envelope ?? admitted.Select(row => row.Prepared?.Identity).FirstOrDefault(i => i is not null);
+
+    static IEnumerable<OwnedSkillRow> Admitted(SkillsLedger? ledger) =>
+        ledger is null ? [] : OwnedSkillRows.Adopt(ledger, (_, _) => { }).Live;
 
     /// <summary>A ledger recording no identity is adopted rather than retired: its files are still
     /// this profile's, and nothing contradicts them.</summary>
@@ -378,6 +383,8 @@ class SkillsCommand(
 
     string LegacyLedgerPath(string hash, string targetKey) =>
         SkillsLegacyMigration.ManifestPathFor(config.Directory, hash, targetKey);
+
+    static bool Holds(string path) => PathExistence.OfFile(path) != PathPresence.Missing;
 
     static SkillsLedger? ReadQuietly(string path, SkillOrigin origin) =>
         SkillsLedgerFile.ReadQuietly(path, origin);

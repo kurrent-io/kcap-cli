@@ -62,7 +62,7 @@ sealed class SkillsSyncRun(
         // for a ledger interrupted before the envelope recorded one. A retained operation under
         // another account is protected by its own refusal and must not retire rows this account has
         // since published.
-        var recorded = SkillsCommand.Recorded(_ledger);
+        var recorded = SkillsCommand.Recorded(_ledger.Identity, _rows.Live);
 
         // Two ledgers, two decisions. A legacy retirement that cannot finish stays due on every
         // start, and folding the two together would delete and re-materialize the local catalogue
