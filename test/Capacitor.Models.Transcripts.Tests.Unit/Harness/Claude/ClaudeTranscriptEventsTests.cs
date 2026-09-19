@@ -200,6 +200,26 @@ public class ClaudeTranscriptEventsTests {
     }
 
     [Test]
+    public async Task A_meta_attachment_notification_carries_is_meta() {
+        var line = """{"type":"attachment","isMeta":true,"attachment":{"type":"queued_command","prompt":"<task-notification></task-notification>","commandMode":"task-notification"}}""";
+        var e = E(line);
+        await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_meta")).IsTrue();
+    }
+
+    /// The id contract binds the records the projection reads: an attachment carrying anything but
+    /// a notification is settled before the uuid is looked at, so a malformed one costs it nothing.
+    [Test]
+    public async Task A_uuid_matters_only_on_the_attachment_the_projection_reads() {
+        var ignored = P("""{"type":"attachment","uuid":42,"attachment":{"type":"file","filename":"x"}}""");
+        await Assert.That(ignored.Rejected).IsNull();
+        await Assert.That(ignored.Events).IsEmpty();
+
+        var notification = P("""{"type":"attachment","uuid":42,"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification></task-notification>"}}""");
+        await Assert.That(notification.Rejected).IsNotNull();
+        await Assert.That(notification.Events).IsEmpty();
+    }
+
+    [Test]
     public async Task A_uuid_matters_only_on_a_record_the_projection_reads() {
         var ignored = P("""{"type":"progress","uuid":"bad","message":{"content":"x"}}""");
         await Assert.That(ignored.Rejected).IsNull();

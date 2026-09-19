@@ -252,6 +252,16 @@ public class ClaudeChatRulesTests {
         await Assert.That(prompt.Subagents).IsEmpty();
     }
 
+    /// Meta hides a notification's row on either delivery: the flag rides the attachment as it
+    /// rides the user line, and the finish lands either way.
+    [Test]
+    public async Task A_meta_attachment_notification_yields_its_finish_but_neither_row_nor_input() {
+        var meta = R("""{"type":"attachment","isMeta":true,"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"X\" finished</summary>\n</task-notification>"}}""");
+        await Assert.That(meta.Envelopes).IsEmpty();
+        await Assert.That(meta.SubmittedInputs).IsEmpty();
+        await Assert.That(meta.Subagents.Single()).IsTypeOf<SubagentSignal.Finished>();
+    }
+
     [Test]
     public async Task A_notification_marked_meta_yields_its_finish_but_neither_row_nor_input() {
         var meta = R(Notification(originKind: true, flags: "\"isMeta\":true,"));

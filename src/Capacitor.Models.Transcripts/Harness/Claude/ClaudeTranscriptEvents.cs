@@ -33,9 +33,13 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
 
             // Only a record the projection reads needs a usable id; every other type is ignored
             // whatever its uuid holds. A notification that lands mid-turn is one such record: an
-            // `attachment` rather than the `user` line it would otherwise be.
+            // `attachment` rather than the `user` line it would otherwise be — and the attachments
+            // that are anything else are settled here, before the id is read, so they stay ignored.
             var type = root.Str("type");
             if (type is not ("user" or "assistant" or "attachment")) return ProjectionResult.Empty;
+
+            var notification = type == "attachment" ? TaskNotification(root) : null;
+            if (type == "attachment" && notification is null) return ProjectionResult.Empty;
 
             Guid recordId;
             switch (root.Prop("uuid")) {
@@ -55,7 +59,7 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
             return ProjectionResult.Of(type switch {
                 "user"      => ProjectUser(root, record),
                 "assistant" => ProjectAssistant(root, record),
-                _           => ProjectAttachment(root, record),
+                _           => ProjectAttachment(notification!, root, record),
             });
         }
     }
@@ -123,16 +127,20 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
     static UserMessageReceived UserMessage(string text, Record record) =>
         new() { Content = text, Timestamp = record.ProtoTimestamp };
 
-    // A queued_command attachment in task-notification mode is how Claude Code delivers a
-    // notification that lands while the parent is mid-turn; anything else an attachment carries
-    // (a queued prompt, a snapshot, a file) is not this leaf's concern.
-    static IReadOnlyList<CanonicalEvent> ProjectAttachment(JsonElement root, Record record) {
-        if (root.Obj("attachment") is not { } attachment) return [];
-        if (attachment.Str("type") != "queued_command" || attachment.Str("commandMode") != "task-notification") return [];
-        if (attachment.Str("prompt") is not { } prompt) return [];
+    /// The notification a <c>queued_command</c> attachment in task-notification mode carries: how
+    /// Claude Code delivers one that lands while the parent is mid-turn. Null for anything else an
+    /// attachment holds — a queued prompt, a snapshot, a file — which this leaf does not read.
+    static string? TaskNotification(JsonElement root) =>
+        root.Obj("attachment") is { } attachment
+        && attachment.Str("type") == "queued_command"
+        && attachment.Str("commandMode") == "task-notification"
+            ? attachment.Str("prompt")
+            : null;
 
+    static IReadOnlyList<CanonicalEvent> ProjectAttachment(string notification, JsonElement root, Record record) {
         var emitter = new Emitter(record);
-        emitter.Add(0, UserMessage(prompt, record), ClaudeCodeExtension.Flags(record.IsSidechain, originKind: "task-notification"));
+        emitter.Add(0, UserMessage(notification, record),
+            ClaudeCodeExtension.Flags(record.IsSidechain, root.Bool("isMeta") == true, "task-notification"));
         return emitter.Events;
     }
 
