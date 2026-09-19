@@ -62,6 +62,9 @@ public class SkillsOwnershipRecoveryTests {
 
         await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
 
+        var written = File.GetLastWriteTimeUtc(fx.SkillFile("alpha")).AddDays(-1);
+        File.SetLastWriteTimeUtc(fx.SkillFile("alpha"), written);
+
         var moved = Tmp.PathTo("moved");
 
         Directory.Move(repo.Path, moved);
@@ -78,6 +81,8 @@ public class SkillsOwnershipRecoveryTests {
         await Assert.That(completed.Path).IsEqualTo(after.SkillDir("alpha"));
         await Assert.That(completed.Anchor).IsEqualTo(moved);
         await Assert.That(File.ReadAllText(after.SkillFile("alpha"))).IsEqualTo(Rendered(alpha));
+        // Completed where the bytes already were, not written again at the new anchor.
+        await Assert.That(File.GetLastWriteTimeUtc(after.SkillFile("alpha"))).IsEqualTo(written);
         await Assert.That(after.Rows().Count).IsEqualTo(2);
     }
 
@@ -230,14 +235,23 @@ public class SkillsOwnershipRecoveryTests {
         var next = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"),
                                          subject: "someone-else");
 
+        // An authored file at the destination the cancelled operation named, so a replay of it
+        // would leave a SKILL.md beside it that nothing could then account for.
+        var witness = new TempDirHandle(first.SkillDir("beta")).CreateFile("notes.md", "mine");
+
         await Assert.That(await next.Command.HandleSync(dryRun: false)).IsEqualTo(1);
 
+        // What landed under the old account is recorded, then retired: the file is gone.
         await Assert.That(next.HasSkill("alpha")).IsFalse();
-        await Assert.That(next.HasSkill("beta")).IsFalse();
+        // What did not land is cancelled, not replayed.
+        await Assert.That(File.Exists(next.SkillFile("beta"))).IsFalse();
+        await Assert.That(File.ReadAllText(witness)).IsEqualTo("mine");
 
         var ledger = next.ReadLedger();
 
-        await Assert.That(ledger.Rows).IsEmpty();
+        await Assert.That(ledger.Rows.Single().State).IsEqualTo(OwnedSkillState.Settled);
+        await Assert.That(ledger.Rows.Single().Confirmed).IsNull();
+        await Assert.That(ledger.Rows.Single().Prepared).IsNull();
         await Assert.That(ledger.Identity!.Account).IsEqualTo("someone-else");
         await Assert.That(ledger.Etag).IsNull();
         await Assert.That(ledger.SyncedAt).IsNull();
@@ -376,35 +390,112 @@ public class SkillsOwnershipRecoveryTests {
         await Assert.That(fx.RowFor("alpha")!.State).IsEqualTo(OwnedSkillState.Settled);
     }
 
-    /// <summary>Requesting a replacement never clears a retirement cause: the deletion the previous
-    /// account's transition ordered is still owed, and the write that would overwrite it is refused
-    /// until it is discharged.</summary>
+    /// <summary>Requesting a replacement never clears a retirement cause. One account publishes,
+    /// the next finds the deletion it ordered refused, and the write that would overwrite the file
+    /// is refused for as long as the obligation stands.</summary>
     [Test]
     public async Task A_replacement_request_does_not_clear_a_retirement_still_owed() {
         using var repo  = Checkout("repo");
-        var       away  = Tmp.CreateDir("away");
         var       alpha = SkillsSyncFixture.Skill("alpha");
-        var       fx    = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha));
-        var       body  = Rendered(alpha);
+        var       first = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha));
 
-        // The catalogue sits behind a link out of the anchor, so containment refuses its deletion.
-        Directory.CreateDirectory(Path.GetDirectoryName(fx.SkillsRoot)!);
-        Directory.CreateSymbolicLink(fx.SkillsRoot, away.Path);
-        away.CreateFile(["kcap-alpha", "SKILL.md"], body);
-        fx.WriteLedger(fx.Owning(fx.Published(alpha, SkillDestination.For(fx.Target, fx.Anchor, "alpha"),
-                                              SkillsMaterializer.FileHash(body))) with {
-            Etag = "etag-0", Identity = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl),
-        });
+        await Assert.That(await first.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        // The published file becomes a link, which a deletion refuses without establishing anything.
+        var elsewhere = Tmp.CreateFile("elsewhere.md", Rendered(alpha));
+
+        File.Delete(first.SkillFile("alpha"));
+        File.CreateSymbolicLink(first.SkillFile("alpha"), elsewhere);
+
+        var next = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", alpha),
+                                         subject: "someone-else");
+
+        await Assert.That(await next.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        var owed = next.Rows().Single();
+
+        await Assert.That(owed.Cause).IsEqualTo(SkillDeletionCause.Retired);
+        await Assert.That(owed.IdentityRetired!.Account).IsEqualTo("signed-in-user");
+        // Neither adopted nor overwritten: the replacement was refused its path.
+        await Assert.That(new FileInfo(next.SkillFile("alpha")).LinkTarget).IsNotNull();
+        await Assert.That(File.ReadAllText(elsewhere)).IsEqualTo(Rendered(alpha));
+        await Assert.That(next.ReadLedger().Etag).IsNull();
+    }
+
+    /// <summary>An operation kept because its bytes are somebody else's is protected, not a standing
+    /// order to retire. Once the account it was authorised under has been retired, later runs under
+    /// the current one must leave what this account has since published alone.</summary>
+    [Test]
+    public async Task A_retained_operation_does_not_retire_the_catalogue_again() {
+        using var repo  = Checkout("repo");
+        var       alpha = SkillsSyncFixture.Skill("alpha");
+        var       beta  = SkillsSyncFixture.Skill("beta");
+        var       first = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha, beta));
+
+        first.Block("beta");
+
+        await Assert.That(await first.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        first.Unblock("beta");
+        File.WriteAllText(first.SkillFile("alpha"), "written by something that is not kcap");
+
+        var next = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-2", alpha, beta),
+                                         subject: "someone-else");
+
+        await Assert.That(await next.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        // A precondition: the operation survived the transition and beta is this account's.
+        await Assert.That(next.RowFor("alpha")!.Prepared).IsNotNull();
+        await Assert.That(File.ReadAllText(next.SkillFile("beta"))).IsEqualTo(Rendered(beta));
+
+        var again = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"),
+                                          subject: "someone-else");
+
+        await Assert.That(await again.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(File.ReadAllText(again.SkillFile("beta"))).IsEqualTo(Rendered(beta));
+        await Assert.That(again.RowFor("beta")!.State).IsEqualTo(OwnedSkillState.Published);
+        await Assert.That(File.ReadAllText(again.SkillFile("alpha")))
+            .IsEqualTo("written by something that is not kcap");
+    }
+
+    /// <summary>A legacy ledger that will not read is exactly the case the obligation exists to
+    /// survive. It has to be recorded before the identity is replaced, and kept until absence or a
+    /// successful retirement is positively established.</summary>
+    [Test]
+    public async Task An_unreadable_legacy_ledger_keeps_the_retirement_obligation() {
+        using var repo    = Checkout("repo");
+        var       alpha   = SkillsSyncFixture.Skill("alpha");
+        var       retired = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl);
+        var       fx      = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+        var       global  = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        fx.WriteLedger(fx.Owning(fx.Materialize(alpha)) with { Etag = "etag-1", Identity = retired });
+        fx.WriteLegacyLedger("{ truncated");
 
         await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
 
-        var owed = fx.Rows().Single();
+        await Assert.That(fx.HasSkill("alpha")).IsFalse();
+        await Assert.That(fx.ReadLedger().Identity).IsEqualTo(fx.Identity);
+        await Assert.That(fx.ReadLedger().LegacyRetirement).IsEqualTo(retired);
+        await Assert.That(Directory.Exists(global)).IsTrue();
 
-        await Assert.That(owed.Cause).IsEqualTo(SkillDeletionCause.Retired);
-        await Assert.That(owed.IdentityRetired!.Account).IsEqualTo("previous-user");
-        await Assert.That(File.ReadAllText(away.PathTo("kcap-alpha", "SKILL.md"))).IsEqualTo(body);
-        // The fetch under the new identity asked for the same document and was refused its path.
-        await Assert.That(fx.Api.Requests.Single().Etag).IsNull();
+        // The ledger becomes readable, in the shape the released version wrote: no identity at all.
+        fx.WriteLegacyLedger($$"""
+            {"etag":"etag-0",
+             "skills":[{"doc_id":"{{alpha.DocId}}","slug":"alpha","version":1,"content_hash":"h",
+                        "path":"{{global.Replace("\\", "\\\\")}}",
+                        "file_hash":"{{SkillsMaterializer.FileHash("the global copy")}}"}]}
+            """);
+
+        var again = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+
+        await Assert.That(await again.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(Directory.Exists(global)).IsFalse();
+        await Assert.That(File.Exists(fx.LegacyLedgerPath)).IsFalse();
+        await Assert.That(fx.ReadLedger().LegacyRetirement).IsNull();
     }
 
     /// <summary>An account transition whose legacy cleanup is blocked records the obligation before

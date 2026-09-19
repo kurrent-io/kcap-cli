@@ -331,9 +331,12 @@ public class SkillsSyncFlowTests {
         await Assert.That(fx.HasSkill("alpha")).IsFalse();
     }
 
-    /// <summary>A converted entry with no file hash is a claim nothing can vouch for: it is reported
-    /// and never deleted, and the current bytes on disk are never adopted as proof.</summary>
+    /// <summary>A converted entry with no file hash is a claim nothing can vouch for: it is named
+    /// on the error stream and never deleted, and the current bytes on disk are never adopted as
+    /// proof. Preserving it silently would leave the operator with a global copy nobody mentions.
+    /// </summary>
     [Test]
+    [NotInParallel]
     public async Task A_converted_entry_without_a_file_hash_is_reported_rather_than_deleted() {
         using var repo   = Checkout("repo");
         var       alpha  = SkillsSyncFixture.Skill("alpha");
@@ -347,8 +350,13 @@ public class SkillsSyncFlowTests {
                         "content_hash":"h","path":"{{JsonPath(global)}}"}]}
             """);
 
-        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+        string reported;
+        using (var console = ConsoleOutput.StartErrorCapture("\n")) {
+            await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+            reported = console.GetCapturedError();
+        }
 
+        await Assert.That(reported).Contains(global);
         await Assert.That(Directory.Exists(global)).IsTrue();
         await Assert.That(fx.ReadLegacyLedger().Rows.Single().State).IsEqualTo(OwnedSkillState.Unverified);
         // The repository-local copy is materialized all the same.

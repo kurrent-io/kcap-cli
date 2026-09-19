@@ -4,6 +4,8 @@ using Capacitor.Cli.Core.Skills;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class SkillsAutoSyncTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     [Test]
     public async Task Throttle_skips_within_the_interval_and_runs_past_or_outside_it() {
         var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
@@ -15,6 +17,42 @@ public class SkillsAutoSyncTests {
         await Assert.That(SkillsCommand.AutoThrottled(new() { SyncedAt = null }, now)).IsFalse();
         // A future stamp (clock correction, tampered file) is stale, never an unbounded suppression.
         await Assert.That(SkillsCommand.AutoThrottled(M(now.AddHours(2)), now)).IsFalse();
+    }
+
+    /// <summary>Settled is terminal: relocation will not move such a row and no run will ever
+    /// finish it, so a checkout that moves while holding one must not make its target outstanding
+    /// at every session for good.</summary>
+    [Test]
+    public async Task A_row_at_another_anchor_is_outstanding_only_while_it_still_holds_a_copy() {
+        var identity = new SkillsIdentity("acct", "https://s");
+        var here     = Tmp.PathTo("here");
+        var previous = Tmp.PathTo("previous");
+
+        static SkillsLedger Owning(SkillsIdentity identity, OwnedSkillState state, string anchor) => new() {
+            Identity = identity,
+            Owned = [new OwnedSkillRow {
+                Path = Path.Combine(anchor, ".claude", "skills", "kcap-x"),
+                Root = Path.Combine(anchor, ".claude", "skills"),
+                Anchor = anchor, Origin = SkillOrigin.Repository, State = state,
+                Confirmed = state == OwnedSkillState.Published
+                    ? new SkillReceipt {
+                          FileHash = "f",
+                          Document = new SkillDocument {
+                              DocId = Guid.Empty, Slug = "x", Version = 1, ContentHash = "h",
+                          },
+                      }
+                    : null,
+            }],
+        };
+
+        await Assert.That(SkillsCommand.Outstanding(
+            Owning(identity, OwnedSkillState.Published, previous), false, identity, here)).IsTrue();
+        await Assert.That(SkillsCommand.Outstanding(
+            Owning(identity, OwnedSkillState.Settled, previous), false, identity, here)).IsFalse();
+        await Assert.That(SkillsCommand.Outstanding(
+            Owning(identity, OwnedSkillState.Unverified, previous), false, identity, here)).IsFalse();
+        await Assert.That(SkillsCommand.Outstanding(
+            Owning(identity, OwnedSkillState.Published, here), false, identity, here)).IsFalse();
     }
 
     [Test]
