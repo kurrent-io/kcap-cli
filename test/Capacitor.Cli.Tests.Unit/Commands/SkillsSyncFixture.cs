@@ -94,11 +94,16 @@ sealed class SkillsSyncFixture {
     public SkillsManifest ReadManifest() =>
         JsonSerializer.Deserialize(File.ReadAllText(ManifestPath), CapacitorJsonContext.Default.SkillsManifest)!;
 
-    public void WriteManifest(SkillsManifest manifest) => Save(ManifestPath, manifest);
+    public void WriteManifest(SkillsManifest manifest) => Write(ManifestPath, Serialize(manifest));
 
     /// <summary>The ledger under the config root that owns user-global copies — the one migration
     /// retires, and the one whose existence alone adopts a target.</summary>
-    public void WriteLegacyManifest(SkillsManifest manifest) => Save(LegacyManifestPath, manifest);
+    public void WriteLegacyManifest(SkillsManifest manifest) =>
+        Write(LegacyManifestPath, Serialize(manifest));
+
+    /// <summary>The same ledger verbatim — for a test whose point is one that will not parse.
+    /// </summary>
+    public void WriteLegacyManifest(string json) => Write(LegacyManifestPath, json);
 
     /// <summary>Writes one skill and the manifest entry that owns it, exactly as a completed sync
     /// would — so the entry reads as served rather than drifted.</summary>
@@ -106,8 +111,7 @@ sealed class SkillsSyncFixture {
         var rendered = SkillsSyncPlanner.RenderSkillFile(item);
         var dir      = SkillDir(item.Slug);
 
-        Directory.CreateDirectory(dir);
-        File.WriteAllText(SkillsMaterializer.SkillFileFor(dir), rendered);
+        Write(SkillsMaterializer.SkillFileFor(dir), rendered);
 
         return new SkillsManifestEntry {
             DocId       = item.DocId, Slug = item.Slug, Version = item.Version,
@@ -131,10 +135,13 @@ sealed class SkillsSyncFixture {
 
     const string ProfileName = "default";
 
-    static void Save(string path, SkillsManifest manifest) {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(manifest, CapacitorJsonContext.Default.SkillsManifest));
-    }
+    static string Serialize(SkillsManifest manifest) =>
+        JsonSerializer.Serialize(manifest, CapacitorJsonContext.Default.SkillsManifest);
+
+    // The destinations come from production, so the directory a test needs is under whichever tree
+    // the code under test chose; the helper is what creates the missing parents.
+    static void Write(string path, string content) =>
+        new TempDirHandle(Path.GetDirectoryName(path)!).CreateFile(Path.GetFileName(path), content);
 
     static Guid DocIdFor(string slug) => new(SHA256.HashData(Encoding.UTF8.GetBytes(slug)).AsSpan(0, 16));
 

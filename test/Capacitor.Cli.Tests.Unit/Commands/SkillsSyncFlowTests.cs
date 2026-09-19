@@ -14,6 +14,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// streams to a null writer, so a message proves nothing about the mode that actually delivers
 /// skills, and the exit code is the only other channel.</para>
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class SkillsSyncFlowTests {
     [TempDir("skillsync")] public required TempDir Tmp { get; init; }
 
@@ -187,8 +188,7 @@ public class SkillsSyncFlowTests {
         var       global = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
 
         Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
-        Directory.CreateDirectory(Path.GetDirectoryName(fx.LegacyManifestPath)!);
-        File.WriteAllText(fx.LegacyManifestPath, "{ truncated");
+        fx.WriteLegacyManifest("{ truncated");
 
         await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
 

@@ -71,7 +71,7 @@ public class SkillsMaterializerTests {
         SkillsMaterializer.Write(root, anchor, Item("x"));
 
         var dir = SkillsMaterializer.SkillDirFor(root, "x");
-        // No partial file is ever left beside the published one.
+
         await Assert.That(Directory.GetFiles(dir).Select(Path.GetFileName).OfType<string>()).IsEquivalentTo(["SKILL.md"]);
     }
 

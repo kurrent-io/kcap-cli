@@ -9,7 +9,6 @@ public class SkillsLegacyMigrationTests {
     static SkillsIdentity Id(string account) => new(account, "https://s");
 
     void WriteLegacy(string repoHash, string target, string account, params string[] paths) {
-        var dir = Tmp.CreateDir($"config/skills/{repoHash}/{target}");
         var manifest = new SkillsManifest {
             Identity = Id(account),
             Skills = [.. paths.Select(p => new SkillsManifestEntry {
@@ -17,8 +16,8 @@ public class SkillsLegacyMigrationTests {
                 ContentHash = "h", Path = p, FileHash = "f",
             })],
         };
-        File.WriteAllText(Path.Combine(dir, "manifest.json"),
-            JsonSerializer.Serialize(manifest, CapacitorJsonContext.Default.SkillsManifest));
+        Tmp.CreateFile(["config", "skills", repoHash, target, "manifest.json"],
+                       JsonSerializer.Serialize(manifest, CapacitorJsonContext.Default.SkillsManifest));
     }
 
     /// <summary>Ownership another live ledger also holds is given up rather than retained: the last
@@ -83,8 +82,7 @@ public class SkillsLegacyMigrationTests {
     /// not parse must not read as one owning nothing — which is what a caller would delete.</summary>
     [Test]
     public async Task A_ledger_of_its_own_that_will_not_parse_is_not_an_empty_one() {
-        var dir = Tmp.CreateDir("config/skills/aaaa/agents");
-        File.WriteAllText(Path.Combine(dir, "manifest.json"), "{ truncated");
+        Tmp.CreateFile(["config", "skills", "aaaa", "agents", "manifest.json"], "{ truncated");
 
         var plan = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "aaaa", "agents", Id("acct-1"));
 
