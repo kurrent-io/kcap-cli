@@ -40,7 +40,7 @@ public sealed class MarkdownView : ContentControl {
             view._details.Clear();
             view.Render();
         });
-        RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
+        RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._codeActions.ApplyRunCode());
         FlavorProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.ApplyFlavor());
     }
 
@@ -58,10 +58,8 @@ public sealed class MarkdownView : ContentControl {
         Content = _viewer;
     }
 
-    /// A code block reads RunCode as it is built, so a command arriving after the first render —
-    /// the order a binding on this property lands in — needs the document built again. Clearing
-    /// first is what makes that second build happen at all: the viewer renders on a change, and
-    /// the markdown it already holds is not one.
+    /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
+    /// a change, and the markdown it already holds is not one.
     void Render() {
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         _viewer.Markdown = Text;

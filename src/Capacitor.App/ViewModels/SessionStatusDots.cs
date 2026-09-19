@@ -46,6 +46,12 @@ public static class SessionStatusDots {
 
     public static bool NeedsAttention(AgentRow row) => row.Status == "Failed" || WaitsOnUser(row);
 
+    /// The one busy verdict every surface reads: a live agent that is either mid-turn or still has
+    /// subagents the daemon counts. The wait flag keeps its meaning beside it — a parent that
+    /// stopped with agents running reads as waiting on the user and busy at once.
+    public static bool IsWorking(string status, bool? awaitingInput, int? liveSubagents) =>
+        status == "Running" && (awaitingInput == false || liveSubagents > 0);
+
     /// Display text for the status: the daemon's own word, except for the one state its
     /// vocabulary does not spell, a live agent whose turn is over.
     public static string Label(AgentStatusDto dto) => WaitsOnUser(dto) ? "Waiting for input" : dto.Status;

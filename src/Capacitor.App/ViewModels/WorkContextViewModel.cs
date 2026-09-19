@@ -34,6 +34,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
                 OfferFallbacks();
             }
+            this.RaisePropertyChanged(nameof(PullRequests));
             this.RaisePropertyChanged(nameof(HasPullRequestContext));
             RaiseRelated();
         }
@@ -157,8 +158,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public bool ShowsRetry  => Phase == WorkContextPhase.Unreachable;
 
     void OnPullRequestChanged(object? sender, PropertyChangedEventArgs e) {
-        if (e.PropertyName is nameof(PullRequestContextViewModel.Title)
-            or nameof(PullRequestContextViewModel.NumberLabel)
+        if (e.PropertyName is nameof(PullRequestContextViewModel.HasChoice)
+            or nameof(PullRequestContextViewModel.HasNotice)
+            or nameof(PullRequestContextViewModel.HasReaderNote)
             or nameof(PullRequestContextViewModel.HasPullRequest)
             or nameof(PullRequestContextViewModel.HasListed))
             RaiseRelated();

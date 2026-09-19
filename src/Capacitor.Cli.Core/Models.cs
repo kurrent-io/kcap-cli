@@ -1213,6 +1213,14 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.FeedbackSubmitResponse))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Policy.PolicyDecisionEventV1))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Policy.PolicySnapshotUploadV1))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactDetailDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactListDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactGrantDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactBody))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactVersionBody))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.SetArtefactVisibilityBody))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     UseStringEnumConverter = true

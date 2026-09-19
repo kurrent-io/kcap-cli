@@ -73,6 +73,12 @@ Session:
 Curation:
   curate apply [--dry-run] [--yes]   Write promoted guidelines into CLAUDE.md / AGENTS.md
 
+Artefacts:
+  artefact publish <file.html> [opts]  Publish a self-contained HTML page, print its link
+  artefact list [--mine]               Artefacts you can see
+  artefact share <id> --visibility V   Change who may open an artefact
+  artefact delete <id>                 Remove an artefact
+
 MCP servers (stdio):
   mcp review [--owner --repo --pr]   PR review context for agents
   mcp judge --session <id>           Per-session judge tools
@@ -82,6 +88,7 @@ MCP servers (stdio):
   mcp workitems                      Declare/list a session's work-item attachments
   mcp plans                          Declare a session's plan document and task list
   mcp analytics                      Governed SQL over org coding-agent analytics (schema + query)
+  mcp artefacts                      Publish an HTML page from an agent and get back a link
 
 Plugin:
   plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills]   Register hooks/skills (Claude default; flag picks the vendor)

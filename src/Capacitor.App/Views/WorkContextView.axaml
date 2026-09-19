@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.WorkContextView"
              x:DataType="vm:WorkContextViewModel"
              Background="{StaticResource KcapSurfaceBrush}">
@@ -357,27 +358,28 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Pull request: the card with its picker and live status, or link cards where the
+                     server has no reader, or the empty note once both reads have settled. -->
                 <StackPanel x:Name="PullRequestSection" Margin="0,18,0,0" IsVisible="{Binding ShowsPullRequestSection}">
-                    <Button x:Name="PullRequestToggle" Classes="sectionHeader">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}"
+                        IsVisible="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).ShowsPullRequestCard}" />
+                    <ItemsControl x:Name="LinkCards" ItemsSource="{Binding Links}" ItemTemplate="{StaticResource LinkCard}"
+                                  IsVisible="{Binding ShowsLegacyLinkCards}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="10" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                    <StackPanel IsVisible="{Binding ShowsPullRequestEmpty}">
+                        <Button x:Name="PullRequestToggle" Classes="sectionHeader">
                             <TextBlock Text="PULL REQUEST" Classes="eyebrow" />
-                            <TextBlock x:Name="PullRequestNumberText" Grid.Column="1" Text="{Binding PullRequestNumberText}" Classes="sectionMeta"
-                                       IsVisible="{Binding PullRequestNumberText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        </Grid>
-                    </Button>
-                    <Border Classes="sectionBody">
-                        <Panel>
-                            <Button x:Name="PullRequestTitleButton" Classes="copyValue" Command="{Binding OpenPullRequestCommand}"
-                                    IsVisible="{Binding CanOpenPullRequest}"
-                                    HorizontalAlignment="Stretch">
-                                <TextBlock x:Name="PullRequestTitleText" Text="{Binding PullRequestTitleText}" FontSize="13" LineHeight="16"
-                                           TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
-                            </Button>
+                        </Button>
+                        <Border Classes="sectionBody">
                             <TextBlock x:Name="PullRequestEmptyText" Text="{x:Static vm:WorkContextViewModel.PullRequestEmptyNote}"
-                                       FontSize="13" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                                       IsVisible="{Binding ShowsPullRequestEmpty}" />
-                        </Panel>
-                    </Border>
+                                       FontSize="13" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}" />
+                        </Border>
+                    </StackPanel>
                 </StackPanel>
 
                 <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}"

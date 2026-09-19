@@ -68,7 +68,7 @@ assert.strictEqual(isPatchableKcapCommand("/opt/kcap-wrapper"), false);         
 assert.strictEqual(isPatchableKcapCommand(undefined), false);
 assert.strictEqual(isPatchableKcapCommand(["kcap"]), false);
 
-// ── happy path: the real shipped config, all seven entries patched ──────────
+// ── happy path: the real shipped config, all eight entries patched ──────────
 {
   const { root, launcher, mcpJson } = makeFakePackage(fs.readFileSync(shippedMcpJson, "utf8"));
   try {
@@ -78,7 +78,7 @@ assert.strictEqual(isPatchableKcapCommand(["kcap"]), false);
 
     const after = JSON.parse(fs.readFileSync(mcpJson, "utf8"));
     const names = Object.keys(after.mcpServers);
-    assert.strictEqual(names.length, 7);
+    assert.strictEqual(names.length, 8);
     for (const name of names) {
       assert.strictEqual(after.mcpServers[name].command, BINARY, `${name} should point at the native binary`);
       // Everything except command is preserved verbatim.

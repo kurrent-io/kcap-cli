@@ -82,7 +82,11 @@ public sealed record AgentStatusDto(
     // Which reader a client uses for TranscriptPath: TranscriptFormats.Vendor for a PTY runtime's own
     // file, TranscriptFormats.Envelopes for the daemon-written envelope journal. Always emitted by a
     // current daemon, so null means an older daemon and nothing else.
-    string? TranscriptFormat = null);
+    string? TranscriptFormat = null,
+    // How many subagents the daemon believes are running: null until the agent's first subagent
+    // report (an older daemon, a vendor whose hooks report none, or a session that has spawned
+    // none yet), then a number — the clock's count while Running, zero in any other status.
+    int? LiveSubagents = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

@@ -8,7 +8,9 @@ namespace Capacitor.App.ViewModels;
 /// rebuilds the rows. Ended is the lane's verdict that nothing more will arrive.
 public sealed record ChatSessionInfo(
         string Status, string StatusLabel, string Vendor, string? Model, string? Root, bool? AwaitingInput, bool Ended,
-        string ReadOnlyNotice, string? FeedKey) {
+        string ReadOnlyNotice, string? FeedKey,
+        // The daemon's count of running subagents; null on the remote lane and from an older daemon.
+        int? LiveSubagents = null) {
     public bool WaitsOnUser => StatusLabel == "Waiting for input";
 
     /// The daemon dropped the agent before this pane ever saw it.
@@ -20,7 +22,7 @@ public sealed record ChatSessionInfo(
         // RepoPath: the repository for a primary, whose worktree beneath it ToolDetail strips, or
         // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
-        ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath);
+        ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath, dto.LiveSubagents);
 
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended) => new(
         row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,
