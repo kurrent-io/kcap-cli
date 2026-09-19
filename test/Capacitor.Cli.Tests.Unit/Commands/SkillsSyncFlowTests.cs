@@ -348,6 +348,34 @@ public class SkillsSyncFlowTests {
         await Assert.That(File.Exists(fx.LegacyManifestPath)).IsTrue();
     }
 
+    /// <summary>The released version recorded no identity at all, so every global ledger an
+    /// upgrading machine already has deserializes with none. Absent is not "the current account's":
+    /// an account transition has to settle it, or the previous account's global catalogue stays
+    /// readable from every repository on the machine and no later run can tell.</summary>
+    [Test]
+    public async Task An_account_change_settles_a_global_ledger_the_shipped_version_wrote() {
+        using var repo    = Checkout("repo");
+        var       alpha   = SkillsSyncFixture.Skill("alpha");
+        var       fx      = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Refusing("HTTP 401"));
+        var       retired = new SkillsIdentity("previous-user", SkillsSyncFixture.ServerUrl);
+        var       global  = Tmp.CreateDir("home", ".claude", "skills").PathTo("kcap-alpha");
+
+        Tmp.CreateFile(["home", ".claude", "skills", "kcap-alpha", "SKILL.md"], "the global copy");
+        fx.WriteManifest(Owning(fx, fx.Materialize(alpha)) with { Etag = "etag-1", Identity = retired });
+        // The shape at the branch point: etag, synced_at and skills, and nothing else.
+        fx.WriteLegacyManifest($$"""
+            {"etag":"etag-0","synced_at":"2026-09-17T09:00:00+00:00",
+             "skills":[{"doc_id":"{{alpha.DocId}}","slug":"alpha","version":1,
+                        "content_hash":"h","path":"{{JsonPath(global)}}","file_hash":"f"}]}
+            """);
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(1);
+
+        await Assert.That(Directory.Exists(global)).IsFalse();
+        await Assert.That(File.Exists(fx.LegacyManifestPath)).IsFalse();
+        await Assert.That(fx.HasSkill("alpha")).IsFalse();
+    }
+
     [Test]
     public async Task An_anchor_change_rewrites_the_paths_even_under_an_unchanged_etag() {
         using var repo     = Checkout("repo");
@@ -770,6 +798,9 @@ public class SkillsSyncFlowTests {
     }
 
     static string Rendered(SkillSnapshotItem item) => SkillsSyncPlanner.RenderSkillFile(item);
+
+    /// <summary>A path inside a JSON string literal — Windows separators are escapes there.</summary>
+    static string JsonPath(string path) => path.Replace("\\", "\\\\");
 
     /// <summary>A ledger row for a path nothing local materialized — a global copy this checkout
     /// owns without holding a copy of its own.</summary>

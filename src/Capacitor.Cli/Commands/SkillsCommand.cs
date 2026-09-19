@@ -266,7 +266,12 @@ class SkillsCommand(
             // two together would then delete and re-materialize the local catalogue every session
             // and leave nothing behind whenever the replacement fetch failed.
             var localRetiring  = Superseded(manifest, identity);
-            var legacyRetiring = Superseded(legacy, identity);
+            // A global ledger written before identities were recorded carries none, and absent is
+            // not evidence that its copies are the current account's. A transition is the moment
+            // that matters, so one settles the unattributed ledger too — under the overlap rule,
+            // which is what still protects a copy another repository owns.
+            var legacyRetiring = Superseded(legacy, identity)
+                              || (localRetiring && legacy is { Identity: null });
 
             // Ahead of the fetch and unconditional: a replacement that fails must leave nothing of
             // the previous account behind, locally or in the global trees. The local ledger is then
