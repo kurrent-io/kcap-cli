@@ -1,6 +1,5 @@
 using System.Reactive;
 using Avalonia.Collections;
-using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
@@ -105,23 +104,22 @@ public sealed partial class WorkContextViewModel {
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasIssue => Issue is not null;
     public bool HasContributors => _contributors.Count > 0;
-    public bool CanOpenPullRequest => PullRequests is { HasPullRequest: true } || _links.Any(l => l.CanOpen);
-    WorkContextLinkViewModel? FirstLinkedPullRequest => _links.Count > 0 ? _links[0] : null;
-    public string PullRequestNumberText =>
-        PullRequests is { NumberLabel.Length: > 0 } prs ? prs.NumberLabel
-        : FirstLinkedPullRequest?.Key ?? "";
-    public string PullRequestTitleText =>
-        PullRequests is { Title.Length: > 0 } prs ? prs.Title
-        : FirstLinkedPullRequest?.Title ?? "";
+    /// The card carries the PR picker and the live checks and review rows, so it stays while it
+    /// has a PR to select or something to say; a list settled with neither leaves the pane's own
+    /// empty copy to speak instead of a bare frame.
+    public bool ShowsPullRequestCard =>
+        PullRequests is { } prs && (prs.HasChoice || prs.HasNotice || prs.HasReaderNote);
+    public bool ShowsLegacyLinkCards => ShowsLegacyLinks && _links.Count > 0;
     /// Empty copy waits until the session list and the work-item read have both settled — an
     /// earlier miss is often the item's link, not a missing PR.
     public bool ShowsPullRequestEmpty =>
         Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem
         && (PullRequests?.HasListed ?? true)
         && PullRequests is not { HasPullRequest: true }
-        && _links.Count == 0;
+        && _links.Count == 0
+        && !ShowsPullRequestCard;
     public const string PullRequestEmptyNote = "No pull request linked";
-    public bool ShowsPullRequestSection => CanOpenPullRequest || ShowsPullRequestEmpty;
+    public bool ShowsPullRequestSection => ShowsPullRequestCard || ShowsLegacyLinkCards || ShowsPullRequestEmpty;
     /// Names stay visible; beyond this the header chevron reveals the rest of the list.
     internal const int VisiblePeopleCap = 4;
     public bool PeopleOverflows => _contributors.Count > VisiblePeopleCap;
@@ -173,27 +171,18 @@ public sealed partial class WorkContextViewModel {
     public ReactiveCommand<Unit, Unit> TogglePeopleCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleSessionCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleSubagentsCommand { get; private set; } = null!;
-    public ReactiveCommand<Unit, Unit> OpenPullRequestCommand { get; private set; } = null!;
 
     void InitializeProjections() {
         TogglePartsCommand   = Toggle(() => PartsExpanded = !PartsExpanded);
         TogglePeopleCommand  = Toggle(() => { if (PeopleOverflows) PeopleExpanded = !PeopleExpanded; });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
         ToggleSubagentsCommand = Toggle(() => SubagentsExpanded = !SubagentsExpanded);
-        OpenPullRequestCommand = Toggle(OpenPullRequest);
     }
 
     ReactiveCommand<Unit, Unit> Toggle(Action flip) {
         var command = ReactiveCommand.Create(flip);
         _disposables.Add(command);
         return command;
-    }
-
-    void OpenPullRequest() {
-        OfferFallbacks();
-        if (PullRequests is { CanOpenReader: true } reader) reader.OpenReader();
-        else if (PullRequests is { HasPullRequest: true } legacy) legacy.OpenSource();
-        else LinkPolicy.Open(_opener, _links.FirstOrDefault(l => l.CanOpen)?.Url);
     }
 
     void UpdateRequester(AgentStatusDto dto, string vendorLabel) {
@@ -255,9 +244,8 @@ public sealed partial class WorkContextViewModel {
     }
 
     void RaiseRelated() {
-        this.RaisePropertyChanged(nameof(CanOpenPullRequest));
-        this.RaisePropertyChanged(nameof(PullRequestNumberText));
-        this.RaisePropertyChanged(nameof(PullRequestTitleText));
+        this.RaisePropertyChanged(nameof(ShowsPullRequestCard));
+        this.RaisePropertyChanged(nameof(ShowsLegacyLinkCards));
         this.RaisePropertyChanged(nameof(ShowsPullRequestEmpty));
         this.RaisePropertyChanged(nameof(ShowsPullRequestSection));
     }

@@ -908,11 +908,9 @@ public class WorkContextViewModelTests {
                         ("PULL REQUEST", "#763", "Sidebar", "https://github.com/kurrent-io/kcap-cli/pull/763"),
                         ("PULL REQUEST", "#764", "Also", "https://github.com/kurrent-io/kcap-cli/pull/764"),
                     }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await Assert.That(h.Vm.ShowsLegacyLinkCards).IsTrue();
                 await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
                 await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
-                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("#763");
-                await Assert.That(h.Vm.PullRequestTitleText).IsEqualTo("Sidebar");
             } finally {
                 await h.Vm.TeardownAsync();
             }
@@ -942,10 +940,10 @@ public class WorkContextViewModelTests {
                 await Assert.That(pullRequests.Notice).IsEqualTo("");
                 await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
                 await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
-                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsTrue();
                 await Assert.That(h.Vm.Links[0].Key).IsEqualTo("#763");
-                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("#763");
-                await h.Vm.OpenPullRequestCommand.Execute();
+                await Assert.That(pullRequests.NumberLabel).IsEqualTo("#763");
+                await pullRequests.OpenReaderCommand.Execute();
                 await Assert.That(opened).IsEqualTo(1);
             } finally {
                 await pullRequests.TeardownAsync();
@@ -983,11 +981,11 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// A legacy server lists PRs but cannot serve a native read; the section opens the selected
-    /// PR on its host, as the PR card's disabled View PR already implies.
+    /// A legacy server lists PRs but cannot serve a native read; the card still shows, with View PR
+    /// disabled and its GitHub button opening the selected PR on its host.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_legacy_reader_sends_the_pull_request_section_to_the_host() {
+    public async Task A_legacy_reader_keeps_the_card_and_opens_the_pull_request_on_its_host() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var opened = 0;
@@ -1001,8 +999,9 @@ public class WorkContextViewModelTests {
                 await WaitUntilAsync(() => pullRequests.HasListed && pullRequests.HasChoice, what: "legacy list applied");
                 await Assert.That(pullRequests.IsLegacy).IsTrue();
                 await Assert.That(pullRequests.CanOpenReader).IsFalse();
-                await Assert.That(h.Vm.CanOpenPullRequest).IsTrue();
-                await h.Vm.OpenPullRequestCommand.Execute();
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsTrue();
+                await pullRequests.OpenReaderCommand.Execute();
+                await pullRequests.OpenGitHubCommand.Execute();
                 await Assert.That(opened).IsEqualTo(0);
                 await Assert.That(h.Opener.Opened).Count().IsEqualTo(1);
                 await Assert.That(h.Opener.Opened[0]).Contains($"/pull/{pullRequests.Selected!.Link.Number}");
@@ -1083,9 +1082,7 @@ public class WorkContextViewModelTests {
                 await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Ready);
                 await Assert.That(h.Vm.ShowsPullRequestEmpty).IsTrue();
                 await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
-                await Assert.That(h.Vm.CanOpenPullRequest).IsFalse();
-                await Assert.That(h.Vm.PullRequestNumberText).IsEqualTo("");
-                await Assert.That(h.Vm.PullRequestTitleText).IsEqualTo("");
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsFalse();
             } finally {
                 if (!gate.Task.IsCompleted) gate.TrySetCanceled();
                 await pullRequests.TeardownAsync();

@@ -90,6 +90,10 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
   canvas. Copy the launcher pickers and the rail help flyout (`kcapPanel` + ghost rows), do not add
   an unstyled control.
+- **The work-context pane hosts the full PR card, not a title line.** `PullRequestCard` is the
+  only place to switch between a session's linked PRs, and its checks and review rows are the live
+  status a user reads without opening the reader tab. A compact header that collapses it to the
+  first PR's title drops both, and the pane smoke test pins the picker and the status rows.
 
 ## Tech stack
 
