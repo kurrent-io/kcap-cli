@@ -1331,22 +1331,26 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// failed. Extracted and internal so the arms are unit-testable — the previous inline expression
     /// collapsed four distinguishable conditions into one boolean and one message, and that message
     /// actively misdirected: it reported the certification revision (which matches on every one of
-    /// these paths) and told the operator to update a CLI that was usually fine.</summary>
-    internal static (bool Ok, string Reason) EvaluateReviewerCertification(
+    /// these paths) and told the operator to update a CLI that was usually fine.
+    ///
+    /// <para><c>Transient</c> marks the arms a retry resolves (a reconnect, a failed probe, a
+    /// re-advertisement) so the caller codes them retryable; the arms a retry cannot fix (vendor,
+    /// policy version, CLI out of range) stay terminal and demand an operator action.</para></summary>
+    internal static (bool Ok, string Reason, bool Transient) EvaluateReviewerCertification(
             string vendor, string? probedVersion, string? currentConnectionId,
             ReviewerCertificationRequirement certification) {
         if (!string.Equals(certification.Vendor, vendor, StringComparison.Ordinal))
-            return (false, $"the launch is for '{vendor}' but the certification is for '{certification.Vendor}'");
+            return (false, $"the launch is for '{vendor}' but the certification is for '{certification.Vendor}'", false);
 
         if (!string.Equals(currentConnectionId, certification.ExpectedDaemonConnectionId, StringComparison.Ordinal))
             return (false, "this daemon reconnected after the certification was issued " +
-                           "(connection id changed) — retry the flow");
+                           "(connection id changed) — retry the flow", true);
 
         if (!string.Equals(certification.RequiredLauncherPolicyVersion,
                 DaemonRunner.ClaudeLauncherPolicyVersion, StringComparison.Ordinal))
             return (false, $"the server requires launcher policy '{certification.RequiredLauncherPolicyVersion}' " +
                            $"but this daemon implements '{DaemonRunner.ClaudeLauncherPolicyVersion}' — " +
-                           "update kcap and restart the daemon");
+                           "update kcap and restart the daemon", false);
 
         // A NULL advertised version means the registration-time probe failed — a transient condition,
         // not evidence the CLI changed. This arm exists to catch a CLI SWAP between advertisement and
@@ -1358,13 +1362,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // it. Fails closed either way; only the diagnosis and remedy differ.
         if (string.IsNullOrEmpty(probedVersion))
             return (false, $"could not read the installed {vendor} CLI version (the version probe " +
-                           "failed or timed out) — this is usually transient under load; retry the flow");
+                           "failed or timed out) — this is usually transient under load; retry the flow", true);
 
         // Range BEFORE swap: an out-of-range replacement would otherwise be told only to retry,
         // and the re-advertisement behind that retry carries the same out-of-range version.
         if (!DaemonRunner.CliVersionAllowed(probedVersion, certification.AllowedCliRanges))
             return (false, $"the installed {vendor} CLI '{probedVersion}' is outside the " +
-                           $"server's allowed range '{certification.AllowedCliRanges}'");
+                           $"server's allowed range '{certification.AllowedCliRanges}'", false);
 
         // A missing advertised version means the registration probe failed — not evidence of a CLI
         // swap, which is all this arm exists to catch. It falls through to the range check above.
@@ -1375,9 +1379,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             !string.Equals(probedVersion, certification.ExpectedCliVersion, StringComparison.Ordinal))
             return (false, $"the installed {vendor} CLI is '{probedVersion}' but this daemon " +
                            $"advertised '{certification.ExpectedCliVersion}' at registration — " +
-                           "the daemon is re-advertising the installed version; retry the flow");
+                           "the daemon is re-advertising the installed version; retry the flow", true);
 
-        return (true, "");
+        return (true, "", false);
     }
 
     /// <summary>
@@ -2126,7 +2130,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // launch path at all while this sat in front of the rejection; my claim that it did
                 // was wrong.
                 await _server.LaunchFailedAsync(cmd.AgentId,
-                    $"reviewer_certification_changed: {certificationCheck.Reason}.");
+                    $"{(certificationCheck.Transient ? "reviewer_certification_transient" : "reviewer_certification_changed")}: {certificationCheck.Reason}.");
 
                 // The self-heal: a certification mismatch usually means the advertisement is stale.
                 // Nothing waits on it — the caller already has its answer. Republished even when the
