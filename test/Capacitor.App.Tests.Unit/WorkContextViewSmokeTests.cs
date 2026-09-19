@@ -411,4 +411,46 @@ public class WorkContextViewSmokeTests {
             await Assert.That(ToolTip.GetTip(button) as string).IsEqualTo(SessionA);
         });
     }
+
+    /// The card is the pane's live PR surface: its picker switches between the linked PRs and its
+    /// checks and review rows read without opening the reader tab. Once the list settles empty
+    /// the card yields to the pane's own empty copy rather than standing as a bare frame.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pull_request_card_shows_its_picker_and_status_rows_in_the_pane() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var source = new FakePullRequestSource(host.Time);
+            var pullRequests = new PullRequestContextViewModel(host.Presence, source, host.Time, new RecordingOpener(), () => { });
+            host.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            try {
+                await host.ShowAsync(KeyOnlyRead());
+                await WorkspaceFixtures.WaitUntilAsync(() => pullRequests.CanReveal && !pullRequests.IsReading, what: "linked PRs loaded");
+                Dispatcher.UIThread.RunJobs();
+                host.Window.UpdateLayout();
+
+                var card = host.Find<PullRequestCard>("PullRequestCard");
+                await Assert.That(card.IsEffectivelyVisible).IsTrue();
+                await Assert.That(card.DataContext).IsSameReferenceAs(pullRequests);
+                var picker = host.Find<ComboBox>("PullRequestSelector");
+                await Assert.That(picker.IsEffectivelyVisible).IsTrue();
+                await Assert.That(((IEnumerable<PullRequestChoice>)picker.ItemsSource!).Count()).IsEqualTo(2);
+                await Assert.That(host.Find<Button>("SidebarChecksButton").IsEffectivelyVisible).IsTrue();
+                await Assert.That(host.Find<Button>("SidebarReviewsButton").IsEffectivelyVisible).IsTrue();
+                await Assert.That(host.Find<TextBlock>("PullRequestEmptyText").IsEffectivelyVisible).IsFalse();
+
+                source.Links = [];
+                host.Time.Advance(TimeSpan.FromSeconds(16));
+                await pullRequests.RefreshCommand.Execute();
+                await WorkspaceFixtures.WaitUntilAsync(() => !pullRequests.HasPullRequest && !pullRequests.IsReading, what: "PRs unlinked");
+                Dispatcher.UIThread.RunJobs();
+                host.Window.UpdateLayout();
+                await Assert.That(card.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.Find<TextBlock>("PullRequestEmptyText").IsEffectivelyVisible).IsTrue();
+            } finally {
+                await pullRequests.TeardownAsync();
+            }
+        });
+    }
 }

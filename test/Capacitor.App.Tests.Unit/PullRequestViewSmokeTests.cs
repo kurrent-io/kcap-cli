@@ -61,7 +61,7 @@ public class PullRequestViewSmokeTests {
     });
 
     [Test]
-    public Task The_tab_and_sidebar_section_show_only_while_a_PR_is_linked() => RunOnUiAsync(async () => {
+    public Task The_tab_and_sidebar_card_show_only_while_a_PR_is_linked() => RunOnUiAsync(async () => {
         var daemon = new FakeDaemonClientService();
         var time = new FakeTimeProvider();
         var source = new FakePullRequestSource(time) { Links = [] };
@@ -76,11 +76,13 @@ public class PullRequestViewSmokeTests {
             var pane = view.FindControl<WorkContextView>("WorkContextHost")!;
             var tab = view.FindControl<Button>("PullRequestTabButton")!;
             var section = pane.FindControl<StackPanel>("PullRequestSection")!;
+            var card = pane.FindControl<PullRequestCard>("PullRequestCard")!;
             vm.PullRequests!.SetForeground(true);
             await WaitUntilAsync(() => source.Lists == 1 && !vm.PullRequests.IsReading, what: "empty PR list applied");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
             await Assert.That(section.IsVisible).IsFalse();
+            await Assert.That(card.IsVisible).IsFalse();
             await Assert.That(vm.PullRequests.Title).IsEqualTo("");
             await Assert.That(vm.PullRequests.Notice).IsEqualTo("");
             await Assert.That(vm.WorkContext.ShowsPullRequestEmpty).IsFalse();
@@ -92,6 +94,7 @@ public class PullRequestViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsTrue();
             await Assert.That(section.IsVisible).IsTrue();
+            await Assert.That(card.IsVisible).IsTrue();
 
             await vm.ShowPullRequestCommand.Execute();
             source.Links = [];
@@ -101,6 +104,7 @@ public class PullRequestViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
             await Assert.That(section.IsVisible).IsFalse();
+            await Assert.That(card.IsVisible).IsFalse();
             await Assert.That(vm.IsChatActive).IsTrue();
         } finally { window.Close(); await vm.TeardownAsync(); }
     });
