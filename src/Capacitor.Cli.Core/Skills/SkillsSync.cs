@@ -46,6 +46,11 @@ public sealed record SkillsManifest {
     [JsonPropertyName("exposure")]       public string[]?              Exposure      { get; init; }
     [JsonPropertyName("pending")]        public bool                   Pending       { get; init; }
     [JsonPropertyName("pending_prunes")] public PendingPrune[]?        PendingPrunes { get; init; }
+    /// <summary>The anchors this ledger has occupied that an outstanding row is still rooted at.
+    /// Written from <see cref="Anchor"/> while it is live, because the builder overwrites that field
+    /// with the current anchor — without this a row left at a previous one is authorisable for
+    /// exactly one run. Dropped as soon as no row references it.</summary>
+    [JsonPropertyName("prune_anchors")]  public string[]?              PruneAnchors  { get; init; }
 }
 
 public sealed record SkillsManifestEntry {

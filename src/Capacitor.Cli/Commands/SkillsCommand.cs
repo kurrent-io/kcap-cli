@@ -301,7 +301,7 @@ class SkillsCommand(
                         }
                         SaveManifest(manifestPath,
                                      BuildManifest(null, [], anchor, identity, target, repoHome,
-                                                   syncedAt: null, pending: false, journal));
+                                                   syncedAt: null, pending: false, journal, anchors));
                     }
                 } else {
                     // The deletion is the most destructive thing this command does and it happens
@@ -457,7 +457,7 @@ class SkillsCommand(
             // finish whichever half was interrupted.
             if (writes.Count > 0 || owedPrunes.Length > 0)
                 SaveManifest(manifestPath, BuildManifest(dto.Etag, claimable, anchor, identity, target,
-                                                         repoHome, lastSynced, pending: true, owedPrunes));
+                                                         repoHome, lastSynced, pending: true, owedPrunes, anchors));
 
             foreach (var w in writes)
                 if (!unownedIds.Contains(w.DocId) && !SkillsMaterializer.Write(root, anchor, w)) refused.Add(w);
@@ -475,7 +475,7 @@ class SkillsCommand(
             stuck = Settle(
                 manifestPath,
                 BuildManifest(refusedIds.Count == 0 ? dto.Etag : null, published, anchor, identity,
-                              target, repoHome, lastSynced, pending: false, owedPrunes),
+                              target, repoHome, lastSynced, pending: false, owedPrunes, anchors),
                 target,
                 anchors,
                 completed: refusedIds.Count == 0 ? time.GetUtcNow() : lastSynced);
@@ -637,13 +637,29 @@ class SkillsCommand(
     static string OldRoot(SkillsManifest? manifest, SkillsTarget target, string anchor) =>
         target.Root(manifest?.Anchor ?? anchor);
 
-    /// <summary>The anchors a deletion may be aimed at: this run's own, and the one the ledger
-    /// records having been written at, so a path left behind by a move is still prunable. Nothing
-    /// else, because every other candidate would come from the record being checked.</summary>
-    static string[] TrustedAnchors(SkillsManifest? manifest, string anchor) =>
-        manifest?.Anchor is { Length: > 0 } previous && !PathComparison.Equal(previous, anchor)
-            ? [anchor, previous]
-            : [anchor];
+    /// <summary>The anchors a deletion may be aimed at: this run's own, the one the ledger was last
+    /// written at, and the ones it recorded occupying while rows were outstanding. All three come
+    /// from what kcap itself wrote when that anchor was live; nothing a row asserts about itself is
+    /// ever admitted, which is the whole point of the rule.</summary>
+    static string[] TrustedAnchors(SkillsManifest? manifest, string anchor) {
+        List<string> trusted = [anchor];
+        var          seen    = new HashSet<string>(PathComparison.Comparer) { anchor };
+
+        foreach (var candidate in (string[])[manifest?.Anchor ?? "", .. manifest?.PruneAnchors ?? []])
+            if (candidate.Length > 0 && seen.Add(candidate)) trusted.Add(candidate);
+
+        return [.. trusted];
+    }
+
+    /// <summary>The anchors a ledger has to keep recording: every trusted one some surviving row is
+    /// rooted at. An anchor no row references is dropped, so the history cannot grow without
+    /// bound.</summary>
+    static string[] ReferencedAnchors(IReadOnlyList<string> trusted, SkillsTarget target,
+                                      IReadOnlyList<PendingPrune> journal) {
+        if (journal.Count == 0) return [];
+        var roots = journal.Select(p => CanonicalPath.Resolve(p.Root)).ToHashSet(PathComparison.Comparer);
+        return [.. trusted.Where(a => roots.Contains(CanonicalPath.Resolve(target.Root(a))))];
+    }
 
     /// <summary>Deletes one recorded directory, authorised by trusted state rather than by the
     /// record: the root beside the path only selects which trusted anchor answers for it, and the
@@ -729,6 +745,7 @@ class SkillsCommand(
             if (!PruneRecorded(recorded, target, anchors)) stuck.Add(recorded);
         SaveManifest(manifestPath, manifest with {
             Pending = false, PendingPrunes = [.. stuck],
+            PruneAnchors = ReferencedAnchors(anchors, target, stuck),
             SyncedAt = stuck.Count == 0 ? completed : manifest.SyncedAt,
         });
         return [.. stuck];
@@ -737,11 +754,12 @@ class SkillsCommand(
     static SkillsManifest BuildManifest(
             string? etag, IReadOnlyList<SkillSnapshotItem> snapshot, string anchor,
             SkillsIdentity identity, SkillsTarget target, string repoHome, DateTimeOffset? syncedAt,
-            bool pending, IReadOnlyList<PendingPrune> journal) {
+            bool pending, IReadOnlyList<PendingPrune> journal, IReadOnlyList<string> anchors) {
         var root = target.Root(anchor);
         return new() {
             Etag     = etag, SyncedAt = syncedAt, Anchor = anchor, Identity = identity,
             Exposure = Exposure(target), Pending = pending, PendingPrunes = [.. journal],
+            PruneAnchors = ReferencedAnchors(anchors, target, journal),
             Skills   = [.. snapshot.Select(s => new SkillsManifestEntry {
                 DocId = s.DocId, Slug = s.Slug, Version = s.Version, ContentHash = s.ContentHash,
                 Path = SkillsMaterializer.SkillDirFor(root, s.Slug),

@@ -407,6 +407,61 @@ public class SkillsSyncFlowTests {
         await Assert.That(second.ReadManifest().PendingPrunes!).IsEmpty();
     }
 
+    /// <summary>A move whose prune was refused leaves a row aimed at the first anchor. A second
+    /// move must not strand it: the ledger records the anchors it has occupied while rows are
+    /// outstanding, so a run at a third anchor can still authorise the first one's paths.
+    ///
+    /// <para>The refusal is real rather than simulated — the first anchor's skills root is a link
+    /// out of it, which containment refuses — and it is lifted before the third run, so what that
+    /// run has to supply is the authority and nothing else.</para></summary>
+    [Test]
+    public async Task A_row_left_at_a_first_anchor_survives_a_move_to_a_third() {
+        using var repo   = Checkout("repo");
+        var       alpha  = SkillsSyncFixture.Skill("alpha");
+        var       first  = Tmp.CreateDir("first");
+        var       second = Tmp.CreateDir("second");
+        var       third  = Tmp.CreateDir("third");
+        var       away   = Tmp.CreateDir("away");
+        var       fx     = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", alpha));
+        var       target = SkillsCommand.Targets(fx.LegacyRoots)
+            .Single(t => t.Key == SkillsSyncFixture.TargetKey);
+        var       ghost  = SkillsMaterializer.SkillDirFor(target.Root(first), "ghost");
+
+        // The first anchor's tree is a link out of it, so its rows cannot be pruned from anywhere.
+        Directory.CreateDirectory(Path.GetDirectoryName(target.Root(first))!);
+        Directory.CreateSymbolicLink(target.Root(first), away.Path);
+        away.CreateFile(["kcap-ghost", "SKILL.md"], "orphaned by a rename");
+
+        fx.WriteManifest(new SkillsManifest {
+            Etag = "etag-0", SyncedAt = SkillsSyncFixture.Now.AddDays(-1),
+            Anchor = first, Identity = fx.Identity, Skills = [],
+            PendingPrunes = [new PendingPrune(ghost, target.Root(first))],
+        });
+
+        var moved = await fx.Command.AttemptTargetAsync(
+            target, second, fx.GitDir, fx.RepoHash, fx.RepoHome, fx.Identity,
+            dryRun: false, auto: false, takeMigration: false);
+
+        // A precondition: the row genuinely could not be carried out at the second anchor.
+        await Assert.That(moved.Code).IsEqualTo(1);
+        await Assert.That(fx.ReadManifest().PendingPrunes!.Single().Path).IsEqualTo(ghost);
+
+        // The link goes; the orphan is now an ordinary owned directory under the first anchor.
+        Directory.Delete(target.Root(first));
+        Directory.CreateDirectory(ghost);
+        File.WriteAllText(SkillsMaterializer.SkillFileFor(ghost), "orphaned by a rename");
+
+        var resumed = await fx.Command.AttemptTargetAsync(
+            target, third, fx.GitDir, fx.RepoHash, fx.RepoHome, fx.Identity,
+            dryRun: false, auto: false, takeMigration: false);
+
+        await Assert.That(resumed.Code).IsEqualTo(0);
+        await Assert.That(Directory.Exists(ghost)).IsFalse();
+        await Assert.That(fx.ReadManifest().PendingPrunes!).IsEmpty();
+        // Dropped once no row needs it, so the history cannot grow without bound.
+        await Assert.That(fx.ReadManifest().PruneAnchors ?? []).IsEmpty();
+    }
+
     /// <summary>The other half of an anchor change: the checkout moved and took its materialized
     /// directories with it, while the ledger — which lives in the git directory — came along
     /// recording the anchor it was written at. Every destination therefore exists before the run
