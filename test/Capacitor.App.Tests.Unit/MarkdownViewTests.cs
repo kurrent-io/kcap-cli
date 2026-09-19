@@ -9,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Capacitor.App.Views;
+using MarkView.Avalonia;
 using ReactiveUI.Reactive;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
@@ -457,6 +458,63 @@ public class MarkdownViewTests {
             try {
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the cost of the binding order every chat row lands in: the command arriving after the
+    /// text adds the run offer to the strip already on screen, not a second build of the document.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_command_set_after_the_text_does_not_render_the_document_again() {
+        await RunOnUiAsync(async () => {
+            var view = new MarkdownView { Text = "```bash\n! kcap agent ls\n```\n\nSome prose.", Width = 400 };
+            var window = new Window { Content = view, Width = 500, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            try {
+                var viewer = Viewer(view);
+                var renders = 0;
+                using var _ = MarkdownViewer.MarkdownProperty.Changed.Subscribe(e => {
+                    if (ReferenceEquals(e.Sender, viewer) && e.NewValue.GetValueOrDefault() is not null) renders++;
+                });
+                var prose = Paragraphs(view).Single();
+
+                view.RunCode = ReactiveCommand.Create<string>(_ => { });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+
+                await Assert.That(renders).IsEqualTo(0);
+                await Assert.That(Paragraphs(view).Single()).IsSameReferenceAs(prose);
+                await Assert.That(Actions(Hosts(view)[0], "markdown-code-run").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the reverse move: a command withdrawn from the view takes the run offer with it, and
+    /// the document on screen is still the one that was built.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_command_withdrawn_takes_the_offer_without_rendering_again() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```bash\n! kcap agent ls\n```\n\nSome prose.");
+            try {
+                var viewer = Viewer(root);
+                var renders = 0;
+                using var _ = MarkdownViewer.MarkdownProperty.Changed.Subscribe(e => {
+                    if (ReferenceEquals(e.Sender, viewer) && e.NewValue.GetValueOrDefault() is not null) renders++;
+                });
+                var prose = Paragraphs(root).Single();
+
+                ((MarkdownView)root).RunCode = null;
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+
+                await Assert.That(renders).IsEqualTo(0);
+                await Assert.That(Paragraphs(root).Single()).IsSameReferenceAs(prose);
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
             } finally { window.Close(); }
         });
     }
