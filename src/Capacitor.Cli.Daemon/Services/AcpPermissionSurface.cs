@@ -90,12 +90,17 @@ internal sealed class AcpPermissionSurface(
         catch { /* the cancel's abandonment path still resolves the server */ }
     }
 
-    PermissionPendingDto? BuildPending(string requestId, AcpInteractionRequest request) =>
-        // The agent's per-option choices stay on the web card; the desktop card is allow/deny, so it
-        // carries no suggestions payload. The shared builder bounds every caller-controlled value.
-        LocalPermissionBridge.BuildPending(
+    PermissionPendingDto? BuildPending(string requestId, AcpInteractionRequest request) {
+        var pending = LocalPermissionBridge.BuildPending(
             requestId, request.AgentId, request.AcpSessionId, vendor, request.ToolName ?? "",
             request.ToolInput, suggestions: null, _time.GetUtcNow().ToString("o"), request.ToolCallId);
+        if (pending is null) return null;
+        var options = request.Options ?? [];
+        return pending with {
+            SupportsAllowOnce = PickAllow(options, preferAlways: false) is not null,
+            SupportsAllowAlways = options.Count(option => option.Kind == "allow_always") == 1,
+        };
+    }
 
     void Record(AcpInteractionRequest request, string outcome, string source) =>
         decisionLog?.Record(new PermissionDecisionRecord(
@@ -119,8 +124,8 @@ internal sealed class AcpPermissionSurface(
         AcpInteractionOption? once = null, always = null, other = null;
         foreach (var o in options) {
             switch (o.Kind) {
-                case "allow_once"   when once   is null: once   = o; break;
-                case "allow_always" when always is null: always = o; break;
+                case "allow_once": once ??= o; break;
+                case "allow_always": always ??= o; break;
                 default:
                     if (other is null && (o.Kind is null || o.Kind.StartsWith("allow", StringComparison.Ordinal))) other = o;
                     break;
