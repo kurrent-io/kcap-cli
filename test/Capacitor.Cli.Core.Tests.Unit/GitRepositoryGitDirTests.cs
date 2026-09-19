@@ -20,7 +20,7 @@ public class GitRepositoryGitDirTests {
         Tmp.CreateFile("wt/.git", $"gitdir: {entry}\n");
 
         await Assert.That(GitRepository.ResolveGitDir(worktree))
-            .IsEqualTo(Tmp.GetResolvedPath("main/.git/worktrees/wt"));
+            .IsEqualTo(Tmp.GetResolvedPath("main", ".git", "worktrees", "wt"));
     }
 
     [Test]

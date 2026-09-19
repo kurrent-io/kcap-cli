@@ -11,7 +11,7 @@ public class CanonicalPathTests {
 
         var resolved = CanonicalPath.Resolve(Path.Combine(linked, "inner"));
 
-        await Assert.That(resolved).IsEqualTo(Tmp.GetResolvedPath("real/inner"));
+        await Assert.That(resolved).IsEqualTo(Tmp.GetResolvedPath("real", "inner"));
     }
 
     [Test]
