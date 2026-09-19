@@ -21,7 +21,13 @@ public enum SkillsLedgerRead {
 public static class SkillsLedgerFile {
     public static SkillsLedgerRead Read(string path, SkillOrigin origin, out SkillsLedger? ledger) {
         ledger = null;
-        if (!File.Exists(path)) return SkillsLedgerRead.Missing;
+
+        // Absence is established, never inferred from a check that answers the same way when it is
+        // refused: a ledger that read as missing would discharge the obligation it exists to carry.
+        switch (PathExistence.OfFile(path)) {
+            case PathPresence.Missing:       return SkillsLedgerRead.Missing;
+            case PathPresence.Indeterminate: return SkillsLedgerRead.Unreadable;
+        }
 
         string text;
         try {

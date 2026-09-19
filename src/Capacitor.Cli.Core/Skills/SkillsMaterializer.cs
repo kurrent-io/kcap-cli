@@ -69,21 +69,9 @@ public static class SkillsMaterializer {
                 : (SkillFileProbe.Unreadable, null);
         }
 
-        // Listed but not answerable, or a directory that refused to be listed at all: either way
-        // nothing here establishes that the file is gone.
-        return Listed(dir) is not false ? (SkillFileProbe.Unreadable, null) : (SkillFileProbe.Absent, null);
-    }
-
-    /// <summary>Whether the managed file appears in the directory listing, or null when the
-    /// directory could not be listed for any reason other than not being there.</summary>
-    static bool? Listed(string dir) {
-        try {
-            return Directory.EnumerateFileSystemEntries(dir, "SKILL.md").Any();
-        } catch (DirectoryNotFoundException) {
-            return false;
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            return null;
-        }
+        return PathExistence.OfFile(file.FullName) == PathPresence.Missing
+            ? (SkillFileProbe.Absent, null)
+            : (SkillFileProbe.Unreadable, null);
     }
 
     /// <summary>Writes one skill, refusing a destination that leaves the anchor through a link: a

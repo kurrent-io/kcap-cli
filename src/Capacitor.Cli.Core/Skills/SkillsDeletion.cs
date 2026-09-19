@@ -33,17 +33,23 @@ public static class SkillsDeletion {
     /// the receipts this row holds, then removes the containing directory only if it is empty.
     /// Never recursive.</summary>
     public static SkillDeletionResult Delete(OwnedSkillRow row, SkillAuthority authority) {
-        if (Gone(row.Path)) return SkillDeletionResult.Removed;
+        if (Presence(row.Path) is not PathPresence.Present) return Outcome(row.Path);
         if (Admit(row.Path, authority) is not { } full) return SkillDeletionResult.Refused;
 
-        var file = new FileInfo(SkillsMaterializer.SkillFileFor(full));
+        var managed = SkillsMaterializer.SkillFileFor(full);
 
-        if (file.Exists) {
-            if (file.LinkTarget is not null) return SkillDeletionResult.Refused;
-            if (SkillsMaterializer.HashOf(file.FullName) is not { } hash) return SkillDeletionResult.Refused;
-            if (!row.Receipts.Any(r => r.Matches(hash))) return SkillDeletionResult.Unvouched;
+        switch (PathExistence.OfFile(managed)) {
+            case PathPresence.Indeterminate:
+                return SkillDeletionResult.Refused;
+            case PathPresence.Present:
+                var file = new FileInfo(managed);
 
-            File.Delete(file.FullName);
+                if (file.LinkTarget is not null) return SkillDeletionResult.Refused;
+                if (SkillsMaterializer.HashOf(managed) is not { } hash) return SkillDeletionResult.Refused;
+                if (!row.Receipts.Any(r => r.Matches(hash))) return SkillDeletionResult.Unvouched;
+
+                File.Delete(managed);
+                break;
         }
 
         return Retire(full);
@@ -52,15 +58,29 @@ public static class SkillsDeletion {
     /// <summary>Gives up a destination that was never written to: the directory goes if it is
     /// empty, and stays — holding something we did not write — if it is not.</summary>
     public static SkillDeletionResult Release(OwnedSkillRow row, SkillAuthority authority) =>
-        Gone(row.Path) ? SkillDeletionResult.Removed
+        Presence(row.Path) is not PathPresence.Present ? Outcome(row.Path)
         : Admit(row.Path, authority) is { } full ? Retire(full)
         : SkillDeletionResult.Refused;
 
-    /// <summary>Nothing there is nothing to guard, and a deletion already carried out.</summary>
-    static bool Gone(string path) => !Directory.Exists(Path.GetFullPath(path));
+    static PathPresence Presence(string path) => PathExistence.OfDirectory(Path.GetFullPath(path));
+
+    /// <summary>Nothing there is nothing to guard, and a deletion already carried out. A directory
+    /// that would not answer is neither.</summary>
+    static SkillDeletionResult Outcome(string path) =>
+        Presence(path) == PathPresence.Missing ? SkillDeletionResult.Removed : SkillDeletionResult.Refused;
 
     static SkillDeletionResult Retire(string full) {
-        if (Directory.EnumerateFileSystemEntries(full).Any()) return SkillDeletionResult.Settled;
+        bool empty;
+
+        try {
+            empty = !Directory.EnumerateFileSystemEntries(full).Any();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // Emptiness could not be established, so nothing here may settle a row or remove a
+            // directory.
+            return SkillDeletionResult.Refused;
+        }
+
+        if (!empty) return SkillDeletionResult.Settled;
 
         Directory.Delete(full, recursive: false);
 

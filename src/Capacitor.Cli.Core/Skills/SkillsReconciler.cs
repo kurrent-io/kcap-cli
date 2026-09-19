@@ -30,12 +30,15 @@ public static class SkillsReconciler {
 
             if (row is null) {
                 // A destination that already exists and no row names is the repository's own, and
-                // may be tracked. An intended hash is never a reason to take it over.
-                if (Directory.Exists(at.Path))
-                    refusals.Add(new RefusedSkillWrite(
-                        item, at.Path, "the directory already exists and kcap does not own it"));
+                // may be tracked. An intended hash is never a reason to take it over, and a
+                // destination that would not answer is not one to claim either.
+                var free = PathExistence.OfDirectory(at.Path);
+
+                if (free == PathPresence.Missing) writes.Add(new PlannedSkillWrite(item, at));
                 else
-                    writes.Add(new PlannedSkillWrite(item, at));
+                    refusals.Add(new RefusedSkillWrite(item, at.Path, free == PathPresence.Present
+                        ? "the directory already exists and kcap does not own it"
+                        : "the directory could not be established as free"));
 
                 continue;
             }
