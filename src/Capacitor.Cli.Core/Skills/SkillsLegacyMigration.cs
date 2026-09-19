@@ -55,15 +55,25 @@ public static class SkillsLegacyMigration {
         return new LegacyMigrationPlan(mine, delete, [], relinquish);
     }
 
+    /// <summary>Every other ledger under the config root. Compared canonically, because a ledger
+    /// this repository failed to recognise as its own would read as another owner of everything it
+    /// owns and migration would stop with nothing failing.</summary>
     static List<string> Candidates(string configRoot, string minePath) {
         var skills = Path.Combine(configRoot, "skills");
         if (!Directory.Exists(skills)) return [];
+        var mine = CanonicalPath.Resolve(minePath);
         return [.. Directory.EnumerateFiles(skills, "manifest.json", SearchOption.AllDirectories)
-            .Where(f => !PathComparison.Equal(f, minePath))];
+            .Where(f => !PathComparison.Equal(CanonicalPath.Resolve(f), mine))];
     }
 
-    static List<SkillsManifest> Others(List<SkillsManifest> siblings, string path) =>
-        [.. siblings.Where(m => (m.Skills ?? []).Any(e => PathComparison.Equal(e.Path, path)))];
+    /// <summary>The ledgers that also own <paramref name="path"/>. Two ledgers reach one physical
+    /// directory through casing, a symlink or a normalization alias, so recorded strings are
+    /// resolved before they are compared: a co-owner missed here has its copy deleted.</summary>
+    static List<SkillsManifest> Others(List<SkillsManifest> siblings, string path) {
+        var wanted = CanonicalPath.Resolve(path);
+        return [.. siblings.Where(m => (m.Skills ?? [])
+            .Any(e => PathComparison.Equal(CanonicalPath.Resolve(e.Path), wanted)))];
+    }
 
     static SkillsManifest? Load(string path) {
         try {

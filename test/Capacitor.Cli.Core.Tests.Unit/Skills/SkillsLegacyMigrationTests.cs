@@ -37,6 +37,22 @@ public class SkillsLegacyMigrationTests {
         await Assert.That(plan.Keep).IsEmpty();
     }
 
+    /// <summary>Two ledgers can spell one physical directory differently, and a retirement that
+    /// does not recognise the co-owner deletes a copy the other still serves.</summary>
+    [Test]
+    public async Task A_co_owner_spelling_the_same_directory_another_way_is_recognised() {
+        var shared  = Tmp.PathTo("global", "kcap-shared");
+        var aliased = Tmp.PathTo("global", "sub", "..", "kcap-shared");
+        WriteLegacy("aaaa", "agents", "acct-1", shared);
+        WriteLegacy("bbbb", "agents", "acct-1", aliased);
+
+        var plan = SkillsLegacyMigration.Plan(Tmp.GetResolvedPath("config"), "aaaa", "agents", Id("acct-1"));
+
+        await Assert.That(plan.Delete).IsEmpty();
+        // The spelling this ledger recorded is what goes back into it, not the resolved form.
+        await Assert.That(plan.Relinquish).IsEquivalentTo([shared]);
+    }
+
     [Test]
     public async Task A_path_whose_every_owner_is_retired_is_deleted() {
         var shared = Tmp.PathTo("global", "kcap-shared");
