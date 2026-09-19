@@ -32,8 +32,8 @@ public class BorrowAuthorizer(DaemonConfig config) {
         try {
             canonicalCwd = Canonicalize(path);
         } catch {
-            // realpath resolution failed (permission on an ancestor, transient FS error, …). Fail
-            // CLOSED — never authorize against an unresolved path on this security boundary (Qodo #290 #3).
+            // realpath resolution failed (permission on an ancestor, a transient FS error, a symlink
+            // chain too long to follow). Fail CLOSED: this boundary never authorizes an unresolved path.
             return Task.FromResult(new BorrowAuthResult(false, null, null, "not_allowed"));
         }
 
@@ -53,6 +53,11 @@ public class BorrowAuthorizer(DaemonConfig config) {
     /// outside the operator's allowlisted tree textually match <see cref="DaemonConfig.IsRepoAllowed"/>
     /// (e.g. an allowlisted <c>/repos/*</c> containing a symlink <c>proj/linkdir</c> → <c>~/.ssh</c>).
     /// Also called by <c>WorktreeInfo.Borrowed</c> so both sides of a borrow compare canonical paths.
+    /// A path the walk could not finish throws rather than answering with its unresolved remainder,
+    /// which the allowlist would match as though it were a location.
     /// </summary>
-    public static string Canonicalize(string path) => CanonicalPath.Resolve(path);
+    public static string Canonicalize(string path) =>
+        CanonicalPath.TryResolve(path, out var resolved)
+            ? resolved
+            : throw new IOException($"{path} could not be fully resolved.");
 }

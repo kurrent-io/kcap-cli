@@ -75,6 +75,23 @@ public class SkillsMaterializerTests {
         await Assert.That(Directory.GetFiles(dir).Select(Path.GetFileName).OfType<string>()).IsEquivalentTo(["SKILL.md"]);
     }
 
+    /// <summary>The skills root is a link out of the anchor, and the anchor is deep enough to have
+    /// exhausted a budget charged per component — which would leave the link unfollowed and the
+    /// destination reading as inside.</summary>
+    [Test]
+    public async Task A_deep_anchor_does_not_buy_a_link_out_of_itself() {
+        var anchor  = Tmp.CreateDir("repo");
+        var outside = Tmp.CreateDir("global", "skills");
+        var deep    = anchor.Nest(45);
+        var root    = deep.CreateDir(".agents").PathTo("skills");
+
+        Directory.CreateSymbolicLink(root, outside.Path);
+
+        await Assert.That(Directory.Exists(deep)).IsTrue();
+        await Assert.That(SkillsMaterializer.Write(root, anchor, Item("x"))).IsFalse();
+        await Assert.That(Directory.GetDirectories(outside)).IsEmpty();
+    }
+
     [Test]
     public async Task A_prune_outside_the_anchor_is_refused() {
         var anchor  = Tmp.CreateDir("repo");

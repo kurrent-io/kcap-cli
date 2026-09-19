@@ -3,19 +3,32 @@ namespace Capacitor.Cli.Core;
 /// <summary>A realpath-style walk: every component is resolved, not only the leaf, because an
 /// ancestor symlink is how a path outside a boundary textually matches one inside it.</summary>
 public static class CanonicalPath {
-    // A symlink cycle can't loop forever: cap the components this walk resolves and return the
-    // best-resolved path on hitting the cap. 40 is the common OS-level MAXSYMLINKS limit, but the
-    // counter charges a plain component too, so a path of more than 40 segments also comes back
-    // partly unresolved.
-    const int MaxResolveSteps = 40;
+    // Charged per symlink traversal only. An ordinary component costs nothing, so no path is deep
+    // enough to exhaust the budget before the walk reaches the link that matters. 40 is the common
+    // OS-level MAXSYMLINKS limit, and running out is also how a cycle terminates.
+    const int MaxSymlinkHops = 40;
 
-    public static string Resolve(string path) => RealPath(Path.GetFullPath(path));
+    /// <summary>Best effort: a path whose links could not all be followed comes back with its
+    /// unresolved remainder stitched on. For grouping and comparing intents, where a partial answer
+    /// is harmless — a containment decision takes <see cref="TryResolve"/> instead, because an
+    /// unresolved remainder is a name rather than a location.</summary>
+    public static string Resolve(string path) {
+        TryResolve(path, out var resolved);
+
+        return resolved;
+    }
+
+    /// <summary>The fully resolved path, or false with the best-effort one: the walk ran out of
+    /// symlink traversals, which is a chain too long to follow or a cycle.</summary>
+    public static bool TryResolve(string path, out string resolved) =>
+        RealPath(Path.GetFullPath(path), out resolved);
 
     /// <summary>Whether <paramref name="candidate"/> resolves to <paramref name="boundary"/> itself
-    /// or to something beneath it.</summary>
+    /// or to something beneath it. A path that could not be fully resolved — either side — is within
+    /// nothing.</summary>
     public static bool IsWithin(string candidate, string boundary) {
-        var resolvedBoundary = Resolve(boundary);
-        var resolved         = Resolve(candidate);
+        if (!TryResolve(boundary, out var resolvedBoundary)) return false;
+        if (!TryResolve(candidate, out var resolved)) return false;
         if (string.Equals(resolved, resolvedBoundary, StringComparison.Ordinal)) return true;
         var prefix = resolvedBoundary.EndsWith(Path.DirectorySeparatorChar)
             ? resolvedBoundary
@@ -27,22 +40,16 @@ public static class CanonicalPath {
     /// Walks the path root-first, resolving each accumulated prefix a single hop at a time: when a
     /// prefix is a symlink, its target replaces the prefix (an absolute target restarts from its own
     /// root; a relative one resolves against the already-canonical parent) and resolution continues
-    /// against it, so symlink chains and ancestor symlinks are all followed. Bounded by
-    /// <see cref="MaxResolveSteps"/> so a symlink cycle terminates at the best-resolved path.
+    /// against it, so symlink chains and ancestor symlinks are all followed.
     /// </summary>
-    static string RealPath(string fullPath) {
-        var root      = Path.GetPathRoot(fullPath) ?? "";
-        var segments  = SplitSegments(fullPath[root.Length..]);
-        var resolved  = root;
-        var steps     = 0;
+    static bool RealPath(string fullPath, out string resolved) {
+        var root     = Path.GetPathRoot(fullPath) ?? "";
+        var segments = SplitSegments(fullPath[root.Length..]);
+        var walked   = root;
+        var hops     = 0;
 
         while (segments.Count > 0) {
-            if (steps++ >= MaxResolveSteps) {
-                // Cycle guard: stitch the unresolved remainder back on and stop.
-                return Path.GetFullPath(Path.Combine([resolved, ..segments]));
-            }
-
-            var next = Path.Combine(resolved, segments.Dequeue());
+            var next = Path.Combine(walked, segments.Dequeue());
 
             // A component that doesn't exist yet (a materialization destination, say) can't be a
             // symlink either; ResolveLinkTarget throws for it instead of returning null.
@@ -54,15 +61,20 @@ public static class CanonicalPath {
             }
 
             if (target is null) {
-                resolved = next; // real directory component
+                walked = next; // real directory component
                 continue;
+            }
+
+            if (++hops > MaxSymlinkHops) {
+                resolved = Path.GetFullPath(Path.Combine([next, .. segments]));
+                return false;
             }
 
             // One symlink hop. Resolve a relative target against the link's (canonical) parent.
             var linkPath = target.FullName;
 
             if (!Path.IsPathRooted(linkPath)) {
-                linkPath = Path.GetFullPath(Path.Combine(resolved, linkPath));
+                linkPath = Path.GetFullPath(Path.Combine(walked, linkPath));
             }
 
             var linkRoot = Path.GetPathRoot(linkPath) ?? "";
@@ -70,10 +82,11 @@ public static class CanonicalPath {
             // Re-queue the target's own segments (so ancestor symlinks inside it get resolved too)
             // ahead of the segments we hadn't reached yet.
             segments = new Queue<string>(SplitSegments(linkPath[linkRoot.Length..]).Concat(segments));
-            resolved = linkRoot;
+            walked   = linkRoot;
         }
 
-        return resolved;
+        resolved = walked;
+        return true;
     }
 
     static Queue<string> SplitSegments(string pathRemainder) => new(
