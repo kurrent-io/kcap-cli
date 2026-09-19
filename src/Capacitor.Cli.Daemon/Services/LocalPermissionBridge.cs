@@ -766,7 +766,8 @@ internal sealed partial class LocalPermissionBridge(
         var (sugg,  suggOmitted)    = Bound(suggestions);
         // Over-cap is dropped, not refused: the id only decorates a chat row.
         var id = toolUseId is { Length: > 0 } t && Encoding.UTF8.GetByteCount(t) <= PermissionWire.MaxToolUseIdBytes ? t : null;
-        return new PermissionPendingDto(requestId, agentId, sessionId, vendor, name, input, sugg, inputOmitted, suggOmitted, requestedAt, id);
+        return new PermissionPendingDto(requestId, agentId, sessionId, vendor, name, input, sugg, inputOmitted, suggOmitted, requestedAt, id,
+            SupportsAllowOnce: vendor is "claude" or "codex", SupportsAllowAlways: vendor == "claude");
 
         static (JsonElement?, bool) Bound(JsonElement? el) =>
             el is { } e && Encoding.UTF8.GetByteCount(e.GetRawText()) > PermissionWire.MaxElementBytes ? (null, true) : (el, false);

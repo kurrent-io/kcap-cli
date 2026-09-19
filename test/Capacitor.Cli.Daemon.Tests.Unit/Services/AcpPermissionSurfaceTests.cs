@@ -104,6 +104,22 @@ public class AcpPermissionSurfaceTests {
         await Assert.That(decision.Outcome).IsEqualTo(outcome);
         await Assert.That(decision.SelectedOptionId).IsEqualTo(optionId);
         await Assert.That(pending.SupportsAllowOnce).IsFalse();
+        await Assert.That(pending.SupportsAllowAlways).IsFalse();
+    }
+
+    [Test]
+    [Arguments("claude")]
+    [Arguments("codex")]
+    public async Task Acp_options_override_hook_vendor_grant_defaults(string vendor) {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(broker, vendor, BlockingServer(), TimeProvider.System);
+        var task = surface.RequestAsync(Request(options: [new("standing", "Always", null, "allow_always")]), CancellationToken.None);
+        var pending = await NextPending(reader);
+        broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision, "deny", PermissionSettlements.SourceApp);
+        await task;
+
+        await Assert.That(pending.SupportsAllowOnce).IsFalse();
         await Assert.That(pending.SupportsAllowAlways).IsTrue();
     }
 

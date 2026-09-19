@@ -135,11 +135,12 @@ public class PermissionServiceTests {
 
     [Test]
     [Arguments("claude", null, null, true, true)]
+    [Arguments("codex", null, null, true, false)]
     [Arguments("copilot", null, null, false, false)]
     [Arguments("copilot", true, false, true, false)]
     [Arguments("copilot", false, true, false, true)]
     [Arguments("claude", false, false, false, false)]
-    public async Task Local_grants_require_advertised_capabilities_except_legacy_claude(
+    public async Task Local_grants_require_advertised_capabilities_except_known_hook_vendors(
             string vendor, bool? once, bool? always, bool expectedOnce, bool expectedAlways) {
         var request = new PendingPermissionRequest(Dto() with {
             Vendor = vendor, SupportsAllowOnce = once, SupportsAllowAlways = always,
@@ -203,6 +204,23 @@ public class PermissionServiceTests {
         await h.EmitAsync(Dto("r1"));
         h.Stream.EmitSubscribed();
         await WaitUntilAsync(() => h.View.Count == 0, what: "cleared at Subscribed");
+    }
+
+    [Test]
+    public async Task Subscription_loss_is_distinct_from_settlement_before_the_removal_is_published() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var settled = await h.EmitAsync(Dto("settled"));
+        h.Stream.EmitResolved("settled", "app");
+        await WaitUntilAsync(() => h.View.Count == 0, what: "settled request removed");
+        await Assert.That(settled.SubscriptionLost).IsFalse();
+        var disconnected = await h.EmitAsync(Dto("disconnected"));
+        var lostAtRemoval = false;
+        using var subscription = h.Service.Pending.Subscribe(_ => {
+            if (!h.View.Lookup(disconnected.Key).HasValue) lostAtRemoval = disconnected.SubscriptionLost;
+        });
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await Assert.That(lostAtRemoval).IsTrue();
     }
 
     static PermissionPendingDto PendingDto(string id, string agent, string vendor, string toolName, string? toolInputJson, bool omitted = false) {

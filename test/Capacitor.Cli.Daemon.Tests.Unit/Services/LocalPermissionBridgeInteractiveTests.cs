@@ -60,6 +60,24 @@ public class LocalPermissionBridgeInteractiveTests {
     static PermissionDecision Deny  => new("deny", null, null);
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
+    [Arguments("claude", true)]
+    [Arguments("codex", false)]
+    public async Task Hook_grant_capabilities_match_the_response_the_vendor_accepts(string vendor, bool supportsAlways) {
+        await using var h = new Harness();
+        h.Server.AwaitScript = (_, ct) => new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);
+        await h.StartAsync();
+        var response = h.Client.PostAsync($"{h.Bridge.BaseUrl}/{vendor}/permission-request",
+            JsonContent.Create(new { session_id = Session, tool_name = "Bash", agent_id = "agent-1", cwd = "/repo" }));
+        var pending = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+        using var answered = await response;
+
+        await Assert.That(await Harness.BehaviorOf(answered)).IsEqualTo("allow");
+        await Assert.That(pending.SupportsAllowOnce).IsTrue();
+        await Assert.That(pending.SupportsAllowAlways).IsEqualTo(supportsAlways);
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
     public async Task App_claim_first_answers_the_hook_cancels_the_server_await_responds_to_the_server_and_logs_app() {
         await using var h = new Harness();
         var awaitCts = new TaskCompletionSource<CancellationToken>();

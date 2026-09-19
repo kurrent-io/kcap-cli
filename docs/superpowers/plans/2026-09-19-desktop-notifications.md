@@ -60,14 +60,17 @@ Interface: IDesktopNotificationSink.Show(DesktopNotification, Action<string?>), 
 
 - [x] Run the full desktop test assembly and inspect failures.
 - [x] Rebuild the desktop app and publish affected shipping projects, clearing warnings.
-- [x] Review the complete diff independently; address substantive findings and rerun affected tests.
-- [ ] Record platform smoke-test coverage and any limitations in the delivery report.
+- [ ] Finish the user-requested Claude review flow after addressing findings and rerunning affected tests.
+- [x] Record platform smoke-test coverage and any limitations in the delivery report.
 
 ## Verification results
 
-- Full desktop assembly: 2,612 tests passed with `LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8`; the default Norwegian locale exposed an existing decimal-separator expectation in AttachmentTrayTests.
-- Focused IPC/wire tests: 27 passed. Focused daemon permission tests: 37 passed.
+- Full desktop assembly after Claude review fixes: 2,622 tests passed with `LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8`; the default Norwegian locale exposed an existing decimal-separator expectation in AttachmentTrayTests.
+- Focused IPC/wire tests: 27 passed. Focused daemon permission tests after review fixes: 116 passed. All 110 focused notification/settings/permission tests passed.
 - Release desktop rebuild: zero warnings and errors. macOS self-contained app publish passed.
 - CLI and daemon NativeAOT publishes passed without trimming warnings; both published binaries passed their version command. Clean local AOT checks used `AppleMinOSVersion=26.0` to match installed Homebrew libraries; repository deployment targets are unchanged.
-- Settings smoke tests exercise mouse clicks, keyboard toggling/focus, persistence and reopening at 540 × 580.
+- Settings smoke tests exercise mouse clicks, dragging, keyboard toggling/focus, selected-tab styling, persistence and reopening at 540 × 580.
 - Review findings for delayed directory rows, reconnect handover, shutdown cleanup, duplicate ACP grant scopes and stale native action tokens have regression coverage.
+- Signed isolated macOS smoke confirmed authorization, managed background delivery, withdrawal to zero delivered notifications, and disposal. The bundle must live outside `/tmp` for macOS notification registration.
+- Actual OS notification button/body clicks and foreground presentation remain unverified: the automation could not access Notification Center notifications, and this captured-display environment did not invoke the isolated foreground callback. Those paths have unit/source coverage; no global OS settings were changed.
+- Claude round one found six issues: switch dragging, reconnect alert loss, missing Codex actions, theme placement/accent, ambiguous ACP standing scopes, and persistent save-error text. All are corrected with regressions; Windows action labels now also escape XML. Follow-up review in flow `7ff25ce97d0145c2ac99d5aa83afaf4d` is pending.

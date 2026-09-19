@@ -294,7 +294,10 @@ public sealed class PermissionService : IPermissionService {
             if (_disposed) return;
             // Replacing a local handle with its server twin must not announce a settled request.
             _cache.Edit(cache => {
-                foreach (var item in cache.Items.Where(i => i.Lane == PermissionLane.Local).ToList()) cache.Remove(item.Key);
+                foreach (var item in cache.Items.Where(i => i.Lane == PermissionLane.Local).ToList()) {
+                    item.SubscriptionLost = true;
+                    cache.Remove(item.Key);
+                }
                 foreach (var (key, twin) in _shadowed.ToList()) {
                     _shadowed.Remove(key);
                     if (_tombstones.Contains(key)) continue;

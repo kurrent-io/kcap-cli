@@ -305,6 +305,22 @@ public class SettingsViewModelTests {
     });
 
     [Test]
+    public Task Successful_notification_save_clears_an_earlier_write_failure() => AvaloniaSession.RunOnUiAsync(async () => {
+        var blocker = Config.CreateFile("blocked");
+        using var notifications = new NotificationSettingsService(Config.PathTo("blocked", "notifications.json"));
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications);
+
+        vm.NotifyOnIdle = false;
+        await WaitUntilAsync(() => vm.NotificationMessage is not null);
+        File.Delete(blocker);
+        vm.NotifyOnQuestions = false;
+
+        await WaitUntilAsync(() => vm.NotificationMessage is null);
+        using var reopened = new NotificationSettingsService(Config.PathTo("blocked", "notifications.json"));
+        await Assert.That(reopened.Current).IsEqualTo(new NotificationPreferences(true, false, false));
+    });
+
+    [Test]
     public Task Disposed_settings_stop_following_shared_notification_changes() => AvaloniaSession.RunOnUiAsync(async () => {
         using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
         var vm = Make(Seed(), Connected(), notificationSettings: notifications);

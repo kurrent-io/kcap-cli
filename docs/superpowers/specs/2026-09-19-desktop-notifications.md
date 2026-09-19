@@ -4,7 +4,11 @@ Implements GitHub #1047 / AI-2997. Notify users when an agent needs a permission
 
 Use an app-lifetime coordinator over the existing merged permission cache and agent directory. Native notification delivery is a separate adapter. Permission actions reuse IPermissionService and must validate that the request is still pending; never turn a notification click into a broad permission outside the existing service. Claude offers Allow, Always, Decline; ACP offers the equivalent actions only when supplied by its request. Questions offer Respond in app; idle offers Open agent. A body click opens the corresponding agent.
 
+Codex hooks offer Allow and Decline. When no Allow-once action is available, also offer Open agent. A single server ACP standing scope uses its supplied label; multiple standing scopes must be chosen in the app.
+
 Deduplicate pending request replays and local/server twins. Remove delivered notifications when requests settle, agents leave, a category is disabled, or the app shuts down. Foreground events are consumed without later replay. Idle means a known working agent transitions to awaiting input, with no pending request and no running subagents; initial snapshots and unknown states do not generate idle alerts. The server registry does not carry a remote idle verdict, so remote idle cannot be inferred from its Running status.
+
+Keep existing server alerts actionable during hub reconnects. A local subscription loss withdraws its alert and invalidates its callback; an authoritative replay restores the alert with a fresh callback. Settlement and foreground/category suppression must not rearm alerts.
 
 Keep remote permission subscriptions alive independently of visible workspaces, using SessionAccessService leases for current server sessions. Existing authorization checks and reconciliation remain authoritative.
 

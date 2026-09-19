@@ -131,6 +131,91 @@ public class DesktopNotificationCoordinatorTests {
     }
 
     [Test]
+    public async Task A_server_notification_stays_actionable_during_a_hub_reconnect() {
+        using var h = new Harness();
+        h.Permissions.Add(PermissionEntries.ServerEntry());
+        var notification = h.Sink.Shown.Single();
+        h.Directory.RemoteStale.OnNext(true);
+        await Assert.That(h.Sink.Closed).IsEmpty();
+        h.Permissions.Queue(PermissionResolveKind.Applied);
+        h.Sink.Callbacks[notification.Id]("allow");
+        await Assert.That(h.Permissions.Resolved.Single().RequestId).IsEqualTo("srv-1");
+    }
+
+    [Test]
+    public async Task A_local_subscription_replay_restores_a_withdrawn_alert_with_a_fresh_callback() {
+        using var h = new Harness();
+        var request = PermissionEntries.Entry();
+        h.Permissions.Add(request);
+        var old = h.Sink.Shown.Single();
+        request.SubscriptionLost = true;
+        h.Permissions.Remove(request.RequestId);
+        h.Permissions.Add(PermissionEntries.Entry());
+        await Assert.That(h.Sink.Shown.Count).IsEqualTo(2);
+        h.Sink.Callbacks[old.Id]("allow");
+        await Assert.That(h.Permissions.Resolved).IsEmpty();
+        h.Permissions.Queue(PermissionResolveKind.Applied);
+        h.Sink.Callbacks[h.Sink.Shown[1].Id]("allow");
+        await Assert.That(h.Permissions.Resolved.Single().RequestId).IsEqualTo("r1");
+    }
+
+    [Test]
+    public async Task Subscription_loss_does_not_rearm_a_foreground_consumed_request() {
+        using var h = new Harness { Foreground = true };
+        var request = PermissionEntries.Entry();
+        h.Permissions.Add(request);
+        request.SubscriptionLost = true;
+        h.Permissions.Remove(request.RequestId);
+        h.Foreground = false;
+        h.Permissions.Add(PermissionEntries.Entry());
+        await Assert.That(h.Sink.Shown).IsEmpty();
+    }
+
+    [Test]
+    public async Task Codex_hook_permissions_offer_once_and_legacy_unknown_scopes_open_the_app() {
+        foreach (var server in new[] { false, true }) {
+            using var h = new Harness();
+            h.Permissions.Add(server ? PermissionEntries.ServerEntry(vendor: "codex") : PermissionEntries.Entry(vendor: "codex"));
+            var notification = h.Sink.Shown.Single();
+            await Assert.That(notification.Actions.Select(a => a.Id)).IsEquivalentTo(["allow", "decline"]);
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            h.Sink.Callbacks[notification.Id]("allow");
+            await Assert.That(h.Permissions.Resolved.Single().Answer).IsEqualTo(PermissionAnswer.Allow);
+        }
+        using var unknown = new Harness();
+        unknown.Permissions.Add(PermissionEntries.Entry(vendor: "pi"));
+        var fallback = unknown.Sink.Shown.Single();
+        await Assert.That(fallback.Actions.Select(a => a.Id)).IsEquivalentTo(["open", "decline"]);
+        unknown.Sink.Callbacks[fallback.Id]("open");
+        await Assert.That(unknown.Opened.Single().Id).IsEqualTo("a1");
+        await Assert.That(unknown.Permissions.Resolved).IsEmpty();
+    }
+
+    [Test]
+    public async Task Acp_standing_scopes_are_named_and_ambiguous_scopes_are_left_to_the_app() {
+        using var single = new Harness();
+        single.Permissions.Add(PermissionEntries.AcpPermission(options: [
+            new() { OptionId = "tool-scope", Label = "Always for this tool", Kind = "allow_always" },
+            new() { OptionId = "deny", Label = "Decline", Kind = "reject_once" },
+        ]));
+        var notice = single.Sink.Shown.Single();
+        await Assert.That(notice.Actions.Single(a => a.Id == "always").Label).IsEqualTo("Always for this tool");
+        single.Permissions.Queue(PermissionResolveKind.Applied);
+        single.Sink.Callbacks[notice.Id]("always");
+        await Assert.That(single.Permissions.Picked.Single().OptionId).IsEqualTo("tool-scope");
+        using var ambiguous = new Harness();
+        ambiguous.Permissions.Add(PermissionEntries.AcpPermission(options: [
+            new() { OptionId = "tool-scope", Label = "Always for this tool", Kind = "allow_always" },
+            new() { OptionId = "project-scope", Label = "Always for this project", Kind = "allow_always" },
+            new() { OptionId = "deny", Label = "Decline", Kind = "reject_once" },
+        ]));
+        var fallback = ambiguous.Sink.Shown.Single();
+        await Assert.That(fallback.Actions.Select(a => a.Id)).IsEquivalentTo(["open", "decline"]);
+        ambiguous.Sink.Callbacks[fallback.Id]("always");
+        await Assert.That(ambiguous.Permissions.Picked).IsEmpty();
+    }
+
+    [Test]
     public async Task Disabling_a_category_withdraws_its_notifications_and_invalidates_callbacks() {
         using var h = new Harness();
         h.Permissions.Add(PermissionEntries.Entry());
@@ -198,20 +283,27 @@ public class DesktopNotificationCoordinatorTests {
     }
 
     [Test]
-    public async Task A_foreign_or_stale_remote_row_cannot_preserve_a_local_notification() {
+    public async Task A_stale_remote_row_preserves_a_local_notification_only_on_the_same_server() {
         foreach (var sameServer in new[] { false, true }) {
             using var h = new Harness();
             h.Permissions.Add(PermissionEntries.Entry(serverRequestId: "srv-1"));
             var notification = h.Sink.Shown.Single();
             h.Directory.LocalOnAppServer.OnNext(sameServer);
-            h.Directory.RemoteStale.OnNext(sameServer);
+            h.Directory.RemoteStale.OnNext(true);
             h.Directory.Rows.Edit(rows => {
                 rows.RemoveKey("local:a1");
                 rows.AddOrUpdate(Row() with { Key = "remote:a1", Origin = AgentOrigin.Remote });
             });
-            h.Sink.Callbacks[notification.Id]("allow");
-            await Assert.That(h.Sink.Closed).Contains(notification.Id);
-            await Assert.That(h.Permissions.Resolved).IsEmpty();
+            if (sameServer) {
+                await Assert.That(h.Sink.Closed).IsEmpty();
+                h.Permissions.Queue(PermissionResolveKind.Applied);
+                h.Sink.Callbacks[notification.Id]("allow");
+                await Assert.That(h.Permissions.Resolved.Single().RequestId).IsEqualTo("r1");
+            } else {
+                h.Sink.Callbacks[notification.Id]("allow");
+                await Assert.That(h.Sink.Closed).Contains(notification.Id);
+                await Assert.That(h.Permissions.Resolved).IsEmpty();
+            }
         }
     }
 
@@ -238,7 +330,7 @@ public class DesktopNotificationCoordinatorTests {
             "acp-1", "a1", "s1", "pi", "Bash", null, null, false, false, "2026-09-19T12:00:00Z",
             SupportsAllowOnce: false, SupportsAllowAlways: true)));
         var notification = h.Sink.Shown.Single();
-        await Assert.That(notification.Actions.Select(a => a.Id)).IsEquivalentTo(["always", "decline"]);
+        await Assert.That(notification.Actions.Select(a => a.Id)).IsEquivalentTo(["open", "always", "decline"]);
         h.Permissions.Queue(PermissionResolveKind.Applied);
         h.Sink.Callbacks[notification.Id]("always");
         await Assert.That(h.Permissions.Resolved.Single()).IsEqualTo(("acp-1", PermissionAnswer.AllowAlways));

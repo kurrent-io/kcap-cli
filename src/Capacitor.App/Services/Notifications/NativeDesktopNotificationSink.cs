@@ -107,7 +107,8 @@ public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink {
                 // Labs' numeric IDs restart at 1 in a new process. A queued COM action from an
                 // old toast must not answer a new request that happens to reuse its numeric ID.
                 var actions = notification.Actions.Select(a =>
-                    (Source: a, Native: new NativeNotificationAction(a.Label, Guid.NewGuid().ToString("N")))).ToArray();
+                    (Source: a, Native: new NativeNotificationAction(_windows ? SecurityElement.Escape(a.Label) : a.Label,
+                        Guid.NewGuid().ToString("N")))).ToArray();
                 native.SetActions(actions.Select(a => a.Native).ToArray());
                 var actionIds = actions.ToDictionary(a => a.Native.Tag, a => a.Source.Id, StringComparer.Ordinal);
                 _pending.Add(notification.Id, new(notification, native, actionIds, activated));

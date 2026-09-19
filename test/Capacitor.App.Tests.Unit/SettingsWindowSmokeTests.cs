@@ -34,12 +34,17 @@ public class SettingsWindowSmokeTests {
             window.Show();
             Dispatcher.UIThread.RunJobs();
             var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            var daemonTab = window.FindControl<TabItem>("DaemonTab")!;
             var name = window.FindControl<TextBox>("NameInput")!;
             var capacity = window.FindControl<NumericUpDown>("CapacityInput")!;
             var save = window.FindControl<Button>("SaveButton")!;
             var rename = window.FindControl<Button>("RenameButton")!;
             await Assert.That(name.Text).IsEqualTo("daemon-a");
             await Assert.That(tabs.SelectedIndex).IsEqualTo(0);
+            Settle(window);
+            var selectedPipe = daemonTab.GetVisualDescendants().OfType<Border>()
+                .Single(x => x.Name == "PART_SelectedPipe");
+            await Assert.That(ReferenceEquals(selectedPipe.Background, window.FindResource("KcapInfoBrush"))).IsTrue();
             await Assert.That(name.Classes.Contains("kcapField")).IsTrue();
             await Assert.That(capacity.Value).IsEqualTo(5m);
             await Assert.That(capacity.Classes.Contains("kcapField")).IsTrue();
@@ -89,6 +94,27 @@ public class SettingsWindowSmokeTests {
             tabs.SelectedIndex = 0;
             Dispatcher.UIThread.RunJobs();
             await Assert.That(name.IsEffectivelyVisible).IsTrue();
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Notification_toggle_can_be_dragged_without_crashing() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 1;
+            Settle(window);
+            var permissions = window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!;
+
+            Drag(window, permissions, permissions.Bounds.Width - 9, -24);
+
+            await WaitUntilAsync(() => !notifications.Current.Permissions);
+            await Assert.That(permissions.IsChecked).IsFalse();
         } finally { window.Close(); }
     });
 
@@ -178,6 +204,17 @@ public class SettingsWindowSmokeTests {
             ?? throw new InvalidOperationException("Click target is not under the window.");
         window.MouseDown(centre, MouseButton.Left);
         window.MouseUp(centre, MouseButton.Left);
+        Settle(window);
+    }
+
+    static void Drag(Window window, Control target, double startX, double deltaX) {
+        Settle(window);
+        var start = target.TranslatePoint(new Point(startX, target.Bounds.Height / 2), window)
+            ?? throw new InvalidOperationException("Drag target is not under the window.");
+        var end = new Point(start.X + deltaX, start.Y);
+        window.MouseDown(start, MouseButton.Left);
+        window.MouseMove(end);
+        window.MouseUp(end, MouseButton.Left);
         Settle(window);
     }
 }

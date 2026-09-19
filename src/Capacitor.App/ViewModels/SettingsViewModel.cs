@@ -275,12 +275,14 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     }
 
     async Task PersistNotificationPreferencesAsync(NotificationPreferences preferences) {
+        if (_notificationSettings is null) return;
+        var saved = false;
         try {
-            if (_notificationSettings is null || await _notificationSettings.SaveAsync(preferences)) return;
+            saved = await _notificationSettings.SaveAsync(preferences);
         } catch {
         }
         if (_lifetime.IsCancellationRequested) return;
-        NotificationMessage = "Could not save notification settings. The change still applies for this run.";
+        NotificationMessage = saved ? null : "Could not save notification settings. The change still applies for this run.";
     }
 
     void Refresh() {

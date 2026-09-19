@@ -19,6 +19,14 @@ public class NativeDesktopNotificationSinkTests {
     }
 
     [Test]
+    public async Task Windows_action_labels_escape_agent_supplied_scope_names() {
+        var manager = new Manager();
+        using var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: true);
+        sink.Show(new("scope", "Permission", "Command", [new("always", "Always for user's <project>")]), _ => { });
+        await Assert.That(manager.Created.Single().Actions.Single().Caption).IsEqualTo("Always for user&apos;s &lt;project&gt;");
+    }
+
+    [Test]
     public async Task Linux_button_activation_keeps_its_action_even_when_IsActivated_is_true() {
         var manager = new Manager();
         using var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: false);

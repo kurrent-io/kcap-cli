@@ -98,7 +98,7 @@ internal sealed class AcpPermissionSurface(
         var options = request.Options ?? [];
         return pending with {
             SupportsAllowOnce = PickAllow(options, preferAlways: false) is not null,
-            SupportsAllowAlways = options.Any(option => option.Kind == "allow_always"),
+            SupportsAllowAlways = options.Count(option => option.Kind == "allow_always") == 1,
         };
     }
 

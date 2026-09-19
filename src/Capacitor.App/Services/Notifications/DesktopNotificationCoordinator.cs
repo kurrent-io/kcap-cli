@@ -97,7 +97,9 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         var retained = new HashSet<string>(StringComparer.Ordinal);
         foreach (var notice in _notices.Values.Where(n => n.Request is not null).ToArray()) {
             var current = _pending.Where(p => SameRequest(p, notice.Request!)).OrderBy(p => p.Lane).FirstOrDefault();
-            if (current is null || RowFor(current) is not { } row || !Enabled(current) || !retained.Add(current.Key)) {
+            if (current is null && notice.Request!.SubscriptionLost)
+                foreach (var alias in Aliases(notice.Request)) _seenRequests.Remove(alias);
+            if (current is null || RowFor(current, allowStale: true) is not { } row || !Enabled(current) || !retained.Add(current.Key)) {
                 Close(notice.Id);
                 continue;
             }
@@ -121,16 +123,16 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         }
     }
 
-    AgentRow? RowFor(PendingPermissionRequest request) {
+    AgentRow? RowFor(PendingPermissionRequest request, bool allowStale = false) {
         if (request.Lane == PermissionLane.Local) {
             if (_rows.TryGetValue($"local:{request.AgentId}", out var local)) return local;
             // Directory rows can switch lanes before the pending permission feed does.
-            return _localOnAppServer && !_remoteStale
+            return _localOnAppServer && (!_remoteStale || allowStale)
                 ? _rows.Values.FirstOrDefault(r => r.Origin == AgentOrigin.Remote &&
                     r.Id == request.AgentId && r.SessionId == request.SessionId)
                 : null;
         }
-        if (_remoteStale) return null;
+        if (_remoteStale && !allowStale) return null;
         return _rows.Values.Where(r => r.SessionId == request.SessionId &&
                 (r.Origin == AgentOrigin.Remote || r.Origin == AgentOrigin.Local && _localOnAppServer))
             .OrderBy(r => r.Origin).FirstOrDefault();
@@ -179,13 +181,18 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         if (request is null) return [new("open", "Open agent")];
         if (Question(request)) return [new("open", "Respond in app")];
         var actions = new List<DesktopNotificationAction>();
+        if (!CanAnswer(request, "allow")) actions.Add(new("open", "Open agent"));
         foreach (var (id, label) in new[] { ("allow", "Allow"), ("always", "Always"), ("decline", "Decline") })
-            if (CanAnswer(request, id)) actions.Add(new(id, label));
+            if (CanAnswer(request, id)) {
+                var scopeLabel = id == "always" ? request.Options?.FirstOrDefault(o => o.Kind == "allow_always")?.Label : null;
+                actions.Add(new(id, string.IsNullOrWhiteSpace(scopeLabel) ? label : scopeLabel));
+            }
         return actions.Count > 0 ? actions : [new("open", "Open agent")];
     }
 
     static string? OptionFor(PendingPermissionRequest request, string action) {
         var kind = action switch { "allow" => "allow_once", "always" => "allow_always", "decline" => "reject_once", _ => null };
+        if (action == "always" && request.Options?.Count(o => o.Kind == kind) != 1) return null;
         return kind is null ? null : request.Options?.FirstOrDefault(o => o.Kind == kind)?.OptionId;
     }
 
