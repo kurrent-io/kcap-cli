@@ -6,6 +6,10 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class PluginCommandSkillsTests {
     [Test]
+    public async Task Eval_watch_is_an_owned_skill() =>
+        await Assert.That(AgentsSkillsInstaller.SourceNames).Contains("eval-watch");
+
+    [Test]
     public async Task Install_with_both_codex_and_skills_flags_returns_error() {
         using var tmp = new TempDir();
         var capturedErr = new StringWriter();

@@ -416,14 +416,19 @@ sealed class SetupMachineActions(TimeProvider time) : IFirstRunMachineActions {
     }
 }
 
-public sealed class SetupCommand(
+sealed class SetupCommand(
         ConfigRoot config, ProfileContext profiles,
         TokenStore store, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
+        IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
         BinaryProbe binaries) {
+    /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
+    /// test so the handoff picker never opens a console prompt. A non-null result other than
+    /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
+    internal Func<IReadOnlyList<string>, string?>? PickHandoffVendor { get; set; }
 
     public async Task<int> HandleAsync(string[] args) {
         if (args.Contains("--discover")) return await RunDiscoverOnlyAsync(args);
@@ -991,20 +996,27 @@ public sealed class SetupCommand(
         // "usable token" = refresh-aware (mirrors the import path's own auth): an expired but
         // refreshable token still counts. The probe is wrapped so a token I/O / refresh failure
         // degrades to an ineligible (best-effort) skip rather than throwing out of setup — the
-        // import path's own errors are caught inside RunImportStepAsync, and this eligibility
+        // import runner itself never throws (it reports a Fault instead), and this eligibility
         // probe (awaited outside that boundary) must be equally non-fatal.
         // Server-scoped: the import step is only actually authorized if the token both refreshes
         // and belongs to the server we just configured.
         var authSatisfied = await IsAuthSatisfiedAsync(
             provider, async () => (await store.GetValidTokensForServerAsync(activeName, serverUrl)).Tokens is not null);
 
-        await RunImportStepAsync(
-            currentRepo, authSatisfied, skipImport, noPrompt,
-            () => AnsiConsole.Prompt(new ConfirmationPrompt("Import past sessions from this repository?") { DefaultValue = true }),
-            saved,
-            defaultVisibility,
-            browserAnswers.Import,
-            browserAnswers.ImportFailed);
+        var importResult = await RunImportStepAsync(new ImportStepInputs(
+            AuthSatisfied:       authSatisfied,
+            SkipImport:          skipImport,
+            NoPrompt:            noPrompt,
+            PromptYesNo:         () => AnsiConsole.Prompt(new ConfirmationPrompt(ImportPrompt) { DefaultValue = true }),
+            Profiles:            saved,
+            ProfileName:         activeName,
+            ServerUrl:           serverUrl,
+            DefaultVisibility:   defaultVisibility,
+            CurrentRepo:         currentRepo,
+            WorkingDirectory:    workdir.Path,
+            Paths:               stepPaths,
+            BrowserImport:       browserAnswers.Import,
+            BrowserImportFailed: browserAnswers.ImportFailed));
 
         await Console.Out.WriteLineAsync();
 
@@ -1055,9 +1067,10 @@ public sealed class SetupCommand(
         }
 
         AnsiConsole.MarkupLine("\n  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
-        AnsiConsole.MarkupLine("  [dim]Optional:[/] import past sessions with [cyan]kcap import --org[/]");
 
-        WriteNextSteps(ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths));
+        WriteNextSteps(
+            ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
+            importResult.PasteBlock);
 
         // Same fields as Result.AnyHooksInstalled, counted instead of OR'd: CodingAgentsStep
         // doesn't surface a count directly, so this sums the per-vendor hook-install outcomes
@@ -1075,11 +1088,11 @@ public sealed class SetupCommand(
     }
 
     /// <summary>The closing "Next steps" box: a question per item, its answer indented beneath.</summary>
-    static void WriteNextSteps(bool offerGuidedTour) {
+    static void WriteNextSteps(bool offerGuidedTour, string? handoffPaste) {
         var rows = new List<IRenderable>();
 
         // Padder, not a "  " prefix: these lines wrap, and a prefix indents only the first of them.
-        foreach (var (question, answer) in NextStepItems(offerGuidedTour)) {
+        foreach (var (question, answer) in NextStepItems(offerGuidedTour, handoffPaste)) {
             if (rows.Count > 0) rows.Add(Text.Empty);
 
             rows.Add(new Markup($"[bold]{Markup.Escape(question)}[/]"));
@@ -1094,12 +1107,19 @@ public sealed class SetupCommand(
                 .Padding(1, 0));
     }
 
-    /// <summary>The box's (question, answer-markup) pairs, split from the write so copy is testable.</summary>
-    internal static List<(string Question, string Answer)> NextStepItems(bool offerGuidedTour) {
+    /// <summary>The box's (question, answer-markup) pairs, split from the write so copy is testable.
+    /// <paramref name="handoffPaste"/> lands above the guided-tour item, when offered.</summary>
+    internal static List<(string Question, string Answer)> NextStepItems(
+            bool offerGuidedTour, string? handoffPaste = null) {
         var items = new List<(string, string)> {
             (ServerSetupQuestion,
              $"{Markup.Escape(ServerSetupAction)}\n[cyan]{Markup.Escape(ServerSetupDocsUrl)}[/]"),
         };
+
+        if (handoffPaste is not null) {
+            items.Add((EvalWatchQuestion,
+                       $"Paste this into your coding agent:\n[cyan]{Markup.Escape(handoffPaste)}[/]"));
+        }
 
         if (offerGuidedTour) {
             // Markup-safe: the quoted prompt has no [ or ], so escaping leaves it a plain substring.
@@ -1128,19 +1148,25 @@ public sealed class SetupCommand(
       || AgentsSkillsInstaller.HasSkill(paths.AntigravitySkillsDir, GuidedTourSkillName));
 
     /// <summary>
-    /// The plugin is registered AND the directory Claude loads it from ships the skill. The
-    /// registered marketplace path in settings is the artifact that matters — <paramref
-    /// name="pluginDir"/> is only where THIS build would install from, and after an upgrade the
-    /// two can differ. Falls back to it when nothing is registered; false when neither resolves,
-    /// because an unverifiable skill must not be advertised.
+    /// The plugin is registered AND the directory Claude loads it from ships the guided-tour skill.
     /// </summary>
-    static bool ClaudeCarriesGuidedTour(string claudeSettingsPath, string? pluginDir) {
+    static bool ClaudeCarriesGuidedTour(string claudeSettingsPath, string? pluginDir) =>
+        ClaudeCarriesSkill(claudeSettingsPath, pluginDir, GuidedTourSkillName);
+
+    /// <summary>
+    /// The plugin is registered AND the directory Claude loads it from ships <paramref
+    /// name="skillName"/>. The registered marketplace path in settings is the artifact that matters
+    /// — <paramref name="pluginDir"/> is only where THIS build would install from, and after an
+    /// upgrade the two can differ. Falls back to it when nothing is registered; false when neither
+    /// resolves, because an unverifiable skill must not be advertised.
+    /// </summary>
+    internal static bool ClaudeCarriesSkill(string claudeSettingsPath, string? pluginDir, string skillName) {
         if (!ClaudePluginInstaller.IsInstalled(claudeSettingsPath)) return false;
 
         var dir = ClaudePluginInstaller.RegisteredMarketplacePath(claudeSettingsPath) ?? pluginDir;
 
         return dir is not null
-            && File.Exists(Path.Combine(dir, "skills", GuidedTourSkillName, "SKILL.md"));
+            && File.Exists(Path.Combine(dir, "skills", skillName, "SKILL.md"));
     }
 
     /// <summary>Source folder name under <c>kcap/skills/</c>; <c>kcap-</c>-prefixed once installed.</summary>
@@ -1163,6 +1189,26 @@ public sealed class SetupCommand(
 
     internal const string GuidedTourCallToAction = $"{GuidedTourQuestion} {GuidedTourAction}";
 
+    /// <summary>Verbatim, pinned by <c>SetupCommandTests</c>.</summary>
+    internal const string ImportPrompt = "Import past sessions from this machine?";
+
+    internal const string EvalWatchQuestion = "Want to watch your import and its evals from your agent?";
+
+    /// <summary>The one place this skill's name is spelled — <see cref="HandoffVendorEligibility.SkillName"/>
+    /// and the skill's own source folder must both agree with it.</summary>
+    internal const string EvalWatchSkillName = HandoffVendorEligibility.SkillName;
+
+    /// <summary>
+    /// Verbatim, pinned by <c>SetupCommandTests</c> and matched against the eval-watch skill's own
+    /// frontmatter description. Carries the run id so concurrent runs stay distinguishable.
+    /// </summary>
+    internal const string EvalWatchPrompt = "Follow my kcap import";
+
+    internal static string HandoffPromptText(string runId) => $"{EvalWatchPrompt}\n(run: {runId})";
+
+    internal const string HandoffPickerTitle =
+        "Open a coding agent to follow the import and its evals? (setup will finish after you close the agent)";
+
     /// <summary>
     /// Server setup lives in the dashboard, so this can only be pointed at. Always printed: who owns
     /// the server is not knowable here, so the reader self-selects on the question. Says "server",
@@ -1178,9 +1224,9 @@ public sealed class SetupCommand(
     /// <summary>
     /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
     /// token; any other provider needs a usable (valid-or-refreshable) token. The token probe is
-    /// injected so it's testable, and any exception it throws is treated as "not satisfied" — this
-    /// probe is awaited OUTSIDE <see cref="RunImportStepAsync"/>'s try/catch, so it must never
-    /// throw out of setup (the optional import failing must not fail <c>kcap setup</c>).
+    /// injected so it's testable, and any exception it throws is treated as "not satisfied" — the
+    /// import step itself never throws (see <see cref="RunImportStepAsync"/>), and this eligibility
+    /// probe, awaited before it runs, must be equally non-fatal.
     /// </summary>
     internal static async Task<bool> IsAuthSatisfiedAsync(string provider, Func<Task<bool>> hasUsableToken) {
         if (provider == AuthProvider.None) return true;
@@ -1192,64 +1238,260 @@ public sealed class SetupCommand(
         }
     }
 
+    /// <summary>The foreground pass's session cap: how many sessions setup imports inline before
+    /// handing the remainder of the machine's history to the background child.</summary>
+    internal const int ForegroundImportCap = 5;
+
+    /// <summary>Everything <see cref="RunImportStepAsync"/> needs, so the step is callable without
+    /// driving the whole wizard.</summary>
+    internal sealed record ImportStepInputs(
+        bool                          AuthSatisfied,
+        bool                          SkipImport,
+        bool                          NoPrompt,
+        Func<bool>                    PromptYesNo,
+        ProfileContext                Profiles,
+        string                        ProfileName,
+        string                        ServerUrl,
+        string                        DefaultVisibility,
+        (string Owner, string Name)? CurrentRepo,
+        string                        WorkingDirectory,
+        CodingAgentsStep.Paths        Paths,
+        FirstRunImportAnswer?         BrowserImport,
+        bool                          BrowserImportFailed);
+
+    /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
+    /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
+    /// is non-null exactly when the caller must show it — no eligible vendor was launched.</summary>
+    internal sealed record ImportStepResult(bool Ran, string? RunId, HandoffDecision? Handoff, string? PasteBlock);
+
     /// <summary>
-    /// Step 6 (import past sessions) decision + best-effort execution, extracted from
-    /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
-    /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
-    /// actual import call goes through the injected <see cref="ISetupImportRunner"/> so a test can
-    /// intercept the invocation instead of running a real import. Import is best-effort: a thrown
-    /// exception or a non-zero
-    /// exit code is reported with a warning and swallowed — this method never throws and never
-    /// fails setup.
+    /// Setup's import step (import past sessions, machine-wide), extracted from <see cref="HandleAsync"/>
+    /// so it's unit-testable without driving the whole wizard: discovery figures, the accept/decline prompt,
+    /// a capped foreground pass, a background child for the remainder, the eval-watch handoff
+    /// decision and its file, and the agent picker. Every collaborator it calls
+    /// (<see cref="ISetupImportRunner"/>, <see cref="IBackgroundImportSpawner"/>,
+    /// <see cref="IHandoffAgentLauncher"/>) is total, so this method never throws and never fails
+    /// setup; a handoff-file write failure is caught and warned about here specifically, since
+    /// <see cref="ImportHandoffFile.Write"/> is the one call in this step that still can.
     /// </summary>
-    internal async Task RunImportStepAsync(
-            (string Owner, string Name)? currentRepo,
-            bool                          authSatisfied,
-            bool                          skipImport,
-            bool                          noPrompt,
-            Func<bool>                    promptYesNo,
-            ProfileContext                profiles,
-            string                        defaultVisibility,
-            FirstRunImportAnswer?         browserImport = null,
-            bool                          browserImportFailed = false) {
+    internal async Task<ImportStepResult> RunImportStepAsync(ImportStepInputs inputs) {
         // Asked and answered in the browser, over a repository selection this step cannot express —
         // so it reports rather than prompting. Re-prompting would offer to import one repository
         // again, right after a screen that chose several.
-        if (browserImport is { } browser) {
-            foreach (var line in BrowserImportSummary(browser, browserImportFailed)) AnsiConsole.MarkupLine(line);
+        if (inputs.BrowserImport is { } browser) {
+            foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed)) AnsiConsole.MarkupLine(line);
 
-            return;
+            return new ImportStepResult(false, null, null, null);
+        }
+
+        var unattributedOnDisk = 0;
+
+        // Discovery only earns its scan when the decision below would otherwise prompt: a skip or an
+        // unattended --no-prompt run has no use for figures nobody sees.
+        if (inputs.AuthSatisfied && !inputs.SkipImport && !inputs.NoPrompt) {
+            var discovery = await imports.DiscoverAsync(inputs.Profiles);
+
+            if (discovery.Fault is { } fault) {
+                AnsiConsole.MarkupLine(
+                    $"  [yellow]![/] Could not scan for past sessions: {Markup.Escape(fault.Message)}. "
+                  + "Run [cyan]kcap import --all[/] to try again.");
+
+                return new ImportStepResult(false, null, null, null);
+            }
+
+            var summary    = discovery.Result!.Summary;
+            var repos      = summary.Repos.Count;
+            var attributed = summary.Repos.Sum(r => r.SessionCount);
+            unattributedOnDisk = summary.UnmatchedCount;
+
+            if (attributed + unattributedOnDisk == 0) {
+                AnsiConsole.MarkupLine("  No past sessions found on this machine.");
+
+                return new ImportStepResult(false, null, null, null);
+            }
+
+            PrintDiscovery(repos, attributed, unattributedOnDisk);
         }
 
         var decision = SetupDecisions.DecideImport(
-            currentRepo is not null, authSatisfied, skipImport, noPrompt, promptYesNo);
+            inputs.AuthSatisfied, inputs.SkipImport, inputs.NoPrompt, inputs.PromptYesNo);
 
         if (decision.Outcome == SetupDecisions.ImportOutcome.Skip) {
-            if (decision.SkipReason is not null)
-                AnsiConsole.MarkupLine($"  [dim]Skipping import — {Markup.Escape(decision.SkipReason)}.[/]");
+            AnsiConsole.MarkupLine(decision.SkipReason is { } reason
+                ? $"  [dim]Skipping import — {Markup.Escape(reason)}.[/]"
+                : "  [dim]Run [cyan]kcap import --all[/] any time.[/]");
 
-            return;
+            return new ImportStepResult(false, null, null, null);
         }
 
-        // Run: DecideImport only returns Run when hasCurrentRepo was true, so currentRepo is
-        // guaranteed non-null here.
-        var invocation = new ImportInvocation(
-            Repo:               currentRepo!.Value,
-            DefaultVisibility:  defaultVisibility,
-            AutoSkipExclusions: true,
-            ForcePrivate:       false,
-            Profiles:           profiles);
+        if (inputs.NoPrompt) {
+            var run = await imports.RunAsync(new ImportInvocation(
+                Scope:              new ImportScope.All(),
+                MaxSessions:        null,
+                CurrentRepo:        inputs.CurrentRepo,
+                DefaultVisibility:  inputs.DefaultVisibility,
+                AutoSkipExclusions: true,
+                ForcePrivate:       false,
+                SkipTitle:          false,
+                Profiles:           inputs.Profiles));
 
-        try {
-            var exitCode = await imports.RunAsync(invocation);
-
-            if (exitCode != 0) {
+            if (run.Fault is { } ex) {
+                AnsiConsole.MarkupLine(
+                    $"  [yellow]⚠[/] Import of past sessions failed: {Markup.Escape(ex.Message)}. Run [cyan]kcap import[/] manually to retry.");
+            } else if (run.ExitCode != 0 || run.Outcome?.AnythingFailed == true) {
                 AnsiConsole.MarkupLine(
                     "  [yellow]⚠[/] Import of past sessions did not complete. Run [cyan]kcap import[/] manually to retry.");
             }
-        } catch (Exception ex) {
+
+            return new ImportStepResult(true, null, null, null);
+        }
+
+        var runId = Guid.NewGuid().ToString("N");
+
+        var foreground = await imports.RunAsync(new ImportInvocation(
+            Scope:              new ImportScope.All(),
+            MaxSessions:        ForegroundImportCap,
+            CurrentRepo:        inputs.CurrentRepo,
+            DefaultVisibility:  inputs.DefaultVisibility,
+            AutoSkipExclusions: true,
+            ForcePrivate:       false,
+            SkipTitle:          false,
+            Profiles:           inputs.Profiles));
+
+        var outcome = ForegroundImportOutcome.From(foreground);
+
+        if (foreground.Fault is { } foregroundFault) {
             AnsiConsole.MarkupLine(
-                $"  [yellow]⚠[/] Import of past sessions failed: {Markup.Escape(ex.Message)}. Run [cyan]kcap import[/] manually to retry.");
+                $"  [yellow]⚠[/] Import of past sessions failed: {Markup.Escape(foregroundFault.Message)}. Run [cyan]kcap import[/] manually to retry.");
+        }
+
+        var launch = outcome.RemainderExists || outcome.Failed > 0 || outcome.Certainty == ForegroundCertainty.Incomplete
+            ? spawner.Spawn(new BackgroundImportRequest(runId, inputs.ProfileName, inputs.DefaultVisibility, inputs.WorkingDirectory))
+            : BackgroundImportLaunch.NotNeeded;
+
+        PrintBackground(launch);
+
+        var analyticsAllowed = PlanEntitlementStore.Get(inputs.ServerUrl, config, time.GetUtcNow()).Allows(PlanFeature.Analytics);
+        var eligible          = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
+        var detectedVendors   = HandoffVendorEligibility.Detected(harnesses);
+
+        var handoff = HandoffDecision.Decide(outcome, launch.Status, analyticsAllowed, eligible.Count, detectedVendors);
+
+        // Best-effort: Write's own contract already leaves no temp behind on failure, so the only
+        // thing this step adds is the warning and the promise to carry on regardless.
+        try {
+            ImportHandoffFile.Compose(
+                    runId, time.GetUtcNow(), handoff.Offered, handoff.Reason, outcome, launch,
+                    inputs.ServerUrl, inputs.ProfileName, unattributedOnDisk)
+                .Write(config, time);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            AnsiConsole.MarkupLine($"  [yellow]![/] Could not write the import handoff file: {Markup.Escape(ex.Message)}");
+        }
+
+        if (!handoff.Offered) {
+            PrintSuppressed(handoff.Reason!.Value, inputs.ServerUrl);
+
+            return new ImportStepResult(true, runId, handoff, null);
+        }
+
+        var pasteBlock = OfferHandoff(inputs, runId, eligible);
+
+        return new ImportStepResult(true, runId, handoff, pasteBlock);
+    }
+
+    static void PrintDiscovery(int repos, int attributed, int unmatched) =>
+        AnsiConsole.MarkupLine(
+            $"  Found {repos} repositor{(repos == 1 ? "y" : "ies")}, "
+          + $"{attributed} session{(attributed == 1 ? "" : "s")} attributed, "
+          + $"{unmatched} session{(unmatched == 1 ? "" : "s")} on disk with no repository match.");
+
+    static void PrintBackground(BackgroundImportLaunch launch) {
+        var log = Markup.Escape(launch.LogPath ?? "");
+
+        switch (launch.Status) {
+            case BackgroundImportStatus.Running:
+                AnsiConsole.MarkupLine($"  Importing the remaining sessions in the background · log: {log}");
+                break;
+            case BackgroundImportStatus.ExitedZero:
+                AnsiConsole.MarkupLine($"  Background import exited immediately (exit 0) — details in {log}");
+                break;
+            case BackgroundImportStatus.Failed:
+                var code = launch.ExitCode is { } c ? $" (exit {c})" : "";
+                AnsiConsole.MarkupLine(
+                    $"  [yellow]![/] Background import did not start{code}: {Markup.Escape(launch.Error ?? "unknown error")}. "
+                  + "Run [cyan]kcap import --all --yes[/] to import the rest.");
+                break;
+            case BackgroundImportStatus.NotNeeded:
+            default:
+                break;
+        }
+    }
+
+    /// <summary>A suppression tied to the import's own outcome (nothing new, nothing landed, or it
+    /// failed) prints nothing beyond what the step already said; one tied to eligibility (plan, skill,
+    /// detection) names the reason. With no agent able to follow along, the two detection-tied
+    /// reasons also point at the web UI, so the run is still watchable.</summary>
+    static void PrintSuppressed(HandoffSuppressedReason reason, string serverUrl) {
+        var line = reason switch {
+            HandoffSuppressedReason.AnalyticsNotInPlan =>
+                "  Insights isn't in this workspace's plan, so the eval-watch handoff is skipped.",
+            HandoffSuppressedReason.SkillNotInstalled =>
+                $"  No detected agent has the kcap {EvalWatchSkillName} skill.",
+            HandoffSuppressedReason.NoAgentDetected =>
+                "  No coding agent detected to hand off to.",
+            _ => null
+        };
+
+        if (line is not null) AnsiConsole.MarkupLine(line);
+
+        if (reason is HandoffSuppressedReason.SkillNotInstalled or HandoffSuppressedReason.NoAgentDetected) {
+            // Point at ended sessions: those are the ones far enough along to carry eval results.
+            var sessionsUrl = Markup.Escape($"{serverUrl.TrimEnd('/')}/sessions?status=ended");
+            AnsiConsole.MarkupLine($"  Watch the import and its evals in the Capacitor UI: [cyan]{sessionsUrl}[/]");
+
+            if (reason == HandoffSuppressedReason.SkillNotInstalled) {
+                AnsiConsole.MarkupLine(
+                    "  Or run [cyan]kcap plugin install[/] (with the agent's flag) so a future run can follow automatically.");
+            }
+        }
+    }
+
+    const string SkipHandoffVendor = "Skip";
+
+    /// <summary>The picker, then either a blocking launch or the paste block. Returns the paste
+    /// block text when the caller must show it — skip, cancel, a non-launchable pick, or a launch
+    /// failure — and null once an agent actually ran.</summary>
+    string? OfferHandoff(ImportStepInputs inputs, string runId, IReadOnlyList<HandoffVendor> eligible) {
+        var prompt = HandoffPromptText(runId);
+        var labels = new List<string>(eligible.Select(v => v.Label)) { SkipHandoffVendor };
+
+        var picked = PickHandoffVendor is { } pick
+            ? pick(labels) ?? SkipHandoffVendor
+            : PromptHandoffVendor(labels);
+
+        var vendor = picked == SkipHandoffVendor ? null : eligible.FirstOrDefault(v => v.Label == picked);
+
+        if (vendor is null || !vendor.Launchable) return prompt;
+
+        var result = launcher.Launch(new HandoffLaunchRequest(vendor, prompt, inputs.ProfileName, inputs.WorkingDirectory));
+
+        if (result.Status == HandoffLaunchStatus.LaunchFailed) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]![/] Could not launch {Markup.Escape(vendor.Label)}: {Markup.Escape(result.Error ?? "unknown error")}.");
+
+            return prompt;
+        }
+
+        return null;
+    }
+
+    /// <summary>The real picker. Cancelling (Esc) surfaces as an exception from Spectre; caught here
+    /// and folded into the same outcome as choosing Skip.</summary>
+    static string PromptHandoffVendor(IReadOnlyList<string> labels) {
+        try {
+            return AnsiConsole.Prompt(new SelectionPrompt<string>().Title(HandoffPickerTitle).AddChoices(labels));
+        } catch {
+            return SkipHandoffVendor;
         }
     }
 
