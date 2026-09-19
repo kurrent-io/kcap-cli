@@ -110,6 +110,11 @@ comes back turns the presentation off again. A repeated notification for an earl
 ends a later launch of the same agent id: a known call id decides alone, and an agent-id-only finish
 dated before the row started belongs to an earlier execution.
 
+A notification that lands while the parent is mid-turn is not a user line at all: Claude Code writes
+it as a `queued_command` attachment in `commandMode: task-notification`, so the leaf projects that
+shape into the user line it would otherwise have been. A notification delivered both ways — mid-turn
+and again once the parent goes idle — settles its row once and shows its note twice.
+
 ## The pull request reader renders GitHub-flavoured markdown
 
 Review bots write their findings almost entirely in HTML, and the reader showed the markup as
