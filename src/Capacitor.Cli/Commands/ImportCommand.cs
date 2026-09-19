@@ -2109,8 +2109,13 @@ class ImportCommand(
     internal static DateTimeOffset ChainTimestamp(SessionClassification c) {
         if (c.Meta.FirstTimestamp is { } ts) return ts;
 
+        // A file that vanished between discovery and ordering makes GetLastWriteTimeUtc return the
+        // 1601 sentinel instead of throwing; treat any missing/unreadable path as an unknown
+        // timestamp so it sorts last, never as a real (ancient) time.
         try {
-            return new DateTimeOffset(File.GetLastWriteTimeUtc(c.FilePath), TimeSpan.Zero);
+            return File.Exists(c.FilePath)
+                ? new DateTimeOffset(File.GetLastWriteTimeUtc(c.FilePath), TimeSpan.Zero)
+                : DateTimeOffset.MinValue;
         } catch {
             return DateTimeOffset.MinValue;
         }

@@ -40,12 +40,23 @@ if (args is ["mcp", "review"] &&
 // to arm if the parent is already gone. Installing later leaves a window where
 // the launching agent can exit during that startup work — the watchdog then
 // never starts and the very first prompt still orphans us.
-// The detached remainder import (setup's background child) is meant to OUTLIVE the setup parent,
-// so it must not arm the parent-liveness watchdog — it would Exit(130) the import seconds after
-// setup returns. It has no terminal, prompts or Ctrl-C either, so skip the lifetime install whole.
-var isDetachedImport = command == "import"
-    && DetachedImportLog.FromEnvironment(Environment.GetEnvironmentVariable) is not null;
-if (InteractiveLifetime.IsInteractiveCommand(command) && !isDetachedImport) {
+// The detached remainder import (setup's background child) must OUTLIVE the setup parent. Detach it
+// HERE — before the potentially slow profile/repo resolution in the import case — so a parent exit
+// and terminal close during startup can't SIGHUP-kill it before it reaches setsid. Skipping the
+// interactive lifetime also drops its parent-liveness watchdog, which would Exit(130) the child
+// ~3s after setup returns; a detached import has no terminal, prompts or Ctrl-C anyway.
+var detachedImport = command == "import"
+    ? DetachedImportLog.FromEnvironment(Environment.GetEnvironmentVariable)
+    : null;
+StreamWriter? detachedImportLog = null;
+if (detachedImport is not null) {
+    detachedImportLog = detachedImport.Open();
+    Console.SetOut(detachedImportLog);
+    Console.SetError(detachedImportLog);
+    ProcessHelpers.DetachFromControllingTerminal();
+    ProcessHelpers.IgnoreHangup();
+}
+if (InteractiveLifetime.IsInteractiveCommand(command) && detachedImport is null) {
     InteractiveLifetime.Install();
 }
 
@@ -695,20 +706,8 @@ switch (command) {
             return 1;
         }
 
-        var detached = DetachedImportLog.FromEnvironment(Environment.GetEnvironmentVariable);
-        StreamWriter? detachedLog = null;
-        if (detached is not null) {
-            detachedLog = detached.Open();
-            Console.SetOut(detachedLog);
-            Console.SetError(detachedLog);
-            ProcessHelpers.DetachFromControllingTerminal();
-
-            // setsid() moves the child out of the parent's session, but the kernel still sends
-            // SIGHUP when the exiting setup parent's session ends; its default action would kill
-            // this detached import mid-run, so drop SIGHUP at the kernel level.
-            ProcessHelpers.IgnoreHangup();
-        }
-
+        // The detached import already opened its log, redirected output and detached at startup
+        // (before this potentially slow resolution) so a parent exit can't truncate it.
         try {
             return await Run<ImportCommand>().HandleImport(
                 filterCwd,
@@ -724,13 +723,13 @@ switch (command) {
                 currentRepo:             currentRepo,
                 needOrgPick:             resolveResult.NeedOrgPick,
                 storedOrg:               storedOrg,
-                defaultVisibility:       detached?.DefaultVisibility,
+                defaultVisibility:       detachedImport?.DefaultVisibility,
                 reimport:                reimport,
                 skipTitle:               skipTitle,
                 discoverOnly:            discoverOnly,
                 discoverJson:            discoverJson);
         } finally {
-            detachedLog?.Dispose();
+            detachedImportLog?.Dispose();
         }
     }
     case "watch" when args.Length < 3:

@@ -42,6 +42,28 @@ public class ImportOrderingTests {
     }
 
     [Test]
+    public async Task A_vanished_file_based_transcript_sorts_as_unknown_not_ancient() {
+        // A transcript that disappears between discovery and ordering must read as an unknown
+        // timestamp (MinValue, sorts last), never as the 1601 sentinel GetLastWriteTimeUtc returns.
+        var gone = new ImportCommand.SessionClassification {
+            SessionId  = "gone",
+            FilePath   = "/nonexistent/kcap-gone-3f9c.jsonl",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata { FirstTimestamp = null },
+            Status     = ImportCommand.ClassificationStatus.New,
+        };
+
+        await Assert.That(ImportCommand.ChainTimestamp(gone)).IsEqualTo(DateTimeOffset.MinValue);
+
+        var items = new List<ImportCommand.SessionClassification> { Routed("known", "2026-02-01T00:00:00Z"), gone, Routed("none", null) };
+        items.Sort(ImportOrdering.Candidate);
+
+        await Assert.That(items[0].SessionId).IsEqualTo("known");         // real timestamp first
+        await Assert.That(items[1].SessionId).IsEqualTo("none");          // unknowns last, id descending
+        await Assert.That(items[2].SessionId).IsEqualTo("gone");
+    }
+
+    [Test]
     public async Task Routed_dispatch_uses_the_same_rule_as_candidates() {
         var a = Routed("a", "2026-03-01T00:00:00Z");
         var b = Routed("b", "2026-01-01T00:00:00Z");
