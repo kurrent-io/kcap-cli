@@ -17,6 +17,10 @@ Subcommands:
                           list a session's work-item attachments and structure.
   plans                   Start the MCP plans server (stdio) — declare the plan
                           document and task list a session executes.
+  analytics               Start the MCP analytics server (stdio) — governed
+                          read-only SQL over the org's coding-agent analytics.
+  artefacts               Start the MCP artefacts server (stdio) — publish a
+                          self-contained HTML page and get back a link.
 
 Options for review:
   --owner <owner>         Repository owner (session default)
@@ -188,10 +192,40 @@ mcp analytics:
       # desktop app launches with no shell PATH, so command
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
+mcp artefacts:
+  Exposes six tools for an agent to publish a self-contained HTML page (a plan,
+  a report, a comparison), hand back a link, and wait for people to answer it.
+
+    publish_artefact          Publish a page and get its URL. `update_id`
+                               revises an existing artefact without changing
+                               that URL; `response_schema` makes it answerable.
+    await_artefact_responses  Block until min_respondents people have answered
+                               the version, or it closes, or the timeout
+                               elapses. A timeout returns what there is — it is
+                               a result, not an error.
+    get_artefact_results      Tallies and each person's current answer, now.
+    close_artefact_responses  Freeze a version's answers; closed=false reopens.
+    list_my_artefacts         The artefacts you can see.
+    set_artefact_visibility   Replace an artefact's audience.
+
+  The page is served under a sandbox with no network access, so every style,
+  script and image has to be inlined as a data URI; an external URL renders as
+  nothing. An artefact is private to its owner until visibility says otherwise.
+
+  A declared response_schema turns the page into a form the server validates and
+  tallies — fields of type choice, multi, score or text — plus a results_mode
+  deciding what other viewers see: owner (default, only their own), aggregate
+  (tallies, never names or free text), or named. Who answered is always the
+  authenticated viewer, resolved server-side.
+
+  Reading, version history and takedown live in the web UI. Requires
+  `kcap login` and a kcap-server with the /api/artefacts endpoints.
+
 INSTALL
 
   `kcap setup` registers `kcap-sessions`, `kcap-review`, `kcap-memory`,
-  `kcap-flows`, `kcap-workitems`, `kcap-plans`, and `kcap-analytics`
+  `kcap-flows`, `kcap-workitems`, `kcap-plans`, `kcap-analytics`, and
+  `kcap-artefacts`
   for both Claude Code (via the plugin's `.mcp.json`) and Codex CLI (`kcap setup`
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap

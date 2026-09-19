@@ -435,7 +435,7 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
@@ -445,6 +445,7 @@ switch (command) {
             Console.Error.WriteLine("  kcap mcp workitems");
             Console.Error.WriteLine("  kcap mcp plans");
             Console.Error.WriteLine("  kcap mcp analytics");
+            Console.Error.WriteLine("  kcap mcp artefacts");
 
             return 1;
         }
@@ -488,6 +489,8 @@ switch (command) {
                 return await Run<McpPlansServer>().RunAsync();
             case "analytics":
                 return await Run<McpAnalyticsServer>().RunAsync();
+            case "artefacts":
+                return await Run<McpArtefactsServer>().RunAsync();
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 
@@ -526,6 +529,8 @@ switch (command) {
                 return 1;
         }
     }
+    case "artefact":
+        return await Run<ArtefactCommand>().HandleAsync(args);
     case "cleanup":
         return await Run<CleanupCommand>().HandleCleanup();
     case "uninstall":

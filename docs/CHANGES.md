@@ -6,6 +6,23 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Artefacts are published from the CLI and awaited from an agent
+
+Neither `kcap artefact` nor `kcap mcp artefacts` composes an artefact's URL: the server returns the
+one it will serve, and a link built here would go stale the moment a tenant moves. The MCP surface
+is six tools wide on purpose — an agent's context pays for every schema it carries whether or not it
+ever publishes, so reading, version history and takedown stay in the web UI. `ArtefactsApi` keeps
+403 and 404 apart because the server does: 404 means the caller could not have seen the artefact at
+all, 403 that they can see it and do not own it, and collapsing them leaves nobody able to tell
+which happened. The long poll's client budget is longer than the server's 25-minute ceiling, and the
+MCP server's `HttpClient` carries no timeout of its own, because the server answers a wait that ran
+out with 200 and whatever it has — a client that gave up first would turn "nobody has answered yet"
+into an error an agent cannot tell from a broken server. A present `update_id` must name an
+artefact, and a flag that takes a value stops the command when given none, since either one read as
+absent publishes a second page under a second URL. The server is registered wherever the other kcap
+MCP servers are, which includes two hand-kept lists — the npm installer's `.mcp.json` patcher and
+the Pi bridge — and it writes, so a hosted reviewer's allowlist refuses it.
+
 ## An idle PTY costs the thread pool nothing
 
 The Unix PTY read blocked in native `poll` on a pool worker, and an idle agent never gave it back.

@@ -27,6 +27,10 @@
     "kcap-plans": {
       "command": "kcap",
       "args": ["mcp", "plans"]
+    },
+    "kcap-artefacts": {
+      "command": "kcap",
+      "args": ["mcp", "artefacts"]
     }
   }
 }

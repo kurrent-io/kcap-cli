@@ -78,6 +78,7 @@ const PLUGIN_MCP_SERVERS = {
   "kcap-memory":    "memory",
   "kcap-workitems": "workitems",
   "kcap-plans":     "plans",
+  "kcap-artefacts": "artefacts",
   "kcap-analytics": "analytics",
 };
 
