@@ -22,6 +22,23 @@ internal static class DaemonBridgeRelay {
         PostAsync(hosted, vendor, "input-wait", new JsonObject { ["session_id"] = sessionId, ["cwd"] = cwd, ["waiting"] = waiting }, budget);
 
     /// <summary>
+    /// A subagent's own hook ran, so the daemon can count it live or, on its stop, drop it.
+    /// <paramref name="sentAtMs"/> is the hook's own UTC clock in Unix milliseconds: hooks are
+    /// asynchronous and the daemon runs their reports independently, so it orders a subagent's
+    /// reports by this stamp rather than by arrival.
+    /// </summary>
+    public static Task NotifySubagentAsync(
+            HostedAgent hosted, string vendor, string? sessionId, string? cwd, string subagentId, bool live,
+            long sentAtMs, TimeSpan budget) =>
+        PostAsync(hosted, vendor, "subagent", new JsonObject {
+            ["session_id"]  = sessionId,
+            ["cwd"]         = cwd,
+            ["subagent_id"] = subagentId,
+            ["live"]        = live,
+            ["sent_at"]     = sentAtMs,
+        }, budget);
+
+    /// <summary>
     /// A tool ran, a subagent stopped (<paramref name="subagentId"/>) or, with neither id, the
     /// turn ended, so a prompt the daemon still holds for it can be retired: the answer was given
     /// in the vendor's own terminal, which the daemon cannot see.

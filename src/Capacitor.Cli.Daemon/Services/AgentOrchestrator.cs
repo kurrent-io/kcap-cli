@@ -438,6 +438,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // registered singleton when one exists) keep compiling unchanged.
     readonly DaemonStatusNotifier _statusNotifier;
 
+    // One timer for every hosted agent's subagent expiry. RescheduleSubagentExpiry is the only code
+    // that touches it, always under this lock, which DisposeAsync also takes: a callback entered
+    // after disposal returns before it can publish or re-arm.
+    readonly Lock   _subagentExpiryLock = new();
+    readonly ITimer _subagentExpiry;
+    bool            _subagentExpiryDisposed;
+
+    /// <summary>Test seam: runs under <see cref="_subagentExpiryLock"/> after the disposal check and
+    /// before the sweep, so a test can move the clock between a call's admission and its visit to
+    /// each agent's clock.</summary>
+    internal Action? BeforeSubagentSweepForTest { get; set; }
+
+    /// <summary>A live report is "alive now"; one stamped further behind the daemon's wall clock
+    /// than this says nothing and is dropped before it reaches a clock. The bridge runs its handlers
+    /// independently, so a report admitted early can be processed late — this is what keeps a live
+    /// report held across its own stop dead however long it was held. Stops are facts and are never
+    /// aged out.</summary>
+    internal static readonly TimeSpan SubagentLiveReportFreshness = TimeSpan.FromSeconds(60);
+
     readonly PolicySnapshotProvider? _policySnapshots;
 
     /// <summary>
@@ -724,6 +743,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _logger            = logger;
         _consentGate       = consentGate;
         _statusNotifier    = statusNotifier ?? new();
+        _subagentExpiry    = _time.CreateTimer(
+            _ => RescheduleSubagentExpiry(announce: false), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _policySnapshots   = policySnapshots;
 
         // Phase B (D4): per-daemon PID-record store + this daemon's logical id + boot epoch.
@@ -780,6 +801,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _permissionBridge.AttributeHandler    =  HandleAttributePermission;
         _permissionBridge.InputWaitHandler    =  HandleInputWait;
         _permissionBridge.ToolSettledHandler  =  HandleToolSettled;
+        _permissionBridge.SubagentHandler     =  HandleSubagent;
         _server.ProbeBorrowSourceHandler      =  HandleProbeBorrowSource;
         // The side-effect-free reviewer-model preflight: pure resolution over the advertised
         // resolvers — no subprocess/worktree/config side effects.
@@ -1002,6 +1024,46 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     void HandleToolSettled(string agentId, ToolSettledNotice notice) {
         if (notice.ToolUseId is { } toolUseId) _permissionBroker.TryWithdrawTool(agentId, notice.SessionId, toolUseId);
         else _permissionBroker.WithdrawTurn(agentId, notice.SessionId, notice.SubagentId);
+    }
+
+    /// The bridge's subagent report for a hosted Claude session: applied to the attributed agent's
+    /// clock, then the shared expiry timer is rescheduled, announcing when the clock said the
+    /// count changed. An id the daemon does not hold is dropped.
+    void HandleSubagent(string agentId, string subagentId, bool live, long sentAtMs) {
+        if (!_agents.TryGetValue(agentId, out var agent)) return;
+        if (live && _time.GetUtcNow().ToUnixTimeMilliseconds() - sentAtMs > SubagentLiveReportFreshness.TotalMilliseconds) return;
+
+        var changed = live
+            ? agent.ActivityClock.SubagentSeen(subagentId, sentAtMs)
+            : agent.ActivityClock.SubagentStopped(subagentId, sentAtMs);
+        RescheduleSubagentExpiry(announce: changed);
+    }
+
+    /// The only code that touches the expiry timer and the only code that pulses status for
+    /// subagents. Every clock is swept whatever its agent's status — a report taken while the agent
+    /// was still Starting must expire on time once it runs — the timer is armed before anything is
+    /// announced, and both happen under one lock hold: an id retired here is absent from the
+    /// snapshot the pulse causes, and one that survived is inside the deadline just armed, however
+    /// long this call was delayed. Every mutation is followed by a call, so the last call to run has
+    /// seen the latest state and cannot overwrite a deadline a racing report set. Pulse only bumps a
+    /// generation and releases waiters asynchronously, so holding the lock across it re-enters
+    /// nothing.
+    void RescheduleSubagentExpiry(bool announce) {
+        lock (_subagentExpiryLock) {
+            if (_subagentExpiryDisposed) return;
+            BeforeSubagentSweepForTest?.Invoke();
+
+            var       retired = false;
+            TimeSpan? next    = null;
+            foreach (var agent in _agents.Values) {
+                var expiry = agent.ActivityClock.TakeSubagentExpiries();
+                retired |= expiry.RetiredAny;
+                if (expiry.NextDue is { } due && (next is null || due < next)) next = due;
+            }
+
+            _subagentExpiry.Change(next ?? Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            if (announce || retired) _statusNotifier.Pulse();
+        }
     }
 
     internal PermissionPromptBroker PermissionBrokerForTest => _permissionBroker;
@@ -5395,6 +5457,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } finally {
             // Mandatory release — runs even if a step above threw, each step individually
             // guarded so one failure can't skip the rest.
+            try {
+                lock (_subagentExpiryLock) {
+                    _subagentExpiryDisposed = true;
+                    _subagentExpiry.Dispose();
+                }
+            } catch (Exception ex) {
+                LogDisposeStepFailed(ex, "subagent-expiry");
+            }
+
             try {
                 _heartbeatTimer.Dispose();
                 _daemonHeartbeat.Dispose();

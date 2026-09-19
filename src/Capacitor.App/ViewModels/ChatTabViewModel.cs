@@ -265,11 +265,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     string _status = "";
     bool? _awaitingInput;
+    int? _liveSubagents;
     long? _workingSince;
     TimeSpan _worked;
 
     void RefreshActivityNote() {
-        var inTurn = _status == "Running" && _awaitingInput == false;
+        var inTurn = SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
         var working = inTurn && !HasPendingCards;
         if (!inTurn) {
             _workingSince = null;
@@ -587,6 +588,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
+        _liveSubagents = info.LiveSubagents;
         _subagents.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.

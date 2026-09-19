@@ -18,7 +18,9 @@ public sealed record AgentRow(
         // Null means unknown (the server registry carries no turn verdict), never "working".
         bool? AwaitingInput = null,
         // The runtime's latest handshake stage on a pending row; null on every published row.
-        string? LaunchStage = null) {
+        string? LaunchStage = null,
+        // The daemon's count of running subagents; null on a remote or pending row.
+        int? LiveSubagents = null) {
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
@@ -27,7 +29,7 @@ public sealed record AgentRow(
         WorktreePath: dto.WorktreePath, WorkLocation: dto.WorkLocation, BorrowedFrom: dto.BorrowedFrom,
         MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
         CheckoutKey: ViewModels.SessionRailViewModel.WorktreeKeyFor(dto), CheckoutLabel: "",
-        AwaitingInput: dto.AwaitingInput);
+        AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents);
 
     public static AgentRow FromRemote(AgentInstanceDto dto) {
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";

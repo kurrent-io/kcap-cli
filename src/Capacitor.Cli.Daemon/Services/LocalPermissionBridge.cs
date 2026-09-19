@@ -40,6 +40,7 @@ internal sealed partial class LocalPermissionBridge(
     const string PathSuffix        = "/permission-request";
     const string InputWaitSuffix   = "/input-wait";
     const string ToolSettledSuffix = "/tool-settled";
+    const string SubagentSuffix    = "/subagent";
 
     internal static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan RequestReadTimeout   = TimeSpan.FromSeconds(2);
@@ -79,6 +80,12 @@ internal sealed partial class LocalPermissionBridge(
     /// Assigned by the orchestrator like <see cref="AttributeHandler"/>: receives the attributed
     /// agent id and what its hook reports as settled. Null = notices are acknowledged and dropped.
     internal Action<string, ToolSettledNotice>? ToolSettledHandler { get; set; }
+
+    /// Assigned by the orchestrator like <see cref="AttributeHandler"/>: receives the attributed
+    /// agent id, the subagent id a Claude hook reported, whether it reported the subagent alive,
+    /// and the report's <c>sent_at</c> in Unix milliseconds. Null = reports are acknowledged and
+    /// dropped.
+    internal Action<string, string, bool, long>? SubagentHandler { get; set; }
 
     internal int ServerLegsInFlightForTest => Volatile.Read(ref _serverLegsInFlight);
 
@@ -492,6 +499,13 @@ internal sealed partial class LocalPermissionBridge(
             if (context.Request.HttpMethod == "POST" && path is not null
              && path.EndsWith(ToolSettledSuffix, StringComparison.Ordinal)) {
                 await HandleToolSettledAsync(context, path);
+
+                return;
+            }
+
+            if (context.Request.HttpMethod == "POST" && path is not null
+             && path.EndsWith(SubagentSuffix, StringComparison.Ordinal)) {
+                await HandleSubagentAsync(context, path);
 
                 return;
             }
@@ -915,7 +929,7 @@ internal sealed partial class LocalPermissionBridge(
     /// a body it cannot read a session and a verdict from.
     /// </summary>
     async Task HandleInputWaitAsync(HttpListenerContext context, string path) {
-        if (await ReadRelayAsync(context, path, InputWaitSuffix, reviewerAllowed: true) is not (var node, var sessionId)) return;
+        if (await ReadRelayAsync(context, path, InputWaitSuffix, reviewerAllowed: true) is not (var node, var sessionId, _)) return;
 
         var waiting = node["waiting"] is JsonValue verdict && verdict.TryGetValue<bool>(out var w) ? w : (bool?) null;
 
@@ -934,7 +948,7 @@ internal sealed partial class LocalPermissionBridge(
     /// Shared token only: an unattended reviewer has no prompt a human could have answered, so
     /// its token buys it no say over the interactive agents' prompts.
     async Task HandleToolSettledAsync(HttpListenerContext context, string path) {
-        if (await ReadRelayAsync(context, path, ToolSettledSuffix, reviewerAllowed: false) is not (var node, var sessionId)) return;
+        if (await ReadRelayAsync(context, path, ToolSettledSuffix, reviewerAllowed: false) is not (var node, var sessionId, _)) return;
 
         if (!TryScope(node, "tool_use_id", PermissionWire.MaxToolUseIdBytes, out var toolUseId)
          || !TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId)) {
@@ -945,6 +959,45 @@ internal sealed partial class LocalPermissionBridge(
 
         var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
         if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId));
+
+        Close(context, 204);
+    }
+
+    /// A Claude subagent's hook reporting the subagent alive or gone: <c>/{token}/claude/subagent</c>
+    /// with <c>session_id</c>, <c>subagent_id</c>, <c>live</c>, and the <c>agent_id</c>/<c>cwd</c> the
+    /// attribution ladder reads. Shared token only, like tool-settled: the ladder trusts the body's
+    /// own ids, so a reviewer token buys no say over another session's count. Only Claude's hooks
+    /// report subagents. A missing or non-integer <c>sent_at</c> is stamped on arrival. Answers 204
+    /// whether or not the ladder placed the agent.
+    async Task HandleSubagentAsync(HttpListenerContext context, string path) {
+        if (await ReadRelayAsync(context, path, SubagentSuffix, reviewerAllowed: false) is not (var node, var sessionId, var vendor)) return;
+
+        if (vendor is not "claude") {
+            Close(context, 404);
+
+            return;
+        }
+
+        if (!TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId) || subagentId is null) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var live = node["live"] is JsonValue verdict && verdict.TryGetValue<bool>(out var l) ? l : (bool?) null;
+
+        if (live is null) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var sentAt = node["sent_at"] is JsonValue stamp && stamp.TryGetValue<long>(out var s)
+            ? s
+            : time.GetUtcNow().ToUnixTimeMilliseconds();
+
+        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
+        if (attributed is { } agent) SubagentHandler?.Invoke(agent.AgentId, subagentId, live.Value, sentAt);
 
         Close(context, 204);
     }
@@ -963,7 +1016,7 @@ internal sealed partial class LocalPermissionBridge(
     /// The prologue the hook relays share: the shared token (or a live reviewer token, where the
     /// route admits one), a PTY vendor and a bounded JSON object carrying a session id. Null means
     /// the response is already closed with the refusal.
-    async Task<(JsonObject Node, string SessionId)?> ReadRelayAsync(
+    async Task<(JsonObject Node, string SessionId, string Vendor)?> ReadRelayAsync(
             HttpListenerContext context, string path, string suffix, bool reviewerAllowed) {
         var trimmed    = path.TrimStart('/');
         var firstSlash = trimmed.IndexOf('/');
@@ -1016,7 +1069,7 @@ internal sealed partial class LocalPermissionBridge(
             return null;
         }
 
-        return (node, sessionId);
+        return (node, sessionId, vendor);
     }
 
     static string? Str(JsonObject? node, string field) =>

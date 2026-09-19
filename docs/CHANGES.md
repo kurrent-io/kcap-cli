@@ -6,6 +6,46 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The daemon counts live subagents beside the wait verdict, never instead of it
+
+Claude's hooks cannot tell "I will wait for my agents" from "I asked you something": both are the
+parent's `Stop`. So `AwaitingInput` keeps its one meaning — the parent finished a turn and nothing
+has been handed to it — and the wait badge, `NeedsYou` and the tray's attention are untouched. What
+`AgentStatusDto` gains is a second fact, `live_subagents`: how many subagents the daemon believes
+are running, null until the agent's first subagent report so an older daemon, a vendor whose hooks
+report none and a session that spawned none read alike. The chat's working note reads the two
+through one predicate, `SessionStatusDots.IsWorking`, while the rail's dot pulses off the count
+alone. The pending-card pause is unchanged: a card up means something is blocked on the user, and
+the note cannot know whether the asker is the parent or a subagent whose tool calls raise cards on
+the same lane.
+
+Evidence is the subagent's own hooks — `SubagentStart`, each tool call, `SubagentStop` — relayed to
+the bridge's `/{token}/claude/subagent` route with a `sent_at` the hook stamps itself. The hooks are
+asynchronous and the bridge runs its handlers independently, so reports apply in the order they were
+sent, not the order they ran: a live report overtaken by its own stop stays dead, a stop overtaken
+by a later live report does not end a resumed run, and a live report more than 60 seconds behind the
+daemon's clock is dropped before it reaches the clock — a live report says "alive now", an old one
+says nothing, which is what keeps one held across its own stop dead however long it was held. A
+start stamped within 30 seconds after its stop is the start hook scheduled late, not a resume. Every
+comparison reads the one wall clock hooks and daemon share, so a stamp is honoured for only 10
+minutes of monotonic time: a clock step misleads the count for at most that long.
+
+A `SubagentStop` is not guaranteed — the hooks run on a 5 s timeout, and a background agent killed
+through `TaskStop` never fires one — so a live id unreported for 10 minutes is retired. Without the
+window a lost stop would show activity for the rest of the session; with it, a lost stop costs at
+most 10 minutes of a stale count, and a subagent quiet for longer drops out until its next tool
+call. The count never moves with time alone: an id leaves the set only through a stop or through
+the sweep, and each is announced by whichever call meets it, so a value cannot change between a
+published snapshot and the report that settles it and leave the app showing a subagent forever.
+
+One timer, shared by every hosted agent, covers expiry, and one method under one lock is the only
+code that touches it: it sweeps every clock whatever the agent's status, arms the timer for the
+earliest deadline, and only then pulses. Arming before announcing is what makes the pulse honest —
+an id retired by the sweep is absent from the snapshot the pulse causes, and one that survived is
+inside the deadline just armed, however long the call was delayed. Because every mutation is
+followed by a call, the last call to run has seen the latest state, and a heartbeat from one session
+can never postpone the news about another's expiry.
+
 ## Artefacts are published from the CLI and awaited from an agent
 
 Neither `kcap artefact` nor `kcap mcp artefacts` composes an artefact's URL: the server returns the

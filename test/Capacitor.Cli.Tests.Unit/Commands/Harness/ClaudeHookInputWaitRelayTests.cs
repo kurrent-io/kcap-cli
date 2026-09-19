@@ -79,9 +79,9 @@ public class ClaudeHookInputWaitRelayTests {
 
     /// A subagent's tool call runs the same hook with the parent's environment, but it is not the
     /// parent's turn: a background subagent working on after the parent asked the user something
-    /// must not clear the parent's wait.
+    /// must not clear the parent's wait. What it does relay is ClaudeHookSubagentRelayTests' subject.
     [Test, NotInParallel]
-    public async Task A_subagents_tool_call_relays_nothing() {
+    public async Task A_subagents_tool_call_posts_no_input_wait() {
         using var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/claude/input-wait").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(204));
@@ -90,7 +90,7 @@ public class ClaudeHookInputWaitRelayTests {
         var exit = await RunAsync(hosted, "PreToolUse", extraFields: ",\"agent_id\":\"3f2504e04f8911d39a0c0305e82c3301\"");
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
+        await Assert.That(bridge.LogEntries.Count(e => e.RequestMessage.Path == "/tok/claude/input-wait")).IsEqualTo(0);
     }
 
     /// The relay spends the hook's own budget, never more: once that is gone the hint is dropped
