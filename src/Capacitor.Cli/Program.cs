@@ -347,14 +347,11 @@ switch (command) {
         var evalSkip        = GetArg(args, "--skip");
         var evalBaselineOut = GetArg(args, "--baseline-out");
 
-        // Guard against the user dropping the flag value — otherwise GetArg
-        // silently returns the next token ("--skip", "--chain", …) and the
-        // resolver later reports a confusing "unknown token" error.
-        foreach (var (flag, value) in new[] { ("--questions", evalQuestions), ("--skip", evalSkip), ("--baseline-out", evalBaselineOut) }) {
-            if (value is not null && value.StartsWith("--")) {
-                Console.Error.WriteLine($"eval: {flag} requires a value (got '{value}')");
-                return 2;
-            }
+        // A value flag with no value would otherwise be silently dropped — the baseline or selection
+        // the user asked for skipped, and the run still reported success.
+        if (EvalCommand.ValidateValueFlags(args) is { } flagError) {
+            Console.Error.WriteLine(flagError);
+            return 2;
         }
 
         return await Run<EvalCommand>().HandleEval(

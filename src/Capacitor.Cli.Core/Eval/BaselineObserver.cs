@@ -14,10 +14,15 @@ public sealed class BaselineObserver(
         bool          chain,
         TimeProvider  time
     ) : IEvalObserver {
-    readonly List<BaselineQuestionOutput> _questions = [];
-    readonly long                         _started   = time.GetTimestamp();
-    BaselineRetrospectiveOutput?          _retrospective;
-    string                                _evalRunId = "";
+    readonly List<BaselineQuestionOutput>  _questions = [];
+    readonly List<BaselineQuestionFailure> _failures  = [];
+    readonly long                          _started   = time.GetTimestamp();
+    BaselineRetrospectiveOutput?           _retrospective;
+    string                                 _evalRunId = "";
+
+    /// <summary>True once a terminal callback tried and failed to write the baseline file, so the
+    /// caller can exit non-zero instead of reporting a success that produced no baseline.</summary>
+    public bool WriteFailed { get; private set; }
 
     public void OnInfo(string message) => inner.OnInfo(message);
 
@@ -43,8 +48,14 @@ public sealed class BaselineObserver(
         inner.OnQuestionCompleted(index, total, assessment, usage, route, elapsed, runnerInvocations);
     }
 
-    public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) =>
+    public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) {
+        _failures.Add(new BaselineQuestionFailure {
+            QuestionId = questionId,
+            Category   = category,
+            Reason     = reason
+        });
         inner.OnQuestionFailed(index, total, category, questionId, reason);
+    }
 
     public void OnFactRetained(string category, string fact) => inner.OnFactRetained(category, fact);
 
@@ -81,6 +92,7 @@ public sealed class BaselineObserver(
             Model          = model,
             Chain          = chain,
             Questions      = _questions,
+            Failures       = _failures,
             Retrospective  = _retrospective,
             Totals         = EvalUsage.Sum(usages),
             TotalElapsedMs = (long)time.GetElapsedTime(_started).TotalMilliseconds
@@ -88,9 +100,10 @@ public sealed class BaselineObserver(
 
         try {
             BaselineOutputWriter.Write(path, output);
-        } catch (IOException ex) {
-            inner.OnInfo($"failed to write baseline output to '{path}': {ex.Message}");
-        } catch (UnauthorizedAccessException ex) {
+        } catch (Exception ex) {
+            // Throwing here would rob the inner observer of its one terminal callback, and swallowing
+            // the failure would report a baseline that was never written — flag it so the run fails.
+            WriteFailed = true;
             inner.OnInfo($"failed to write baseline output to '{path}': {ex.Message}");
         }
     }

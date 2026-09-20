@@ -47,4 +47,30 @@ public class EvalBaselineOutArgTests {
 
         await Assert.That(id).IsEqualTo("sess-combo");
     }
+
+    [Test]
+    public async Task Baseline_out_with_a_path_passes_validation() {
+        await Assert.That(EvalCommand.ValidateValueFlags(["eval", "sess-abc", "--baseline-out", "out.json"])).IsNull();
+    }
+
+    [Test]
+    public async Task Baseline_out_as_the_last_token_is_rejected_not_silently_skipped() {
+        var error = EvalCommand.ValidateValueFlags(["eval", "sess-abc", "--baseline-out"]);
+
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("--baseline-out requires a value");
+    }
+
+    [Test]
+    public async Task Baseline_out_swallowing_the_next_flag_is_rejected() {
+        var error = EvalCommand.ValidateValueFlags(["eval", "sess-abc", "--baseline-out", "--chain"]);
+
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!).Contains("--baseline-out requires a value (got '--chain')");
+    }
+
+    [Test]
+    public async Task Empty_questions_selection_still_passes_validation() {
+        await Assert.That(EvalCommand.ValidateValueFlags(["eval", "sess-abc", "--questions", ""])).IsNull();
+    }
 }

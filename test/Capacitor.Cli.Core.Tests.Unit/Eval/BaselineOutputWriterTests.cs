@@ -4,6 +4,8 @@ using Capacitor.Cli.Core.Eval;
 namespace Capacitor.Cli.Core.Tests.Unit.Eval;
 
 public class BaselineOutputWriterTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static readonly EvalUsage TextUsage = new() {
         InputTokens      = 1000,
         OutputTokens     = 200,
@@ -44,6 +46,11 @@ public class BaselineOutputWriterTests {
             Calls      = 1,
             ElapsedMs  = 4200
         };
+        var failure = new BaselineQuestionFailure {
+            QuestionId = "unparseable_verdict",
+            Category   = "safety",
+            Reason     = "null judge result"
+        };
         var retrospective = new BaselineRetrospectiveOutput {
             Usage     = RetroUsage,
             Calls     = 1,
@@ -57,13 +64,13 @@ public class BaselineOutputWriterTests {
             Model          = "sonnet",
             Chain          = true,
             Questions      = [textQuestion, toolsQuestion],
+            Failures       = [failure],
             Retrospective  = retrospective,
             Totals         = totals,
             TotalElapsedMs = 9000
         };
 
-        using var tmp  = new TempDir();
-        var       path = tmp.PathTo("baseline.json");
+        var path = Tmp.PathTo("baseline.json");
 
         BaselineOutputWriter.Write(path, output);
 
@@ -94,6 +101,12 @@ public class BaselineOutputWriterTests {
         await Assert.That(q1.GetProperty("usage").GetProperty("cache_read_tokens").GetInt64()).IsEqualTo(500L);
         await Assert.That(q1.GetProperty("usage").GetProperty("cache_write_tokens").GetInt64()).IsEqualTo(100L);
 
+        var failures = root.GetProperty("failures");
+        await Assert.That(failures.GetArrayLength()).IsEqualTo(1);
+        await Assert.That(failures[0].GetProperty("question_id").GetString()).IsEqualTo("unparseable_verdict");
+        await Assert.That(failures[0].GetProperty("category").GetString()).IsEqualTo("safety");
+        await Assert.That(failures[0].GetProperty("reason").GetString()).IsEqualTo("null judge result");
+
         var retro = root.GetProperty("retrospective");
         await Assert.That(retro.GetProperty("calls").GetInt32()).IsEqualTo(1);
         await Assert.That(retro.GetProperty("elapsed_ms").GetInt64()).IsEqualTo(2100L);
@@ -108,7 +121,7 @@ public class BaselineOutputWriterTests {
     }
 
     [Test]
-    public async Task Omitted_retrospective_serializes_as_null() {
+    public async Task Omitted_retrospective_serializes_as_null_and_no_failures_as_an_empty_array() {
         var question = new BaselineQuestionOutput {
             QuestionId = "solo",
             Route      = "text",
@@ -127,12 +140,12 @@ public class BaselineOutputWriterTests {
             TotalElapsedMs = 500
         };
 
-        using var tmp  = new TempDir();
-        var       path = tmp.PathTo("baseline-solo.json");
+        var path = Tmp.PathTo("baseline-solo.json");
 
         BaselineOutputWriter.Write(path, output);
 
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(path));
-        await Assert.That(doc.RootElement.GetProperty("retrospective").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(doc.RootElement.GetProperty("retrospective").IsNull).IsTrue();
+        await Assert.That(doc.RootElement.GetProperty("failures").GetArrayLength()).IsEqualTo(0);
     }
 }

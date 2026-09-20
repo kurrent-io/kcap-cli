@@ -1024,6 +1024,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV4))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.EvalUsage))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineQuestionOutput))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineQuestionFailure))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineRetrospectiveOutput))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineOutput))]
 [JsonSerializable(typeof(QuestionResultV2))]

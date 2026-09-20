@@ -41,8 +41,8 @@ public interface IEvalObserver {
 
     /// <summary>Fired after a judge question completed and its verdict was parsed — including an
     /// unassessed outcome, which carries no score. <paramref name="route"/> is <c>text</c> or
-    /// <c>tools</c>; <paramref name="runnerInvocations"/> counts the runner calls behind this
-    /// result (retries included — 1 today).</summary>
+    /// <c>tools</c>; <paramref name="runnerInvocations"/> is how many times the runner was called to
+    /// produce this result.</summary>
     void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations);
 
     /// <summary>Fired when a judge question fails (null Claude result, unparseable JSON, etc.); the eval continues.</summary>
