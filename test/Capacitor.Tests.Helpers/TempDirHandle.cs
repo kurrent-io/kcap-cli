@@ -27,6 +27,17 @@ public readonly record struct TempDirHandle(string Path) {
     public TempDirHandle CreateDir(params ReadOnlySpan<string> segments) =>
         new(Directory.CreateDirectory(PathTo(segments)).FullName);
 
+    /// <summary>Creates a chain of <paramref name="depth"/> nested directories and returns the
+    /// deepest — for a test that needs a path with many components. Each segment is one character,
+    /// so a deep chain still fits inside Windows' 260-character classic path limit.</summary>
+    public TempDirHandle Nest(int depth) {
+        var dir = this;
+
+        for (var i = 0; i < depth; i++) dir = dir.CreateDir("d");
+
+        return dir;
+    }
+
     /// <summary>Writes a file, creating any missing parent directories, and returns its path.</summary>
     public string CreateFile(string relativePath, string content = "") =>
         Write(PathTo(relativePath), content);

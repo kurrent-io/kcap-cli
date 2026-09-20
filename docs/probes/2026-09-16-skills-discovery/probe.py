@@ -48,6 +48,21 @@ ALL_ROOTS: dict[str, str] = {
     "cursor": ".cursor/skills", "github": ".github/skills", "gemini": ".gemini/skills",
     "kiro": ".kiro/skills", "pi": ".pi/skills", "opencode": ".opencode/skills", "agent": ".agent/skills",
 }
+
+
+def root_label(root: str) -> str:
+    for key, value in ALL_ROOTS.items():
+        if value == root:
+            return key
+    return root.strip("./").replace("/", "-")
+
+
+def root_arm(base: str, root: str, native_root: str) -> str:
+    """The arm's on-disk identity: unchanged at the native root, so existing measurements are
+    never touched, and suffixed at any other root so an override lands in its own directory."""
+    return base if root == native_root else f"{base}-{root_label(root)}"
+
+
 SCENARIOS = ("S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10")
 S2_ARMS = ("hook-creates-root", "hook-adds-skill", "registration")
 S3_ARMS = ("gitignore", "info-exclude")
@@ -111,13 +126,15 @@ def _verdicts_by_root(recs: list[RunRecord]) -> dict[str | None, str]:
 
 class Runner:
     def __init__(self, adapter: Adapter, outdir: Path, runs: int = 2, keep: bool = False,
-                 base: Path | None = None, version: str | None = None, rerun: bool = False) -> None:
+                 base: Path | None = None, version: str | None = None, rerun: bool = False,
+                 root: str | None = None) -> None:
         self.adapter = adapter
         self.outdir = outdir
         self.runs = runs
         self.keep = keep
         self.base = base
         self.rerun = rerun
+        self.root = root
         self._cleared: set[Path] = set()
         self._sb: Sandbox | None = None
         self.s1_ok: dict[str, bool] = {}
@@ -348,7 +365,7 @@ class Runner:
         write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
         rel = str(a.skill_dir(sb, root, skill.name).relative_to(sb.repo))
         apply_exclusion(sb.repo, exclusion, rel)
-        arm = "S1/native" if scenario == "S1" else f"S3/{exclusion}"
+        arm = "S1/native" if scenario == "S1" else root_arm(f"S3/{exclusion}", root, a.native_root)
         try:
             assert_untracked_state(sb.repo, rel, exclusion)
         except AssertionError as ex:
@@ -395,8 +412,8 @@ class Runner:
         return self.record(mode, "S2", f"S2/{arm}", root, "none", res, verdict, {"native": skill.token},
                            hook=hook, sb=sb, started=started, notes=notes, name=skill.name)
 
-    def arm_s3(self, mode: str, exclusion: str) -> RunRecord:
-        return self.arm_s1(mode, exclusion=exclusion, scenario="S3")
+    def arm_s3(self, mode: str, exclusion: str, root: str | None = None) -> RunRecord:
+        return self.arm_s1(mode, exclusion=exclusion, scenario="S3", root=root)
 
     def arm_s4_all(self, mode: str) -> list[RunRecord]:
         started = time.time()
@@ -554,10 +571,10 @@ class Runner:
         return self.record(mode, "S7", f"S7/{arm}", root, "none", res, verdict, {"native": skill.token}, sb=sb,
                            started=started, notes=f"turn1={turn1} session={sid}", name=skill.name, prior=first)
 
-    def arm_s8(self, mode: str, arm: str) -> RunRecord:
+    def arm_s8(self, mode: str, arm: str, root: str | None = None) -> RunRecord:
         started = time.time()
         a = self.adapter
-        root = a.native_root
+        root = root or a.native_root
         sb = self.sandbox()
         sb.cwd = sb.repo / "sub" / "dir"
         sb.cwd.mkdir(parents=True)
@@ -567,7 +584,8 @@ class Runner:
         write_skill(tree / root, skill, flat=a.flat_skill_layout)
         res = self._ask(sb, mode, self._prompt(mode, skill))
         verdict = self._judge_turn(mode, res, skill)
-        return self.record(mode, "S8", f"S8/{arm}", root, "none", res, verdict, {"native": skill.token}, sb=sb,
+        label = root_arm(f"S8/{arm}", root, a.native_root)
+        return self.record(mode, "S8", label, root, "none", res, verdict, {"native": skill.token}, sb=sb,
                            started=started, notes="cwd=sub/dir", name=skill.name)
 
     def arm_s9(self, mode: str, arm: str) -> RunRecord:
@@ -649,12 +667,14 @@ class Runner:
                     out += self.run_arm(lambda a=arm: self.arm_s2(mode, a), mode, "S2", f"S2/{arm}",
                                         native, "none")
         elif scenario == "S3":
+            root = self.root or native
             for exclusion in arms or arms_of(mode, "S3"):
+                label = root_arm(f"S3/{exclusion}", root, native)
                 if gated:
-                    out += self._blocked(mode, "S3", f"S3/{exclusion}", native, exclusion)
+                    out += self._blocked(mode, "S3", label, root, exclusion)
                 else:
-                    out += self.run_arm(lambda e=exclusion: self.arm_s3(mode, e), mode, "S3",
-                                        f"S3/{exclusion}", native, exclusion)
+                    out += self.run_arm(lambda e=exclusion: self.arm_s3(mode, e, root=self.root), mode, "S3",
+                                        label, root, exclusion)
         elif scenario == "S4":
             if gated:
                 out += self._blocked(mode, "S4", "S4/all-roots", None, "none")
@@ -669,8 +689,8 @@ class Runner:
                 # stopped enumerating, and a second miss adds no evidence.
                 out += self.run_once(lambda k=key, r=root: self.arm_s4_confirm(mode, k, r), mode, "S4",
                                      f"S4/confirm-{key}", root, "none")
-        elif scenario in ("S5", "S6", "S7", "S8", "S9"):
-            fn = {"S5": self.arm_s5, "S6": self.arm_s6, "S7": self.arm_s7, "S8": self.arm_s8, "S9": self.arm_s9}[scenario]
+        elif scenario in ("S5", "S6", "S7", "S9"):
+            fn = {"S5": self.arm_s5, "S6": self.arm_s6, "S7": self.arm_s7, "S9": self.arm_s9}[scenario]
             exclusion = "info-exclude" if scenario == "S9" else "none"
             for arm in arms or arms_of(mode, scenario):
                 if gated:
@@ -682,6 +702,15 @@ class Runner:
                                          notes="no reload command for this entry")
                 else:
                     out += self.run_arm(lambda a_=arm: fn(mode, a_), mode, scenario, f"{scenario}/{arm}", native, exclusion)
+        elif scenario == "S8":
+            root = self.root or native
+            for arm in arms or arms_of(mode, "S8"):
+                label = root_arm(f"S8/{arm}", root, native)
+                if gated:
+                    out += self._blocked(mode, "S8", label, root, "none")
+                else:
+                    out += self.run_arm(lambda a_=arm: self.arm_s8(mode, a_, root=self.root), mode, "S8",
+                                        label, root, "none")
         elif scenario == "S10":
             if gated:
                 out += self._blocked(mode, "S10", "S10/hook-from-peer", native, "none")
@@ -769,6 +798,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rerun", action="store_true")
     p.add_argument("--emit", action="store_true")
     p.add_argument("--base", type=Path, default=None)
+    p.add_argument("--root", default=None,
+                   help="override the S3/S8 skills root (relative to the repo), e.g. .agents/skills")
     args = p.parse_args(argv)
 
     if args.emit:
@@ -788,7 +819,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{name}: {info['version']} auth_ok={info['auth_ok']}")
             if args.turn:
                 runner = Runner(adapter, args.outdir, runs=args.runs, keep=args.keep, base=args.base,
-                                version=info["version"], rerun=args.rerun)
+                                version=info["version"], rerun=args.rerun, root=args.root)
                 blocker = blocked_reason(info)
                 if blocker:
                     print(f"{name}: {blocker}, turn arms recorded as untested")

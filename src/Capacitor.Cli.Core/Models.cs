@@ -1208,6 +1208,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.MachineSummary[]))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Skills.SkillsSnapshotResponse))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Skills.SkillsManifest))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Skills.SkillsLedger))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.FeedbackSubmitRequest))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.FeedbackSubmitContext))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.FeedbackSubmitResponse))]
