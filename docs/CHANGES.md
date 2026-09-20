@@ -1726,6 +1726,15 @@ asymmetry is deliberate — a standing prompt is the safe outcome for the seam w
 question a human is already looking at, and moving it earlier would auto-answer prompts during the
 very outage that made the evaluation least trustworthy.
 
+**The two seams of one Claude call do not agree on carrying a call id.** A live session sends
+`tool_use_id` at `PreToolUse` and none at `PermissionRequest`, so the prompt an ask forces arrives
+with no id for an ask `PolicyDecisionJournal` filed under one. A `Consume` with no id therefore also
+takes the oldest id-filed **ask** with the same input hash, flagged ambiguous. Without that the
+forced prompt never finds its ask, and the only thing holding it for the human is a fresh evaluation
+that happens to agree — which a judge verdict need not. The reach is asks only: an id-filed allow
+or deny taken by hash would answer a later identical call's prompt unevaluated, and an event that
+does carry an id never takes an ask filed under a different one.
+
 ## Desktop shell: the checkout on the status wire
 
 **AI-2320** adds three trailing members to `AgentStatusDto` — `worktree_path`, `work_location`,

@@ -268,6 +268,26 @@ public class ClaudePolicySeamTests {
         await Assert.That(events[0]["fresh_outcome"]!.GetValue<string>()).IsEqualTo("allow");
     }
 
+    /// <summary>The shape a live Claude session produces: PreToolUse carries tool_use_id, the
+    /// PermissionRequest its ask forces does not. The prompt must still spend that ask — it is what
+    /// holds the prompt for the human once a fresh evaluation can answer differently.</summary>
+    [Test]
+    public async Task An_ask_forced_with_a_call_id_is_spent_by_the_prompt_that_arrives_without_one() {
+        const string input = """{"command":"git status"}""";
+        WriteUserPolicy("version: 1\nrules:\n  - match: { kind: shell, command: \"git status\" }\n    outcome: ask\n");
+        await Seam.HandlePreToolUseAsync(Body("Bash", input, callId: "toolu_01A"), Sid, renderedAgent: false, new StringWriter());
+
+        var stdout = new StringWriter();
+        var answer = await Seam.HandlePermissionRequestAsync(PermissionNode("Bash", input), Sid, stdout);
+
+        await Assert.That(answer).IsEqualTo(SeamAnswer.NotAnswered);
+        await Assert.That(stdout.ToString()).IsEmpty();
+        var prompt = Decisions().Single(e => e["seam"]!.GetValue<string>() == "claude_permission_request");
+        await Assert.That(prompt["effective_outcome"]!.GetValue<string>()).IsEqualTo("prompt_stands");
+        await Assert.That(prompt["pending_ask_consumed"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(prompt["correlation_ambiguous"]!.GetValue<bool>()).IsTrue();
+    }
+
     [Test]
     public async Task Pending_ask_on_the_exact_lane_is_not_ambiguous() {
         WriteUserPolicy("version: 1\nrules:\n  - match: { kind: shell, command: \"git status *\" }\n    outcome: allow\n");

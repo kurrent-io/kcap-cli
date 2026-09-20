@@ -417,7 +417,7 @@ behavior, so a degraded ask never reads as if execution actually paused.
 | Vendor | Seam | Class | Verified |
 | --- | --- | --- | --- |
 | Claude | PermissionRequest hook (installed today, decision-capable) | at-prompt | yes — the rendered path uses it |
-| Claude | PreToolUse hook (new plugin entry) | pre-decision | protocol-documented; certify in phase 1 |
+| Claude | PreToolUse hook (new plugin entry) | pre-decision | yes — certified against a live session in `default` permission mode (#738); carries `tool_use_id`, which PermissionRequest does not |
 | Codex | approval hook | at-prompt (sandboxed auto-runs never reach us) | seam spike |
 | Gemini | hook decision | at-prompt | seam spike |
 | others | — | — | seam spike (#738) |
@@ -439,6 +439,12 @@ behave as one decision:
 
 - **Call identity**: the vendor's call id when the payload carries one — then every emitted
   terminal decision (allow, deny, or ask) is journaled and correlated exactly.
+- **The two seams of one call need not agree on carrying an id.** Claude sends `tool_use_id` at
+  PreToolUse and none at PermissionRequest, so the forced prompt arrives with no id for an ask
+  that was filed under one. An at-prompt event with no id therefore also takes the oldest
+  id-filed **ask** with its input hash — asks only, flagged ambiguous, under exactly the fallback
+  rules below. An id-filed allow or deny is never reachable by hash, and an event that does carry
+  an id never takes an ask filed under a different one: two ids are two calls.
 - **Fallback without a call id — asks only, restrictive-safe, best-effort provenance.** Allow and
   deny emitted at PreToolUse normally prevent any later seam from firing, so journaling them would
   strand stale entries that a later *identical* call could wrongly consume — and a stale allow
@@ -598,7 +604,9 @@ is verified against the outcome × native table.
     most-restrictively — a fresh deny still denies; every other fresh outcome leaves the prompt
     standing — so a stale entry can cost a prompt but can never weaken an outcome in either
     direction. Fallback provenance is best-effort, recorded with an ambiguity flag alongside both
-    the guard and the fresh outcome, never claimed exact.
+    the guard and the fresh outcome, never claimed exact. An ask filed under a call id is still
+    spent by the prompt it forced when that prompt arrives with no id; an id-filed allow or deny is
+    never taken by hash.
 11. A pre-decision seam without a sound correlation path never emits ask: the ask degrades to
     pass-through at that seam (requested and effective both recorded), and ask stays available at
     the vendor's at-prompt seam.
