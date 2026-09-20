@@ -6,6 +6,27 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## An unplaced response settles a session's transcript questions
+
+For a Claude `AskUserQuestion` the server keeps two ids that never meet. The hook's request id is
+broadcast as `PermissionPending` and `PermissionResponded` but never written to the session stream;
+the transcript entry's uuid is written there as `InterruptIssued` and `InterruptResolved` but never
+broadcast. The transcript watcher polls once a second, so both stream events trail their pings.
+
+`SessionAttentionTracker` therefore cannot settle such a question by id, and cannot settle it by
+reading either: the read a response triggers lands after the question was recorded and before its
+resolution, which is written only once the agent's tool result is ingested. So a response naming an
+id the set does not hold settles the session's transcript questions — the ones held, and the ones
+the read it triggers still lists. Settled ids are kept for the tracker's lifetime, because the
+stream may never record the resolution and the next prompt's read would bring the question back.
+A lost connection withdraws the claim on the next read: the snapshot after a reconnect can list a
+question asked during the outage, which the earlier response says nothing about.
+
+The web UI has the same rule, clearing a session's question on any response ping. The cost is
+shared too: a parallel subagent's permission, answered before the tracker read it, clears an open
+question's mark early. A permission's id is the one its pings carry, so it keeps exact removal and
+needs no read.
+
 ## Desktop notifications follow pending requests and completed turns
 
 Notifications belong to the app lifetime so hiding the window does not stop permission and
