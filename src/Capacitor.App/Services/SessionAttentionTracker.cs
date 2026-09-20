@@ -20,10 +20,10 @@ public sealed class SessionAttentionTracker : IDisposable {
 
     sealed class Session {
         public readonly HashSet<string> Ids = new(StringComparer.Ordinal);
-        /// The members of Ids that are transcript questions.
         public readonly HashSet<string> Questions = new(StringComparer.Ordinal);
         public bool Dirty;
-        /// An unplaced response is owed to the questions of the next snapshot applied.
+        /// An unplaced response is owed to the questions of the next snapshot applied, unless
+        /// something newer than the response could be among them.
         public bool SettlesQuestions;
         public int Failures;
         public int Attempt;
@@ -62,6 +62,9 @@ public sealed class SessionAttentionTracker : IDisposable {
         lock (_lock) {
             if (_disposed) return;
             var s = Get(sessionId);
+            // The ping may announce a question asked after the response, and a failing read keeps
+            // the claim armed for as long as its retries last.
+            s.SettlesQuestions = false;
             s.Dirty = true;
             Schedule(sessionId, s, _debounce);
         }

@@ -257,6 +257,23 @@ public class SessionAttentionTrackerTests {
         await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "the second question");
     }
 
+    /// A failing read keeps the response's claim on the next snapshot alive for as long as the
+    /// retries last, and a question asked meanwhile is not one the response answered.
+    [Test]
+    public async Task A_question_asked_while_the_answers_read_is_retrying_still_lights() {
+        using var h = new Harness();
+        h.Connect();
+        h.Detail = _ => new SessionDetailFetch(null);
+        h.Lane.PermissionRespondedSubject.OnNext(new PermissionRespondedPing("s1", "hook-1"));
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the failed read");
+
+        h.Detail = _ => Snapshot([Question("t2")]);
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "the new question");
+    }
+
     /// An unplaced response settles questions only: a permission it did not name is still open.
     [Test]
     public async Task An_answered_question_leaves_an_open_permission_lit() {

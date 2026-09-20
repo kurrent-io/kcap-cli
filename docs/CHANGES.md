@@ -19,8 +19,12 @@ resolution, which is written only once the agent's tool result is ingested. So a
 id the set does not hold settles the session's transcript questions — the ones held, and the ones
 the read it triggers still lists. Settled ids are kept for the tracker's lifetime, because the
 stream may never record the resolution and the next prompt's read would bring the question back.
-A lost connection withdraws the claim on the next read: the snapshot after a reconnect can list a
-question asked during the outage, which the earlier response says nothing about.
+A lost connection withdraws the claim on the next read, and so does a later pending ping: either
+way the snapshot can list a question asked after the response, which says nothing about it. A
+failing read is what makes the second one matter, since its retries keep the claim armed for far
+longer than the debounce. The price is a question the set did not yet hold staying lit when a
+parallel prompt lands inside that window; lighting a mark too long is the cheaper error than never
+lighting one on a session only this tracker reports.
 
 The web UI has the same rule, clearing a session's question on any response ping. The cost is
 shared too: a parallel subagent's permission, answered before the tracker read it, clears an open
