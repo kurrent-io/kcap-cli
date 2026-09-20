@@ -441,10 +441,16 @@ behave as one decision:
   terminal decision (allow, deny, or ask) is journaled and correlated exactly.
 - **The two seams of one call need not agree on carrying an id.** Claude sends `tool_use_id` at
   PreToolUse and none at PermissionRequest, so the forced prompt arrives with no id for an ask
-  that was filed under one. An at-prompt event with no id therefore also takes the oldest
-  id-filed **ask** with its input hash — asks only, flagged ambiguous, under exactly the fallback
-  rules below. An id-filed allow or deny is never reachable by hash, and an event that does carry
-  an id never takes an ask filed under a different one: two ids are two calls.
+  that was filed under one. An at-prompt event with no id is therefore also held by any id-filed
+  **ask** with its input hash — asks only, flagged ambiguous, aggregated under the fallback rules
+  below. **The match finds the ask and never spends it**: a hash cannot say which of several
+  identical calls a prompt belongs to, so a prompt the policy did not force (an identical call
+  whose pre-decision evaluation differed, as a judge verdict can mid-turn) could otherwise take
+  the guard and leave the forced prompt to a fresh evaluation that allows it. The entry goes with
+  its own call id or with the turn, so the cost is extra prompts for that input until the turn
+  ends, never a weakened outcome. An id-filed allow or deny is never reachable by hash, and an
+  event that does carry an id never takes an ask filed under a different one: two ids are two
+  calls.
 - **Fallback without a call id — asks only, restrictive-safe, best-effort provenance.** Allow and
   deny emitted at PreToolUse normally prevent any later seam from firing, so journaling them would
   strand stale entries that a later *identical* call could wrongly consume — and a stale allow
@@ -604,9 +610,11 @@ is verified against the outcome × native table.
     most-restrictively — a fresh deny still denies; every other fresh outcome leaves the prompt
     standing — so a stale entry can cost a prompt but can never weaken an outcome in either
     direction. Fallback provenance is best-effort, recorded with an ambiguity flag alongside both
-    the guard and the fresh outcome, never claimed exact. An ask filed under a call id is still
-    spent by the prompt it forced when that prompt arrives with no id; an id-filed allow or deny is
-    never taken by hash.
+    the guard and the fresh outcome, never claimed exact. An ask filed under a call id still holds
+    the prompt it forced when that prompt arrives with no id, and — the one exception to
+    consume-once — a hash-only match never spends it: it holds every id-less prompt for that input
+    until its own call id or the turn's end removes it. An id-filed allow or deny is never taken by
+    hash.
 11. A pre-decision seam without a sound correlation path never emits ask: the ask degrades to
     pass-through at that seam (requested and effective both recorded), and ask stays available at
     the vendor's at-prompt seam.

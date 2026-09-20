@@ -269,10 +269,10 @@ public class ClaudePolicySeamTests {
     }
 
     /// <summary>The shape a live Claude session produces: PreToolUse carries tool_use_id, the
-    /// PermissionRequest its ask forces does not. The prompt must still spend that ask — it is what
+    /// PermissionRequest its ask forces does not. The prompt must still find that ask — it is what
     /// holds the prompt for the human once a fresh evaluation can answer differently.</summary>
     [Test]
-    public async Task An_ask_forced_with_a_call_id_is_spent_by_the_prompt_that_arrives_without_one() {
+    public async Task An_ask_forced_with_a_call_id_holds_the_prompt_that_arrives_without_one() {
         const string input = """{"command":"git status"}""";
         WriteUserPolicy("version: 1\nrules:\n  - match: { kind: shell, command: \"git status\" }\n    outcome: ask\n");
         await Seam.HandlePreToolUseAsync(Body("Bash", input, callId: "toolu_01A"), Sid, renderedAgent: false, new StringWriter());
@@ -286,6 +286,26 @@ public class ClaudePolicySeamTests {
         await Assert.That(prompt["effective_outcome"]!.GetValue<string>()).IsEqualTo("prompt_stands");
         await Assert.That(prompt["pending_ask_consumed"]!.GetValue<bool>()).IsTrue();
         await Assert.That(prompt["correlation_ambiguous"]!.GetValue<bool>()).IsTrue();
+    }
+
+    /// <summary>Two identical calls overlap and only one was forced by an ask. Whichever prompt
+    /// arrives first, neither may be auto-allowed: by hash the seam cannot tell which one the ask
+    /// was for, so the first arrival must not leave the second unguarded.</summary>
+    [Test]
+    public async Task A_prompt_the_policy_did_not_force_cannot_spend_the_guard_of_one_it_did() {
+        const string input = """{"command":"git status"}""";
+        WriteUserPolicy("version: 1\nrules:\n  - match: { kind: shell, command: \"git status *\" }\n    outcome: allow\n");
+        new PolicyDecisionJournal(Config.Root).RecordAsk(Sid, "toolu_04A", HashOf(input));
+
+        var first  = new StringWriter();
+        var second = new StringWriter();
+        var firstAnswer  = await Seam.HandlePermissionRequestAsync(PermissionNode("Bash", input), Sid, first);
+        var secondAnswer = await Seam.HandlePermissionRequestAsync(PermissionNode("Bash", input), Sid, second);
+
+        await Assert.That(firstAnswer).IsEqualTo(SeamAnswer.NotAnswered);
+        await Assert.That(secondAnswer).IsEqualTo(SeamAnswer.NotAnswered);
+        await Assert.That(first.ToString()).IsEmpty();
+        await Assert.That(second.ToString()).IsEmpty();
     }
 
     [Test]

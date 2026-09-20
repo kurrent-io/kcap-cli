@@ -17,9 +17,9 @@ public readonly record struct PolicyJournalConsume(bool PendingAsk, string? Exac
 
 /// <summary>
 /// Per-session decision journal shared by hook processes. With a vendor call id, terminal
-/// decisions correlate exactly; without one, only asks correlate (FIFO per input hash) so a
-/// stale entry can cost at most one extra human prompt and can never weaken an outcome. The two
-/// seams of one call need not agree on whether they carry an id.
+/// decisions correlate exactly; without one, only asks correlate, by input hash, so a stale
+/// entry can cost human prompts and can never weaken an outcome. The two seams of one call need
+/// not agree on whether they carry an id.
 /// </summary>
 public sealed class PolicyDecisionJournal(ConfigRoot config) {
     string PathFor(string sessionKey) => config.Path("policy", "journal", $"{PolicySnapshotStore.Sanitize(sessionKey)}.json");
@@ -59,11 +59,13 @@ public sealed class PolicyDecisionJournal(ConfigRoot config) {
             // A vendor may carry a call id at one seam and not the other, so an ask filed under an
             // id stays reachable by hash from a seam that has none. Asks only: an allow or deny
             // taken this way would answer a later identical call's prompt without evaluating it.
+            // Found, never spent: a hash cannot say which of several identical calls the prompt
+            // belongs to, and one the policy did not force could otherwise take the guard from one
+            // it did. The entry goes with its own call id or with the turn.
             if (callId is { Length: > 0 }) return f;
-            var filed = f.ByCallId.FirstOrDefault(e => e.Outcome == "ask" && e.InputHash == inputHash);
-            if (filed is null) return f;
-            result = new(PendingAsk: true, ExactOutcome: null, Ambiguous: true);
-            return f with { ByCallId = [.. f.ByCallId.Where(e => e.CallId != filed.CallId)] };
+            if (f.ByCallId.Any(e => e.Outcome == "ask" && e.InputHash == inputHash))
+                result = new(PendingAsk: true, ExactOutcome: null, Ambiguous: true);
+            return f;
         });
         return result;
     }
