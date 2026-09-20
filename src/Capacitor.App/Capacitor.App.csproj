@@ -16,6 +16,7 @@
         <ProjectReference Include="..\Capacitor.Remote.Models\Capacitor.Remote.Models.csproj" />
         <PackageReference Include="Avalonia" />
         <PackageReference Include="Avalonia.Desktop" />
+        <PackageReference Include="Avalonia.Labs.Notifications" />
         <PackageReference Include="Avalonia.Themes.Fluent" />
         <PackageReference Include="ReactiveUI.Avalonia.Reactive" />
         <PackageReference Include="DynamicData" />

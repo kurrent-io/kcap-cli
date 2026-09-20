@@ -1,4 +1,5 @@
 using System.Reactive.Subjects;
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -133,6 +134,35 @@ public class PermissionServiceTests {
     }
 
     [Test]
+    [Arguments("claude", null, null, true, true)]
+    [Arguments("codex", null, null, true, false)]
+    [Arguments("copilot", null, null, false, false)]
+    [Arguments("copilot", true, false, true, false)]
+    [Arguments("copilot", false, true, false, true)]
+    [Arguments("claude", false, false, false, false)]
+    public async Task Local_grants_require_advertised_capabilities_except_known_hook_vendors(
+            string vendor, bool? once, bool? always, bool expectedOnce, bool expectedAlways) {
+        var request = new PendingPermissionRequest(Dto() with {
+            Vendor = vendor, SupportsAllowOnce = once, SupportsAllowAlways = always,
+        });
+        await Assert.That(request.CanAllowOnce).IsEqualTo(expectedOnce);
+        await Assert.That(request.CanAllowAlways).IsEqualTo(expectedAlways);
+    }
+
+    [Test]
+    public async Task Acp_always_sends_the_boolean_apply_marker() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var entry = await h.EmitAsync(Dto() with { Vendor = "copilot", SupportsAllowOnce = false, SupportsAllowAlways = true });
+        h.Ops.QueuePermissionResolve(true);
+
+        var outcome = await h.Service.ResolveAsync(entry, PermissionAnswer.AllowAlways, CancellationToken.None);
+
+        await Assert.That(outcome.Kind).IsEqualTo(PermissionResolveKind.Applied);
+        await Assert.That(h.Ops.PermissionResolvePayloads.Single().ApplyPermissions!.Value.GetRawText()).IsEqualTo("true");
+    }
+
+    [Test]
     public async Task Resolve_outcomes_and_the_always_allow_payload() {
         using var h = new Harness();
         await h.StartAsync();
@@ -174,6 +204,23 @@ public class PermissionServiceTests {
         await h.EmitAsync(Dto("r1"));
         h.Stream.EmitSubscribed();
         await WaitUntilAsync(() => h.View.Count == 0, what: "cleared at Subscribed");
+    }
+
+    [Test]
+    public async Task Subscription_loss_is_distinct_from_settlement_before_the_removal_is_published() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var settled = await h.EmitAsync(Dto("settled"));
+        h.Stream.EmitResolved("settled", "app");
+        await WaitUntilAsync(() => h.View.Count == 0, what: "settled request removed");
+        await Assert.That(settled.SubscriptionLost).IsFalse();
+        var disconnected = await h.EmitAsync(Dto("disconnected"));
+        var lostAtRemoval = false;
+        using var subscription = h.Service.Pending.Subscribe(_ => {
+            if (!h.View.Lookup(disconnected.Key).HasValue) lostAtRemoval = disconnected.SubscriptionLost;
+        });
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await Assert.That(lostAtRemoval).IsTrue();
     }
 
     static PermissionPendingDto PendingDto(string id, string agent, string vendor, string toolName, string? toolInputJson, bool omitted = false) {
@@ -343,6 +390,19 @@ public class PermissionServiceTests {
         var twin = h.View.Lookup("server:srv-1").Value;
         await Assert.That(twin.Lane).IsEqualTo(PermissionLane.Server);
         await Assert.That(twin.RequestId).IsEqualTo("srv-1");
+    }
+
+    [Test]
+    public async Task A_local_to_server_handover_never_announces_that_the_request_has_settled() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        var counts = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        using var subscription = h.Service.Pending.QueryWhenChanged(q => q.Count).Subscribe(counts.Enqueue);
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "server handle restored");
+        await Assert.That(counts).DoesNotContain(0);
     }
 
     /// A socket closing under a daemon the status feed still calls healthy is the same loss: the

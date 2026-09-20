@@ -195,6 +195,74 @@
         <Style Selector="ComboBox.kcapField ComboBoxItem:selected /template/ ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
         </Style>
+        <Style Selector="TabControl.kcapSettingsTabs">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="14,8" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab:selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab:selected /template/ Border#PART_SelectedPipe">
+            <Setter Property="Background" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch">
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="ToggleSwitch">
+                    <Grid Width="44" Height="24" VerticalAlignment="Center"
+                          Background="{TemplateBinding Background}"
+                          TemplatedControl.IsTemplateFocusTarget="True">
+                        <Border Name="SwitchTrack" CornerRadius="12"
+                                Background="{StaticResource KcapSurfaceRaisedBrush}"
+                                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1" />
+                        <Canvas Name="PART_SwitchKnob" Width="22" Height="24" HorizontalAlignment="Left">
+                            <Grid Name="PART_MovingKnobs" Width="22" Height="24">
+                                <Border Name="SwitchThumb" Width="18" Height="18"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="9"
+                                        Background="{StaticResource KcapMutedBrush}" />
+                            </Grid>
+                        </Canvas>
+                    </Grid>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:pointerover /template/ Border#SwitchTrack">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:focus-visible /template/ Border#SwitchTrack">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:checked /template/ Border#SwitchTrack">
+            <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:checked /template/ Border#SwitchThumb">
+            <Setter Property="Background" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:disabled">
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
         <!-- Fluent's radio/check glyphs use the system accent (a bright blue on our canvas). -->
         <Style Selector="RadioButton /template/ Ellipse#OuterEllipse">
             <Setter Property="Stroke" Value="{StaticResource KcapBorderBrush}" />
