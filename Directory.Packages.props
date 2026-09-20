@@ -6,6 +6,7 @@
     <PackageVersion Include="Avalonia" Version="12.1.2" />
     <PackageVersion Include="Avalonia.Desktop" Version="12.1.2" />
     <PackageVersion Include="Avalonia.Headless" Version="12.1.2" />
+    <PackageVersion Include="Avalonia.Labs.Notifications" Version="12.0.2" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.2" />
     <PackageVersion Include="Duende.IdentityModel.OidcClient" Version="7.1.0" />
     <PackageVersion Include="Duende.IdentityModel" Version="8.1.0" />
