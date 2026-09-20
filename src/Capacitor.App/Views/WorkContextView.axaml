@@ -329,7 +329,9 @@
                                                                  HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
                                                         <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
                                                                  HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsSettled}" />
-                                                        <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
+                                                        <!-- Sized to the disc: the geometry draws at its own coordinates, so a
+                                                             tighter box centres its bounds and lands the tick off centre. -->
+                                                        <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
                                                               Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                               IsVisible="{Binding IsSettled}" />
                                                     </Panel>
@@ -474,21 +476,23 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:SubagentRow">
                                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                                        <!-- The PARTS marks: purple is in flight, green and danger are outcomes, a hollow ring is
-                                             a run the session ended for it. -->
+                                        <!-- Warning marks a run in flight, as it does a running tool; green and danger are
+                                             outcomes, and a hollow ring is a run the session ended for it. A glyph inside a
+                                             disc is sized to the disc: its geometry is drawn at its own coordinates, so a
+                                             box any tighter centres the bounds and lands the mark off the disc's middle. -->
                                         <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                                            <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
+                                            <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5"
                                                      HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsRunning}" />
-                                            <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"
+                                            <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
                                                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsRunning}" />
                                             <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
                                                      HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsDone}" />
-                                            <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
+                                            <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
                                                   Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                   IsVisible="{Binding IsDone}" />
                                             <Ellipse Width="12" Height="12" Fill="{StaticResource KcapDangerBrush}"
                                                      HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsFailed}" />
-                                            <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
+                                            <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
                                                   Data="M4,4 L8,8 M8,4 L4,8" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                   IsVisible="{Binding IsFailed}" />
                                             <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"

@@ -35,4 +35,21 @@ public class FakeServerLaneTests {
         await Assert.That(lane.Stops.Count).IsEqualTo(writers * calls);
         await Assert.That(lane.Calls.Count).IsEqualTo(writers * calls * 2);
     }
+
+    /// Tests push as soon as their tail shows in Tails, and the handler runs at the earliest such
+    /// moment: a push from it must reach the tail rather than find no stream to deliver to.
+    [Test]
+    public async Task An_event_pushed_once_the_tail_is_visible_reaches_it() {
+        var lane = new FakeServerLane();
+        var envelope = RemoteFixtures.Envelope("s1", 0, "UserMessageReceived", RemoteFixtures.Hello);
+        lane.TailHandler = (_, _) => {
+            lane.PushStreamEvent(envelope);
+            return null;
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var tail = lane.TailStreamAsync(envelope.Stream, null, cts.Token).GetAsyncEnumerator(cts.Token);
+
+        await Assert.That(await tail.MoveNextAsync()).IsTrue();
+        await Assert.That(tail.Current.EventId).IsEqualTo(envelope.EventId);
+    }
 }
