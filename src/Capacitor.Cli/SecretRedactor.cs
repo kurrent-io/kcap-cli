@@ -7,7 +7,7 @@ using DotNext.Buffers;
 
 namespace Capacitor.Cli;
 
-static partial class SecretRedactor {
+public static partial class SecretRedactor {
     // Lines above this are swapped for a placeholder rather than scanned: they are almost always
     // truncated dumps, and an unterminated `-----BEGIN RSA PRIVATE KEY-----` blob drives the regex
     // alternation into catastrophic backtracking that wedges the watcher loop at 100% CPU. UTF-16
@@ -40,6 +40,12 @@ static partial class SecretRedactor {
             return UnparsableOutputPlaceholder;
         }
     }
+
+    // Public so an out-of-process redactor reuses the exact production vocabulary rather than
+    // re-deriving it; RedactLine and its 64K rule stay the in-process path and are unchanged.
+    public static bool IsSecretKey(ReadOnlySpan<char> propertyName) => SecretKeyNameRegex.IsMatch(propertyName);
+
+    public static string? RedactValue(ReadOnlySpan<char> value, bool keyIsSecret) => Redact(value, keyIsSecret);
 
     // Each value is scanned decoded, never as it sits in the line: a pattern run over the line
     // matches past the value it found into the surrounding structure. Null means nothing changed,
@@ -301,9 +307,14 @@ static partial class SecretRedactor {
 
     static readonly Regex JsonKeySecretRegex = JsonKeySecretRx();
 
-    // Env var: SECRET_NAME=value (uppercase key containing secret keyword, value until whitespace
-    // or a quote — a quote ends the value in every shell and JSON-ish dump it can appear in).
-    [GeneratedRegex(@"([A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*=)([^\s""\\]+)", RegexOptions.IgnoreCase)]
+    // Env var: SECRET_NAME=value (value runs until whitespace or a quote). The leading lookbehind
+    // starts a match only at an [A-Z_] run boundary, so the unanchored `[A-Z_]*` prefix scans a long
+    // delimiter-free value once, not once per character (O(n^2)); the cost only surfaces on the
+    // multi-megabyte values scanned through RedactValue, outside RedactLine's 64K cap. The excluded
+    // class MUST be [A-Za-z_] and NOT include digits: `[A-Z_]` stops at a digit, so a keyword run can
+    // begin right after one (`OAUTH2_TOKEN`, `S3_SECRET_KEY`), and excluding digits here would skip
+    // that run start and leak the value.
+    [GeneratedRegex(@"(?<![A-Za-z_])([A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*=)([^\s""\\]+)", RegexOptions.IgnoreCase)]
     private static partial Regex EnvVarSecretRx();
 
     static readonly Regex EnvVarSecretRegex = EnvVarSecretRx();
