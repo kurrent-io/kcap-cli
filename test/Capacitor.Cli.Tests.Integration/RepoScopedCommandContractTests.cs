@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using WireMock.Logging;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -166,6 +167,24 @@ public class RepoScopedCommandContractTests : IDisposable {
         await Assert.That(Header(SnapshotRequestFor("claude"), "If-None-Match")).IsNull();
     }
 
+    /// <summary>An upgrade finds the ledger the released version left under the config root and
+    /// reconciles the target it names, asking unconditionally: that ledger records no credential,
+    /// and an etag earned under one kcap cannot name is not one to reuse.
+    ///
+    /// <para>Kiro is the target because a machine without that harness installed has no other
+    /// reason to reconcile it, so the request is the ledger being read. A machine with it passes
+    /// for a weaker reason rather than failing for a wrong one.</para></summary>
+    [Test]
+    public async Task Skills_sync_reconciles_the_ledger_the_released_version_wrote() {
+        SeedReleasedManifest("kiro", etag: "from-before-the-upgrade");
+        StubEmptySnapshot();
+
+        var run = await RunAsync("skills", "sync", "--dry-run");
+
+        await Assert.That(run.ExitCode).IsEqualTo(0);
+        await Assert.That(Header(SnapshotRequestFor("kiro"), "If-None-Match")).IsNull();
+    }
+
     /// <summary>A 404 names the profile, the same answer curate gives for the same reason.</summary>
     [Test]
     public async Task Skills_sync_reports_a_repo_it_cannot_see() {
@@ -180,14 +199,28 @@ public class RepoScopedCommandContractTests : IDisposable {
         await Assert.That(run.Stderr).Contains("Repo not found or not visible for this profile.");
     }
 
-    /// <summary>Only a target kcap already owns is reconciled, and ownership is the manifest's
+    /// <summary>Only a target kcap already owns is reconciled, and ownership is the ledger's
     /// existence — so writing one is what puts a target in the sync set. It lives in this
     /// worktree's own git directory, which is also the only place a stored etag is read from.
-    /// </summary>
+    ///
+    /// <para>It records the credential it was fetched under, because an etag is only ever resent to
+    /// the identity that earned it. That identity is the anonymous one here: the seeded token
+    /// carries no subject claim, which is what a credential kcap cannot read an account out of
+    /// resolves to.</para></summary>
     void SeedOwnedManifest(string target, string? etag) =>
         _repo.CreateFile(
             [".git", "kcap", "skills", $"{target}.json"],
-            etag is null ? """{"skills":[]}""" : $$"""{"etag":"{{etag}}","skills":[]}""");
+            $$"""
+            {"etag":{{(etag is null ? "null" : $"\"{etag}\"")}},
+             "identity":{"account":"anonymous","server":"{{AppConfig.NormalizeUrl(_server.Url!)}}"},
+             "owned":[]}
+            """);
+
+    /// <summary>The shape every installed release wrote, at the only place it ever wrote one —
+    /// under the config root, keyed by repository and target.</summary>
+    void SeedReleasedManifest(string target, string etag) =>
+        Config.CreateDir("skills", RepoHash, target)
+            .CreateFile("manifest.json", $$"""{"etag":"{{etag}}","skills":[]}""");
 
     void StubEmptySnapshot() =>
         _server.Given(Request.Create().WithPath($"/api/repositories/{RepoHash}/skills").UsingGet())
