@@ -254,9 +254,7 @@
                          IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Stopped}}" />
             </Panel>
         </DataTemplate>
-        <!-- One mark per task state, used by the rows and the folded counts alike. The subagent
-             marks' language: warning for work in flight, green for an outcome, a hollow ring for
-             nothing yet, and a dimmer ring with a dash for a task that was dropped. -->
+        <!-- One template for the rows and the folded counts alike, so the two cannot drift apart. -->
         <DataTemplate x:Key="PlanMark" x:DataType="vm:PlanTaskState">
             <Panel Width="12" Height="12">
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5"
@@ -569,8 +567,7 @@
                     </Border>
                 </StackPanel>
 
-                <!-- Plan: the documents and tasks the session declared, read from the server. Expanded,
-                     the header says how far along it is; folded, it carries a count per mark. -->
+                <!-- Plan: read from the server, so unlike SUBAGENTS it shows nothing while signed out. -->
                 <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.HasPlan}" Margin="0,18,0,0">
                     <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
