@@ -28,13 +28,15 @@ nothing about the shipped app.
 Pull-request lifecycle, checks, and review stay in the sidebar so the pane never
 holds only a title that opens the reader. Pull request and issue use the same eyebrow
 and left hairline as Session: the PR body shows lifecycle, checks, review, and a
-`kcapField` picker when more than one PR is linked; the issue key is meta and its
-title wraps. The PR title opens the reader on its own row; GitHub sits mid-right of
+`kcapField` picker when more than one PR is linked; the PR eyebrow is always
+`PULL REQUESTS` with a count (the selected `#n` sits on the lifecycle row). Every
+link-class issue is listed (key as meta when one, count when several) and titles wrap. The PR title opens the reader on its own row; GitHub sits mid-right of
 lifecycle over repo once the overview (or legacy/unlisted settle) is ready, so the
 link does not appear beside a half-built status stack. Who's on it sits under the work item because it describes the item, not
 the session, and Session is last. Collapsed Session keeps labeled BRANCH / REPOSITORY /
-WORKTREE rows so values stay named; expand reveals harness, transport, and id. Merged is muted (settled), not
-location purple; checks stay a short verdict when
+WORKTREE rows so values stay named; expand reveals harness, transport, and id. Merged is
+success green (settled), not location purple; Open and Draft stay muted so live work is
+not read as done. Checks stay a short verdict when
 all green, with a count only for fail or pending. Checks and reviews use filled discs for
 outcomes and hollow rings while pending or waiting on review — same grammar as subagents;
 git lifecycle marks (open / merged / draft) stay stroke glyphs.
@@ -1163,7 +1165,7 @@ id and falls back to the requested one when a read carried no item, so neither t
 projection.
 
 **Reference-class links are ignored on purpose.** The server passes `link_class = reference` rows
-through for other consumers; the issue card is the first `kind = issue` row of class `link`, and its
+through for other consumers; the issue section lists every `kind = issue` row of class `link`, and its
 URL crosses the same `LinkPolicy` boundary as the PR cards.
 
 **Contributors render as initials.** The app has no remote image loader, so `avatar_url` is carried

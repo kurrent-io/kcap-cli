@@ -6,8 +6,12 @@ namespace Capacitor.App.ViewModels;
 
 public sealed partial class PullRequestContextViewModel {
     public bool HasMultipleChoices => _choices.Count > 1;
+    /// Always plural: identity lives on the card; the eyebrow only names how many are linked.
+    public string SectionEyebrow => "PULL REQUESTS";
+    public string SectionMeta => _choices.Count.ToString(CultureInfo.InvariantCulture);
     public string RepositoryLabel => _selected is { } choice ? $"{choice.Link.Owner}/{choice.Link.RepoName}" : "";
     public string NumberLabel => _selected is { } choice ? "#" + choice.Link.Number.ToString(CultureInfo.InvariantCulture) : "";
+    public bool HasNumberLabel => NumberLabel.Length > 0;
     public string ProviderLabel => _selected?.Subject.Provider switch { "github" => "GitHub", "gitlab" => "GitLab", _ => "Source" };
     public bool CanOpenSource => _selected is { IsAvailable: true };
     /// Host exit beside status/repo once the card has settled — overview, legacy list, or unlisted refusal.
@@ -81,7 +85,7 @@ public sealed partial class PullRequestContextViewModel {
     }
 
     void NotifyPresentation() {
-        foreach (var property in new[] { nameof(HasMultipleChoices), nameof(RepositoryLabel), nameof(NumberLabel), nameof(ProviderLabel),
+        foreach (var property in new[] { nameof(HasMultipleChoices), nameof(SectionEyebrow), nameof(SectionMeta), nameof(RepositoryLabel), nameof(NumberLabel), nameof(HasNumberLabel), nameof(ProviderLabel),
             nameof(CanOpenSource), nameof(ShowsOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
             nameof(HasStaleOverview), nameof(OverviewFreshnessLabel),
             nameof(SelectedTabIndex), nameof(SelectedReviewTabIndex), nameof(LifecycleStatus), nameof(ReviewStatus), nameof(ChecksStatus),

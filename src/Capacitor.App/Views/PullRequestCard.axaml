@@ -17,9 +17,13 @@
             </ComboBox>
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding HasChoice}">
                 <StackPanel Spacing="4" VerticalAlignment="Top">
-                    <Panel IsVisible="{Binding CanDisplay}">
+                    <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanDisplay}">
                         <views:PullRequestStatusLabel DataContext="{Binding LifecycleStatus}" />
-                    </Panel>
+                        <TextBlock Text="·" Classes="prMuted" VerticalAlignment="Center"
+                                   IsVisible="{Binding HasNumberLabel}" />
+                        <TextBlock x:Name="LifecycleNumber" Text="{Binding NumberLabel}" Classes="prMuted" VerticalAlignment="Center"
+                                   IsVisible="{Binding HasNumberLabel}" ToolTip.Tip="{Binding NumberLabel}" />
+                    </StackPanel>
                     <TextBlock Text="{Binding RepositoryLabel}" Classes="prMuted" TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding RepositoryLabel}" />
                 </StackPanel>

@@ -1,11 +1,12 @@
 namespace Capacitor.App.ViewModels;
 
 public sealed record PullRequestStatus(string Text, string Kind = "neutral", string? Detail = null) {
-    public bool IsSuccess => Kind is "success" or "open";
+    /// Settled outcomes only — a merge, or a passing check/review. Open is live work, not success.
+    public bool IsSuccess => Kind is "success" or "merged";
     public bool IsWarning => Kind is "conflict" or "warning";
     public bool IsDanger => Kind is "failure" or "closed";
-    /// A running check, a draft, and a merge share the muted colour; only the check pulses.
-    public bool IsMuted => Kind is "pending" or "draft" or "merged";
+    /// Live / in-progress kinds share muted: open, draft, and a running check (only the check pulses).
+    public bool IsMuted => Kind is "pending" or "draft" or "open";
     public bool IsPulsing => Kind == "pending";
     /// Git lifecycle marks stay stroke glyphs. Outcome discs are filled; in-flight / waiting
     /// kinds stay hollow (pending pulse, review-required ring) like subagent running.

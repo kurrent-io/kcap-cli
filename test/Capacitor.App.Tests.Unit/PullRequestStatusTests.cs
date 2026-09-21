@@ -3,7 +3,7 @@ using Capacitor.App.ViewModels;
 namespace Capacitor.App.Tests.Unit;
 
 /// One colour per kind, shared by the card, the reader header and the rail: a running check
-/// pulses grey, a conflict takes the warning colour, a draft is muted.
+/// pulses grey, a conflict takes the warning colour, open and draft are muted, merged is success.
 public class PullRequestStatusTests {
     [Test]
     public async Task A_pending_check_pulses_in_the_muted_colour() {
@@ -51,11 +51,12 @@ public class PullRequestStatusTests {
     [Test]
     public async Task Success_failure_and_merged_keep_their_colours() {
         await Assert.That(new PullRequestStatus("", "success").IsSuccess).IsTrue();
-        await Assert.That(new PullRequestStatus("", "open").IsSuccess).IsTrue();
+        await Assert.That(new PullRequestStatus("", "merged").IsSuccess).IsTrue();
+        await Assert.That(new PullRequestStatus("", "merged").IsMuted).IsFalse();
+        await Assert.That(new PullRequestStatus("", "open").IsMuted).IsTrue();
+        await Assert.That(new PullRequestStatus("", "open").IsSuccess).IsFalse();
         await Assert.That(new PullRequestStatus("", "failure").IsDanger).IsTrue();
         await Assert.That(new PullRequestStatus("", "closed").IsDanger).IsTrue();
-        await Assert.That(new PullRequestStatus("", "merged").IsMuted).IsTrue();
-        await Assert.That(new PullRequestStatus("", "merged").IsSuccess).IsFalse();
         await Assert.That(new PullRequestStatus("", "neutral").IsMuted).IsFalse();
     }
 

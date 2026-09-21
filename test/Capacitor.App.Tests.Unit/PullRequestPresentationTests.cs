@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Automation;
@@ -83,6 +84,8 @@ public class PullRequestPresentationTests {
         await h.ShowAsync();
         var selector = h.Card.FindControl<ComboBox>("PullRequestSelector")!;
         await Assert.That(selector.IsEffectivelyVisible).IsEqualTo(visible);
+        await Assert.That(h.Model.SectionEyebrow).IsEqualTo("PULL REQUESTS");
+        await Assert.That(h.Model.SectionMeta).IsEqualTo(count.ToString(CultureInfo.InvariantCulture));
         await Assert.That(h.Model.RepositoryLabel).IsEqualTo("example/repo");
         await Assert.That(h.Model.NumberLabel).IsEqualTo("#1");
         if (visible) {
@@ -167,14 +170,15 @@ public class PullRequestPresentationTests {
     });
 
     [Test]
-    public Task Sidebar_status_buttons_have_hover_feedback_and_remain_subdued_when_access_expires() => RunOnUiAsync(async () => {
+    public Task Sidebar_status_rows_keep_a_hand_cursor_without_a_hover_wash() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();
         await h.ShowAsync();
         var checks = h.Card.FindControl<Button>("SidebarChecksButton")!;
         var presenter = checks.GetVisualDescendants().OfType<ContentPresenter>().Single(item => item.Name == "PART_ContentPresenter" && item.TemplatedParent == checks);
+        await Assert.That(checks.Cursor?.ToString()).Contains("Hand");
         h.Window.MouseMove(checks.TranslatePoint(new Point(checks.Bounds.Width / 2, checks.Bounds.Height / 2), h.Window)!.Value);
         Dispatcher.UIThread.RunJobs();
-        await Assert.That(((ISolidColorBrush)presenter.Background!).Color).IsEqualTo(Color.Parse("#191D27"));
+        await Assert.That(((ISolidColorBrush)presenter.Background!).Color.A).IsEqualTo((byte)0);
 
         h.Source.Failure = "transient";
         h.Time.Advance(TimeSpan.FromSeconds(21));

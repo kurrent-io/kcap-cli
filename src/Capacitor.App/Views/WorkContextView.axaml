@@ -430,10 +430,10 @@
                     <StackPanel IsVisible="{Binding ShowsPullRequestCard}">
                         <Button x:Name="PullRequestHeader" Classes="sectionHeader">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                                <TextBlock Text="PULL REQUEST" Classes="eyebrow" />
+                                <TextBlock Text="{Binding PullRequests.SectionEyebrow}" Classes="eyebrow" />
                                 <TextBlock x:Name="PullRequestNumberMeta" Grid.Column="1"
-                                           Text="{Binding PullRequests.NumberLabel}" Classes="sectionMeta"
-                                           IsVisible="{Binding PullRequests.NumberLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                           Text="{Binding PullRequests.SectionMeta}" Classes="sectionMeta"
+                                           IsVisible="{Binding PullRequests.SectionMeta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             </Grid>
                         </Button>
                         <Border Classes="sectionBody">
@@ -450,7 +450,7 @@
                     </ItemsControl>
                     <StackPanel IsVisible="{Binding ShowsPullRequestEmpty}">
                         <Button x:Name="PullRequestToggle" Classes="sectionHeader">
-                            <TextBlock Text="PULL REQUEST" Classes="eyebrow" />
+                            <TextBlock Text="PULL REQUESTS" Classes="eyebrow" />
                         </Button>
                         <Border Classes="sectionBody">
                             <TextBlock x:Name="PullRequestEmptyText" Text="{x:Static vm:WorkContextViewModel.PullRequestEmptyNote}"
@@ -461,24 +461,55 @@
 
                 <StackPanel x:Name="IssueSection" Margin="0,18,0,0" IsVisible="{Binding HasSeparateIssue}">
                     <Button x:Name="IssueHeader" Classes="sectionHeader"
-                            Command="{Binding Issue.OpenCommand}"
+                            Classes.expandable="{Binding IssuesOverflows}"
+                            Command="{Binding ToggleIssuesCommand}"
                             ToolTip.Tip="{Binding Issue.Url}">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                            <TextBlock Text="ISSUE" Classes="eyebrow" />
-                            <TextBlock x:Name="IssueKey" Grid.Column="1" Text="{Binding Issue.Key}" Classes="sectionMeta"
-                                       IsVisible="{Binding Issue.Key, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Text="{Binding IssueSectionEyebrow}" Classes="eyebrow" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock x:Name="IssueKey" Text="{Binding IssueSectionMeta}" Classes="sectionMeta"
+                                           IsVisible="{Binding IssueSectionMeta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                <Panel Width="12" Height="12" IsVisible="{Binding IssuesOverflows}">
+                                    <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IssuesExpanded}" />
+                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IssuesExpanded}" />
+                                </Panel>
+                            </StackPanel>
                         </Grid>
                     </Button>
                     <Border Classes="sectionBody">
-                        <Button x:Name="IssueTitleButton" Classes="copyValue"
-                                Command="{Binding Issue.OpenCommand}"
-                                IsVisible="{Binding Issue.Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                                ToolTip.Tip="{Binding Issue.Url}"
-                                HorizontalAlignment="Stretch">
-                            <TextBlock x:Name="IssueTitle" Text="{Binding Issue.Title}" FontSize="13" LineHeight="16" FontWeight="SemiBold"
-                                       TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}"
-                                       IsVisible="{Binding Issue.Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        </Button>
+                        <Panel>
+                            <Button x:Name="IssueTitleButton" Classes="copyValue"
+                                    Command="{Binding Issue.OpenCommand}"
+                                    IsVisible="{Binding !HasMultipleIssues}"
+                                    ToolTip.Tip="{Binding Issue.Url}"
+                                    HorizontalAlignment="Stretch">
+                                <TextBlock x:Name="IssueTitle" Text="{Binding Issue.Title}" FontSize="13" LineHeight="16" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}"
+                                           IsVisible="{Binding Issue.Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </Button>
+                            <ItemsControl x:Name="IssueList" ItemsSource="{Binding VisibleSeparateIssues}" IsVisible="{Binding HasMultipleIssues}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Spacing="10" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WorkContextLinkViewModel">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="{Binding Key}" Classes="prMuted" FontSize="12" />
+                                            <Button Classes="copyValue"
+                                                    Command="{Binding OpenCommand}"
+                                                    IsVisible="{Binding Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                    ToolTip.Tip="{Binding Url}"
+                                                    HorizontalAlignment="Stretch">
+                                                <TextBlock Text="{Binding Title}" FontSize="13" LineHeight="16" FontWeight="SemiBold"
+                                                           TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
+                                            </Button>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Panel>
                     </Border>
                 </StackPanel>
 
@@ -555,10 +586,8 @@
                         </Grid>
                     </Button>
                     <Border Classes="sectionBody">
-                        <Grid x:Name="SessionFacts" ColumnDefinitions="108,*"
-                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
-                              RowSpacing="8">
-                            <Grid.Styles>
+                        <StackPanel>
+                            <StackPanel.Styles>
                                 <Style Selector="TextBlock.factLabel">
                                     <Setter Property="FontSize" Value="10.5" />
                                     <Setter Property="FontWeight" Value="Bold" />
@@ -581,30 +610,40 @@
                                     <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
                                     <Setter Property="VerticalAlignment" Value="Center" />
                                 </Style>
-                            </Grid.Styles>
-                            <!-- Orientation facts stay visible when collapsed so each value keeps its label. -->
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="BRANCH" Classes="factLabel" />
-                            <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Branch}" Classes="factValue" />
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="REPOSITORY" Classes="factLabel" />
-                            <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Repository}" Classes="factValue" ToolTip.Tip="{Binding RepositoryPath}" />
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="WORKTREE" Classes="factLabel" />
-                            <SelectableTextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Worktree}" Classes="factValue" ToolTip.Tip="{Binding WorktreePath}" />
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="HARNESS" Classes="factLabel" IsVisible="{Binding SessionExpanded}" />
-                            <SelectableTextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Harness}" Classes="factValue" IsVisible="{Binding SessionExpanded}" />
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="TRANSPORT" Classes="factLabel" IsVisible="{Binding SessionExpanded}" />
-                            <SelectableTextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Transport}" Classes="factValue" IsVisible="{Binding SessionExpanded}" />
-                            <TextBlock Grid.Row="5" Grid.Column="0" Text="ID" Classes="factLabel" IsVisible="{Binding SessionExpanded}" />
-                            <Panel Grid.Row="5" Grid.Column="1" IsVisible="{Binding SessionExpanded}">
-                                <Button x:Name="SessionIdButton" Classes="copyValue" Click="OnSessionIdClick"
-                                        IsVisible="{Binding CanCopySessionId}"
-                                        AutomationProperties.Name="Copy session ID"
-                                        ToolTip.Tip="{Binding SessionIdText}">
-                                    <TextBlock Text="{Binding SessionIdDisplay}" Classes="factValue" />
-                                </Button>
-                                <SelectableTextBlock Text="{Binding SessionIdText}" Classes="factValue"
-                                                     IsVisible="{Binding !CanCopySessionId}" />
-                            </Panel>
-                        </Grid>
+                            </StackPanel.Styles>
+                            <Grid x:Name="SessionFacts" ColumnDefinitions="108,*"
+                                  RowDefinitions="Auto,Auto,Auto"
+                                  RowSpacing="8">
+                                <!-- Orientation facts stay visible when collapsed so each value keeps its label. -->
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="BRANCH" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Branch}" Classes="factValue" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="REPOSITORY" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Repository}" Classes="factValue" ToolTip.Tip="{Binding RepositoryPath}" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="WORKTREE" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Worktree}" Classes="factValue" ToolTip.Tip="{Binding WorktreePath}" />
+                            </Grid>
+                            <!-- Separate grid so collapsed RowSpacing does not reserve trailing gaps for hidden rows. -->
+                            <Grid Margin="0,8,0,0" ColumnDefinitions="108,*"
+                                  RowDefinitions="Auto,Auto,Auto"
+                                  RowSpacing="8"
+                                  IsVisible="{Binding SessionExpanded}">
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="HARNESS" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Harness}" Classes="factValue" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="TRANSPORT" Classes="factLabel" />
+                                <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Transport}" Classes="factValue" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="ID" Classes="factLabel" />
+                                <Panel Grid.Row="2" Grid.Column="1">
+                                    <Button x:Name="SessionIdButton" Classes="copyValue" Click="OnSessionIdClick"
+                                            IsVisible="{Binding CanCopySessionId}"
+                                            AutomationProperties.Name="Copy session ID"
+                                            ToolTip.Tip="{Binding SessionIdText}">
+                                        <TextBlock Text="{Binding SessionIdDisplay}" Classes="factValue" />
+                                    </Button>
+                                    <SelectableTextBlock Text="{Binding SessionIdText}" Classes="factValue"
+                                                         IsVisible="{Binding !CanCopySessionId}" />
+                                </Panel>
+                            </Grid>
+                        </StackPanel>
                     </Border>
                 </StackPanel>
             </StackPanel>

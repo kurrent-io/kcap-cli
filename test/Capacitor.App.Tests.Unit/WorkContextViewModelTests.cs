@@ -851,9 +851,10 @@ public class WorkContextViewModelTests {
         }
     });
 
+    /// The issue section lists every link-class issue; reference rows stay ignored.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_issue_card_is_the_first_link_class_issue_and_reference_rows_are_ignored() {
+    public async Task The_issue_section_lists_every_link_class_issue_and_ignores_references() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var withIssue = Item() with {
@@ -869,8 +870,9 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
 
             await Assert.That(h.Vm.HasIssue).IsTrue();
-            await Assert.That(h.Vm.Issue!.Eyebrow).IsEqualTo("ISSUE");
-            await Assert.That(h.Vm.Issue.Key).IsEqualTo("#777");
+            await Assert.That(h.Vm.HasMultipleIssues).IsTrue();
+            await Assert.That(h.Vm.Issues.Select(i => i.Key)).IsEquivalentTo(new[] { "#777", "#778" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(h.Vm.Issue!.Key).IsEqualTo("#777");
             await Assert.That(h.Vm.Issue.Title).IsEqualTo("Read the work item");
             await Assert.That(h.Vm.Issue.CanOpen).IsTrue();
             await h.Vm.Issue.OpenCommand.Execute();
@@ -878,6 +880,7 @@ public class WorkContextViewModelTests {
 
             await h.TickAsync();
             await Assert.That(h.Vm.Issue!.Key).IsEqualTo("WK-2521");
+            await Assert.That(h.Vm.HasMultipleIssues).IsFalse();
             await Assert.That(h.Vm.Issue.Title).IsEqualTo("");
             await Assert.That(h.Vm.Issue.CanOpen).IsFalse();
 

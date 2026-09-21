@@ -143,8 +143,8 @@ public class WorkContextViewSmokeTests {
 
                 var issueHeader = host.Find<Button>("IssueHeader");
                 await Assert.That(host.Vm.Issue!.CanOpen).IsTrue();
-                await Assert.That(issueHeader.Command).IsSameReferenceAs(host.Vm.Issue.OpenCommand);
-                await host.Vm.Issue.OpenCommand.Execute();
+                await Assert.That(issueHeader.Command).IsSameReferenceAs(host.Vm.ToggleIssuesCommand);
+                await host.Vm.ToggleIssuesCommand.Execute();
                 await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { $"https://linear.app/x/issue/{issueKey}" });
             }
         });
@@ -513,7 +513,10 @@ public class WorkContextViewSmokeTests {
                 var header = host.Find<Button>("PullRequestHeader");
                 await Assert.That(header.IsEffectivelyVisible).IsTrue();
                 var meta = host.Find<TextBlock>("PullRequestNumberMeta");
-                await Assert.That(meta.Text).IsEqualTo(pullRequests.NumberLabel);
+                await Assert.That(meta.Text).IsEqualTo(pullRequests.SectionMeta);
+                await Assert.That(meta.Text).IsEqualTo("2");
+                await Assert.That(pullRequests.SectionEyebrow).IsEqualTo("PULL REQUESTS");
+                await Assert.That(host.Find<TextBlock>("LifecycleNumber").Text).IsEqualTo(pullRequests.NumberLabel);
                 await Assert.That(card.Content).IsTypeOf<StackPanel>();
                 var picker = host.Find<ComboBox>("PullRequestSelector");
                 await Assert.That(picker.IsEffectivelyVisible).IsTrue();
