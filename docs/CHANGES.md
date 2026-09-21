@@ -8,14 +8,16 @@ code moves on; where an entry disagrees with the code, the code wins.
 
 ## The work-context pane shows the session's plan
 
-A PLAN section sits under the pull request and above SESSION: the documents the session declared,
+A PLAN section sits between the pull request and SUBAGENTS: the documents the session declared,
 then its tasks, marked the way subagent rows are — a hollow ring for pending, the warning ring and
-pulse for in progress, the green tick for completed, a dimmed ring and dash for skipped. The header
-counts settled and open tasks beside their marks and keeps them up when the section folds, so a
-folded pane still answers "how far along is it". Skipped counts as settled because the server's own
-progress figure counts it so. A status the app has never heard of reads as pending rather than
-dropping the row. Document rows are labels: the path is the declaring machine's, and handing a
-server-supplied path to the OS shell is not something a sidebar should do on a click.
+pulse for in progress, the green tick for completed, a dimmed ring and dash for skipped. Its header
+follows the subagents section's: words while the list is open ("2 of 6 done"), and folded, a count
+of settled and of open tasks beside the marks the rows use, so a folded pane still answers "how far
+along is it". One template keyed on the task state draws the mark in both places. Skipped counts as
+settled because the server's own progress figure counts it so. A status the app has never heard of
+reads as pending rather than dropping the row. Document rows are labels: the path is the declaring
+machine's, and handing a server-supplied path to the OS shell is not something a sidebar should do
+on a click.
 
 The read is `GET /api/sessions/{id}/plans`, not the plan-artifacts route the CLI's validation uses:
 it resolves the continuation chain, needs only overview access, and carries no document bodies, so
@@ -40,6 +42,62 @@ holds the work item back and a late answer for the previous session is dropped. 
 server keeps the last plan on screen; a refusal or a sign-out clears it. A re-read of the same task
 list updates the rows in place, because replacing them would rebuild their containers and restart
 the in-progress pulse on every poll.
+
+## The sidebar's subagents section starts folded to a count per state
+
+A session that spawns many subagents pushed the rest of the work-context pane off screen, so the
+section starts collapsed and its header carries one number per state beside the mark the rows use.
+A state nothing is in shows nothing, and stopped is counted on its own rather than folded into
+completed or failed: the numbers have to add up to the list, and a run the session ended is neither.
+
+The tracker raises `Changed` when any per-state count moves, not only the running count or the row
+count. A bare stop reads as done until a notification says the run failed, and that revision moves
+neither — the collapsed numbers would have stayed wrong until the next start or finish.
+
+The mark is one template keyed on the state, used by the rows and the counts alike, so the two
+cannot drift apart.
+
+## Notification access is requested in the foreground and its refusal is visible
+
+macOS settles an unanswered permission prompt as denied, and its prompt is a banner whose Allow
+control only appears on hover. Requested from the first notification — which by construction fires
+while the app is in the background — it reads as an ordinary banner, times out, and every later
+notification is refused with nothing in the app to say so. The request happens once, while an
+app window is active and at least one preference is on: on activation, or when a preference is
+switched on. The authorization read before it is asynchronous, so the foreground is checked again
+after it and a user who has left gets the request on the next activation instead. The request inside `Show` stays as
+the fallback for an app that never had an active window.
+
+Settings reads the authorization rather than remembering the request's outcome, because the user
+changes it in System Settings, outside the app; the window re-reads it on activation, which is what
+coming back from System Settings is. Platforms with no authorization to read report `Unknown` and
+show nothing. Authorization is keyed by bundle id, so a grant given to a development bundle says
+nothing about the shipped app.
+
+## An unplaced response settles a session's transcript questions
+
+For a Claude `AskUserQuestion` the server keeps two ids that never meet. The hook's request id is
+broadcast as `PermissionPending` and `PermissionResponded` but never written to the session stream;
+the transcript entry's uuid is written there as `InterruptIssued` and `InterruptResolved` but never
+broadcast. The transcript watcher polls once a second, so both stream events trail their pings.
+
+`SessionAttentionTracker` therefore cannot settle such a question by id, and cannot settle it by
+reading either: the read a response triggers lands after the question was recorded and before its
+resolution, which is written only once the agent's tool result is ingested. So a response naming an
+id the set does not hold settles the session's transcript questions — the ones held, and the ones
+the read it triggers still lists. Settled ids are kept for the tracker's lifetime, because the
+stream may never record the resolution and the next prompt's read would bring the question back.
+A lost connection withdraws the claim on the next read, and so does a later pending ping: either
+way the snapshot can list a question asked after the response, which says nothing about it. A
+failing read is what makes the second one matter, since its retries keep the claim armed for far
+longer than the debounce. The price is a question the set did not yet hold staying lit when a
+parallel prompt lands inside that window; lighting a mark too long is the cheaper error than never
+lighting one on a session only this tracker reports.
+
+The web UI has the same rule, clearing a session's question on any response ping. The cost is
+shared too: a parallel subagent's permission, answered before the tracker read it, clears an open
+question's mark early. A permission's id is the one its pings carry, so it keeps exact removal and
+needs no read.
 
 ## Desktop notifications follow pending requests and completed turns
 
@@ -178,6 +236,54 @@ itself from that process's worker minimum rather than a fixed count. It asserts 
 smaller than the PTY count as well as the echo latency — once the pool has inflated, latency alone
 reads as healthy.
 
+## The pull request reader shows images and folds details as an outline
+
+Review bots build a finding as a `<details>` per finding holding a `<details>` per section, and a
+box per level read as boxes in boxes. Only an outermost section is a card now — the chat's tool
+group, same fill, chevron and hover row — and a nested one is a header row with its content set in
+beneath it. Each keeps its author's `open` state: a bot chooses which sections a reader sees first,
+and github.com honours the same choice. Toggling one re-renders the document, and the header the
+reader pressed is held at its viewport Y through that frame's layout — then released, so a scroll
+of the reader's own a moment later is not undone. The jump that survived that fix was not the
+re-render at all: a press focuses the comment's viewer, and the reader's scroll brought the focused
+viewer into view — a viewer taller than the reader scrolls its top to the top, under the pointer,
+so the release landed on body text and the section never toggled. The reader's scroll no longer
+scrolls on focus change, as the chat's already did. The row list is also edited in place now
+rather than replaced on every page load and refresh: a row's control holds what its data does
+not — sections the reader opened, a loaded image — and a rebuild dropped all of it and left the
+saved offset pointing into a document of different heights. Three shapes bots draw around nothing are dropped
+before rendering (`BlockTidy`): a rule at the start or end of its container, one rule of two in a
+row, and a quote or a `dd` holding only details sections — a hairline beside, or a second inset
+under, sections already set in; Qodo's file list wraps every level in `dl`/`dd`, so three levels
+came to over 100px of inset — and a `dd` inside a details body is lifted outright, because the
+section already insets and Qodo wraps every body that way even when the content is prose or a list.
+A `pre` inside a section is prose set in monospace, so it loses its box.
+
+Those cards borrow the border colour the comment list used to rule comments apart, so a comment
+ending in a card ran into the next one. Comments now sit 22px off their rule, drawn in
+`KcapBorderStrongBrush` — a token a hair lighter than `KcapBorderBrush`, for a rule that has to
+read across chrome in the ordinary border colour — and the last comment carries no rule, since
+there is nothing beneath it to separate.
+
+Images were alt-text links because the app fetched nothing agent-authored. The reader's content is
+pull request comments, so it now fetches images — through `MarkdownImages`, the one loader: https
+only, no cookies or credentials, an 8 MiB cap, a 15 s timeout, and one outcome per URL for the
+process, because a details toggle re-renders the whole document and a URL that failed once must not
+be retried on every toggle. An SVG is recognised by its bytes, since badge services serve one from
+a path with no extension. Chat is unchanged and still renders an image as its source text.
+
+Two layout facts shaped the rendering. A paragraph's line height is exact, and a line takes an
+embedded control's full height as its ascent: a control taller than the font's ascent pushes the
+text down inside the line and clips its descenders. So a paragraph of nothing but images — a
+screenshot, a badge row, a divider — renders as a row of block images at natural size, capped to
+the pane's width; an image beside text is embedded in the line at 18px, measured 6px shorter
+than it is so it hangs into the descent the line already has instead of moving the baseline.
+A width the tag asks for that exceeds the pane is dropped so the picture can shrink with aspect.
+Until its bytes arrive an image shows its label, and keeps it if they never do; a press opens the
+enclosing anchor when the policy would; a bare image is display-only. A bullet list whose every
+item opens with ➕ or ➖ (Qodo's High-Level Assessment) becomes bold `+` / `-` paragraphs, so the
+marker and the faint emoji do not stack.
+
 ## The restart setup asks for now carries its own message
 
 Hooks, skills and MCP servers are read when an agent session starts, so the session that runs setup
@@ -236,6 +342,53 @@ nothing more will arrive, a real finish in the final drain still settles it, and
 comes back turns the presentation off again. A repeated notification for an earlier execution never
 ends a later launch of the same agent id: a known call id decides alone, and an agent-id-only finish
 dated before the row started belongs to an earlier execution.
+## Skills materialize into the repository they were approved for
+
+`kcap skills sync` wrote into the user-global harness trees, so every repository on a machine was
+offered every repository's skills, and two worktrees of one repository shared one set of files and
+one ledger. The destination is now the checkout or linked worktree the sync runs in. The planner,
+the drift rule and the conditional fetch were already right; what the move cost was identity, crash
+recovery, containment and the serialization of what stays shared.
+
+The ledger moved with the files, into the worktree's own git directory (`<git-dir>/kcap/skills/`).
+That makes it per worktree by construction — a linked worktree has a git directory of its own — and
+Git deletes it with the worktree, where a copy under the config root would outlive the checkout it
+described and go on claiming paths that no longer exist.
+
+Identity is the account a snapshot was fetched under, together with the server URL. The profile
+name is not identity: signing in again replaces the credentials inside one profile. When the
+recorded identity is not the current one, the previous catalogue is deleted *before* the
+replacement is requested, locally and in the global trees alike, and the ledger is saved owning
+nothing. A replacement fetch that then fails leaves nothing of the previous account loadable, which
+is the whole point of retiring it; requesting first and deleting on success would leave a revoked
+account's skills in place exactly when the credential that revoked them stopped working.
+
+Pruning walks the ledger, never a skills root, so a directory is deletable only while something
+owns it. Ownership is therefore recorded before the write and cleared only after the writes and
+prunes succeed, and a deletion still owed is recorded as a pair — the path, and the skills root that
+authorises deleting it. The root travels with the path because containment is defined against an
+anchor: after a move from one anchor to another the new anchor's root cannot authorise the old
+anchor's paths, and a ledger with one row per document could not hold a rename's old path and new
+path at once.
+
+Three locks — migration, then repository, then manifest — and no shared lock is held across a
+network request. The migration lock is one key for the whole machine rather than one per
+repository, because legacy global ownership crosses repositories: a project-homed skill puts the
+same global directory in two repositories' ledgers, and two keys would let each observe the other
+as the remaining owner, each skip the deletion, and each then delete its own ledger, leaving the
+directory with nothing able to prune it.
+
+The Git exclusion block is written before the first file rather than after the last, because it is
+idempotent and depends on nothing a fetch returns. Written afterwards, a run interrupted between
+the ledger's refresh stamp and the block left the directories visible to Git with the six-hour
+throttle suppressing the retry.
+
+Placement cannot enforce a vendor restriction. `.claude/skills` is read by Claude, Copilot, Cursor
+and OpenCode, so a Claude-only skill lands in one tree and four harnesses can read it; the ledger
+records the measured readers of the tree a document landed in, for a later consumer to surface. The
+restrictions this shape cannot deliver at all — every harness whose only tree is fetched without a
+vendor — are documented rather than observed, because the request excludes those documents
+server-side and the client never sees one.
 
 A notification that lands while the parent is mid-turn is not a user line at all: Claude Code writes
 it as a `queued_command` attachment in `commandMode: task-notification`, so the leaf projects that
@@ -1713,6 +1866,22 @@ inside `HandleCore`, which that arm never reaches, so a prompt already raised si
 asymmetry is deliberate — a standing prompt is the safe outcome for the seam whose job is to answer a
 question a human is already looking at, and moving it earlier would auto-answer prompts during the
 very outage that made the evaluation least trustworthy.
+
+**The two seams of one Claude call do not agree on carrying a call id.** A live session sends
+`tool_use_id` at `PreToolUse` and none at `PermissionRequest`, so the prompt an ask forces arrives
+with no id for an ask `PolicyDecisionJournal` filed under one. A `Consume` with no id is therefore
+also held by any id-filed **ask** with the same input hash, flagged ambiguous. Without that the
+forced prompt never finds its ask, and the only thing holding it for the human is a fresh evaluation
+that happens to agree — which a judge verdict need not. The reach is asks only: an id-filed allow
+or deny taken by hash would answer a later identical call's prompt unevaluated, and an event that
+does carry an id never takes an ask filed under a different one.
+
+**That hash-only match finds the ask and never spends it.** A hash cannot say which of several
+identical calls a prompt belongs to. Spending the ask would let a prompt the policy did not force —
+an identical overlapping call whose pre-decision evaluation came out differently — take the guard,
+and the prompt that *was* forced would then meet a fresh evaluation with nothing holding it. So the
+entry leaves only with its own call id or with the turn, and the price is extra prompts for that
+input until then. Making this lane consume-once again reopens the hole.
 
 ## Desktop shell: the checkout on the status wire
 

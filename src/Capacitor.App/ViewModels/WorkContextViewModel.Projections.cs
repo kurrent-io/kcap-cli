@@ -106,9 +106,11 @@ public sealed partial class WorkContextViewModel {
     public bool HasContributors => _contributors.Count > 0;
     /// The card carries the PR picker and the live checks and review rows, so it stays while it
     /// has a PR to select or something to say; a list settled with neither leaves the pane's own
-    /// empty copy to speak instead of a bare frame.
+    /// empty copy to speak instead of a bare frame. Before a session id the card could only repeat
+    /// the pane's waiting note.
     public bool ShowsPullRequestCard =>
-        PullRequests is { } prs && (prs.HasChoice || prs.HasNotice || prs.HasReaderNote);
+        Phase != WorkContextPhase.WaitingForSession
+        && PullRequests is { } prs && (prs.HasChoice || prs.HasNotice || prs.HasReaderNote);
     public bool ShowsLegacyLinkCards => ShowsLegacyLinks && _links.Count > 0;
     /// Empty copy waits until the session list and the work-item read have both settled — an
     /// earlier miss is often the item's link, not a missing PR.
@@ -164,7 +166,7 @@ public sealed partial class WorkContextViewModel {
     }
     bool _sessionExpanded;
     public bool SessionExpanded { get => _sessionExpanded; private set => this.RaiseAndSetIfChanged(ref _sessionExpanded, value); }
-    bool _subagentsExpanded = true;
+    bool _subagentsExpanded;
     public bool SubagentsExpanded { get => _subagentsExpanded; private set => this.RaiseAndSetIfChanged(ref _subagentsExpanded, value); }
 
     public ReactiveCommand<Unit, Unit> TogglePartsCommand { get; private set; } = null!;

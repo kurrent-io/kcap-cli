@@ -510,6 +510,8 @@ public static class EvalService {
         // observers log OnInfo at Debug level where they vanish.
         var               diagnostics = new List<string>();
         ClaudeCliOutcome  outcome;
+        var               route       = question.NeedsTools || ctx.ForceTools ? "tools" : "text";
+        var               started     = time.GetTimestamp();
 
         if (question.NeedsTools || ctx.ForceTools) {
             // DEV-1486 tools-enabled path. Session-scoped MCP tool surface
@@ -615,7 +617,7 @@ public static class EvalService {
             EvidenceCoverage = ReconcileEvidenceCoverage(assessment.Outcome, CoverageForTextPath(ctx, question))
         };
 
-        observer.OnQuestionCompleted(index, total, assessment, result.InputTokens, result.OutputTokens);
+        observer.OnQuestionCompleted(index, total, assessment, EvalUsage.FromResult(result), route, time.GetElapsedTime(started), runnerInvocations: 1);
 
         // If the judge emitted a retain_fact, persist it for future evals.
         if (ExtractRetainFact(result.Result) is { } retainedFact) {
@@ -1562,6 +1564,8 @@ public static class EvalService {
 
         observer.OnRetrospectiveStarted();
 
+        var started = time.GetTimestamp();
+
         var sessionMeta  = $"session-id: {sessionId}\nrun-id: {evalRunId}\nmodel: {model}\noverall-score: {aggregate.OverallScore}/5";
         var verdictsJson = JsonSerializer.Serialize(verdicts, CapacitorJsonContext.Default.IReadOnlyListEvalQuestionVerdict);
 
@@ -1615,7 +1619,7 @@ public static class EvalService {
                 return null;
             }
 
-            observer.OnRetrospectiveCompleted(retrospective);
+            observer.OnRetrospectiveCompleted(retrospective, EvalUsage.FromResult(result), time.GetElapsedTime(started));
 
             return retrospective;
         } catch (OperationCanceledException) {
@@ -1650,6 +1654,8 @@ public static class EvalService {
         ct.ThrowIfCancellationRequested();
 
         observer.OnRetrospectiveStarted();
+
+        var started = time.GetTimestamp();
 
         var overallText  = aggregate.OverallScore is { } score ? $"{score}/5" : "not scored";
         var sessionMeta  = $"session-id: {sessionId}\nrun-id: {evalRunId}\nmodel: {model}\noverall-score: {overallText}";
@@ -1691,7 +1697,7 @@ public static class EvalService {
                 return null;
             }
 
-            observer.OnRetrospectiveCompleted(retrospective);
+            observer.OnRetrospectiveCompleted(retrospective, EvalUsage.FromResult(result), time.GetElapsedTime(started));
 
             return retrospective;
         } catch (OperationCanceledException) {
@@ -1766,8 +1772,8 @@ public static class EvalService {
         public void OnQuestionStarted(int index, int total, string category, string questionId) =>
             Safe(() => inner.OnQuestionStarted(index, total, category, questionId), nameof(OnQuestionStarted));
 
-        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, long inputTokens, long outputTokens) =>
-            Safe(() => inner.OnQuestionCompleted(index, total, assessment, inputTokens, outputTokens), nameof(OnQuestionCompleted));
+        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations) =>
+            Safe(() => inner.OnQuestionCompleted(index, total, assessment, usage, route, elapsed, runnerInvocations), nameof(OnQuestionCompleted));
 
         public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) =>
             Safe(() => inner.OnQuestionFailed(index, total, category, questionId, reason), nameof(OnQuestionFailed));
@@ -1778,8 +1784,8 @@ public static class EvalService {
         public void OnRetrospectiveStarted() =>
             Safe(inner.OnRetrospectiveStarted, nameof(OnRetrospectiveStarted));
 
-        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) =>
-            Safe(() => inner.OnRetrospectiveCompleted(retrospective), nameof(OnRetrospectiveCompleted));
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed) =>
+            Safe(() => inner.OnRetrospectiveCompleted(retrospective, usage, elapsed), nameof(OnRetrospectiveCompleted));
 
         public void OnRetrospectiveFailed(string reason) =>
             Safe(() => inner.OnRetrospectiveFailed(reason), nameof(OnRetrospectiveFailed));

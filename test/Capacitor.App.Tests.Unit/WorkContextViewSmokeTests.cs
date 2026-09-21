@@ -17,6 +17,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
 namespace Capacitor.App.Tests.Unit;
@@ -89,6 +90,32 @@ public class WorkContextViewSmokeTests {
         ISolidColorBrush s => s.Color.A,
         _                  => 255,
     };
+
+    /// Before the daemon reports the agent the pane knows no harness, checkout or requester, so the
+    /// sections that would hold only dashes stay out and the waiting note stands alone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Session_and_who_sections_wait_for_the_agent() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Window.Show();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(host.Vm.HasAgent).IsFalse();
+            await Assert.That(host.Find<TextBlock>("PhaseNoteText").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<Control>("SessionSection").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<Control>("WhoSection").IsEffectivelyVisible).IsFalse();
+
+            host.Presence.OnNext(WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj"));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(host.Vm.HasAgent).IsTrue();
+            await Assert.That(host.Find<Control>("SessionSection").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<Control>("WhoSection").IsEffectivelyVisible).IsTrue();
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -310,7 +337,8 @@ public class WorkContextViewSmokeTests {
     }
 
     /// Each row carries its state in words as well as in the dot, and the failed word is painted
-    /// danger; the section hides whole when the session spawned none and folds on its toggle.
+    /// danger; the section hides whole when the session spawned none, starts folded and opens on
+    /// its toggle.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_subagents_section_lists_rows_by_state_and_hides_when_the_session_spawned_none() {
@@ -331,6 +359,12 @@ public class WorkContextViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(section.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
+
+            await host.Vm.ToggleSubagentsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(host.Find<ItemsControl>("SubagentsSummary").IsEffectivelyVisible).IsFalse();
             await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").Text).IsEqualTo("1 of 2 running");
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             await Assert.That(texts).Contains("Explore");
@@ -348,7 +382,41 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<ItemsControl>("SubagentsSummary").IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    /// Collapsed, the header carries one count per state beside the rows' own mark, and a state
+    /// nothing is in shows neither mark nor number.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_subagents_header_shows_a_marked_count_per_state_and_omits_empty_states() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var now = host.Time.GetUtcNow();
+            host.Subagents.Apply(new ChatProjectionResult([], [], [
+                new SubagentSignal.Started("c1", "Explore", "", now.AddSeconds(-18)),
+                new SubagentSignal.Started("c2", "Reviewer", "", now.AddMinutes(-3)),
+                new SubagentSignal.Started("c3", "Planner", "", now.AddMinutes(-4)),
+                new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(-132)),
+                new SubagentSignal.Finished("c3", null, SubagentOutcome.Failed, now.AddSeconds(-140)),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var summary = host.Find<ItemsControl>("SubagentsSummary");
+            await Assert.That(summary.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").IsEffectivelyVisible).IsFalse();
+            var numbers = summary.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
+            await Assert.That(numbers).IsEquivalentTo(new[] { "1", "2" }, CollectionOrdering.Matching);
+
+            var marks = summary.GetVisualDescendants().OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToList();
+            var warning = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapWarningBrush")!).Color;
+            var danger = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapDangerBrush")!).Color;
+            await Assert.That(marks.Select(e => ((ISolidColorBrush)(e.Fill ?? e.Stroke)!).Color))
+                .IsEquivalentTo(new[] { warning, danger }, CollectionOrdering.Matching);
+            await Assert.That(summary.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
         });
     }
 
@@ -367,6 +435,7 @@ public class WorkContextViewSmokeTests {
                 new SubagentSignal.Started("c1", longName, "", now.AddSeconds(-18)),
                 new SubagentSignal.Detached("c1", "a1"),
             ]));
+            await host.Vm.ToggleSubagentsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
 
@@ -468,26 +537,30 @@ public class WorkContextViewSmokeTests {
 
     static double TopOf(Control control, Visual relativeTo) => control.TranslatePoint(new Point(0, 0), relativeTo)!.Value.Y;
 
-    /// The section sits below the pull request and above SESSION, counts settled and open tasks
-    /// in its header, and marks each task by status: only a task in progress pulses, and only
-    /// while the session runs.
+    /// The section sits between the pull request and SUBAGENTS. Expanded, its header says how far
+    /// along the plan is and the rows carry the marks; folded, the header carries the marks with a
+    /// count each. Only a task in progress pulses, and only while the session runs.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_plan_section_lists_documents_and_tasks_by_status_between_the_pull_request_and_the_session() {
+    public async Task The_plan_section_lists_documents_and_tasks_by_status_between_the_pull_request_and_the_subagents() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             host.Plans.Enqueue(PlanRead(
                 [new PlanDocumentDto { DocumentKey = "k1", Kind = "spec", Path = "docs/specs/plan-widget-design.md" }],
                 ("completed", "Read the route", null), ("in_progress", "Draw the rows", "glyphs first"), ("pending", "Pin the order", null), ("skipped", "Animate the fold", null)));
             await host.ShowAsync(KeyOnlyRead());
+            host.Subagents.Apply(new ChatProjectionResult([], [], [new SubagentSignal.Started("c1", "Explore", "Map the UI", host.Time.GetUtcNow())]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
 
             var section = host.Find<StackPanel>("PlanSection");
             await Assert.That(section.IsEffectivelyVisible).IsTrue();
             await Assert.That(TopOf(section, host.Window)).IsGreaterThan(TopOf(host.Find<StackPanel>("PullRequestSection"), host.Window));
-            await Assert.That(TopOf(section, host.Window)).IsLessThan(TopOf(host.Find<Button>("SessionToggle"), host.Window));
+            await Assert.That(TopOf(section, host.Window)).IsLessThan(TopOf(host.Find<StackPanel>("SubagentsSection"), host.Window));
 
-            await Assert.That(host.Find<TextBlock>("PlanDoneCount").Text).IsEqualTo("2");
-            await Assert.That(host.Find<TextBlock>("PlanOpenCount").Text).IsEqualTo("2");
+            await Assert.That(host.Find<TextBlock>("PlanHeaderText").Text).IsEqualTo("2 of 4 done");
+            await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<StackPanel>("PlanCounts").IsEffectivelyVisible).IsFalse();
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             await Assert.That(texts).Contains("spec");
             await Assert.That(texts).Contains("plan-widget-design.md");
@@ -517,14 +590,21 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(host.Find<Border>("PlanBody").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<TextBlock>("PlanDoneCount").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<TextBlock>("PlanOpenCount").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<StackPanel>("PlanCounts").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("PlanDoneCount").Text).IsEqualTo("2");
+            await Assert.That(host.Find<TextBlock>("PlanOpenCount").Text).IsEqualTo("2");
+
+            var success = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapSuccessBrush")!).Color;
+            var marks = host.Find<StackPanel>("PlanCounts").GetVisualDescendants().OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToList();
+            await Assert.That(marks.Count).IsEqualTo(2);
+            await Assert.That(marks.Count(e => e.Fill is ISolidColorBrush fill && fill.Color == success)).IsEqualTo(1);
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_plan_section_is_hidden_without_a_plan_and_shows_no_counts_for_documents_alone() {
+    public async Task The_plan_section_is_hidden_without_a_plan_and_counts_nothing_for_documents_alone() {
         await RunOnUiAsync(async () => {
             await using (var none = new Host()) {
                 await none.ShowAsync(KeyOnlyRead());
@@ -536,9 +616,14 @@ public class WorkContextViewSmokeTests {
             await host.ShowAsync(KeyOnlyRead());
 
             await Assert.That(host.Find<StackPanel>("PlanSection").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<StackPanel>("PlanCounts").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsFalse();
             await Assert.That(host.Find<ItemsControl>("PlanDocumentList").IsEffectivelyVisible).IsTrue();
             await Assert.That(host.Find<ItemsControl>("PlanTaskList").IsEffectivelyVisible).IsFalse();
+
+            await host.Vm.Plan.ToggleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(host.Find<StackPanel>("PlanCounts").IsEffectivelyVisible).IsFalse();
         });
     }
 }

@@ -71,6 +71,7 @@ public class PlanSectionViewModelTests {
             await Assert.That(h.Vm.Tasks[1].Note).IsEqualTo("half way");
             await Assert.That(h.Vm.DoneCount).IsEqualTo(2);
             await Assert.That(h.Vm.OpenCount).IsEqualTo(2);
+            await Assert.That(h.Vm.HeaderText).IsEqualTo("2 of 4 done");
             await h.Vm.TeardownAsync();
         });
     }

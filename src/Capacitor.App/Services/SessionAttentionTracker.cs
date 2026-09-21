@@ -11,12 +11,20 @@ namespace Capacitor.App.Services;
 /// until a reconciliation completes. A response removes one id; one the set never held means
 /// the set is out of date, so it re-reconciles rather than trusting the count. A change of
 /// signed-in subject retires every set, and every fetch in flight, with it.
+/// A transcript question is the exception to removal by id: no ping ever names it, and the stream
+/// resolves it only once the agent's tool result is ingested, after the response ping. So a
+/// response the set cannot place settles the session's questions — the ones held and the ones the
+/// reconciliation it triggers still lists — and a settled question never returns.
 public sealed class SessionAttentionTracker : IDisposable {
     static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
 
     sealed class Session {
         public readonly HashSet<string> Ids = new(StringComparer.Ordinal);
+        public readonly HashSet<string> Questions = new(StringComparer.Ordinal);
         public bool Dirty;
+        /// An unplaced response is owed to the questions of the next snapshot applied, unless
+        /// something newer than the response could be among them.
+        public bool SettlesQuestions;
         public int Failures;
         public int Attempt;
         public ITimer? Timer;
@@ -26,6 +34,9 @@ public sealed class SessionAttentionTracker : IDisposable {
     readonly TimeProvider _time;
     readonly TimeSpan _debounce;
     readonly Dictionary<string, Session> _sessions = new(StringComparer.Ordinal);
+    /// Outlives its session's entry: the stream may never record the resolution, and the ids are
+    /// never reused.
+    readonly HashSet<string> _settledQuestions = new(StringComparer.Ordinal);
     readonly BehaviorSubject<IReadOnlySet<string>> _attention = new(FrozenSet<string>.Empty);
     readonly IDisposable _subscriptions;
     readonly CancellationTokenSource _lifetime = new();
@@ -51,6 +62,9 @@ public sealed class SessionAttentionTracker : IDisposable {
         lock (_lock) {
             if (_disposed) return;
             var s = Get(sessionId);
+            // The ping may announce a question asked after the response, and a failing read keeps
+            // the claim armed for as long as its retries last.
+            s.SettlesQuestions = false;
             s.Dirty = true;
             Schedule(sessionId, s, _debounce);
         }
@@ -61,6 +75,7 @@ public sealed class SessionAttentionTracker : IDisposable {
             if (_disposed) return;
             if (ping.RequestId is null) {
                 if (!_sessions.TryGetValue(ping.SessionId, out var known)) return;
+                SettleQuestions(known);
                 known.Ids.Clear();
                 Supersede(ping.SessionId, known);
                 Prune(ping.SessionId, known);
@@ -69,14 +84,25 @@ public sealed class SessionAttentionTracker : IDisposable {
             }
             var s = Get(ping.SessionId);
             if (s.Ids.Remove(ping.RequestId)) {
+                s.Questions.Remove(ping.RequestId);
                 Supersede(ping.SessionId, s);
                 Prune(ping.SessionId, s);
                 Publish();
                 return;
             }
+            SettleQuestions(s);
+            s.SettlesQuestions = true;
             s.Dirty = true;
             Schedule(ping.SessionId, s, _debounce);
+            Publish();
         }
+    }
+
+    // Caller holds _lock.
+    void SettleQuestions(Session s) {
+        _settledQuestions.UnionWith(s.Questions);
+        s.Ids.ExceptWith(s.Questions);
+        s.Questions.Clear();
     }
 
     // Caller holds _lock. A reconciliation already in flight took its snapshot before this
@@ -118,8 +144,9 @@ public sealed class SessionAttentionTracker : IDisposable {
     void Forget() {
         lock (_lock) {
             if (_disposed) return;
-            foreach (var s in _sessions.Values) { s.Attempt++; s.Ids.Clear(); s.Timer?.Dispose(); s.Timer = null; }
+            foreach (var s in _sessions.Values) { s.Attempt++; s.Ids.Clear(); s.Questions.Clear(); s.Timer?.Dispose(); s.Timer = null; }
             _sessions.Clear();
+            _settledQuestions.Clear();
             Publish();
         }
     }
@@ -132,7 +159,9 @@ public sealed class SessionAttentionTracker : IDisposable {
             // so walk a snapshot rather than the dictionary being mutated underneath.
             foreach (var (sid, s) in _sessions.ToArray()) {
                 s.Failures = 0;
-                if (!connected) { s.Attempt++; s.Timer?.Dispose(); s.Timer = null; continue; }
+                // The snapshot after a reconnect can list a question asked during the outage, which
+                // the response from before it says nothing about.
+                if (!connected) { s.Attempt++; s.SettlesQuestions = false; s.Timer?.Dispose(); s.Timer = null; continue; }
                 // A set that outlived the disconnect is owed a reconciliation as much as a dirty
                 // session is, and the dirty mark is the only record of that: without it, a response
                 // superseding the one scheduled here would leave a stale set with nothing to refill it.
@@ -185,8 +214,17 @@ public sealed class SessionAttentionTracker : IDisposable {
                 return;
             }
             s.Ids.Clear();
+            s.Questions.Clear();
             if (fetch.Detail is { } detail && InterruptReconciliation.FromDetail(detail) is { Ended: false } reconciled)
-                foreach (var p in reconciled.Pending) s.Ids.Add(p.RequestId);
+                foreach (var p in reconciled.Pending) {
+                    if (p.Kind == PendingInterruptKind.TranscriptQuestion) {
+                        if (s.SettlesQuestions) _settledQuestions.Add(p.RequestId);
+                        if (_settledQuestions.Contains(p.RequestId)) continue;
+                        s.Questions.Add(p.RequestId);
+                    }
+                    s.Ids.Add(p.RequestId);
+                }
+            s.SettlesQuestions = false;
             s.Dirty = false;
             s.Failures = 0;
             if (s.Ids.Count == 0) { s.Timer?.Dispose(); s.Timer = null; _sessions.Remove(sessionId); }

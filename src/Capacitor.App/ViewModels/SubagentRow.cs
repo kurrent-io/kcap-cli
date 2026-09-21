@@ -33,18 +33,14 @@ public sealed class SubagentRow : ReactiveObject {
             if (_state == value) return;
             this.RaiseAndSetIfChanged(ref _state, value);
             this.RaisePropertyChanged(nameof(IsRunning));
-            this.RaisePropertyChanged(nameof(IsDone));
             this.RaisePropertyChanged(nameof(IsFailed));
-            this.RaisePropertyChanged(nameof(IsStopped));
         }
     }
 
     public string StateText { get => _stateText; private set => this.RaiseAndSetIfChanged(ref _stateText, value); }
 
     public bool IsRunning => State == SubagentState.Running;
-    public bool IsDone    => State == SubagentState.Done;
     public bool IsFailed  => State == SubagentState.Failed;
-    public bool IsStopped => State == SubagentState.Stopped;
 
     internal void MarkBackground() => IsBackground = true;
 

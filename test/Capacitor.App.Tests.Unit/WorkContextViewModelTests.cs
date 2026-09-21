@@ -10,6 +10,7 @@ using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
@@ -922,6 +923,37 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// Until a session id arrives the pull request card has only the pane's own waiting note to
+    /// repeat, so the section stays out and the note is said once.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pull_request_card_waits_for_the_session_with_the_pane() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(Ready());
+            try {
+                await Assert.That(h.Vm.PhaseNote).IsEqualTo(WorkContextViewModel.WaitingNote);
+                await Assert.That(pullRequests.Notice).IsEqualTo(WorkContextViewModel.WaitingNote);
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+
+                await h.PushAsync(Dto(sessionId: null));
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Phase).IsNotEqualTo(WorkContextPhase.WaitingForSession);
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     /// An empty session list still offers the work-item PR so the in-app reader can open: reads
     /// route to the local `gh` reader, which needs no session admission.
     [Test]
@@ -1479,14 +1511,46 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_subagents_section_starts_expanded_and_the_toggle_folds_it() {
+    public async Task The_subagents_section_starts_collapsed_and_the_toggle_opens_it() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
-            await h.Vm.ToggleSubagentsCommand.Execute();
             await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
             await h.Vm.ToggleSubagentsCommand.Execute();
             await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
+            await h.Vm.ToggleSubagentsCommand.Execute();
+            await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The collapsed summary lists running, completed, failed, stopped in that order and leaves
+    /// out a state nothing is in, so its numbers always add up to the list.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_subagents_summary_counts_each_state_in_order_and_omits_the_empty_ones() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(h.Vm.SubagentCounts).IsEmpty();
+
+            var now = h.Time.GetUtcNow();
+            h.Subagents.Apply(Spawn("c1", now));
+            h.Subagents.Apply(Spawn("c2", now));
+            h.Subagents.Apply(Spawn("c3", now));
+            h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
+            h.Subagents.Apply(new([], [], [new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(6))]));
+            var raised = new List<string?>();
+            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            await Assert.That(h.Vm.SubagentCounts).IsEquivalentTo(new SubagentCount[] {
+                new(SubagentState.Running, 1), new(SubagentState.Done, 1), new(SubagentState.Failed, 1),
+            }, CollectionOrdering.Matching);
+            await Assert.That(h.Vm.SubagentCounts.Select(c => c.Label))
+                .IsEquivalentTo(new[] { "1 running", "1 completed", "1 failed" }, CollectionOrdering.Matching);
+
+            h.Subagents.SessionOver = true;
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.SubagentCounts));
+            await Assert.That(h.Vm.SubagentCounts).IsEquivalentTo(new SubagentCount[] {
+                new(SubagentState.Done, 1), new(SubagentState.Failed, 1), new(SubagentState.Stopped, 1),
+            }, CollectionOrdering.Matching);
             await h.Vm.TeardownAsync();
         });
     }

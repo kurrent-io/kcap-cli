@@ -119,6 +119,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
+    static readonly SubagentState[] SubagentCountOrder =
+        [SubagentState.Running, SubagentState.Done, SubagentState.Failed, SubagentState.Stopped];
+
+    /// What the collapsed section shows: one entry per state something is in, so the numbers
+    /// add up to the list.
+    public IReadOnlyList<SubagentCount> SubagentCounts =>
+        [.. SubagentCountOrder.Select(state => new SubagentCount(state, _subagents.Count(state))).Where(c => c.Count > 0)];
+
     /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
     /// read never holds the work item back.
     public PlanSectionViewModel Plan { get; }
@@ -126,6 +134,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasSubagents));
         this.RaisePropertyChanged(nameof(SubagentsHeader));
+        this.RaisePropertyChanged(nameof(SubagentCounts));
     }
 
     internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {
@@ -194,6 +203,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
+    bool _hasAgent;
+    /// Until the daemon reports the agent, every session fact and the requester are placeholders.
+    public bool HasAgent { get => _hasAgent; private set => this.RaiseAndSetIfChanged(ref _hasAgent, value); }
+
     /// Tip on the header refresh control — bound with ShowOnDisabled so a greyed icon still explains itself.
     public string RefreshTip => HasSession
         ? IsReading ? "Refreshing…" : "Refresh"
@@ -255,6 +268,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         if (_tornDown || dto is null) return;
         _dto = dto;
         UpdateFacts(dto);
+        HasAgent = true;
         if (dto.SessionId is { Length: > 0 } id && (_current is null || !string.Equals(_current.SessionId, id, StringComparison.Ordinal)))
             SwitchSession(id);
         this.RaisePropertyChanged(nameof(PhaseNote));

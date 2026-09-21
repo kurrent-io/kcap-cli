@@ -326,7 +326,7 @@ sealed class DaemonEvalObserver(
             Relay(() => connection.EvalQuestionStartedAsync(evalRunId, sessionId, index, total, category, questionId), "EvalQuestionStarted");
     }
 
-    public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, long inputTokens, long outputTokens) {
+    public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations) {
         logger.LogInformation(
             "[eval {Run}] [{Index}/{Total}] {Question} -> {Outcome} {Score} ({Verdict})",
             evalRunId,
@@ -364,7 +364,7 @@ sealed class DaemonEvalObserver(
         Relay(() => connection.EvalRetrospectiveStartedAsync(sessionId, evalRunId), "EvalRetrospectiveStarted");
     }
 
-    public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) {
+    public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed) {
         logger.LogInformation("[eval {Run}] retrospective completed", evalRunId);
         Relay(() => connection.EvalRetrospectiveCompletedAsync(sessionId, evalRunId), "EvalRetrospectiveCompleted");
     }

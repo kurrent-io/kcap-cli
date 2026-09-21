@@ -389,6 +389,20 @@ In a linked worktree, every harness finds the worktree's own skills under `info/
 them reads the main checkout's. Git resolves a linked worktree's `info/exclude` to the shared common
 directory, so one exclusion covers every worktree.
 
+## Git exclusion and nested launch at the compatibility root (`.agents/skills`)
+
+Codex's and Antigravity's (`agy-dirlayout`) native root is `.agents/skills` itself, so their S3 and S8
+rows above are the compatibility-root measurement. Measured separately for Copilot, Cursor,
+OpenCode 1.x and Pi (the `-agents` arms in the matrix): both exclusion mechanisms still load the skill
+for every one of these four, and a session started in `sub/dir` still finds the repository-root skill
+for Copilot and OpenCode 1.x, matching their native-root behavior. Cursor stays `not_visible` for the
+ancestor arm at `.agents/skills`, as it does at `.cursor/skills`: it only ever finds a subdirectory's
+own skill, whichever root holds it. Pi is the one divergence: `not_visible` for the ancestor arm at its
+native `.pi/skills` but `visible_first_turn` for the same arm at `.agents/skills`, so the compatibility
+root is found from a nested launch where Pi's own root is not. Both properties hold at the compatibility
+root for five of the six vendors that read it; only Cursor's nested-launch property fails there, the
+same as at its own native root.
+
 ## Consequences for #778 and #962
 
 - **Writing into a live session works only on Codex and Kiro**, and for a rewrite also on Pi, Cursor

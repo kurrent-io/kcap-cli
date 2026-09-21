@@ -44,6 +44,8 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     public bool HasDocuments => _documents.Count > 0;
     public int DoneCount => _tasks.Count(task => task.IsSettled);
     public int OpenCount => _tasks.Count - DoneCount;
+    /// What the expanded header says; folded, the header shows the two counts beside their marks.
+    public string HeaderText => $"{DoneCount} of {_tasks.Count} done";
     public string CountsTip => $"{DoneCount} done · {OpenCount} open";
 
     bool _isExpanded = true;
@@ -182,6 +184,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(HasDocuments));
         this.RaisePropertyChanged(nameof(DoneCount));
         this.RaisePropertyChanged(nameof(OpenCount));
+        this.RaisePropertyChanged(nameof(HeaderText));
         this.RaisePropertyChanged(nameof(CountsTip));
     }
 

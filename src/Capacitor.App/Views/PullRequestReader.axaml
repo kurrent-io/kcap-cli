@@ -65,7 +65,7 @@
                 <TabStripItem Content="Replies" IsVisible="{Binding IsThreadComments}" />
             </TabStrip>
         </StackPanel>
-        <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" BringIntoViewOnFocusChange="False">
             <StackPanel Margin="24,18,24,24" Spacing="10">
                 <TextBlock Text="{Binding SectionTitle}" Classes="prSectionTitle" />
                 <StackPanel IsVisible="{Binding IsOverview}" Spacing="10">
