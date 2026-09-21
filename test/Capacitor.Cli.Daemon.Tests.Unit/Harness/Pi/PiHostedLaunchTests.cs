@@ -9,8 +9,9 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 
 /// <summary>
 /// Pi's hosted-launch invariants, asserted on the LAUNCH ARTIFACT — the
-/// <see cref="System.Diagnostics.ProcessStartInfo"/> <see cref="PiRpcHostedAgentRuntimeFactory.BuildPsi"/>
-/// actually produces — plus the factory's refusal ladder and DI registration.
+/// <see cref="System.Diagnostics.ProcessStartInfo"/>
+/// <see cref="PiRpcHostedAgentRuntimeFactory.BuildPsi(DaemonConfig, RuntimeStartContext)"/> actually
+/// produces — plus the factory's refusal ladder and DI registration.
 /// </summary>
 public class PiHostedLaunchTests {
     static RuntimeStartContext Ctx(

@@ -40,9 +40,10 @@ namespace Capacitor.Cli.Daemon.Harness.Pi;
 /// this runtime has no containment strategy for a workspace it does not own.</para>
 /// </summary>
 /// <param name="processSource">Test seam ONLY. Production passes null, which spawns the real
-/// <see cref="PiRpcProcess"/> from the <see cref="ProcessStartInfo"/> <see cref="BuildPsi"/> built —
-/// so the seam changes nothing about production behaviour, and the argv/env assertions run against
-/// the same builder a real launch uses.</param>
+/// <see cref="PiRpcProcess"/> from the <see cref="ProcessStartInfo"/>
+/// <see cref="BuildPsi(DaemonConfig, RuntimeStartContext)"/> built — so the seam changes nothing about
+/// production behaviour, and the argv/env assertions run against the same builder a real launch
+/// uses.</param>
 /// <param name="binaryExists">Test seam ONLY, for <see cref="IsAvailable"/>. Production passes null,
 /// which resolves the real binary through the registry's search path via
 /// <see cref="Capacitor.Cli.Core.Setup.BinaryProbe.Finds"/>.</param>
@@ -198,22 +199,47 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
             ? ctx.Model
             : config.PiModel;
 
+    /// <summary>The interactive shape — no reviewer lane. See the four-argument overload for the full
+    /// builder both shapes share.</summary>
+    internal static ProcessStartInfo BuildPsi(DaemonConfig config, RuntimeStartContext ctx) =>
+        BuildPsi(config, ctx, reviewer: null, tools: null);
+
     /// <summary>
     /// PURE builder for the whole launch — no process, no filesystem side effects. The real spawn
     /// path and the launch tests both go through it, so an assertion here certifies the vector the OS
     /// actually receives.
     ///
-    /// <para>Argv is exactly <c>--mode rpc</c> plus <c>--model &lt;m&gt;</c> when
-    /// <see cref="ResolveModel"/> yields one. Env carries <see cref="PiLaunchEnvironment.Apply"/>'s
-    /// <c>KCAP_PI_PURE=1</c> (never omitted — see that type's doc) plus the same daemon-identity
-    /// stamps <see cref="Antigravity.AntigravityHostedAgentRuntimeFactory.BuildTurnPsi"/> carries:
+    /// <para>Interactive (<paramref name="reviewer"/> null): argv is exactly <c>--mode rpc</c> plus
+    /// <c>--model &lt;m&gt;</c> when <see cref="ResolveModel"/> yields one. Reviewer (<paramref
+    /// name="reviewer"/> non-null): argv additionally carries the extension, tool allowlist and
+    /// containment flags a reviewer needs, in the byte-exact order the launch tests pin, and the env
+    /// carries <see cref="PiLaunchEnvironment.ApplyReviewer"/>'s additions on top.</para>
+    ///
+    /// <para>Env always carries <see cref="PiLaunchEnvironment.Apply"/>'s <c>KCAP_PI_PURE=1</c>
+    /// (never omitted — see that type's doc) plus the same daemon-identity stamps
+    /// <see cref="Antigravity.AntigravityHostedAgentRuntimeFactory.BuildTurnPsi"/> carries:
     /// <c>KCAP_URL</c>, <c>KCAP_AGENT_ID</c>, <c>KCAP_DAEMON_ID</c>, <c>KCAP_DAEMON_EPOCH</c> — the
     /// last two are what makes a surviving child visible to <c>OrphanReaper</c>'s env-marker pass
     /// after a daemon restart, and are omitted (never stamped empty) when the context does not carry
     /// them, matching Antigravity's convention.</para>
     /// </summary>
-    internal static ProcessStartInfo BuildPsi(DaemonConfig config, RuntimeStartContext ctx) {
+    internal static ProcessStartInfo BuildPsi(DaemonConfig config, RuntimeStartContext ctx,
+                                               PiReviewerLaunchPaths? reviewer, IReadOnlyList<PiReviewerTool>? tools) {
         var argv = new List<string> { "--mode", "rpc" };
+
+        if (reviewer is not null) {
+            // Order is pinned by test. --session-dir and --offline are containment, not hygiene: without the
+            // first a repository's .pi/settings.json chooses where Pi writes, and without the second Pi
+            // installs the operator's configured packages at startup.
+            argv.AddRange([
+                "--no-approve", "--no-extensions", "-e", reviewer.Extension,
+                "--tools", PiReviewerToolSurface.AllowlistArg(tools!),
+                "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes",
+                "--system-prompt", reviewer.SystemPrompt, "--append-system-prompt", "",
+                "--offline",
+                "--session-dir", reviewer.Sessions,
+            ]);
+        }
 
         if (ResolveModel(config, ctx) is { Length: > 0 } model) {
             argv.Add("--model");
@@ -240,6 +266,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
 
         // The dual-capture gate — unconditional, see PiLaunchEnvironment's doc.
         PiLaunchEnvironment.Apply(psi.Environment);
+        if (reviewer is not null) PiLaunchEnvironment.ApplyReviewer(psi.Environment, reviewer.Manifest);
 
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
