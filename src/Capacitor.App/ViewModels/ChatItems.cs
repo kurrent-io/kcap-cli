@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reactive;
 using Avalonia.Collections;
+using Capacitor.App.Views;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -140,6 +141,14 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public string KindChip =>
         _calls.Count == 1 ? ToolSummary.ChipLabel(_calls[0].Category) : "";
 
+    public string HeaderIconData {
+        get {
+            if (_calls.Count == 1) return ToolCategoryIcons.ForCategory(_calls[0].Category);
+            var firstSettled = _calls.FirstOrDefault(c => c.IsSettled);
+            return firstSettled is null ? "" : ToolCategoryIcons.ForCategory(firstSettled.Category);
+        }
+    }
+
     /// The single call on a lone card — header status binds here.
     public ToolCallItem? LoneCall => _calls.Count == 1 ? _calls[0] : null;
 
@@ -177,6 +186,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         foreach (var c in _calls) c.ShowRowStatus = !lone;
         this.RaisePropertyChanged(nameof(ShowsKindChip));
         this.RaisePropertyChanged(nameof(KindChip));
+        this.RaisePropertyChanged(nameof(HeaderIconData));
         this.RaisePropertyChanged(nameof(LoneCall));
     }
 
@@ -196,6 +206,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         HasFailure = failed;
         HasSummary = settled.Count > 0;
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
+        this.RaisePropertyChanged(nameof(HeaderIconData));
         NotifyVisible();
     }
 

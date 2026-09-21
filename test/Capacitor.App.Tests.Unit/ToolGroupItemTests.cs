@@ -1,4 +1,5 @@
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
 using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
@@ -57,9 +58,26 @@ public class ToolGroupItemTests {
             await Assert.That(group.ShowsSummaryHeader).IsFalse();
             await Assert.That(group.ShowsKindChip).IsTrue();
             await Assert.That(group.KindChip).IsEqualTo("Command");
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
             await Assert.That(group.LoneCall).IsSameReferenceAs(call);
             await Assert.That(call.ShowRowStatus).IsFalse();
             await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { call });
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Header_icon_follows_the_first_settled_category() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var a = Call("Bash", ToolCategory.Command);
+            var b = Call("Read", ToolCategory.Read);
+            group.Add(a);
+            group.Add(b);
+            b.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
+            a.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
         });
     }
 
