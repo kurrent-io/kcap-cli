@@ -29,4 +29,13 @@ public class ToolCategoryIconsTests {
         await Assert.That(ToolCategoryIcons.ForFixedLabel("You")).IsEmpty();
         await Assert.That(ToolCategoryIcons.ForFixedLabel("")).IsEmpty();
     }
+
+    [Test]
+    public async Task Other_uses_puzzle_not_edit_glyph() {
+        var other = ToolCategoryIcons.ForCategory(ToolCategory.Other);
+        var edit = ToolCategoryIcons.ForCategory(ToolCategory.Edit);
+        await Assert.That(other).IsNotEqualTo(edit);
+        await Assert.That(other).Contains("H20 V12");
+        await Assert.That(edit).Contains("M13,7 L17,11");
+    }
 }

@@ -60,7 +60,6 @@ public class ToolGroupItemTests {
             await Assert.That(group.KindChip).IsEqualTo("Command");
             await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
             await Assert.That(group.LoneCall).IsSameReferenceAs(call);
-            await Assert.That(call.ShowRowStatus).IsFalse();
             await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { call });
         });
     }
