@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
+using Capacitor.App.Services.Notifications;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
@@ -31,12 +32,13 @@ public class SettingsViewModelTests {
             Func<CancellationToken, Task<bool>>? relaunch = null, bool mac = true,
             Task? startup = null, bool nameOverride = false, bool needsRestart = false,
             Func<MutationRequest, CancellationToken, Task<bool>>? canRetire = null,
-            NotificationSettingsService? notificationSettings = null) =>
+            NotificationSettingsService? notificationSettings = null,
+            IDesktopNotificationAccess? notificationAccess = null) =>
         new(store, service, ops ?? new ScriptedLocalControlOps(), target ?? ((_, _) => Task.FromResult(false)),
             run ?? ((_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded())),
             confirm ?? ((_, _) => Task.FromResult(true)), relaunch ?? (_ => Task.FromResult(false)), mac,
             startup ?? Task.CompletedTask, canRetire ?? ((_, _) => Task.FromResult(true)), nameOverride, needsRestart,
-            notificationSettings: notificationSettings);
+            notificationSettings: notificationSettings, notificationAccess: notificationAccess);
 
     static FakeDaemonClientService Connected(int active = 0, bool supportsSettings = true) {
         var service = new FakeDaemonClientService();
@@ -329,6 +331,67 @@ public class SettingsViewModelTests {
         await notifications.SaveAsync(new NotificationPreferences(false, true, true));
 
         await Assert.That(vm.NotifyOnPermissions).IsTrue();
+    });
+
+    [Test]
+    public Task Blocked_notifications_are_explained_and_lead_to_system_settings() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        var access = new FakeDesktopNotificationAccess(DesktopNotificationAccess.Denied);
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications, notificationAccess: access);
+
+        await WaitUntilAsync(() => vm.NotificationAccessText is not null);
+        await Assert.That(vm.NotificationAccessText!).Contains("turned off");
+        await Assert.That(vm.NotificationAccessAction).IsEqualTo("Open System Settings");
+
+        await vm.NotificationAccessCommand.Execute();
+
+        await Assert.That(access.SettingsOpened).IsEqualTo(1);
+        await Assert.That(access.Requests).IsEqualTo(0);
+    });
+
+    [Test]
+    public Task Undetermined_access_is_requested_from_settings_and_the_notice_clears() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        var access = new FakeDesktopNotificationAccess(DesktopNotificationAccess.NotDetermined);
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications, notificationAccess: access);
+
+        await WaitUntilAsync(() => vm.NotificationAccessText is not null);
+        await Assert.That(vm.NotificationAccessAction).IsEqualTo("Allow notifications");
+
+        await vm.NotificationAccessCommand.Execute();
+
+        await Assert.That(access.Requests).IsEqualTo(1);
+        await Assert.That(access.SettingsOpened).IsEqualTo(0);
+        await Assert.That(vm.NotificationAccessText).IsNull();
+        await Assert.That(vm.NotificationAccessAction).IsNull();
+    });
+
+    [Test]
+    public Task Refreshing_picks_up_access_changed_outside_the_app() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        var access = new FakeDesktopNotificationAccess(DesktopNotificationAccess.Denied);
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications, notificationAccess: access);
+        await WaitUntilAsync(() => vm.NotificationAccessText is not null);
+
+        access.Current = DesktopNotificationAccess.Allowed;
+        vm.RefreshNotificationAccess();
+
+        await WaitUntilAsync(() => vm.NotificationAccessText is null);
+    });
+
+    [Test]
+    [Arguments(DesktopNotificationAccess.Unknown)]
+    [Arguments(DesktopNotificationAccess.Allowed)]
+    public Task Access_that_needs_nothing_from_the_user_shows_no_notice(DesktopNotificationAccess current) => AvaloniaSession.RunOnUiAsync(async () => {
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications,
+            notificationAccess: new FakeDesktopNotificationAccess(current));
+
+        vm.RefreshNotificationAccess();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        await Assert.That(vm.NotificationAccessText).IsNull();
+        await Assert.That(vm.NotificationAccessAction).IsNull();
     });
 
     static async Task WaitUntilAsync(Func<bool> ready) {

@@ -134,6 +134,8 @@ public partial class App : Application {
     PermissionService? _permissions;
     NotificationSettingsService? _notificationSettings;
     IDesktopNotificationSink? _notificationSink;
+    IDesktopNotificationAccess? _notificationAccess;
+    IDisposable? _notificationAccessPrompt;
     DesktopNotificationCoordinator? _desktopNotifications;
     NotificationSessionSubscriptions? _notificationSessions;
     // The server lane's half of the permission graph. Disposed as a group with _permissions: the
@@ -692,7 +694,14 @@ public partial class App : Application {
         if (!_shutdownStarted) {
             var notificationSettings = new NotificationSettingsService(_config.Path("notifications.json"));
             _notificationSettings = notificationSettings;
-            _notificationSink = new NativeDesktopNotificationSink();
+            var notificationSink = new NativeDesktopNotificationSink();
+            _notificationSink = notificationSink;
+            _notificationAccess = notificationSink;
+            var accessPrompt = new DesktopNotificationAccessPrompt(notificationSink, () => notificationSettings.Current);
+            _notificationAccessPrompt = Window.IsActiveProperty.Changed
+                .Where(change => change.NewValue.GetValueOrDefault() && !_shutdownStarted)
+                .Subscribe(change => { _ = accessPrompt.AskOnceAsync(); });
+            if (desktop.Windows.Any(window => window.IsActive)) _ = accessPrompt.AskOnceAsync();
             _desktopNotifications = new DesktopNotificationCoordinator(
                 permissions, directory, notificationSettings.Changes, _notificationSink,
                 () => _shutdownStarted || desktop.Windows.Any(window => window.IsActive),
@@ -743,7 +752,7 @@ public partial class App : Application {
                 ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
-                notificationSettings: _notificationSettings);
+                notificationSettings: _notificationSettings, notificationAccess: _notificationAccess);
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -1733,6 +1742,7 @@ public partial class App : Application {
     // teardown REGISTERED here, so the drain below can only ever seal a set that already contains
     // it. The gate is latched even with no window ever built — a window built later still sees it.
     void LatchNavigation() {
+        _notificationAccessPrompt?.Dispose();
         _desktopNotifications?.Dispose();
         (_coordinator?.Window?.DataContext as MainWindowViewModel)?.LatchShutdown();
         _navigation.Latch();
