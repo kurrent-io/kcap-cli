@@ -47,4 +47,15 @@ public class PullRequestStatusTests {
         await Assert.That(new PullRequestStatus("", "merged").IsSuccess).IsFalse();
         await Assert.That(new PullRequestStatus("", "neutral").IsMuted).IsFalse();
     }
+
+    [Test]
+    public async Task Checks_and_reviews_use_filled_discs_git_lifecycle_keeps_glyphs() {
+        await Assert.That(new PullRequestStatus("", "success").UsesDiscIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "failure").UsesDiscIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "pending").UsesDiscIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "warning").UsesDiscIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "merged").UsesGlyphIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "open").UsesGlyphIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "conflict").UsesGlyphIcon).IsTrue();
+    }
 }
