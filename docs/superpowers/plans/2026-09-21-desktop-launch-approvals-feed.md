@@ -18,7 +18,7 @@
 - **Copy, verbatim:** chip `Launches`; flyout title `Launch approvals`; empty primary `No launches decided yet`; empty secondary `Allow and deny choices from consent prompts show up here.`; outcomes `Allowed` / `Denied`.
 - **Keep control name** `ActivityButton` (and keep `ActivityViewModel` type name). Rename only user-visible strings.
 - **Tests:** `dotnet run --project test/Capacitor.App.Tests.Unit/Capacitor.App.Tests.Unit.csproj -- --treenode-filter "/*/*/<Class>/<Method>*"` — never `--filter`. Avalonia tests stay `[NotInParallel("AvaloniaSession")]`.
-- **Commits:** imperative subject ≤ 80 chars, no ticket id, no `Co-authored-by`. Optional body ≤ 5 lines. Stage by explicit path.
+- **Commits:** imperative subject ≤ 80 chars including trailing `(#NNN)` GitHub issue reference when known, no Linear ids in subject, no `Co-authored-by`. Optional body ≤ 5 lines. Stage by explicit path.
 - **Do not change** consent reader, refresh gates, source-label map, or prompt window.
 
 ---
@@ -166,7 +166,7 @@ dotnet run --project test/Capacitor.App.Tests.Unit/Capacitor.App.Tests.Unit.cspr
 ```bash
 git add src/Capacitor.App/ViewModels/ActivityViewModel.cs test/Capacitor.App.Tests.Unit/ActivityViewModelTests.cs
 git commit -m "$(cat <<'EOF'
-Add launch-approvals truncation and line helpers
+Add launch-approvals truncation and line helpers (#1089)
 
 Emails keep the domain; agent kind and "you" source drop out of the feed lines.
 EOF
@@ -423,7 +423,7 @@ git add src/Capacitor.App/ViewModels/ActivityViewModel.cs \
         test/Capacitor.App.Tests.Unit/ActivityViewModelTests.cs \
         docs/CHANGES.md
 git commit -m "$(cat <<'EOF'
-Show launch approvals as a readable feed
+Show launch approvals as a readable feed (#1089)
 
 The Activity spreadsheet hid that this is consent history; Launches names it
 and middle-ellipsis keeps email domains.

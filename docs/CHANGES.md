@@ -6,6 +6,15 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Launcher “Launches” is the consent decision log, not session activity
+
+The chip formerly labeled Activity opened the local allow/deny log for daemon
+launches. The name and a seven-column table made that hard to read. The chip is
+**Launches**, the flyout title is **Launch approvals**, and each decision is a
+short feed row (outcome · vendor · kind; requester · repo · source; time). Email
+requesters keep the domain via middle ellipsis. The file, poll, and Complete
+rules are unchanged.
+
 ## The sidebar's subagents section starts folded to a count per state
 
 A session that spawns many subagents pushed the rest of the work-context pane off screen, so the

@@ -8,12 +8,10 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One row of the decision log, projected for display. Time is a short local clock for the
-/// table; TimeTip carries the full local stamp for hover. An unparseable decided_at renders
-/// verbatim in both rather than throwing. IsAllowed drives the outcome color.
 public sealed record ActivityRow(
-    string Time, string TimeTip, string Outcome, bool IsAllowed, string Requester, string KindLabel,
-    string RepoLeaf, string RepoFull, string Vendor, string SourceLabel);
+    string Time, string TimeTip, string Outcome, bool IsAllowed,
+    string PrimaryDetail, string SecondaryLine, string SecondaryTip,
+    string RequesterFull, string RepoFull);
 
 /// Renders the consent decision log as the Activity tab (spec §7): pure file I/O via the injected
 /// `read`, so the feed works with the daemon stopped or unreachable. No FileSystemWatcher —
@@ -156,10 +154,18 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
     static ActivityRow ToRow(ConsentDecisionRecord r) {
         var (time, tip) = FormatTime(r.DecidedAt);
+        var requester = RequesterOf(r);
+        var source = SourceLabelOf(r.Source);
+        var leaf = RepoLabel.Leaf(r.RepoPath);
         return new(
-            time, tip, r.Outcome, r.Outcome == "allowed", RequesterOf(r),
-            ConsentPromptViewModel.KindLabelOf(r.Kind), RepoLabel.Leaf(r.RepoPath), r.RepoPath, r.Vendor,
-            SourceLabelOf(r.Source));
+            time, tip,
+            OutcomeLabelOf(r.Outcome),
+            r.Outcome == "allowed",
+            PrimaryDetailOf(r.Vendor, r.Kind),
+            SecondaryLineOf(TruncateRequester(requester), leaf, source),
+            $"{requester}\n{r.RepoPath}",
+            requester,
+            r.RepoPath);
     }
 
     static string RequesterOf(ConsentDecisionRecord r) =>
