@@ -67,11 +67,27 @@ public class PiReviewerContainmentCertTests {
         await using var bench = PiContainmentBench.Create(plantCanaries: false);
 
         // Positive control: proves a scripted call reaches an executor when the tool exists, so the
-        // not-found results above are containment and not a driver that never calls anything.
+        // not-found results above are containment and not a driver that never calls anything. Two
+        // built-ins, not one, so "not found" for write/edit/read/grep/find/ls doesn't rest entirely on
+        // bash's own control.
         await bench.RunAsync(argvOverride: ["--mode", "rpc", "--no-approve", "--no-extensions", "--offline"],
-            HostileCalls[0], new PiScriptedStep(Text: "done"));
+            HostileCalls[0], HostileCalls[1], new PiScriptedStep(Text: "done"));
 
         await Assert.That(File.Exists(Path.Combine(bench.Worktree, "BASH_RAN"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(bench.Worktree, "WRITE_RAN"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Read_file_accepts_an_inside_path() {
+        RequireGate();
+        await using var bench = PiContainmentBench.Create(plantCanaries: false);
+
+        var run = await bench.RunAsync(null,
+            new PiScriptedStep(Tool: "read_file", ArgsJson: """{"path":"inside.txt"}""", Id: "r1"),
+            new PiScriptedStep(Text: "done"));
+
+        await Assert.That(run.ToolResults).Contains(r => r.Contains("INSIDE-FILE"));
+        await Assert.That(string.Join("\n", run.ToolResults)).DoesNotContain("path is outside the repository under review");
     }
 
     [Test]
@@ -131,6 +147,12 @@ public class PiReviewerContainmentCertTests {
 
         await Assert.That(run.SessionFile!).StartsWith(PiReviewerLaunchDir.RootFor(bench.StateDir));
         await Assert.That(Directory.Exists(bench.HostileSessionDir)).IsFalse();
+
+        // Evidence, not silence: the npmCommand stand-in really is invoked under --offline (Pi spawns
+        // it once for "root -g" before the extension filter even applies), so its absence of an
+        // "install" line means the install was refused — not that npmCommand was never reached at all.
+        await Assert.That(bench.NpmInvocations).IsNotEmpty();
+        await Assert.That(bench.NpmInvocations).Contains(i => i.Contains("root"));
         await Assert.That(bench.NpmInvocations).DoesNotContain(i => i.StartsWith("install", StringComparison.Ordinal));
     }
 
@@ -140,13 +162,40 @@ public class PiReviewerContainmentCertTests {
         await using var bench = PiContainmentBench.Create(plantCanaries: true);
 
         // Positive control for the first test: every plant must be observable, or "no INV- token"
-        // proves nothing.
+        // proves nothing. Bench planting differs from probe.py's, so this asserts EVERY
+        // token-bearing source individually rather than trusting that a couple of them standing in
+        // for the rest — a source silently dead in THIS bench's planting would not otherwise be caught.
         var run = await bench.RunAsync(argvOverride: ["--mode", "rpc", "--approve", "--offline"], new PiScriptedStep(Text: "ok"));
 
         await Assert.That(run.ToolsOffered).Contains("opext_tool");
         await Assert.That(run.ToolsOffered).Contains("repoext_tool");
+
+        // AGENTS.md, at both scopes.
         await Assert.That(run.FirstRequestText).Contains("INV-OP-AGENTS");
+        await Assert.That(run.FirstRequestText).Contains("INV-REPO-AGENTS");
+
+        // An ancestor directory's CLAUDE.md.
+        await Assert.That(run.FirstRequestText).Contains("INV-REPO-ANCESTOR-CLAUDE");
+
+        // The repository's own SYSTEM.md / APPEND_SYSTEM.md. The operator's own APPEND_SYSTEM.md is
+        // deliberately NOT asserted here: the probe findings record it as shadowed by the repository's
+        // when both are present in the same launch — measured on its own is a --system-prompt/
+        // --append-system-prompt argv test, not this inventory control.
+        await Assert.That(run.FirstRequestText).Contains("INV-REPO-SYSTEM");
+        await Assert.That(run.FirstRequestText).Contains("INV-REPO-APPEND-SYSTEM");
+
+        // Skill description tokens, at every planted scope.
+        await Assert.That(run.FirstRequestText).Contains("INV-OP-SKILL-DECLARED");
+        await Assert.That(run.FirstRequestText).Contains("INV-OP-SKILL-AGENTDIR");
+        await Assert.That(run.FirstRequestText).Contains("INV-OP-SKILL-HOME-AGENTS");
+        await Assert.That(run.FirstRequestText).Contains("INV-REPO-SKILL-PI");
+        await Assert.That(run.FirstRequestText).Contains("INV-REPO-SKILL-AGENTS");
         await Assert.That(run.FirstRequestText).Contains("INV-REPO-SKILL-ANCESTOR");
+
+        // Prompt templates (INV-OP-TEMPLATE, INV-REPO-TEMPLATE) are planted too, but their only
+        // observable is the get_commands RPC, never the first request's text — this control cannot
+        // prove them live; their liveness rests on the committed probe's own get_commands-based
+        // control instead.
     }
 
     [Test]
