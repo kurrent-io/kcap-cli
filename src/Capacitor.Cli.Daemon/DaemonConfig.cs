@@ -384,6 +384,15 @@ public class DaemonConfig {
     /// </summary>
     public string? PiModel { get; set; }
 
+    /// <summary>Whether THIS daemon may run Pi as an unattended review-flow reviewer. **Default TRUE —
+    /// the variable is an opt-OUT** (<c>KCAP_PI_UNATTENDED_REVIEWER=0</c> disables), matching the other
+    /// gated reviewers and the never-gated Claude/Codex/Cursor/Copilot ones that carry the same
+    /// authority. See <c>PiReviewerCapability</c>.</summary>
+    public bool PiUnattendedReviewerEnabled { get; set; } = true;
+
+    /// <summary>Ceiling on a Pi reviewer turn. Matches the Antigravity reviewer's turn limit.</summary>
+    public int PiReviewerTurnTimeoutSeconds { get; set; } = 600;
+
     /// <summary>Path or bare command for Google Gemini CLI's ACP entry point, spawned as
     /// <c>{GeminiPath} --experimental-acp …</c> by <c>AcpHostedAgentRuntimeFactory</c>. It drives
     /// interactive hosting AND the gated unattended reviewer, whose build-affirmation probe reads
