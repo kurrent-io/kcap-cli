@@ -41,6 +41,16 @@ public class CloudTerminalSinkTests {
         }
     }
 
+    /// <summary>Lets a test release sends one at a time.</summary>
+    sealed class StepGate : IDisposable {
+        readonly SemaphoreSlim _permits = new(0);
+
+        public Task Wait(byte[] _, CancellationToken ct) => _permits.WaitAsync(ct);
+        public void Release(int count = 1) => _permits.Release(count);
+        public void Open() => _permits.Release(1_000_000);
+        public void Dispose() => _permits.Dispose();
+    }
+
     [Test]
     public async Task Chunks_reach_the_mirror_in_order() {
         await using var rig = new Rig();
@@ -255,5 +265,272 @@ public class CloudTerminalSinkTests {
 
         await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
         await Assert.That(rig.Mirror.Entered).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_backlog_past_the_budget_is_replaced_by_a_reset_and_the_ring() {
+        var gate = new StepGate();
+        await using var rig = new Rig(Fast with { BacklogBudgetBytes = 8 });
+        rig.Mirror.OnSend = gate.Wait;
+        _ = rig.Sink;
+
+        rig.Emit("aaaa");
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Entered == 1); // dequeued, parked on the gate
+        rig.Emit("bbbb");
+        rig.Emit("cccc"); // 8 queued: exactly the budget
+        rig.Emit("dddd"); // would exceed it
+
+        gate.Open();
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 6);
+        rig.Emit("eeee");
+        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+
+        // "aaaa" was already in the transport, so it may land before the reset. Nothing queued
+        // before the overflow follows it.
+        await Assert.That(string.Join(",", rig.Mirror.SentText()))
+            .IsEqualTo("aaaa,<RIS>,aaaa,bbbb,cccc,dddd,eeee");
+    }
+
+    [Test]
+    public async Task A_chunk_larger_than_the_budget_is_accepted_on_an_empty_queue() {
+        await using var rig = new Rig(Fast with { BacklogBudgetBytes = 2 });
+        _ = rig.Sink;
+
+        rig.Emit("much-larger-than-two-bytes");
+        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+
+        await Assert.That(string.Join(",", rig.Mirror.SentText())).IsEqualTo("much-larger-than-two-bytes");
+    }
+
+    [Test]
+    public async Task Appends_racing_resyncs_leave_no_gap_and_no_duplicate() {
+        await using var rig = new Rig(Fast with { BacklogBudgetBytes = 64 });
+        rig.Mirror.OnSend = async (_, _) => await Task.Yield();
+        _ = rig.Sink;
+
+        var emitted = new StringBuilder();
+        for (var i = 0; i < 2_000; i++) {
+            var text = $"c{i:D5};";
+            emitted.Append(text);
+            rig.Emit(text);
+        }
+
+        // The ring never evicted (14 KB total), so a terminal fed this stream must end up holding
+        // every chunk exactly once, in order — whatever resyncs happened on the way. Wait for it
+        // before stopping: a sink stopped while desynced exits without replaying.
+        var expected = emitted.ToString();
+        await WaitHarness.PollUntilAsync(() => string.Concat(rig.Mirror.Reconstruct()) == expected);
+
+        await Assert.That(rig.Mirror.SentText().Count(t => t == "<RIS>")).IsGreaterThan(0);
+        await rig.Sink.StopAsync(TimeSpan.Zero).WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_send_that_keeps_failing_while_ready_desyncs_even_with_an_empty_queue() {
+        await using var rig = new Rig(Fast with { FailingSendAttempts = 3 });
+        var failures = 3;
+        rig.Mirror.OnSend = (_, _) =>
+            Interlocked.Decrement(ref failures) >= 0
+                ? throw new InvalidOperationException("rejected while connected")
+                : Task.CompletedTask;
+        _ = rig.Sink;
+
+        rig.Emit("only");
+
+        // The failing chunk was the last one; the pump must not park on the empty channel.
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 2);
+        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+
+        await Assert.That(string.Join(",", rig.Mirror.SentText())).IsEqualTo("<RIS>,only");
+    }
+
+    [Test]
+    public async Task An_overflow_during_a_replay_does_not_interrupt_it() {
+        var gate = new StepGate();
+        await using var rig = new Rig(Fast with { BacklogBudgetBytes = 4 });
+        rig.Mirror.OnSend = gate.Wait;
+        _ = rig.Sink;
+
+        rig.Emit("r1");
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Entered == 1);
+        rig.Emit("r2");
+        rig.Emit("r3");
+        rig.Emit("r4"); // overflow → desync; ring = r1..r4
+
+        gate.Release(2); // stale r1, then the reset
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 2);
+
+        rig.Emit("x1");
+        rig.Emit("x2");
+        rig.Emit("x3"); // overflows again, mid-replay
+
+        gate.Open();
+
+        // Wait for the second resync to have begun before stopping: a completed sink never
+        // begins a resync, so a stop racing the lock ahead of it would cut this short.
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.SentText().Count(t => t == "<RIS>") == 2);
+        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+
+        var sent = string.Join(",", rig.Mirror.SentText());
+        await Assert.That(sent).StartsWith("r1,<RIS>,r1,r2,r3,r4,<RIS>,r1,r2,r3,r4,x1,x2,x3");
+    }
+
+    [Test]
+    public async Task Sustained_overload_ends_synced_once_production_stops() {
+        await using var rig = new Rig(Fast with { BacklogBudgetBytes = 32 });
+        rig.Mirror.OnSend = (_, ct) => Task.Delay(1, ct);
+        _ = rig.Sink;
+
+        var emitted = new StringBuilder();
+        for (var i = 0; i < 400; i++) {
+            var text = $"o{i:D4};";
+            emitted.Append(text);
+            rig.Emit(text);
+            if (i % 40 == 0) await Task.Yield();
+        }
+
+        rig.Emit("tail;");
+        emitted.Append("tail;");
+
+        // Production has stopped: the last replay completes, the queue stays within budget, and
+        // the mirror converges on everything emitted.
+        var expected = emitted.ToString();
+        await WaitHarness.PollUntilAsync(() => string.Concat(rig.Mirror.Reconstruct()) == expected);
+
+        rig.Emit("live;");
+        await WaitHarness.PollUntilAsync(() => string.Concat(rig.Mirror.Reconstruct()) == expected + "live;");
+        await rig.Sink.StopAsync(TimeSpan.Zero).WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_resync_request_on_an_idle_sink_wakes_the_pump() {
+        await using var rig = new Rig();
+        _ = rig.Sink;
+
+        rig.Emit("a");
+        rig.Emit("b");
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 2);
+
+        rig.Sink.RequestResync();
+
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 5);
+        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+
+        await Assert.That(string.Join(",", rig.Mirror.SentText())).IsEqualTo("a,b,<RIS>,a,b");
+    }
+
+    [Test]
+    public async Task A_resync_request_aborts_a_replay_in_progress() {
+        var gate = new StepGate();
+        await using var rig = new Rig();
+        rig.Mirror.OnSend = gate.Wait;
+        _ = rig.Sink;
+
+        lock (rig.SinksLock) {
+            foreach (var t in new[] { "p1", "p2", "p3" }) rig.Ring.Append(Encoding.UTF8.GetBytes(t));
+        }
+
+        rig.Sink.RequestResync();
+        gate.Release(2); // reset + p1
+
+        // Wait until p2 is inside the transport: a request that lands before p2's send starts
+        // would supersede p2 as well, and the sequence below would differ.
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Entered == 3);
+
+        rig.Sink.RequestResync(); // the connection the replay started on is gone
+        gate.Open();
+
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.SentText().Count(t => t == "<RIS>") == 2);
+        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+
+        // p2 was already in the transport when the request arrived; p3 of the first replay never goes out.
+        await Assert.That(string.Join(",", rig.Mirror.SentText())).IsEqualTo("<RIS>,p1,p2,<RIS>,p1,p2,p3");
+    }
+
+    [Test]
+    public async Task Many_resync_requests_against_a_held_pump_coalesce_into_one() {
+        var gate = new StepGate();
+        await using var rig = new Rig();
+        rig.Mirror.OnSend = gate.Wait;
+        _ = rig.Sink;
+
+        rig.Emit("a");
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Entered == 1);
+
+        for (var i = 0; i < 10_000; i++) rig.Sink.RequestResync();
+
+        await Assert.That(rig.Sink.WakeupsWrittenForTest).IsEqualTo(1L);
+
+        gate.Open();
+
+        // Wait for the resync to have begun before stopping: a completed sink never begins a
+        // resync, so a stop racing the lock ahead of it would cut this short.
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.SentText().Count(t => t == "<RIS>") == 1);
+        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+
+        await Assert.That(string.Join(",", rig.Mirror.SentText())).IsEqualTo("a,<RIS>,a");
+    }
+
+    [Test]
+    public async Task A_stop_wins_over_a_resync_that_is_waiting_for_readiness() {
+        await using var rig = new Rig();
+        rig.Mirror.Ready = false;
+        _ = rig.Sink;
+
+        rig.Emit("a");
+        rig.Sink.RequestResync();
+
+        var stop = rig.Sink.StopAsync(HangGuard);
+        rig.Mirror.Ready = true;
+        await stop.WaitAsync(HangGuard);
+
+        await Assert.That(rig.Mirror.Entered).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_stop_lets_a_replay_that_has_begun_finish_inside_the_bound() {
+        var gate = new StepGate();
+        await using var rig = new Rig();
+        rig.Mirror.OnSend = gate.Wait;
+        _ = rig.Sink;
+
+        rig.Emit("a");
+        rig.Emit("b");
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Entered == 1);
+        rig.Sink.RequestResync();
+
+        gate.Release(2); // stale "a", then the reset: the replay has begun
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 2);
+
+        var stop = rig.Sink.StopAsync(HangGuard);
+        gate.Open();
+        await stop.WaitAsync(HangGuard);
+
+        await Assert.That(string.Join(",", rig.Mirror.SentText())).IsEqualTo("a,<RIS>,a,b");
+    }
+
+    [Test]
+    public async Task Desync_warnings_are_limited_to_one_per_interval() {
+        var time = new FakeTimeProvider();
+        var log  = new CountingLogger();
+        await using var rig = new Rig();
+        await using var sink = new CloudTerminalSink(
+            "agent-1", rig.SinksLock, rig.Ring, rig.Mirror.Send, () => rig.Mirror.Ready,
+            log, time, Fast, CancellationToken.None);
+
+        for (var i = 0; i < 5; i++) {
+            sink.RequestResync();
+            var resets = i + 1;
+            await WaitHarness.PollUntilAsync(() => rig.Mirror.SentText().Count(t => t == "<RIS>") == resets);
+        }
+
+        await Assert.That(log.Warnings).IsEqualTo(1);
+
+        time.Advance(Fast.WarningInterval);
+        sink.RequestResync();
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.SentText().Count(t => t == "<RIS>") == 6);
+
+        await Assert.That(log.Warnings).IsEqualTo(2);
+        await sink.StopAsync(TimeSpan.Zero).WaitAsync(HangGuard);
     }
 }
