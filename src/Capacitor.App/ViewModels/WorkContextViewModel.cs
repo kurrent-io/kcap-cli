@@ -125,6 +125,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public IReadOnlyList<SubagentCount> SubagentCounts =>
         [.. SubagentCountOrder.Select(state => new SubagentCount(state, _subagents.Count(state))).Where(c => c.Count > 0)];
 
+    /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
+    /// read never holds the work item back.
+    public PlanSectionViewModel Plan { get; }
+
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasSubagents));
         this.RaisePropertyChanged(nameof(SubagentsHeader));
@@ -217,8 +221,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
             SessionSubagents subagents, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
-            Action<string>? openWorkItem = null) {
+            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null) {
         _source = source;
+        Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
         _opener = opener;
         _time = time;
         _openWorkItem = openWorkItem;
@@ -235,6 +240,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         RefreshCommand = ReactiveCommand.Create(
             () => {
                 PullRequests?.Refresh();
+                Plan.Refresh();
                 if (_current is null) return;
                 if (_current.IsReading) _current.RefreshPending = true;
                 else StartRead(_current);
@@ -299,6 +305,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         IsStale = false;
         Phase = WorkContextPhase.Loading;
         StartRead(_current);
+        Plan.SwitchSession(id);
     }
 
     void StartRead(ReadLease lease) {
@@ -337,12 +344,15 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     }
 
     void OnTick() {
-        if (_tornDown || _current is not { IsReading: false } lease) return;
-        StartRead(lease);
+        if (_tornDown) return;
+        Plan.Refresh();
+        if (_current is { IsReading: false } lease) StartRead(lease);
     }
 
     void OnSignInCompleted() {
-        if (_tornDown || _current is not { } lease) return;
+        if (_tornDown) return;
+        Plan.Refresh();
+        if (_current is not { } lease) return;
         if (lease.IsReading) lease.RefreshPending = true;
         else StartRead(lease);
     }
@@ -388,5 +398,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 try { await pending; } catch (Exception) { }
             }
         foreach (var lease in leases) lease.Cts.Dispose();
+        await Plan.TeardownAsync();
     }
 }

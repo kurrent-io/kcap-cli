@@ -121,6 +121,7 @@ public class WorkspaceViewSmokeTests {
                 "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
                 "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton",
                 "PullRequestSection", "PullRequestHeader", "PullRequestNumberMeta", "PullRequestCard", "LinkCards", "PullRequestToggle", "PullRequestEmptyText", "IssueSection",
+                "PlanSection", "PlanToggle", "PlanHeaderText", "PlanCounts", "PlanDoneCount", "PlanOpenCount", "PlanBody", "PlanDocumentList", "PlanTaskList",
                 "WhoSection", "WhoToggle", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionFacts", "SessionIdButton", "OpenWorkItemButton", "PaneScroll",
             })
                 await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");

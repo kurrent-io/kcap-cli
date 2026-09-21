@@ -13,11 +13,12 @@ public sealed class ServerClients : IAsyncDisposable {
     volatile bool _cleanupRequested;
     readonly Action _invalidateAuthentication;
 
-    public ServerClients(IAsyncDisposable? launch, IAsyncDisposable? workContext, IAsyncDisposable? pullRequests = null) {
-        _cleanup = new Lazy<Task>(() => CleanupAsync(launch, workContext, _signIn, pullRequests), LazyThreadSafetyMode.ExecutionAndPublication);
+    public ServerClients(IAsyncDisposable? launch, IAsyncDisposable? workContext, IAsyncDisposable? pullRequests = null, IAsyncDisposable? plans = null) {
+        _cleanup = new Lazy<Task>(() => CleanupAsync(launch, workContext, _signIn, pullRequests, plans), LazyThreadSafetyMode.ExecutionAndPublication);
         _invalidateAuthentication = () => {
             (workContext as ServerWorkContextSource)?.InvalidateAuthentication();
             (pullRequests as ServerPullRequestSource)?.InvalidateAuthentication();
+            (plans as ServerPlanSource)?.InvalidateAuthentication();
         };
     }
 
@@ -40,12 +41,14 @@ public sealed class ServerClients : IAsyncDisposable {
         return new(_cleanup.Value);
     }
 
-    /// Launch client, then the work-context source, then the subject completed and disposed —
-    /// each step guarded so a throwing disposal never skips the next.
-    internal static async Task CleanupAsync(IAsyncDisposable? launch, IAsyncDisposable? workContext, Subject<Unit> signIn, IAsyncDisposable? pullRequests = null) {
+    /// Launch client, then the sources, then the subject completed and disposed — each step guarded
+    /// so a throwing disposal never skips the next.
+    internal static async Task CleanupAsync(IAsyncDisposable? launch, IAsyncDisposable? workContext, Subject<Unit> signIn,
+            IAsyncDisposable? pullRequests = null, IAsyncDisposable? plans = null) {
         await DisposeGuarded(launch, "launch client").ConfigureAwait(false);
         await DisposeGuarded(workContext, "work-context source").ConfigureAwait(false);
         await DisposeGuarded(pullRequests, "pull-request source").ConfigureAwait(false);
+        await DisposeGuarded(plans, "plan source").ConfigureAwait(false);
         try {
             signIn.OnCompleted();
             signIn.Dispose();
