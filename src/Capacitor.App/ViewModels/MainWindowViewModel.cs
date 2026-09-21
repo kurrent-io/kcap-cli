@@ -209,8 +209,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
-    /// True while the footer reads Signed out and a sign-in action exists — the launcher's
-    /// Sign in lives on the other pane and is hidden once a workspace is open.
+    /// True while the rail reads Signed out and a sign-in action exists — the help flyout
+    /// offers it then; the launcher's Sign in is on the other pane and hidden once a workspace
+    /// is open.
     public bool SignInVisible => _signInVisible?.Value ?? false;
 
     string? _startMessage;
@@ -295,8 +296,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// no directory can give it.
     /// </param>
     /// <param name="requestSignIn">
-    /// Opens the re-auth sign-in surface (App owns the window). Null hides the rail Sign in —
-    /// a window with no dialog to open.
+    /// Opens the re-auth sign-in surface (App owns the window). Null hides Sign in in the help
+    /// flyout — a window with no dialog to open.
     /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,

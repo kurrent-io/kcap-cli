@@ -154,47 +154,39 @@
                  org's hover — at rail width it wraps to two lines and outweighs its neighbours. -->
             <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
                 <StackPanel x:Name="RailFooterPanel" Margin="16,10,16,10" Spacing="2">
-                    <DockPanel>
-                        <Button x:Name="RailSignInButton" DockPanel.Dock="Right" Classes="kcapChip"
-                                Content="Sign in" Command="{Binding SignInCommand}"
-                                IsVisible="{Binding SignInVisible}"
-                                FontSize="11" FontWeight="SemiBold" Padding="8,3" CornerRadius="6"
-                                Margin="8,0,0,0" VerticalAlignment="Center"
-                                AutomationProperties.Name="Sign in" />
-                        <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
-                            <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
-                                 diagnostic takes the extra slot; without one the caption stands
-                                 alone at default colour, same as daemon / agents / help. -->
+                    <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
+                        <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
+                             diagnostic takes the extra slot; without one the caption stands
+                             alone at default colour, same as daemon / agents / help. -->
+                        <ToolTip.Tip>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
+                                           IsVisible="{Binding ConnectionHasDetail}" />
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                           Classes="kcapTipCaption"
+                                           IsVisible="{Binding ConnectionHasDetail}" />
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                           IsVisible="{Binding !ConnectionHasDetail}" />
+                            </StackPanel>
+                        </ToolTip.Tip>
+                        <!-- The word IS the indicator: it takes StatusBrush itself, so the status
+                             colour needs no disc with a line box of its own to align against.
+                             Both fragments draw their size from footerValue and override only the
+                             brush, so the row cannot end up with two sizes and two baselines. -->
+                        <TextBlock Text="{Binding ConnectionDisplay}" Classes="footerValue"
+                                   Foreground="{Binding StatusBrush}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" Classes="footerValue"
+                                   Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis"
+                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                             <ToolTip.Tip>
                                 <StackPanel Spacing="2">
-                                    <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
-                                               IsVisible="{Binding ConnectionHasDetail}" />
-                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
-                                               Classes="kcapTipCaption"
-                                               IsVisible="{Binding ConnectionHasDetail}" />
-                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
-                                               IsVisible="{Binding !ConnectionHasDetail}" />
+                                    <TextBlock Text="{Binding ServerUrl}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.ServerUrlTip}"
+                                               Classes="kcapTipCaption" />
                                 </StackPanel>
                             </ToolTip.Tip>
-                            <!-- The word IS the indicator: it takes StatusBrush itself, so the status
-                                 colour needs no disc with a line box of its own to align against.
-                                 Both fragments draw their size from footerValue and override only the
-                                 brush, so the row cannot end up with two sizes and two baselines. -->
-                            <TextBlock Text="{Binding ConnectionDisplay}" Classes="footerValue"
-                                       Foreground="{Binding StatusBrush}" TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" Classes="footerValue"
-                                       Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis"
-                                       IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                <ToolTip.Tip>
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Text="{Binding ServerUrl}" />
-                                        <TextBlock Text="{x:Static vm:MainWindowViewModel.ServerUrlTip}"
-                                                   Classes="kcapTipCaption" />
-                                    </StackPanel>
-                                </ToolTip.Tip>
-                            </TextBlock>
-                        </StackPanel>
-                    </DockPanel>
+                        </TextBlock>
+                    </StackPanel>
                     <!-- ClipToBounds plus WrapPanel: a horizontal StackPanel sizes children
                          unbounded, so a long daemon line paints into the help chip. -->
                     <DockPanel ClipToBounds="True">
@@ -210,6 +202,15 @@
                                 <Flyout Placement="TopEdgeAlignedRight" VerticalOffset="6"
                                         FlyoutPresenterClasses="kcapPanel">
                                     <StackPanel Spacing="2" Margin="6" MinWidth="188">
+                                        <!-- Signed-out only: recovery leads, then a divider, then help. -->
+                                        <Button x:Name="RailHelpSignInButton" Classes="kcapGhost" Content="Sign in"
+                                                Command="{Binding SignInCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding SignInVisible}"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                Padding="10,8" FontSize="13.5"
+                                                AutomationProperties.Name="Sign in" />
+                                        <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}"
+                                                IsVisible="{Binding SignInVisible}" />
                                         <Button x:Name="RailHelpDocsButton" Classes="kcapGhost" Content="Documentation"
                                                 Command="{Binding OpenDocsCommand}" Click="OnHelpFlyoutItemClick"
                                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
