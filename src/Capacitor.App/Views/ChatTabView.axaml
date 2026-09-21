@@ -206,17 +206,9 @@
                    Foreground="{StaticResource KcapMutedBrush}" FontSize="14"
                    HorizontalAlignment="Center" VerticalAlignment="Center" />
 
-        <StackPanel x:Name="ChatActivityNote" Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="22,8,22,8"
-                    IsVisible="{Binding ActivityNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <Border Classes="toolRunning toolStatus" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
-                    Background="{StaticResource KcapWarningBrush}" />
-            <TextBlock Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
-                       VerticalAlignment="Center" />
-        </StackPanel>
-
         <!-- Runs that outlive the turn; the activity note never shares the screen with it. Warning
              marks work in flight here as it does on a running tool, not attention. -->
-        <Border x:Name="SubagentsBanner" Grid.Row="2" Margin="22,10,22,0" Padding="13,10"
+        <Border x:Name="SubagentsBanner" Grid.Row="1" Margin="22,10,22,0" Padding="13,10"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningSubagents}">
             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -235,7 +227,7 @@
             </StackPanel>
         </Border>
 
-        <Border x:Name="QueuedMessagesBanner" Grid.Row="3" Margin="22,4,22,0" Padding="13,10"
+        <Border x:Name="QueuedMessagesBanner" Grid.Row="2" Margin="22,4,22,0" Padding="13,10"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasQueuedMessages}">
             <StackPanel Spacing="6">
@@ -261,7 +253,15 @@
             </StackPanel>
         </Border>
 
-        <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="4" Margin="22,8,22,18"
+        <StackPanel x:Name="ChatActivityNote" Grid.Row="3" Orientation="Horizontal" Spacing="8" Margin="22,6,22,4"
+                    IsVisible="{Binding ActivityNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <Border Classes="toolRunning toolStatus" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
+                    Background="{StaticResource KcapWarningBrush}" />
+            <TextBlock Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
+                       VerticalAlignment="Center" />
+        </StackPanel>
+
+        <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="4" Margin="22,4,22,18"
                 Background="{StaticResource KcapSurfaceBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">
