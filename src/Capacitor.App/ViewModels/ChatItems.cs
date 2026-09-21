@@ -35,6 +35,10 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// True when the transcript carried a useful detail (brighter paint than a bare name).
     public bool HasDetail => !string.IsNullOrEmpty(Detail);
 
+    /// A question's detail is the question itself — prose, read whole and wrapped. Every other
+    /// detail is a command or a path, which the row keeps to one line and elides.
+    public bool DetailIsProse => Category == ToolCategory.Question;
+
     ToolOutcome _outcome;
     /// Flipped in place when the matching tool_result arrives; a result is terminal.
     public ToolOutcome Outcome {
@@ -74,16 +78,6 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
         _                 => _isAwaitingPermission ? "?" : "",
     };
 
-    bool _showRowStatus = true;
-    /// False on a lone-call card: status sits in the kind-chip header instead of trailing the detail.
-    public bool ShowRowStatus {
-        get => _showRowStatus;
-        set {
-            if (_showRowStatus == value) return;
-            _showRowStatus = value;
-            this.RaisePropertyChanged();
-        }
-    }
 }
 
 /// A run of consecutive tool calls. Settled calls fold into Summary when there are two or more
@@ -163,6 +157,13 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         set => this.RaiseAndSetIfChanged(ref _packsWithCard, value);
     }
 
+    bool _suppressedForPendingQuestion;
+    /// While a question prompt is open, the centered card owns the turn — hide this system bubble.
+    public bool SuppressedForPendingQuestion {
+        get => _suppressedForPendingQuestion;
+        set => this.RaiseAndSetIfChanged(ref _suppressedForPendingQuestion, value);
+    }
+
     public ToolGroupItem() {
         ToggleCommand = ReactiveCommand.Create(Toggle);
     }
@@ -182,8 +183,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     }
 
     void RefreshLoneChrome() {
-        var lone = _calls.Count == 1;
-        foreach (var c in _calls) c.ShowRowStatus = !lone;
         this.RaisePropertyChanged(nameof(ShowsKindChip));
         this.RaisePropertyChanged(nameof(KindChip));
         this.RaisePropertyChanged(nameof(HeaderIconData));
@@ -220,9 +219,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     string? PeekDetail() {
         var first = _calls.FirstOrDefault(c => c.IsSettled);
         if (first is null) return null;
-        var text = first.LineText;
-        const int cap = 56;
-        return text.Length <= cap ? text : text[..(cap - 1)] + "…";
+        return first.DetailIsProse ? TextElision.End(first.LineText, 56) : TextElision.Middle(first.LineText, 56);
     }
 }
 

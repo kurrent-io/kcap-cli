@@ -582,18 +582,47 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var path = Tmp.CreateFile("ask.jsonl", [
-                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""",
             ]);
             await h.PushAsync(Dto(path));
-            h.Permissions.Add(PermissionEntries.Question("q1"));
+            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
             await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
             var group = (ToolGroupItem)h.Chat.Items[0];
             await Assert.That(group.PacksWithCard).IsTrue();
             await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsTrue();
 
-            h.Permissions.Remove("q1");
+            h.Permissions.Remove("r1");
             await WaitUntilAsync(() => CardRows(h.Chat).Length == 0, what: "cleared");
             await Assert.That(group.PacksWithCard).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// The centered card owns a live question, so the group hides the moment the call is read —
+    /// before the card exists. Waiting for the card would show the row for the round trip and
+    /// then take it away. It comes back when the card retires, because until the transcript
+    /// carries the result the row is the only record of the call.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_call_hides_its_group_before_the_card_arrives() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            var group = (ToolGroupItem)h.Chat.Items[0];
+            await Assert.That(CardRows(h.Chat)).IsEmpty();
+            await Assert.That(group.SuppressedForPendingQuestion).IsTrue();
+
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
+            await Assert.That(group.SuppressedForPendingQuestion).IsTrue();
+            await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsFalse();
+
+            h.Permissions.Remove("q1");
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 0, what: "cleared");
+            await Assert.That(group.SuppressedForPendingQuestion).IsFalse();
             await h.TeardownAsync();
         });
     }
@@ -604,10 +633,10 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var path = Tmp.CreateFile("ask.jsonl", [
-                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""",
             ]);
             await h.PushAsync(Dto(path));
-            h.Permissions.Add(PermissionEntries.Question("q1"));
+            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
             await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
             var group = (ToolGroupItem)h.Chat.Items[0];
             await Assert.That(group.PacksWithCard).IsTrue();

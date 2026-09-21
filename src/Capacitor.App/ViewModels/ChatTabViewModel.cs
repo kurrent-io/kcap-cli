@@ -778,32 +778,60 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         RefreshActivityNote();
     }
 
+    /// The one group carrying the pack/suppress flags. Only the trailing group ever carries them,
+    /// and it stops being the trailing group without any card changing, so it is cleared by
+    /// identity rather than by sweeping every row on each drain.
+    ToolGroupItem? _flaggedGroup;
+
+    /// The group a question card has stood in for, so the row can come back the moment that card
+    /// retires rather than waiting for the transcript to carry the answer.
+    ToolGroupItem? _questionCardHost;
+
     /// Cards ride the same virtualizing list as the thread, always last, so a path switch or a
     /// transcript reset cannot bury them in the middle of replayed rows.
     void SyncPendingCardItems() {
         var cards = PendingCards;
         var start = _items.Count;
         while (start > 0 && _items[start - 1] is PendingCardItem) start--;
-        if (TrailingCardsMatch(start, cards)) return;
+        var trailingGroup = start > 0 && _items[start - 1] is ToolGroupItem g ? g : null;
+        var questionPending = cards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
+        if (questionPending && trailingGroup is not null) _questionCardHost = trailingGroup;
+        var suppressGroup = trailingGroup is not null && HidesBehindQuestionCard(trailingGroup, questionPending);
 
-        foreach (var item in _items)
-            if (item is ToolGroupItem { PacksWithCard: true } packed)
-                packed.PacksWithCard = false;
-
-        var wasEmpty = _items.Count == 0;
-        for (var i = _items.Count - 1; i >= 0; i--)
-            if (_items[i] is PendingCardItem) _items.RemoveAt(i);
-
-        var packs = cards.Count > 0 && _items.Count > 0 && _items[^1] is ToolGroupItem;
-        if (packs) ((ToolGroupItem)_items[^1]).PacksWithCard = true;
-        var first = true;
-        foreach (var card in cards) {
-            _items.Add(new PendingCardItem(card, packsWithPrevious: first && packs));
-            first = false;
+        if (!TrailingCardsMatch(start, cards)) {
+            var wasEmpty = _items.Count == 0;
+            for (var i = _items.Count - 1; i >= 0; i--)
+                if (_items[i] is PendingCardItem) _items.RemoveAt(i);
+            var first = true;
+            foreach (var card in cards) {
+                _items.Add(new PendingCardItem(card, packsWithPrevious: first && trailingGroup is not null && !suppressGroup));
+                first = false;
+            }
+            if (wasEmpty != (_items.Count == 0))
+                this.RaisePropertyChanged(nameof(PhaseNote));
         }
-        if (wasEmpty != (_items.Count == 0))
-            this.RaisePropertyChanged(nameof(PhaseNote));
+
+        if (!ReferenceEquals(_flaggedGroup, trailingGroup) && _flaggedGroup is { } stale) {
+            stale.PacksWithCard = false;
+            stale.SuppressedForPendingQuestion = false;
+        }
+        _flaggedGroup = trailingGroup;
+        if (trailingGroup is not null) {
+            trailingGroup.PacksWithCard = cards.Count > 0 && !suppressGroup;
+            trailingGroup.SuppressedForPendingQuestion = suppressGroup;
+        }
     }
+
+    /// The centered card is where a question is answered, so the left card for the same call is
+    /// chrome while the question is live. Hiding keys off the call, not off the card: the card
+    /// lands a round trip later, and waiting for it shows the left card only to take it away
+    /// again. Two cases hand the row back — an ended session, which is getting no card at all,
+    /// and a card that has already retired, after which the row is the only record of the call
+    /// until the transcript carries its result.
+    bool HidesBehindQuestionCard(ToolGroupItem group, bool questionPending) =>
+        _input.Availability != SendAvailability.Ended
+        && (questionPending || !ReferenceEquals(_questionCardHost, group))
+        && group.Calls.Any(static c => c.Category == ToolCategory.Question && !c.IsSettled);
 
     bool TrailingCardsMatch(int start, ReadOnlyObservableCollection<PendingCardViewModel> cards) {
         if (_items.Count - start != cards.Count) return false;

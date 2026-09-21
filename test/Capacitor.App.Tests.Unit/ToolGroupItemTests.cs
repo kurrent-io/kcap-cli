@@ -85,7 +85,7 @@ public class ToolGroupItemTests {
     public async Task Folded_summary_peeks_the_first_settled_detail_and_caps_long_ones() {
         await RunOnUiAsync(async () => {
             var group = new ToolGroupItem();
-            var longDetail = new string('x', 80);
+            var longDetail = new string('x', 40) + new string('y', 40);
             var first = new ToolCallItem("Bash", longDetail, ToolCategory.Command);
             var second = Call("Read", ToolCategory.Read);
             group.Add(first);
@@ -93,7 +93,8 @@ public class ToolGroupItemTests {
             first.Outcome = ToolOutcome.Done;
             second.Outcome = ToolOutcome.Done;
 
-            await Assert.That(group.SummaryLine).IsEqualTo($"Ran a command, read a file · {new string('x', 55)}…");
+            await Assert.That(group.SummaryLine)
+                .IsEqualTo($"Ran a command, read a file · {new string('x', 28)}…{new string('y', 27)}");
             group.Toggle();
             await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
         });

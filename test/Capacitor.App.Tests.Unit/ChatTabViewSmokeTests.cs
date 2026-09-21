@@ -768,6 +768,62 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// Pins the card's inner alignment: one header control for both the folded summary and a
+    /// lone call's kind chip, and a body inset by the header's icon box plus its gap on both
+    /// sides, so rows and their status pills read as nested under the label.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_cards_body_is_inset_under_its_header_label() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("inset.jsonl", [ToolCallLine, ToolResultLine, ReadCallLine, ReadResultLine]));
+            host.Settle();
+
+            var summary = Summary(host.View);
+            await Assert.That(summary.GetVisualDescendants().OfType<ChatKindHeader>().Any()).IsTrue();
+            await Assert.That(summary.Padding.Left).IsEqualTo(8);
+            // The hover fill needs room around the row; the icon still starts where a lone
+            // call's header icon does, so the negative margin has to cancel that padding.
+            await Assert.That(summary.Margin.Left).IsEqualTo(-8);
+
+            var rows = host.View.GetVisualDescendants().OfType<ItemsControl>()
+                .Single(c => c.ItemsSource is IEnumerable<ToolCallItem>);
+            await Assert.That(rows.Margin.Left).IsEqualTo(22);
+            await Assert.That(rows.Margin.Right).IsEqualTo(22);
+            await host.CloseAsync();
+        });
+    }
+
+    /// A question's detail is the question: it wraps whole instead of eliding, unlike the command
+    /// and path rows around it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_row_wraps_instead_of_eliding() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            // Each call needs its own group: a folded multi-call group holds no settled rows.
+            await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach should we take for the chat bubble chrome?"}]}}]}}""",
+                """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"ok"}]}}""",
+                AssistantLinkLine, ToolCallLine, ToolResultLine,
+            ]));
+            host.Settle();
+
+            var lines = ToolRows(host.View)
+                .SelectMany(r => r.GetVisualDescendants().OfType<SelectableTextBlock>())
+                .Where(t => t.IsEffectivelyVisible)
+                .ToList();
+            var question = lines.Single(t => t.Text!.StartsWith("Which approach", StringComparison.Ordinal));
+            await Assert.That(question.TextWrapping).IsEqualTo(TextWrapping.Wrap);
+            await Assert.That(question.TextTrimming).IsEqualTo(TextTrimming.None);
+
+            var command = lines.Single(t => t.Text == "ls -la");
+            await Assert.That(command.TextWrapping).IsEqualTo(TextWrapping.NoWrap);
+            await Assert.That(command.TextTrimming).IsEqualTo(ChatTrimming.MiddleEllipsis);
+            await host.CloseAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task System_tool_cards_align_left_not_stretch() {
@@ -854,7 +910,6 @@ public class ChatTabViewSmokeTests {
             host.Settle();
             var call = OnlyGroup(host).Calls[0];
             await Assert.That(call.IsRunning).IsFalse();
-            await Assert.That(call.ShowRowStatus).IsFalse();
             var glyph = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.DataContext is ToolCallItem && t.Text == "?" && t.IsEffectivelyVisible);
             await Assert.That(glyph.Foreground).IsSameReferenceAs(Brush(isError: false));
@@ -874,9 +929,8 @@ public class ChatTabViewSmokeTests {
             var call = OnlyGroup(host).Calls[0];
             await Assert.That(call.IsRunning).IsTrue();
             await Assert.That(call.HasDetail).IsTrue();
-            await Assert.That(call.ShowRowStatus).IsFalse();
-            var pulse = host.View.GetVisualDescendants().OfType<Border>()
-                .Single(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible);
+            var pulse = ToolRows(host.View)[0].GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Classes.Contains("toolRunning") && b.IsVisible);
             await Assert.That(pulse.Background).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapWarningBrush"));
             var detail = ToolRows(host.View)[0].GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.IsEffectivelyVisible && t.Text == "ls -la");
@@ -1165,24 +1219,20 @@ public class ChatTabViewSmokeTests {
             await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
             host.Settle();
 
-            var chips = host.View.GetVisualDescendants().OfType<TextBlock>()
-                .Where(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible).ToList();
-            var kind = chips.Single(t => t.Text == "Question");
-            var header = chips.Single(t => t.Text == "Missing tools");
-            await Assert.That(header.FontSize).IsEqualTo(kind.FontSize);
-            await Assert.That(header.FontWeight).IsEqualTo(kind.FontWeight);
-            await Assert.That(header.Foreground).IsSameReferenceAs(kind.Foreground);
-
+            var header = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "Missing tools" && t.IsEffectivelyVisible);
             var question = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Classes.Contains("prompt") && t.Text == "declare this");
             await Assert.That(header.FontSize).IsNotEqualTo(question.FontSize);
+            await Assert.That(host.View.GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Classes.Contains("toolGroup")).IsVisible).IsFalse();
             await host.CloseAsync();
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_question_card_packs_against_the_tool_group_it_follows() {
+    public async Task A_pending_question_hides_the_tool_group_and_shows_only_the_centered_card() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
@@ -1195,10 +1245,10 @@ public class ChatTabViewSmokeTests {
 
             var group = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
             var card = host.View.GetVisualDescendants().OfType<ContentControl>().Single(c => c.Classes.Contains("pendingCard"));
-            await Assert.That(group.Classes.Contains("packsWithCard")).IsTrue();
-            await Assert.That(card.Classes.Contains("packsWithPrevious")).IsTrue();
-            await Assert.That(group.Margin.Bottom).IsEqualTo(4);
-            await Assert.That(card.Margin.Top).IsEqualTo(4);
+            await Assert.That(group.IsVisible).IsFalse();
+            await Assert.That(((ToolGroupItem)group.DataContext!).SuppressedForPendingQuestion).IsTrue();
+            await Assert.That(card.Classes.Contains("packsWithPrevious")).IsFalse();
+            await Assert.That(card.Margin.Top).IsEqualTo(8);
             await host.CloseAsync();
         });
     }

@@ -8,17 +8,20 @@
         <Border Classes="chatPromptCard">
             <StackPanel Spacing="6">
                 <views:ChatKindHeader Label="Permission" IconData="{x:Static views:ToolCategoryIcons.PermissionIcon}" />
-                <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" />
-                <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding ToolName}" FontSize="13" TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
+                <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}"
+                           TextTrimming="{x:Static views:ChatTrimming.MiddleEllipsis}" />
                 <TextBlock Text="{Binding ErrorText}" FontSize="11" Foreground="{StaticResource KcapDangerBrush}"
                            IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding HasOptions}">
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <Button Content="{Binding Label}" Command="{Binding PickCommand}" ToolTip.Tip="{Binding Description}"
+                            <Button Command="{Binding PickCommand}" ToolTip.Tip="{Binding Description}"
                                     Margin="0,0,6,6" Padding="10,4" FontSize="12" CornerRadius="7"
-                                    Background="{StaticResource KcapSurfaceRaisedBrush}" Foreground="{StaticResource KcapTextBrush}" />
+                                    Background="{StaticResource KcapSurfaceRaisedBrush}" Foreground="{StaticResource KcapTextBrush}">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -252,8 +255,10 @@
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <ToggleButton Classes="acpOption" Content="{Binding Label}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                          ToolTip.Tip="{Binding Description}" />
+                            <ToggleButton Classes="acpOption" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                          ToolTip.Tip="{Binding Description}">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </ToggleButton>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -261,8 +266,10 @@
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <Button Classes="acpOption" Content="{Binding Label}" Command="{Binding PickCommand}"
-                                    ToolTip.Tip="{Binding Description}" />
+                            <Button Classes="acpOption" Command="{Binding PickCommand}"
+                                    ToolTip.Tip="{Binding Description}">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
