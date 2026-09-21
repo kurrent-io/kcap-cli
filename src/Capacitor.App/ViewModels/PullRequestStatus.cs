@@ -12,6 +12,20 @@ public sealed record PullRequestStatus(string Text, string Kind = "neutral", str
     public bool UsesGlyphIcon => Kind is "open" or "draft" or "merged" or "conflict" or "commented";
     public bool UsesDiscIcon => !UsesGlyphIcon;
     public bool IsNeutralDisc => UsesDiscIcon && !IsSuccess && !IsWarning && !IsDanger && !IsPulsing;
+    /// Hover copy so colour is never the only cue — Detail when the caller has more, else Kind.
+    public string Tip => !string.IsNullOrEmpty(Detail) ? Detail! : Kind switch {
+        "open" => "This pull request is open.",
+        "draft" => "This pull request is still a draft.",
+        "merged" => "This pull request has been merged.",
+        "closed" => "This pull request was closed without merging.",
+        "conflict" => "This branch has merge conflicts with the base.",
+        "success" => Text.Length > 0 ? Text : "Passed.",
+        "failure" => Text.Length > 0 ? Text : "Failed.",
+        "pending" => "Checks are still running.",
+        "warning" => "Waiting on a required review before this PR can merge.",
+        "commented" => "Reviewers left comments without approving or requesting changes.",
+        _ => Text.Length > 0 ? Text : "Status unknown.",
+    };
     public string IconData => Kind switch {
         "open" or "draft" => "M4,5 A2,2 0 1 0 4,1 A2,2 0 1 0 4,5 M4,5 V13 M12,11 A2,2 0 1 0 12,15 A2,2 0 1 0 12,11 M12,11 V6 Q12,3 8,3 M10,1 L8,3 L10,5",
         "conflict" => "M8,2 L14.5,13.5 H1.5 Z M8,6.5 V9.5 M8,11.3 V11.7",

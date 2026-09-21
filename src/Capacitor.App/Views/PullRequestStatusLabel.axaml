@@ -14,7 +14,7 @@
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
     </UserControl.Styles>
     <!-- Same icon column as work-item parts and subagents: 12×16 slot, nudged up half a pixel against the 13/16 text. -->
-    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
+    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" ToolTip.Tip="{Binding Tip}" Classes.pulsing="{Binding IsPulsing}">
         <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
             <Panel Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"
                    IsVisible="{Binding UsesDiscIcon}">

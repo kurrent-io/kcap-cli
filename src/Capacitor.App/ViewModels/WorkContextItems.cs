@@ -15,6 +15,12 @@ public sealed class WorkContextPartViewModel(string title, WorkContextPartMark m
     public WorkContextPartMark Mark { get; } = mark;
     public bool IsSettled => Mark == WorkContextPartMark.Settled;
     public bool IsThisSession => Mark == WorkContextPartMark.ThisSession;
+    /// Purple is location (this session), green is settled — tip names the mark so colour is not alone.
+    public string MarkTip => Mark switch {
+        WorkContextPartMark.Settled => "Completed — settled on this work item.",
+        WorkContextPartMark.ThisSession => "In progress in this session.",
+        _ => "Not yet settled.",
+    };
 }
 
 /// A pull-request or issue card. The URL is server-returned, so it crosses the same trust boundary

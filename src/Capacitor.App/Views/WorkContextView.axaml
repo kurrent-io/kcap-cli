@@ -318,7 +318,7 @@
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="vm:WorkContextPartViewModel">
-                                                <StackPanel Orientation="Horizontal" Spacing="9">
+                                                <StackPanel Orientation="Horizontal" Spacing="9" ToolTip.Tip="{Binding MarkTip}">
                                                     <!-- Settled is green (outcome). This session is purple like IN FLIGHT — location, not done. -->
                                                     <Panel Width="12" Height="16" VerticalAlignment="Center" RenderTransform="translateY(-1.5px)">
                                                         <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"

@@ -27,6 +27,15 @@ public class PullRequestStatusTests {
         await Assert.That(status.IsWarning).IsTrue();
         await Assert.That(status.IsPulsing).IsFalse();
         await Assert.That(status.IsMuted).IsFalse();
+        await Assert.That(status.Tip).Contains("required review");
+    }
+
+    [Test]
+    public async Task A_status_tip_explains_when_detail_is_absent() {
+        await Assert.That(new PullRequestStatus("Merged", "merged").Tip).Contains("merged");
+        await Assert.That(new PullRequestStatus("Open", "open").Tip).Contains("open");
+        await Assert.That(new PullRequestStatus("2 failed", "failure", "1 failed · 0 pending · 1 passed").Tip)
+            .IsEqualTo("1 failed · 0 pending · 1 passed");
     }
 
     [Test]

@@ -41,9 +41,14 @@ public sealed partial class PullRequestContextViewModel {
     }
 
     public PullRequestStatus LifecycleStatus => CanDisplay ? PullRequestTones.LifecycleStatus(_overview) : new("");
-    public PullRequestStatus ReviewStatus => new(ReviewSummary, CanDisplay ? _overview?.ReviewDecision switch {
-        "approved" => "success", "changes_requested" => "failure", "review_required" => "warning", _ => "neutral"
-    } : "neutral");
+    public PullRequestStatus ReviewStatus => CanDisplay
+        ? _overview?.ReviewDecision switch {
+            "approved" => new("Approved", "success", "All required reviews are approved."),
+            "changes_requested" => new("Changes requested", "failure", "A reviewer requested changes before merge."),
+            "review_required" => new("Review required", "warning", "Waiting on a required review before this PR can merge."),
+            _ => new("Review decision unknown", "neutral", "GitHub has not reported a review decision yet."),
+        }
+        : new("");
     public PullRequestStatus ChecksStatus {
         get {
             if (!CanDisplay) return new("");
