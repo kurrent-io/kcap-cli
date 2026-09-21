@@ -114,8 +114,10 @@ one budget of queued references plus one ring's worth held by a replay in progre
   atomically, coalesces them: the setter writes a sentinel only when it flips the flag from clear
   to set, and the pump clears it when it reads a sentinel, *before* it re-checks the flags. At most
   one sentinel is ever queued, however many resync requests arrive while the pump is held, so the
-  memory bound holds. The sentinel is never sent and never counted. A sentinel write that fails
-  because the channel is completed is ignored: a completed sink does not resync.
+  memory bound holds. The sentinel is never sent and never counted. A completed sink claims no
+  sentinel at all — it has no reader to un-park, and it logs no desync — though the flags are still
+  set, so a completed pump that exhausts a send exits rather than send later chunks over a gap. A
+  claim whose write fails is released rather than left set.
 - `RequestResync()` on a sink that is already desynced still sets `_abortReplay`: a budget desync
   is upgraded, so a replay running on the dead connection is abandoned.
 
@@ -145,9 +147,12 @@ Pending resync work always comes before waiting on, or exiting from, the channel
 1. Wait until eligible (`IsReady`), re-checking after each retry delay. Nothing is sent to a
    connection that has not finished re-registering. A chunk that is waiting or held is given up —
    a live chunk when `_desynced` is set, a replay chunk when `_abortReplay` is set — and control
-   returns to the loop: the resync that follows supersedes it.
+   returns to the loop: the resync that follows supersedes it. A chunk of either kind is also
+   given up when the sink has completed and the connection is not eligible: the run has ended and
+   the mirror is about to be deleted, so waiting for readiness would only delay finalization.
 2. Call the send delegate with the pump's token.
-3. On an exception while *not* eligible: hold the chunk and go back to step 1, indefinitely.
+3. On an exception while *not* eligible: hold the chunk and go back to step 1, indefinitely —
+   unless the sink has completed, in which case step 1 gives the chunk up.
 4. On an exception while eligible: retry after the delay; when the attempts are exhausted, set
    `_desynced` and `_abortReplay` and return to the loop. The chunk is not dropped silently — the
    resync that follows replaces it.
@@ -251,16 +256,21 @@ pump and no tracked sink that has not started. The read loop removes its entry a
   the sink's single termination task. Every call awaits that same task.
 - The stop deadline is the earliest any caller has asked for: a later call with a shorter bound
   shortens it, and `TimeSpan.Zero` cancels at once. A later call never lengthens it.
-- Until the deadline the pump delivers what is queued, including a replay that has already begun.
-  A completed sink never *begins* a resync: the server deletes an agent's terminal buffer when the
-  agent unregisters, so a replay begun at the end of a run is worthless.
+- Until the deadline the pump delivers what is queued to a ready connection, including a replay
+  that has already begun. A chunk it finds the connection not ready for is given up rather than
+  held, even with bound remaining: the server deletes an agent's terminal buffer when the agent
+  unregisters, so a tail that cannot go out now is worthless, and holding it would delay
+  finalization — and the local clients' exit notice behind it — for the whole bound during an
+  outage. For the same reason a completed sink never *begins* a resync.
 - At the deadline the termination task cancels the pump's own token — which reaches a send blocked
   inside the transport, a retry delay and a channel wait alike — and waits for the pump, for at
   most the cancellation grace.
 - A pump that outlives the grace is **abandoned, not ended**: `StopAsync` returns, a Warning is
   logged, and a continuation observes the pump's eventual result or fault and disposes the token
-  source then. Otherwise the termination task disposes it once the pump has ended. This path
-  exists for a send delegate that ignores its token; the production delegate does not.
+  source then. Otherwise the termination task disposes it once the pump has ended. Two things
+  reach this path: a send delegate that ignores its token (the production delegate does not), and
+  a scheduler too starved to run the cancelled send's continuation inside the grace. A test whose
+  asserted outcome depends on the pump really ending therefore sets a grace no run can outlast.
 - A drain cut short logs at Debug with the bytes left unsent.
 
 Total time in `StopAsync` is at most the drain bound plus the cancellation grace — 2.5 s with the
@@ -360,7 +370,8 @@ can be gated, made to throw, and that observes its token; a settable eligibility
 - many `RequestResync` calls while the pump is held on a gated send leave at most one sentinel
   queued, and one reset + replay follows once the gate opens;
 - a failing resync retries after the delay, with Warnings limited to one per interval;
-- `StopAsync`, single caller: drains a synced queue; exits at once when desynced; cancels a send
+- `StopAsync`, single caller: drains a synced queue; exits at once when desynced; gives up a queue
+  it cannot deliver because the connection is not ready, without waiting out the bound; cancels a send
   blocked on its gate at the deadline, without the gate being released; a stop during a replay
   delivers the rest of the replay and the queued tail when they fit in the bound, and the pump then
   exits instead of waiting on the completed channel;
