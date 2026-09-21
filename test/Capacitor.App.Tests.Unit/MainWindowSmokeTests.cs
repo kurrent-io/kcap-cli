@@ -984,10 +984,10 @@ public class MainWindowSmokeTests {
     }
 
     /// Signed-out is a rail diagnosis; the launcher's Sign in is on the other pane and hidden
-    /// once a workspace is open, so the footer has to offer the same action beside the word.
+    /// once a workspace is open, so the help flyout has to offer the same action (not the footer).
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Rail_footer_offers_sign_in_when_signed_out() {
+    public async Task Rail_help_flyout_offers_sign_in_when_signed_out() {
         var (visibleWhileOut, clicks, visibleWhileIn) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var lane = new FakeServerLane();
@@ -1006,8 +1006,12 @@ public class MainWindowSmokeTests {
             window.UpdateLayout();
 
             var rail = window.FindDescendantOfType<SessionRailView>()!;
-            var signIn = rail.FindControl<Button>("RailSignInButton")!;
-            var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+            var signIn = rail.FindControl<Button>("RailHelpSignInButton")!;
+            var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled && signIn.Classes.Contains("kcapGhost");
             vm.SignInCommand.Execute().Subscribe();
             Dispatcher.UIThread.RunJobs();
 
@@ -1016,6 +1020,7 @@ public class MainWindowSmokeTests {
             window.UpdateLayout();
             var whileIn = signIn.IsVisible;
 
+            flyout.Hide();
             window.Close();
             Dispatcher.UIThread.RunJobs();
             return (whileOut, clicks, whileIn);

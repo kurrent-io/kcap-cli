@@ -31,6 +31,9 @@ public sealed class ClaudePaths {
     public string Plans        => Path.Combine(Home, "plans");
     public string UserSettings => Path.Combine(Home, "settings.json");
 
+    /// <summary>The repository-local skills tree, relative to a session's anchor.</summary>
+    public static string RepoSkillsRelativePath { get; } = Path.Combine(".claude", "skills");
+
     /// <summary>
     /// Claude's user-global config FILE (account/OAuth, MCP servers, per-project trust flags
     /// under <c>projects[path]</c>). With CLAUDE_CONFIG_DIR set it lives INSIDE the config dir;

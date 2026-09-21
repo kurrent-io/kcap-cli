@@ -5,7 +5,7 @@ using Avalonia.Threading;
 
 namespace Capacitor.App.Services.Notifications;
 
-public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink {
+public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink, IDesktopNotificationAccess {
     static bool _labsAvailable;
     readonly IDesktopNotificationSink _backend;
 
@@ -21,6 +21,12 @@ public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink {
     public void Show(DesktopNotification notification, Action<string?> activated) => _backend.Show(notification, activated);
     public void Close(string id) => _backend.Close(id);
     public void Dispose() => _backend.Dispose();
+
+    public Task<DesktopNotificationAccess> GetAsync() =>
+        (_backend as IDesktopNotificationAccess)?.GetAsync() ?? Task.FromResult(DesktopNotificationAccess.Unknown);
+    public Task<DesktopNotificationAccess> RequestAsync() =>
+        (_backend as IDesktopNotificationAccess)?.RequestAsync() ?? Task.FromResult(DesktopNotificationAccess.Unknown);
+    public void OpenSystemSettings() => (_backend as IDesktopNotificationAccess)?.OpenSystemSettings();
 
     public static AppBuilder Configure(AppBuilder builder) {
         // Labs' macOS implementation has async-void authorization failures and only withdraws

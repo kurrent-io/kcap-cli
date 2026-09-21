@@ -1,3 +1,3 @@
 namespace Capacitor.App.GitHubHtml;
 
-enum HtmlBlockPartKind { DetailsOpen, DetailsClose, Summary, Paragraph, Pre }
+enum HtmlBlockPartKind { Open, Close, Summary, Paragraph, Pre, Heading, Rule }

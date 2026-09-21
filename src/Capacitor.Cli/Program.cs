@@ -327,38 +327,36 @@ switch (command) {
             return await Run<EvalCommand>().HandleListQuestions();
         }
 
-        var evalSessionId = ResolveSessionId(args, valueFlags: ["--model", "--threshold", "--questions", "--skip"]);
+        var evalSessionId = ResolveSessionId(args, valueFlags: EvalCommand.ValueFlags);
 
         if (evalSessionId is null) {
             Console.Error.WriteLine("Usage: kcap eval [--model sonnet] [--chain] [--threshold N]");
-            Console.Error.WriteLine("                     [--questions <csv> | --skip <csv>] [sessionId]");
+            Console.Error.WriteLine("                     [--questions <csv> | --skip <csv>] [--baseline-out <path>] [sessionId]");
             Console.Error.WriteLine("       kcap eval --list-questions");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
 
-        var evalChain     = args.Contains("--chain");
-        var evalModel     = GetArg(args, "--model") ?? "sonnet";
-        var evalThreshold = GetArg(args, "--threshold") is { } ts && int.TryParse(ts, out var parsed)
+        var evalChain       = args.Contains("--chain");
+        var evalModel       = GetArg(args, "--model") ?? "sonnet";
+        var evalThreshold   = GetArg(args, "--threshold") is { } ts && int.TryParse(ts, out var parsed)
             ? parsed
             : (int?)null;
-        var evalQuestions = GetArg(args, "--questions");
-        var evalSkip      = GetArg(args, "--skip");
+        var evalQuestions   = GetArg(args, "--questions");
+        var evalSkip        = GetArg(args, "--skip");
+        var evalBaselineOut = GetArg(args, "--baseline-out");
 
-        // Guard against the user dropping the flag value — otherwise GetArg
-        // silently returns the next token ("--skip", "--chain", …) and the
-        // resolver later reports a confusing "unknown token" error.
-        foreach (var (flag, value) in new[] { ("--questions", evalQuestions), ("--skip", evalSkip) }) {
-            if (value is not null && value.StartsWith("--")) {
-                Console.Error.WriteLine($"eval: {flag} requires a value (got '{value}')");
-                return 2;
-            }
+        // A value flag with no value would otherwise be silently dropped — the baseline or selection
+        // the user asked for skipped, and the run still reported success.
+        if (EvalCommand.ValidateValueFlags(args) is { } flagError) {
+            Console.Error.WriteLine(flagError);
+            return 2;
         }
 
         return await Run<EvalCommand>().HandleEval(
             evalSessionId, evalModel, evalChain, evalThreshold,
-            evalQuestions, evalSkip
+            evalQuestions, evalSkip, evalBaselineOut
         );
     }
     case "generate-whats-done" when args.Length < 2:

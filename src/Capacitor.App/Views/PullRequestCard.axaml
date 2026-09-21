@@ -4,19 +4,9 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.PullRequestCard"
              x:DataType="vm:PullRequestContextViewModel">
-    <Border Margin="0" Padding="14" CornerRadius="8" BorderThickness="1"
-            Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
-        <StackPanel Spacing="9">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
-                    <TextBlock Text="Pull request" Classes="prMuted" />
-                    <TextBlock Text="{Binding NumberLabel}" FontSize="13" Foreground="{StaticResource KcapTextBrush}"
-                               IsVisible="{Binding NumberLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                </StackPanel>
-                <views:PullRequestStatusLabel Grid.Column="1" DataContext="{Binding LifecycleStatus}"
-                    IsVisible="{Binding $parent[views:PullRequestCard].((vm:PullRequestContextViewModel)DataContext).CanDisplay}" />
-            </Grid>
-            <ComboBox x:Name="PullRequestSelector" ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+    <StackPanel Spacing="9">
+            <ComboBox x:Name="PullRequestSelector" Classes="kcapField"
+                      ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected, Mode=TwoWay}"
                       IsVisible="{Binding HasMultipleChoices}" HorizontalAlignment="Stretch" FontSize="13"
                       AutomationProperties.Name="Linked pull request">
                 <ComboBox.ItemTemplate>
@@ -25,20 +15,46 @@
                     </DataTemplate>
                 </ComboBox.ItemTemplate>
             </ComboBox>
-            <TextBlock Text="{Binding RepositoryLabel}" Classes="prMuted" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RepositoryLabel}" IsVisible="{Binding HasChoice}" />
-            <TextBlock Text="{Binding Title}" FontSize="15.5" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="3"
-                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}"
-                       IsVisible="{Binding Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding HasChoice}">
+                <StackPanel Spacing="4" VerticalAlignment="Top">
+                    <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanDisplay}">
+                        <views:PullRequestStatusLabel DataContext="{Binding LifecycleStatus}" />
+                        <TextBlock Text="·" Classes="prMuted" VerticalAlignment="Center"
+                                   IsVisible="{Binding HasNumberLabel}" />
+                        <TextBlock x:Name="LifecycleNumber" Text="{Binding NumberLabel}" Classes="prMuted" VerticalAlignment="Center"
+                                   IsVisible="{Binding HasNumberLabel}" ToolTip.Tip="{Binding NumberLabel}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding RepositoryLabel}" Classes="prMuted" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding RepositoryLabel}" />
+                </StackPanel>
+                <Button x:Name="OpenGitHubButton" Grid.Column="1" Command="{Binding OpenGitHubCommand}" IsEnabled="{Binding CanOpenSource}"
+                        IsVisible="{Binding ShowsOpenSource}" Classes="prButton" VerticalAlignment="Center"
+                        AutomationProperties.Name="Open pull request in browser">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
+                        <Path Classes="prExternal prAfterLabel" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+            <Button x:Name="PullRequestTitleButton" Classes="copyValue" Command="{Binding OpenReaderCommand}"
+                    IsEnabled="{Binding CanOpenReader}" HorizontalAlignment="Stretch"
+                    IsVisible="{Binding Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                    AutomationProperties.Name="Open pull request overview">
+                <TextBlock Text="{Binding Title}" FontSize="13" LineHeight="16" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="3"
+                           TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
+            </Button>
             <StackPanel IsVisible="{Binding CanDisplay}">
-                <Button x:Name="SidebarChecksButton" Classes="prButton prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
-                        IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
+                <Button x:Name="SidebarChecksButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
+                        IsEnabled="{Binding CanReveal}" ToolTip.Tip="{Binding ChecksStatus.Tip}"
+                        AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
                         <Path Grid.Column="1" Classes="prChevron" />
                     </Grid>
                 </Button>
-                <Button x:Name="SidebarReviewsButton" Classes="prButton prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
-                        IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
+                <Button x:Name="SidebarReviewsButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
+                        IsEnabled="{Binding CanReveal}" ToolTip.Tip="{Binding ReviewStatus.Tip}"
+                        AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
                         <Path Grid.Column="1" Classes="prChevron" />
@@ -52,21 +68,7 @@
                 <Button Content="{Binding InstallToolLabel}" Command="{Binding InstallToolCommand}" IsVisible="{Binding ShowsInstallTool}" Classes="prButton prPrimary" Margin="0,0,8,0" />
                 <Button Content="Recheck" Command="{Binding RefreshCommand}" Classes="prButton" />
             </WrapPanel>
-            <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0" IsVisible="{Binding HasChoice}">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
-                    <Button Content="View PR" Command="{Binding OpenReaderCommand}"
-                            IsEnabled="{Binding !IsLegacy}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
-                    <Button Grid.Column="1" Command="{Binding OpenGitHubCommand}" IsEnabled="{Binding CanOpenSource}"
-                            Classes="prButton" AutomationProperties.Name="Open pull request in browser">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
-                            <Path Classes="prExternal prAfterLabel" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
-            </Border>
             <Button Content="Sign in" Command="{Binding SignInCommand}" IsVisible="{Binding ShowsSignIn}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
             <Button Content="Link GitHub" Command="{Binding LinkGitHubCommand}" IsVisible="{Binding ShowsLinkGitHub}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
-        </StackPanel>
-    </Border>
+    </StackPanel>
 </UserControl>

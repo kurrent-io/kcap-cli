@@ -1,21 +1,37 @@
 namespace Capacitor.App.ViewModels;
 
 public sealed record PullRequestStatus(string Text, string Kind = "neutral", string? Detail = null) {
-    public bool IsSuccess => Kind is "success" or "open";
+    /// Settled outcomes only — a merge, or a passing check/review. Open is live work, not success.
+    public bool IsSuccess => Kind is "success" or "merged";
     public bool IsWarning => Kind is "conflict" or "warning";
     public bool IsDanger => Kind is "failure" or "closed";
-    public bool IsPurple => Kind == "merged";
-    /// A running check and a draft share the muted colour; only the check pulses.
-    public bool IsMuted => Kind is "pending" or "draft";
+    /// Live / in-progress kinds share muted: open, draft, and a running check (only the check pulses).
+    public bool IsMuted => Kind is "pending" or "draft" or "open";
     public bool IsPulsing => Kind == "pending";
+    /// Git lifecycle marks stay stroke glyphs. Outcome discs are filled; in-flight / waiting
+    /// kinds stay hollow (pending pulse, review-required ring) like subagent running.
+    public bool UsesGlyphIcon => Kind is "open" or "draft" or "merged" or "conflict" or "commented";
+    public bool UsesDiscIcon => !UsesGlyphIcon;
+    public bool IsNeutralDisc => UsesDiscIcon && !IsSuccess && !IsWarning && !IsDanger && !IsPulsing;
+    /// Hover copy so colour is never the only cue — Detail when the caller has more, else Kind.
+    public string Tip => !string.IsNullOrEmpty(Detail) ? Detail! : Kind switch {
+        "open" => "This pull request is open.",
+        "draft" => "This pull request is still a draft.",
+        "merged" => "This pull request has been merged.",
+        "closed" => "This pull request was closed without merging.",
+        "conflict" => "This branch has merge conflicts with the base.",
+        "success" => Text.Length > 0 ? Text : "Passed.",
+        "failure" => Text.Length > 0 ? Text : "Failed.",
+        "pending" => "Checks are still running.",
+        "warning" => "Waiting on a required review before this PR can merge.",
+        "commented" => "Reviewers left comments without approving or requesting changes.",
+        _ => Text.Length > 0 ? Text : "Status unknown.",
+    };
     public string IconData => Kind switch {
         "open" or "draft" => "M4,5 A2,2 0 1 0 4,1 A2,2 0 1 0 4,5 M4,5 V13 M12,11 A2,2 0 1 0 12,15 A2,2 0 1 0 12,11 M12,11 V6 Q12,3 8,3 M10,1 L8,3 L10,5",
         "conflict" => "M8,2 L14.5,13.5 H1.5 Z M8,6.5 V9.5 M8,11.3 V11.7",
         "merged" => "M4,5 A2,2 0 1 0 4,1 A2,2 0 1 0 4,5 M4,5 V11 M4,11 A2,2 0 1 0 4,15 A2,2 0 1 0 4,11 M4,6 Q4,10 11,10 M11,10 A2,2 0 1 0 15,10 A2,2 0 1 0 11,10",
         "commented" => "M3,2 H13 Q14,2 14,3 V10 Q14,11 13,11 H6 L2,14 V3 Q2,2 3,2 Z",
-        "success" => "M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M4.5,8 L7,10.5 L11.5,5.5",
-        "failure" or "closed" => "M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M5.5,5.5 L10.5,10.5 M10.5,5.5 L5.5,10.5",
-        "pending" => "M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M8,4 V8 H11",
-        _ => "M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M5,8 H11"
+        _ => ""
     };
 }

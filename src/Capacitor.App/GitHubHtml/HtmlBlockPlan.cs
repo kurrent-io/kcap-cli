@@ -5,7 +5,7 @@ sealed class HtmlBlockPlan {
 
     public List<HtmlBlockPart> Parts { get; } = [];
 
-    /// Every `details` tag of the block in order, true for an open tag. Recorded even when the
+    /// Every structural tag of the block in order, open and close alike. Recorded even when the
     /// block is rejected: matching reads every block, so a rejected one cannot change who pairs.
-    public List<bool> DetailsTags { get; } = [];
+    public List<HtmlToken> StructuralTags { get; } = [];
 }

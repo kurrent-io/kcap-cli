@@ -1,5 +1,6 @@
 using System.Text;
 using Capacitor.App.GitHubHtml;
+using Markdig.Extensions.Tables;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 
@@ -24,12 +25,17 @@ static class TreeDump {
                 Blocks(builder, "", details);
                 break;
             case HtmlPreBlock pre:        Leaf(builder, "pre", pre); break;
+            case HtmlIndentBlock indent:  Blocks(builder, "indent", indent); break;
             case ParagraphBlock paragraph: Leaf(builder, "p", paragraph); break;
             case HeadingBlock heading:    Leaf(builder, "h" + heading.Level, heading); break;
+            case ThematicBreakBlock:      builder.Append("hr"); break;
             case HtmlBlock html:          builder.Append("html(").Append(Quote(Lines(html))).Append(')'); break;
             case QuoteBlock quote:        Blocks(builder, "quote", quote); break;
-            case ListBlock list:          Blocks(builder, "list", list); break;
+            case ListBlock list:          Blocks(builder, list.IsOrdered ? "olist" : "list", list); break;
             case ListItemBlock item:      Blocks(builder, "li", item); break;
+            case Table table:             Blocks(builder, "table" + table.ColumnDefinitions.Count, table); break;
+            case TableRow row:            Blocks(builder, row.IsHeader ? "thr" : "tr", row); break;
+            case TableCell cell:          Blocks(builder, cell.ColumnSpan > 1 ? "td" + cell.ColumnSpan : "td", cell); break;
             case ContainerBlock container: Blocks(builder, container.GetType().Name, container); break;
             case LeafBlock leaf:          Leaf(builder, leaf.GetType().Name, leaf); break;
             case LiteralInline literal:   builder.Append(Quote(literal.Content.ToString())); break;

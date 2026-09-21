@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
@@ -88,7 +89,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Branch).IsEqualTo("feature/x");
             await Assert.That(h.Vm.Harness).IsEqualTo("Claude Code · Claude Opus 5");
             await Assert.That(h.Vm.Transport).IsEqualTo("PTY");
-            await Assert.That(h.Vm.SessionSummaryLine).IsEqualTo("Claude Code · Claude Opus 5 · PTY");
+            await Assert.That(h.Vm.SessionExpanded).IsFalse();
             await Assert.That(h.Vm.SessionIdText).IsEqualTo("resolving…");
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
             await Assert.That(h.Source.Requested).IsEmpty();
@@ -109,6 +110,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Branch).IsEqualTo("—");
             await Assert.That(h.Vm.Worktree).IsEqualTo("main checkout · borrowed");
             await Assert.That(h.Vm.Transport).IsEqualTo("PTY");
+            await Assert.That(h.Vm.SessionExpanded).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }
@@ -490,8 +492,12 @@ public class WorkContextViewModelTests {
     static WorkItemPartDto Part(string id, string title, int ordinal, bool settled = false) =>
         new() { WorkItemId = id, Title = title, Ordinal = ordinal, IsSettled = settled };
 
-    static WorkItemLinkDto Link(string kind, string shortKey, string? url = null, string? title = null, string linkClass = "link") =>
-        new() { Kind = kind, Provider = "github", Value = shortKey, ShortKey = shortKey, Url = url, Title = title, LinkClass = linkClass };
+    static WorkItemLinkDto Link(string kind, string shortKey, string? url = null, string? title = null, string linkClass = "link",
+            string? value = null, string provider = "github") =>
+        new() {
+            Kind = kind, Provider = provider, Value = value ?? shortKey, ShortKey = shortKey,
+            Url = url, Title = title, LinkClass = linkClass,
+        };
 
     static WorkItemContributorDto Person(string userId, string? name, DateTimeOffset? at = null, string? avatar = null) =>
         new() { UserId = userId, DisplayName = name, LastActivityAt = at, AvatarUrl = avatar };
@@ -797,7 +803,7 @@ public class WorkContextViewModelTests {
             window.UpdateLayout();
             await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsFalse();
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsFalse();
-            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(view.FindControl<StackPanel>("IssueSection")!.IsEffectivelyVisible).IsFalse();
             var open = view.FindControl<Button>("OpenWorkItemButton")!;
             await Assert.That(open.IsEffectivelyVisible).IsTrue();
             open.Command!.Execute(open.CommandParameter);
@@ -809,7 +815,7 @@ public class WorkContextViewModelTests {
             await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.Text).IsEqualTo("A useful title");
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsTrue();
-            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(view.FindControl<StackPanel>("IssueSection")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(open.IsEffectivelyVisible).IsTrue();
         } finally {
             window.Close();
@@ -840,7 +846,7 @@ public class WorkContextViewModelTests {
             await Assert.That(title.IsEffectivelyVisible).IsEqualTo(displayTitle.Length > 0);
             await Assert.That(title.Text).IsEqualTo(displayTitle);
             await Assert.That(view.FindControl<Button>("OpenWorkItemButton")!.IsEffectivelyVisible).IsTrue();
-            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsEqualTo(!inline);
+            await Assert.That(view.FindControl<StackPanel>("IssueSection")!.IsEffectivelyVisible).IsEqualTo(!inline);
             await Assert.That(h.Vm.Issue!.Title).IsEqualTo(issueTitle);
         } finally {
             window.Close();
@@ -850,9 +856,10 @@ public class WorkContextViewModelTests {
         }
     });
 
+    /// The issue section lists every link-class issue; reference rows stay ignored.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_issue_card_is_the_first_link_class_issue_and_reference_rows_are_ignored() {
+    public async Task The_issue_section_lists_every_link_class_issue_and_ignores_references() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var withIssue = Item() with {
@@ -868,21 +875,99 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
 
             await Assert.That(h.Vm.HasIssue).IsTrue();
-            await Assert.That(h.Vm.Issue!.Eyebrow).IsEqualTo("ISSUE");
-            await Assert.That(h.Vm.Issue.Key).IsEqualTo("#777");
-            await Assert.That(h.Vm.Issue.Title).IsEqualTo("Read the work item");
-            await Assert.That(h.Vm.Issue.CanOpen).IsTrue();
-            await h.Vm.Issue.OpenCommand.Execute();
+            await Assert.That(h.Vm.HasMultipleIssues).IsTrue();
+            await Assert.That(h.Vm.Issues.Select(i => i.Key)).IsEquivalentTo(new[] { "#777", "#778" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(h.Vm.SeparateIssue!.Key).IsEqualTo("#777");
+            await Assert.That(h.Vm.SeparateIssue.Title).IsEqualTo("Read the work item");
+            await Assert.That(h.Vm.SeparateIssue.CanOpen).IsTrue();
+            await h.Vm.SeparateIssue.OpenCommand.Execute();
             await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://github.com/kurrent-io/kcap-cli/issues/777" });
 
             await h.TickAsync();
-            await Assert.That(h.Vm.Issue!.Key).IsEqualTo("WK-2521");
-            await Assert.That(h.Vm.Issue.Title).IsEqualTo("");
-            await Assert.That(h.Vm.Issue.CanOpen).IsFalse();
+            await Assert.That(h.Vm.SeparateIssue!.Key).IsEqualTo("WK-2521");
+            await Assert.That(h.Vm.HasMultipleIssues).IsFalse();
+            await Assert.That(h.Vm.SeparateIssue.Title).IsEqualTo("");
+            await Assert.That(h.Vm.SeparateIssue.CanOpen).IsFalse();
 
             await h.TickAsync();
             await Assert.That(h.Vm.Issue).IsNull();
             await Assert.That(h.Vm.HasIssue).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// An absorbed primary issue must not steal the section body or open action from the one
+    /// remaining separate issue.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_separate_issue_opens_itself_when_the_primary_is_inline() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "WK-2198"), Item(title: "WK-2198", enriched: null) with {
+                Links = [
+                    Link("issue", "WK-2198", "https://linear.app/x/issue/WK-2198", "WK-2198"),
+                    Link("issue", "#860", "https://github.com/example/repo/issues/860", "Secondary tracker"),
+                ],
+            }));
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.HasInlineIssue).IsTrue();
+            await Assert.That(h.Vm.HasMultipleIssues).IsFalse();
+            await Assert.That(h.Vm.IssueSectionMeta).IsEqualTo("#860");
+            await Assert.That(h.Vm.SeparateIssue!.Key).IsEqualTo("#860");
+            await Assert.That(h.Vm.SeparateIssue.Title).IsEqualTo("Secondary tracker");
+            await h.Vm.ToggleIssuesCommand.Execute();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://github.com/example/repo/issues/860" });
+            await h.Vm.SeparateIssue.OpenCommand.Execute();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] {
+                "https://github.com/example/repo/issues/860",
+                "https://github.com/example/repo/issues/860",
+            });
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// ShortKey is display text: same number from different repos must not collapse when URLs differ
+    /// or when identity is kind/provider/value without a URL.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Same_short_key_issues_from_different_repos_stay_distinct() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("issue", "#42", "https://github.com/kurrent-io/kcap-cli/issues/42", "CLI",
+                        value: "kurrent-io/kcap-cli#42"),
+                    Link("issue", "#42", "https://github.com/kurrent-io/kcap-server/issues/42", "Server",
+                        value: "kurrent-io/kcap-server#42"),
+                    Link("issue", "#42", title: "No url A", value: "org/a#42", provider: "github"),
+                    Link("issue", "#42", title: "No url B", value: "org/b#42", provider: "github"),
+                ],
+            }));
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.Issues.Select(i => i.Title).ToArray())
+                .IsEquivalentTo(new[] { "CLI", "Server", "No url A", "No url B" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Untitled multi-issue rows still open: the whole row carries OpenCommand, not only the title.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Untitled_multi_issue_rows_still_open() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("issue", "#1", "https://github.com/o/r/issues/1"),
+                    Link("issue", "#2", "https://github.com/o/r/issues/2"),
+                ],
+            }));
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.HasMultipleIssues).IsTrue();
+            await Assert.That(h.Vm.Issues[0].Title).IsEqualTo("");
+            await Assert.That(h.Vm.Issues[0].CanOpen).IsTrue();
+            await h.Vm.Issues[0].OpenCommand.Execute();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://github.com/o/r/issues/1" });
             await h.Vm.TeardownAsync();
         });
     }
@@ -912,6 +997,37 @@ public class WorkContextViewModelTests {
                 await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
                 await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
             } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// Until a session id arrives the pull request card has only the pane's own waiting note to
+    /// repeat, so the section stays out and the note is said once.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pull_request_card_waits_for_the_session_with_the_pane() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(Ready());
+            try {
+                await Assert.That(h.Vm.PhaseNote).IsEqualTo(WorkContextViewModel.WaitingNote);
+                await Assert.That(pullRequests.Notice).IsEqualTo(WorkContextViewModel.WaitingNote);
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+
+                await h.PushAsync(Dto(sessionId: null));
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Phase).IsNotEqualTo(WorkContextPhase.WaitingForSession);
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+            } finally {
+                await pullRequests.TeardownAsync();
                 await h.Vm.TeardownAsync();
             }
         });
@@ -981,8 +1097,8 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// A legacy server lists PRs but cannot serve a native read; the card still shows, with View PR
-    /// disabled and its GitHub button opening the selected PR on its host.
+    /// A legacy server lists PRs but cannot serve a native read; the card still shows, with the
+    /// title open disabled and its GitHub button opening the selected PR on its host.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_legacy_reader_keeps_the_card_and_opens_the_pull_request_on_its_host() {
@@ -1474,14 +1590,46 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_subagents_section_starts_expanded_and_the_toggle_folds_it() {
+    public async Task The_subagents_section_starts_collapsed_and_the_toggle_opens_it() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
-            await h.Vm.ToggleSubagentsCommand.Execute();
             await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
             await h.Vm.ToggleSubagentsCommand.Execute();
             await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
+            await h.Vm.ToggleSubagentsCommand.Execute();
+            await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The collapsed summary lists running, completed, failed, stopped in that order and leaves
+    /// out a state nothing is in, so its numbers always add up to the list.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_subagents_summary_counts_each_state_in_order_and_omits_the_empty_ones() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(h.Vm.SubagentCounts).IsEmpty();
+
+            var now = h.Time.GetUtcNow();
+            h.Subagents.Apply(Spawn("c1", now));
+            h.Subagents.Apply(Spawn("c2", now));
+            h.Subagents.Apply(Spawn("c3", now));
+            h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
+            h.Subagents.Apply(new([], [], [new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(6))]));
+            var raised = new List<string?>();
+            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            await Assert.That(h.Vm.SubagentCounts).IsEquivalentTo(new SubagentCount[] {
+                new(SubagentState.Running, 1), new(SubagentState.Done, 1), new(SubagentState.Failed, 1),
+            }, CollectionOrdering.Matching);
+            await Assert.That(h.Vm.SubagentCounts.Select(c => c.Label))
+                .IsEquivalentTo(new[] { "1 running", "1 completed", "1 failed" }, CollectionOrdering.Matching);
+
+            h.Subagents.SessionOver = true;
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.SubagentCounts));
+            await Assert.That(h.Vm.SubagentCounts).IsEquivalentTo(new SubagentCount[] {
+                new(SubagentState.Done, 1), new(SubagentState.Failed, 1), new(SubagentState.Stopped, 1),
+            }, CollectionOrdering.Matching);
             await h.Vm.TeardownAsync();
         });
     }

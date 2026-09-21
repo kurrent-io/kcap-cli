@@ -82,7 +82,7 @@ public class PullRequestViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
             await Assert.That(section.IsVisible).IsFalse();
-            await Assert.That(card.IsVisible).IsFalse();
+            await Assert.That(card.IsEffectivelyVisible).IsFalse();
             await Assert.That(vm.PullRequests.Title).IsEqualTo("");
             await Assert.That(vm.PullRequests.Notice).IsEqualTo("");
             await Assert.That(vm.WorkContext.ShowsPullRequestEmpty).IsFalse();
@@ -94,7 +94,7 @@ public class PullRequestViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsTrue();
             await Assert.That(section.IsVisible).IsTrue();
-            await Assert.That(card.IsVisible).IsTrue();
+            await Assert.That(card.IsEffectivelyVisible).IsTrue();
 
             await vm.ShowPullRequestCommand.Execute();
             source.Links = [];
@@ -104,7 +104,7 @@ public class PullRequestViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
             await Assert.That(section.IsVisible).IsFalse();
-            await Assert.That(card.IsVisible).IsFalse();
+            await Assert.That(card.IsEffectivelyVisible).IsFalse();
             await Assert.That(vm.IsChatActive).IsTrue();
         } finally { window.Close(); await vm.TeardownAsync(); }
     });

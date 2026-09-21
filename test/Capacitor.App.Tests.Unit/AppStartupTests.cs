@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -119,6 +120,53 @@ public class AppStartupTests {
 
         await Assert.That(tip).IsEqualTo("diagnostic-marker");
         await Assert.That(hostedText).IsEqualTo("1 hosted");
+    }
+
+    sealed class AcceptingLaunchClient(string agentId) : ILaunchClient {
+        public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
+            Task.FromResult(new LaunchOutcome(true, agentId, null));
+    }
+
+    /// Pins the wiring, not the rule: the launcher and the window only meet in the composition
+    /// root, so a failed launch hands the screen back only if the root ties the two together.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_returns_a_failed_launch_to_the_launcher() {
+        const string agentId = "0123456789abcdef0123456789abcdef";
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var (actions, notifier) = NewActions(service);
+            var lane = new FakeServerLane();
+            var attach = new FakeTerminalAttachClientFactory();
+
+            var window = AppUnderTest.BuildAndShowMainWindow(
+                service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
+                new AcceptingLaunchClient(agentId), TimeProvider.System, lane: lane,
+                workspaceFactory: id => new WorkspaceViewModel(
+                    id, service, actions, attach.Factory, () => new FakeTerminalSurface(), TimeProvider.System, new RecordingOpener(),
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
+            Dispatcher.UIThread.RunJobs();
+            var vm = (MainWindowViewModel)window.DataContext!;
+            var home = vm.Home!;
+
+            try {
+                await home.SelectRepositoryAsync("/repo/myproj");
+                home.Goal = "do the thing";
+                await home.StartCommand.Execute();
+                await Assert.That(vm.CurrentWorkspace?.AgentId).IsEqualTo(agentId);
+
+                lane.LaunchFailuresSubject.OnNext(new LaunchFailure(agentId, "launch_denied_by_owner: default"));
+                Dispatcher.UIThread.RunJobs();
+
+                await Assert.That(vm.CurrentWorkspace).IsNull();
+                await Assert.That(home.StartError).Contains("consent policy denied");
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
     }
 
     /// Regression coverage for a P2 bug found in review: the startup catch used to write to

@@ -93,13 +93,13 @@ npm automatically selects the right native binary for your [platform](#requireme
 
 Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/mac (Apple silicon, macOS 15 or later), open it and drag **Kurrent Capacitor** to **Applications**. The app bundles its own `kcap` CLI and daemon: you do not need the npm install as well, and the first run offers to link `kcap` onto your terminal PATH and to install the daemon as a background service. Sessions running on your other machines' daemons open in the app too — their chat, their prompts, and for a terminal harness a read-only view of the terminal — over the server, without a local daemon.
 
-When a Claude Code session spawns subagents, the chat shows a strip above the composer while any of them run ("2 subagents running"), and the work-context pane lists them under **SUBAGENTS** — the agent type, a *background* tag for one launched in the background, and its state: running with its elapsed time, done, failed or stopped. Both are read from the transcript; a session on another machine's daemon shows the strip alone, since the work-context pane is not part of the remote session view. Rows are not links.
+When a Claude Code session spawns subagents, the chat shows a strip above the composer while any of them run ("2 subagents running"), and the work-context pane lists them under **SUBAGENTS** — the agent type, a *background* tag for one launched in the background, and its state: running with its elapsed time, done, failed or stopped. The section starts collapsed, its header showing how many subagents are running, completed, failed and stopped; click the header to open the list. Both are read from the transcript; a session on another machine's daemon shows the strip alone, since the work-context pane is not part of the remote session view. Rows are not links.
 
 The app must run from the Applications folder — launched from the disk image or from Downloads it offers to move itself there first, because the terminal link and the background service point at its location.
 
 Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. Set it to **0** for no limit. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself. Rename waits for startup to finish and requires a CLI that supports retiring the old service. If `KCAP_DAEMON_NAME` sets the name, remove that override and restart the app before renaming.
 
-The **Notifications** tab in Settings controls permission requests, questions, and idle-agent alerts independently; all three start enabled and apply while the app is in the background. Permission notifications offer **Allow**, **Always**, and **Decline** when the agent supports those choices. Questions open the agent in the app to respond. Idle alerts open a local agent after its turn and subagents finish; remote daemons do not yet report idle state. Allow notifications in macOS when prompted. These are local desktop notifications: the app must remain running, including in the tray.
+The **Notifications** tab in Settings controls permission requests, questions, and idle-agent alerts independently; all three start enabled and apply while the app is in the background. Permission notifications offer **Allow**, **Always**, and **Decline** when the agent supports those choices. Questions open the agent in the app to respond. Idle alerts open a local agent after its turn and subagents finish; remote daemons do not yet report idle state. macOS asks for permission the first time the app window is active; choose **Allow**, because an unanswered prompt counts as a refusal. If notifications are turned off in macOS, the tab says so and links to System Settings → Notifications. These are local desktop notifications: the app must remain running, including in the tray.
 
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
@@ -517,6 +517,7 @@ kcap eval --chain <sessionId>              # include the full continuation chain
 kcap eval --threshold 5000 <sessionId>     # keep more of each tool output before truncation
 kcap eval --questions safety <sessionId>   # run only the 4 safety judges
 kcap eval --skip efficiency <sessionId>    # run everything except efficiency
+kcap eval --baseline-out out.json <sessionId>  # also write per-question usage/route/timing
 kcap eval --list-questions                 # print the question taxonomy
 ```
 
@@ -698,7 +699,7 @@ Stdio MCP server that lets coding agents correlate the current session to the SD
 
 It provides ten tools:
 
-- **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (e.g. `"AI-1234"`), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
+- **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (a tracker key such as `"AI-1234"`, an issue number in the session's repository such as `"#123"`, a qualified `"owner/repo#123"`, or a GitHub issue URL), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
 - **`get_session_work_items`** — list the work items the current session is attached to.
 - **`declare_loose_end`** — record one concrete piece of work this session leaves unfinished (`text`), so it appears in the user's next-work loose-ends ledger. Idempotent per session, owner and normalized text; the server refuses none-class text (`"none"`, `"n/a"`, …).
 - **`declare_work_breakdown`** — declare that a work item is broken into parts (`parent_id` + `part_ids`). Idempotent; a part has at most one parent, and every item must be visible to the caller — a part may live in a different repository than its parent.
@@ -792,15 +793,30 @@ kcap curate apply -y          # shorthand for --yes
 
 ### Skills sync
 
-Materialize the current repo's approved, skill-targeted guidance docs into every present
-harness's skills tree (`kcap-<slug>/SKILL.md` under `~/.claude/skills`, the agent-agnostic
-`~/.agents/skills`, `~/.kiro/skills`, and the `~/.gemini/skills` tree shared by Gemini CLI and
-Antigravity). The server is the canonical source: each sync fetches the repo's versioned snapshot
-per target, writes new or re-approved skills, and prunes ones revoked centrally — a per-target
-manifest under `~/.config/kcap/skills/` records exactly which directories kcap owns, and nothing
-outside it is ever touched. Shared trees are fetched without a vendor, so vendor-restricted docs
-reach only their own harness's tree. Skills are never written into the repository itself. Requires
-`kcap login` and a repo checkout (the repo is detected from the working directory).
+Materialize the current repo's approved, skill-targeted guidance docs into the checkout or
+linked worktree the sync runs in — `kcap-<slug>/SKILL.md` under `.claude/skills`, the
+agent-agnostic `.agents/skills`, `.kiro/skills`, and `.gemini/skills`, which Gemini CLI documents
+but which no harness has been measured reading from a repository. A linked worktree gets its own
+copy, synced independently of the main checkout's. The server is the canonical source: each sync
+fetches the repo's versioned snapshot per target, writes new or re-approved skills, and prunes ones
+revoked centrally. Inside those four directories it touches only its own `kcap-` subdirectories;
+outside them it writes two things — the exclusion block described below, and a ledger of what it
+owns under the worktree's own git directory (`<git-dir>/kcap/skills/`, which Git removes with the
+worktree) — and it deletes the user-global copies earlier versions left. The generated directories
+are kept out of Git through the repository's own `.git/info/exclude` rather than a tracked ignore
+file, so any ignore rules you've committed stay untouched, and one exclusion block covers the main
+checkout and every linked worktree. If this repo's skills already exist under your home directory,
+syncing clears them — unless another repository's sync still owns them, in which case they stay
+until that repository's sync clears its share.
+
+A skill restricted to one vendor still lands only in that vendor's tree — a Claude-only skill
+goes to `.claude/skills` and nowhere else — but Copilot, Cursor, and OpenCode read
+`.claude/skills` too, so any of them working in the same checkout can see a skill approved only
+for Claude Code. Claude and Kiro are also the only vendors whose tree is fetched under their own
+name, so a skill restricted to Codex, Copilot, Cursor, Gemini, OpenCode, Pi, or Antigravity is not
+delivered at all: no request names them, and a request that names no vendor keeps every
+vendor-restricted doc out of what it returns. Requires `kcap login` and a repo checkout (the
+repo is detected from the working directory).
 
 ```bash
 kcap skills sync              # fetch, write and prune this repo's skills
@@ -809,9 +825,11 @@ kcap skills sync --auto       # hook-spawned form: silent, and skipped when sync
 ```
 
 Opt into an automatic background refresh with `kcap config set skills.auto_sync true`: the Claude
-session-start hook then spawns a detached, self-throttling sync (at most one network round-trip
-per ~6 hours per repo), so centrally revoked or re-approved skills reach the machine without a
-manual sync. Off by default.
+session-start hook then spawns a detached, self-throttling sync (at most one network round-trip per
+~6 hours per skills tree, so up to four for a checkout that has all four), so centrally revoked or
+re-approved skills reach the machine without a manual sync. It writes into the checkout it runs in,
+exactly as a manual `kcap skills sync` does — the files land in the repository's own skills trees,
+not under your home directory. Off by default.
 
 
 ### Loading historical sessions

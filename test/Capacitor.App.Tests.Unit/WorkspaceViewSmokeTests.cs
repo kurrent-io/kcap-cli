@@ -120,8 +120,8 @@ public class WorkspaceViewSmokeTests {
             foreach (var name in new[] {
                 "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
                 "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton",
-                "PullRequestSection", "PullRequestCard", "LinkCards", "PullRequestToggle", "PullRequestEmptyText", "IssueCard",
-                "WhoToggle", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts", "SessionIdButton", "OpenWorkItemButton", "PaneScroll",
+                "PullRequestSection", "PullRequestHeader", "PullRequestNumberMeta", "PullRequestCard", "LinkCards", "PullRequestToggle", "PullRequestEmptyText", "IssueSection",
+                "WhoSection", "WhoToggle", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionFacts", "SessionIdButton", "OpenWorkItemButton", "PaneScroll",
             })
                 await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
             await Assert.That(pane.FindControl<ScrollViewer>("PaneScroll")!.HorizontalScrollBarVisibility)
@@ -379,6 +379,54 @@ public class WorkspaceViewSmokeTests {
             await Assert.That(Find<Control>(window, "SessionEndedNote")!.IsEffectivelyVisible).IsFalse();
             await Assert.That(chatHost.IsEffectivelyVisible).IsTrue();
             await Assert.That(vm.Chat!.ComposerHint).IsEqualTo("This session has ended");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A launch the daemon has not published has no chat view model, and a chat surface bound to
+    /// nothing draws every banner and the composer as empty shells: the starting panel stands
+    /// alone until the first dto.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_starting_workspace_shows_the_starting_panel_and_no_chat_surface() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto(AgentId, "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "spawned"),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            var vm = new WorkspaceViewModel(
+                AgentId, daemon, NewActions(), new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(),
+                new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
+                new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+            var window = new Window { Content = new WorkspaceView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var chatHost = Find<ChatTabView>(window, "ChatHost")!;
+            await Assert.That(Visible(window, "StartingPanel")).IsTrue();
+            await Assert.That(chatHost.IsVisible).IsFalse();
+            await Assert.That(IsOffscreen(chatHost)).IsTrue();
+            await Assert.That(Visible(window, "OpenInWebButton")).IsFalse();
+            await Assert.That(Visible(window, "StopButton")).IsFalse();
+            foreach (var name in new[] { "ChatActivityNote", "SubagentsBanner", "QueuedMessagesBanner", "ComposerCard", "ReadOnlyBanner", "SendButton" })
+                await Assert.That(Visible(window, name)).IsFalse().Because($"{name} has nothing to show yet");
+
+            daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: false));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            await Assert.That(Visible(window, "StartingPanel")).IsFalse();
+            await Assert.That(Visible(window, "OpenInWebButton")).IsTrue();
+            await Assert.That(Visible(window, "StopButton")).IsTrue();
+            await Assert.That(chatHost.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Visible(window, "ComposerInput")).IsTrue();
+            await Assert.That(Visible(window, "SubagentsBanner")).IsFalse();
 
             window.Close();
             Dispatcher.UIThread.RunJobs();

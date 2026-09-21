@@ -88,6 +88,20 @@
                                        Text="Shown only while Kurrent Capacitor is in the background. Your operating system must also allow notifications." />
                         </StackPanel>
 
+                        <Border x:Name="NotificationAccessNotice"
+                                Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20,14"
+                                IsVisible="{Binding NotificationAccessText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                <TextBlock x:Name="NotificationAccessText" Classes="kcapHint" TextWrapping="Wrap"
+                                           Text="{Binding NotificationAccessText}"
+                                           Foreground="{StaticResource KcapWarningBrush}" VerticalAlignment="Center" />
+                                <Button x:Name="NotificationAccessButton" Grid.Column="1" Classes="kcapChip"
+                                        Content="{Binding NotificationAccessAction}"
+                                        Command="{Binding NotificationAccessCommand}" VerticalAlignment="Center" />
+                            </Grid>
+                        </Border>
+
                         <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                                 BorderThickness="1" CornerRadius="12" Padding="20">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">

@@ -25,6 +25,7 @@
         <PackageReference Include="MarkView.Avalonia.SyntaxHighlighting" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
         <PackageReference Include="Eventuous.SignalR.Client" />
+        <PackageReference Include="Svg.Controls.Skia.Avalonia" />
         <PackageReference Include="SvcSystems.UI.Terminal" />
         <PackageReference Include="Velopack" />
         <PackageReference Include="XTerm.NET" />
