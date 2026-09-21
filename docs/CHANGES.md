@@ -6,6 +6,26 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A flows tool call ends before the shortest harness timeout
+
+A start holds its tool call open while the first round runs, and the reply it ends on — the round
+result, or "Flow still running" — is the only place the driver is handed its `flow_run_id`. Codex
+aborts an MCP tool call at 300 s. The call was bounded at 9 minutes, so on Codex any round over five
+minutes ended in the harness's own timeout error instead: no id, no guidance, a reviewer still
+running, and a driver with no supported way back to it.
+
+The bounds are sized to 300 s for every harness rather than per client. `ToolCallBudget` is 4
+minutes: with a GET still in flight when it expires and the ack POST after it, the call ends around
+275 s. `PollCap`, which alone bounds a `wait: true` status call, is 3m30s.
+
+`SettlementElapsedDeadline` stays at 3 minutes because it is not ours to move: it is one cycle of the
+server's reconcile sweep, the thing that proves a prior reviewer agent gone so a
+`participant_unreachable` retry can succeed. That leaves `SettlementAbsoluteDeadline` 30 s of room
+above it, so a daemon lane that keeps making progress now re-arms the window for 30 s, not five
+minutes, before the caller gets the retryable busy error. The cost falls on Claude Code too, which
+sat through the longer bounds without trouble; a long round there takes more status calls. A
+per-client budget would avoid that, at the price of a second set of bounds to keep honest.
+
 ## Launcher “Launches” is the consent decision log, not session activity
 
 The chip formerly labeled Activity opened the local allow/deny log for daemon

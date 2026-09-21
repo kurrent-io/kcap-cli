@@ -72,11 +72,10 @@ class McpFlowsServer(
             try {
                 if (client is null) {
                     client = await http.ForSessionAsync();
-                    // the review-flow endpoints long-poll (start_review_flow /
-                    // submit_review_round block server-side up to ~10 min while the reviewer runs).
-                    // The default 100s timeout would abort the POST, which the server sees as a
-                    // cancel and tears the reviewer down — so disable the client-side deadline and
-                    // let the server's FlowResultWaiter + the harness MCP tool timeout bound it.
+                    // A start or round POST can be held open server-side: an admission wait on a
+                    // current server, the whole round on an older blocking one. The default 100s
+                    // timeout would abort it, which the server sees as a cancel and tears the
+                    // reviewer down — so no client-wide deadline; each lane bounds its own requests.
                     client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
                 }
 
@@ -476,55 +475,50 @@ class McpFlowsServer(
         }
     }
 
+    /// <summary>The shortest tool-call timeout among the harnesses that drive flows: Codex aborts an
+    /// MCP call at 300 s. A call the harness aborts never delivers its reply — for a start, the only
+    /// place the driver is handed its flow_run_id — so every bound below is sized to end the call
+    /// first.</summary>
+    internal static readonly TimeSpan ShortestHarnessToolTimeout = TimeSpan.FromSeconds(300);
+
     /// <summary>
-    /// The no-progress window: how long the start/submit POST lane keeps transparently retrying a
-    /// settlement-layer coded 409 WITHOUT seeing the daemon's sequenced-lane watermark
-    /// (<c>last_processed_seq</c> on the 409 body) advance, measured as ELAPSED time — including
-    /// each request's own duration, not just the sum of the backoff delays. That distinction is the
-    /// whole point: a settlement-aware server absorbs the wait by HOLDING the request open (up to a
-    /// per-launch admission wait on the order of a minute), so a delay-only budget would let
-    /// worst-case wall-clock blow past the MCP tool timeout the kcap plugin pins for its MCP servers
-    /// (MCP_TOOL_TIMEOUT, 10 minutes) and surface as a harness-level timeout instead of a clean
-    /// tool result. Three minutes fits roughly two full server-side admission waits plus backoff
-    /// while staying far under that ceiling. If the harness pin ever changes, re-derive this.
+    /// The no-progress window: how long the start/submit POST lane keeps retrying a settlement-layer
+    /// coded 409 without seeing the daemon's sequenced-lane watermark (<c>last_processed_seq</c> on the
+    /// 409 body) advance. Measured as ELAPSED time, each request's own duration included: the server
+    /// absorbs an admission wait by holding the request open for up to about a minute, so a budget
+    /// that summed only the backoff delays would overrun <see cref="ToolCallBudget"/>.
     ///
-    /// <para>Liveness-supervision spec §5: a retryable 409's <c>last_processed_seq</c> re-arms this
-    /// window from the moment of that response when it is the FIRST seq observed, or STRICTLY higher
-    /// than the previous one. An equal or lower seq is not progress (a frozen lane must still exhaust
-    /// one full window after its single observation; a lower one is a daemon reconnect resetting its
-    /// watermark, not a drain). A missing/null seq is "no evidence" — never a reset, and never a
-    /// reason to tell the caller anything is out of date; it simply keeps the flat window. Clipped by
-    /// <see cref="SettlementAbsoluteDeadline"/>.</para>
+    /// <para>Three minutes is one full cycle of the server's reconcile sweep, which is what proves a
+    /// prior reviewer agent gone and lets a <see cref="ParticipantUnreachableCode"/> retry succeed.
+    /// Any shorter and that retry can never win.</para>
     ///
-    /// <para>A tool call spends AT MOST ONE such window in total, which is what keeps that
-    /// derivation valid: the one caller that sends twice (the preference fallback) threads
-    /// <c>budgetStartedAt</c> so both sends share this budget rather than opening a second. The
-    /// settlement lane and the round-poll lane that follows it likewise share ONE
-    /// <see cref="ToolCallBudget"/> — a second independent window would push the call past the
-    /// harness pin, and precisely in the shape that matters, with a paid reviewer launched by a POST
-    /// whose result nobody is still waiting for.</para>
+    /// <para>A retryable 409's <c>last_processed_seq</c> re-arms the window from that response when it
+    /// is the first seq observed or strictly higher than the previous one. An equal or lower seq is
+    /// not progress — a lower one is a daemon reconnect resetting its watermark — and a missing seq is
+    /// no evidence either way. Clipped by <see cref="SettlementAbsoluteDeadline"/>.</para>
+    ///
+    /// <para>A tool call spends at most one such window: the preference fallback, which sends twice,
+    /// threads <c>budgetStartedAt</c> so both sends share it.</para>
     /// </summary>
     internal static readonly TimeSpan SettlementElapsedDeadline = TimeSpan.FromMinutes(3);
 
-    /// <summary>The hard absolute ceiling on the whole settlement-retry lane, measured from the
-    /// FIRST attempt — continuous daemon-lane progress can keep resetting
-    /// <see cref="SettlementElapsedDeadline"/>'s rolling window indefinitely, so this is what
-    /// actually bounds that lane. It bounds the settlement lane ALONE; the end-to-end bound on a tool
-    /// call is <see cref="ToolCallBudget"/>, which this must stay under.</summary>
-    internal static readonly TimeSpan SettlementAbsoluteDeadline = TimeSpan.FromMinutes(8);
+    /// <summary>Hard ceiling on the settlement-retry lane, measured from its first attempt: continuous
+    /// daemon-lane progress can re-arm <see cref="SettlementElapsedDeadline"/> indefinitely, so this
+    /// is what bounds the lane. Stays under <see cref="ToolCallBudget"/> so that a start admitted at
+    /// the last moment still has time to return its flow_run_id.</summary>
+    internal static readonly TimeSpan SettlementAbsoluteDeadline = TimeSpan.FromSeconds(210);
 
-    /// <summary>The ONE end-to-end budget for a tool call that sends and then polls, anchored at its
-    /// first POST attempt. The settlement lane (<see cref="SettlementAbsoluteDeadline"/>) and the
-    /// round-poll lane (<see cref="PollCap"/>) run SEQUENTIALLY, so bounding them separately bounds
-    /// the call at 8m + 8m against the ~10m MCP tool timeout the kcap plugin pins — the harness would
-    /// kill the call mid-poll with the reviewer already launched and paid for. Sharing this budget
-    /// means whatever settlement spends, the poll no longer has.
+    /// <summary>The one end-to-end budget for a tool call that sends and then polls, anchored at its
+    /// first POST attempt. The settlement lane and the round-poll lane run sequentially, so bounding
+    /// them separately bounds the call at their sum; sharing this budget means whatever settlement
+    /// spends, the poll no longer has. Applied as a clip on <see cref="PollCap"/>, so a call whose
+    /// settlement lane returned at once is bounded by <c>PollCap</c> alone.
     ///
-    /// <para>Applied as a CLIP on <see cref="PollCap"/>, never a replacement: a call whose settlement
-    /// lane returned immediately (the overwhelming majority, and every existing fixture) is bounded by
-    /// <c>PollCap</c> exactly as before. If the harness pin changes, re-derive this ONE value.</para>
-    /// </summary>
-    internal static readonly TimeSpan ToolCallBudget = TimeSpan.FromMinutes(9);
+    /// <para>Sized so that the budget, a GET still in flight when it expires
+    /// (<see cref="PerGetTimeout"/>) and the ack POST after it (<see cref="PerAckPostTimeout"/>) all
+    /// end before <see cref="ShortestHarnessToolTimeout"/>. A harness abort mid-poll leaves a reviewer
+    /// launched and paid for with nobody waiting on its result.</para></summary>
+    internal static readonly TimeSpan ToolCallBudget = TimeSpan.FromMinutes(4);
 
     /// <summary>The coded 409s the settlement lane retries transparently. The two settlement-layer
     /// conflicts are native to the lane; the rest are daemon-flap signals the server declares
@@ -1222,7 +1216,10 @@ class McpFlowsServer(
     }
 
     static readonly TimeSpan PollInterval   = TimeSpan.FromSeconds(3);
-    static readonly TimeSpan PollCap        = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
+    // With a GET in flight at the cap and the ack POST after it, a bare status wait still ends before
+    // ShortestHarnessToolTimeout. Under ToolCallBudget, so the budget only clips a call that spent
+    // settlement time.
+    static readonly TimeSpan PollCap        = TimeSpan.FromSeconds(210);
     static readonly TimeSpan PerGetTimeout  = TimeSpan.FromSeconds(20);
     static readonly TimeSpan NotFoundGrace  = TimeSpan.FromSeconds(10);
     // E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
@@ -1599,9 +1596,9 @@ class McpFlowsServer(
             await clock.DelayAsync(PollInterval);
         }
 
-        // Genuine 8-min cap: the same benign text the round-submission poll lane returns, minus the
-        // round number (a bare status wait has none pinned) — callers already treat this string as
-        // benign, non-error "try the status tool again" guidance, per the backwards-compat design.
+        // PollCap reached: the same benign text the round-submission poll lane returns, minus the round
+        // number (a bare status wait has none pinned). Agents match on this string as non-error
+        // "call the status tool again" guidance.
         return new(
             $"Flow still running for flow_run_id {flowRunId}. Call {toolName} to retrieve the result when ready.",
             false
@@ -2129,13 +2126,13 @@ class McpFlowsServer(
             "get_review_flow_status",
             "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
             "Long rounds are normal — a reviewer round can legitimately run well past a single check. " +
-            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
+            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow."),
-                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 8 minutes elapse, instead of returning immediately.")
+                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
                 ["flow_run_id"]
             )
@@ -2197,13 +2194,13 @@ class McpFlowsServer(
             "get_flow_status",
             "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
             "Long rounds are normal — a participant round can legitimately run well past a single check. " +
-            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
+            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_flow."),
-                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 8 minutes elapse, instead of returning immediately.")
+                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
                 ["flow_run_id"]
             )

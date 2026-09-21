@@ -7,13 +7,13 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// One tool call, ONE budget. <c>SettlementAbsoluteDeadline</c> (8m) and <c>PollCap</c> (8m) run
-/// SEQUENTIALLY inside a single <c>HandleToolCallAsync</c> — the settlement retry returns a response,
-/// then <c>ResolveRoundResultAsync</c> starts polling — so bounding them independently bounded the
-/// call at ~16m against the ~10-minute MCP tool timeout the kcap plugin pins. A call that burned real
-/// settlement time could then be killed by the harness mid-poll with a reviewer already launched and
-/// paid for. <see cref="McpFlowsServer.ToolCallBudget"/> is the shared budget both lanes now draw
-/// from, anchored immediately before the first POST attempt.
+/// One tool call, ONE budget. <c>SettlementAbsoluteDeadline</c> and <c>PollCap</c> run SEQUENTIALLY
+/// inside a single <c>HandleToolCallAsync</c> — the settlement retry returns a response, then
+/// <c>ResolveRoundResultAsync</c> starts polling — so bounding them independently bounds the call at
+/// their sum, past the harness tool timeout. A call that burned real settlement time would then be
+/// killed by the harness mid-poll with a reviewer already launched and paid for.
+/// <see cref="McpFlowsServer.ToolCallBudget"/> is the shared budget both lanes draw from, anchored
+/// immediately before the first POST attempt.
 ///
 /// <para>Both tests assert the TOTAL elapsed time, not merely that the call ended — "it terminated"
 /// passes under every wrong composition of these two deadlines.</para>
@@ -45,7 +45,7 @@ public class ToolCallBudgetTests {
 
     /// <summary>Mirrors <c>McpFlowsServer.PollCap</c> (private). Pinned locally rather than exposed:
     /// if the production value moves, these tests must be re-derived deliberately, not silently follow.</summary>
-    static readonly TimeSpan PollCap = TimeSpan.FromMinutes(8);
+    static readonly TimeSpan PollCap = TimeSpan.FromSeconds(210);
 
     /// <summary>Simulates a settlement-aware server that ABSORBS the admission wait by holding the
     /// POST open (the real behaviour the elapsed — not delay-summed — settlement deadline exists for):
@@ -94,11 +94,11 @@ public class ToolCallBudgetTests {
         return (clock, handler, response);
     }
 
-    /// <summary>The defect, pinned by arithmetic: a call whose settlement lane genuinely held for 2m50s
-    /// must NOT then get a fresh 8-minute poll. Total elapsed lands exactly on
-    /// <see cref="McpFlowsServer.ToolCallBudget"/> — so the poll got budget MINUS the settlement hold,
-    /// not the full <c>PollCap</c>. Pre-fix this same run ends at 2m50s + 8m = 10m50s, past the harness
-    /// timeout; the strict assertion below fails on that value rather than merely tolerating it.</summary>
+    /// <summary>Pinned by arithmetic: a call whose settlement lane genuinely held for 2m50s must NOT
+    /// then get a fresh <c>PollCap</c>. Total elapsed lands exactly on
+    /// <see cref="McpFlowsServer.ToolCallBudget"/> — so the poll got budget MINUS the settlement hold.
+    /// Two independent bounds would end this run at 2m50s + <c>PollCap</c>; the strict assertion fails
+    /// on that value rather than merely tolerating it.</summary>
     [Test]
     public async Task Settlement_time_is_deducted_from_the_poll_lane_not_added_to_it() {
         var hold = TimeSpan.FromSeconds(170); // 2m50s — real hold, still inside the 3m no-progress window
@@ -142,5 +142,31 @@ public class ToolCallBudgetTests {
         // spend and correctly comes off the shared budget, just not off PollCap here.)
         await Assert.That(clock.Elapsed - handler.SettlementSpent).IsEqualTo(PollCap);
         await Assert.That(clock.Elapsed).IsLessThan(McpFlowsServer.ToolCallBudget);
+    }
+
+    /// <summary>Codex aborts an MCP tool call at 300 s, the shortest timeout among the harnesses that
+    /// drive flows. A call the harness aborts never delivers its "still running" reply, and that reply
+    /// is the only place a start hands the driver its flow_run_id.</summary>
+    static readonly TimeSpan ShortestHarnessToolTimeout = TimeSpan.FromSeconds(300);
+
+    /// <summary>What a call can still spend once its deadline has passed: a GET already in flight
+    /// (<c>PerGetTimeout</c>, 20 s) and the ack POST after it (<c>PerAckPostTimeout</c>, 15 s). The
+    /// virtual clock answers both instantly, so the test adds them back.</summary>
+    static readonly TimeSpan DeadlineOvershoot = TimeSpan.FromSeconds(35);
+
+    /// <summary>The worst case a start can reach — a settlement lane that held almost its whole
+    /// no-progress window, then a round that never settles — still ends on the benign reply before
+    /// the shortest harness timeout. The hold keeps the test honest: without it the call is bounded by
+    /// the poll cap alone and says nothing about the shared budget.</summary>
+    [Test]
+    public async Task A_start_that_never_settles_returns_before_the_shortest_harness_timeout() {
+        var (clock, handler, response) = await RunAsync(TimeSpan.FromSeconds(170));
+
+        await Assert.That(handler.Gets).IsGreaterThan(3);
+        await Assert.That(clock.Elapsed + DeadlineOvershoot).IsLessThan(ShortestHarnessToolTimeout);
+
+        var text = JsonNode.Parse(response)!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        await Assert.That(text).Contains("Flow still running");
+        await Assert.That(text).Contains("flow-budget");
     }
 }

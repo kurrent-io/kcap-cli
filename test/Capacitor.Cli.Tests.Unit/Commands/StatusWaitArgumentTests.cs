@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// review-flows liveness-supervision design): absent or false must be byte-for-byte today's
 /// single-GET behavior — the whole backwards-compat contract for every existing caller that never
 /// sends the argument — while `wait: true` polls the SAME endpoint until the round is terminal or
-/// the shared 8-minute PollCap elapses, sharing the round-submission poll lane's per-attempt
+/// the shared PollCap elapses, sharing the round-submission poll lane's per-attempt
 /// timeout, poll cadence, and transient-failure budget (mirrored here as local constants —
 /// PollInterval/PollCap/MaxTransientRetries are private to McpFlowsServer, exactly like the existing
 /// poll-path tests in McpFlowsServerSettlementRetryTests.cs already do).
@@ -27,7 +27,7 @@ public class StatusWaitArgumentTests {
             new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), time: TimeProvider.System);
 
     static readonly TimeSpan PollInterval       = TimeSpan.FromSeconds(3);
-    static readonly TimeSpan PollCap            = TimeSpan.FromMinutes(8);
+    static readonly TimeSpan PollCap            = TimeSpan.FromSeconds(210);
     const           int      MaxTransientRetries = 5;
 
     static VirtualFlowRetryClock Clock() => new();
@@ -60,7 +60,7 @@ public class StatusWaitArgumentTests {
 
         // A VIRTUAL clock is injected here even though the compat (no-wait) path never touches it:
         // if a routing bug ever sent this call into the wait branch by mistake, a real clock would
-        // make the mutant hang for up to 8 minutes of actual wall time instead of failing fast on
+        // make the mutant hang for up to the whole poll cap of actual wall time instead of failing fast on
         // the assertion below — this is what let the earlier hand-verification of this exact guard
         // (mutating ParseWaitArg to always return true) surface as a real-time hang rather than a
         // clean failure. Keeping the virtual clock here means a future regression fails in
@@ -187,10 +187,10 @@ public class StatusWaitArgumentTests {
         await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == $"/api/flows/{flowRunId}")).IsEqualTo(2);
     }
 
-    // === wait: true — caps at the 8-minute PollCap ===
+    // === wait: true — caps at PollCap ===
 
     [Test]
-    public async Task Wait_true_caps_at_eight_minutes_and_returns_the_benign_still_running_text() {
+    public async Task Wait_true_caps_at_the_poll_cap_and_returns_the_benign_still_running_text() {
         const string flowRunId = "flow-wait-cap";
 
         using var server = WireMockServer.Start();
@@ -212,11 +212,42 @@ public class StatusWaitArgumentTests {
         await Assert.That(text).Contains(flowRunId);
         await Assert.That(text).Contains("get_review_flow_status");
 
-        // The load-bearing shape assertion: elapsed virtual time is EXACTLY the 8-minute cap, not
-        // merely "some delay happened" — proves the cap is what stopped it.
+        // The load-bearing shape assertion: elapsed virtual time is EXACTLY the cap, not merely
+        // "some delay happened" — proves the cap is what stopped it.
         await Assert.That(clock.Elapsed).IsEqualTo(PollCap);
         await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == $"/api/flows/{flowRunId}"))
             .IsEqualTo((int)(PollCap.TotalSeconds / PollInterval.TotalSeconds));
+    }
+
+    /// <summary>Codex aborts an MCP tool call at 300 s, the shortest timeout among the harnesses that
+    /// drive flows; an aborted wait never delivers its "still running" reply.</summary>
+    static readonly TimeSpan ShortestHarnessToolTimeout = TimeSpan.FromSeconds(300);
+
+    /// <summary>What a wait can still spend once its cap has passed: a GET already in flight
+    /// (<c>PerGetTimeout</c>, 20 s) and the ack POST after it (<c>PerAckPostTimeout</c>, 15 s). The
+    /// virtual clock answers both instantly, so the test adds them back.</summary>
+    static readonly TimeSpan DeadlineOvershoot = TimeSpan.FromSeconds(35);
+
+    [Test]
+    public async Task Wait_true_on_a_round_that_never_settles_returns_before_the_shortest_harness_timeout() {
+        const string flowRunId = "flow-wait-ceiling";
+
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                  .WithBody($$"""{"flow_run_id":"{{flowRunId}}","status":"running","definition_id":"code-review","target_title":"t","round_count":1,"round_number":1,"round_status":"running"}"""));
+        using var client = new HttpClient();
+
+        var clock    = Clock();
+        var response = await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!,
+            ToolCallRequest("get_review_flow_status", new JsonObject { ["flow_run_id"] = flowRunId, ["wait"] = true }),
+            client, server.Url!, cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, clock: clock);
+
+        var (text, isError) = Unwrap(response);
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("Flow still running");
+        await Assert.That(clock.Elapsed + DeadlineOvershoot).IsLessThan(ShortestHarnessToolTimeout);
     }
 
     // === wait: true — transient-failure budget matches the round-submission poll lane's rule ===
