@@ -1,3 +1,4 @@
+using System.Text;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Daemon.Harness.Pi;
 
@@ -31,6 +32,39 @@ public class PiReviewerLaunchDirTests {
             await Assert.That(File.GetUnixFileMode(paths.Manifest))
                 .IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
+    }
+
+    [Test]
+    public async Task Create_refuses_a_launch_root_left_group_or_other_readable() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "Unix file modes.");
+        using var state = new TempDir();
+        var root = PiReviewerLaunchDir.RootFor(state.Path);
+        Directory.CreateDirectory(root);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(root,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.OtherRead);
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => PiReviewerLaunchDir.Create(state.Path, "epoch1", "agent-1", "{}"));
+
+        await Assert.That(ex!.Message).StartsWith("pi_reviewer_launch_dir_not_owner_only");
+    }
+
+    [Test]
+    public async Task A_refused_create_leaves_no_launch_dir_behind() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only directories are POSIX-only.");
+        using var state = new TempDir();
+
+        // An unpaired surrogate cannot be UTF-8 encoded, so the manifest write inside the
+        // all-or-nothing block throws without any filesystem trickery.
+        await Assert.ThrowsAsync<EncoderFallbackException>(() => {
+            PiReviewerLaunchDir.Create(state.Path, "epoch1", "agent-1", "\uD800");
+            return Task.CompletedTask;
+        });
+
+        var dir = Path.Combine(
+            PiReviewerLaunchDir.RootFor(state.Path), PiReviewerLaunchDir.NameFor("epoch1", "agent-1"));
+        await Assert.That(Directory.Exists(dir)).IsFalse();
     }
 
     [Test]

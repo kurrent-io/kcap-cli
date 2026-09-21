@@ -135,7 +135,16 @@ internal static class PiReviewerLaunchDir {
                 "pi_reviewer_unsupported_platform: a reviewer launch directory cannot be created owner-only here.");
 
         Directory.CreateDirectory(path, OwnerOnlyDir);
-        File.SetUnixFileMode(path, OwnerOnlyDir);
+
+        // An existing directory keeps its own mode — CreateDirectory's mode argument applies only when
+        // it creates. Verifying covers that, and any filesystem that ignores the request.
+        var mode = File.GetUnixFileMode(path);
+
+        if ((mode & (UnixFileMode.GroupRead  | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                     UnixFileMode.OtherRead  | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) != 0)
+            throw new InvalidOperationException(
+                $"pi_reviewer_launch_dir_not_owner_only: '{path}' is mode {mode}. The reviewer's launch "
+              + "directory, and so the review context it carries, would be readable by other users on this host.");
     }
 
     /// <summary>What keeps a launch id from naming a path outside the root.</summary>
