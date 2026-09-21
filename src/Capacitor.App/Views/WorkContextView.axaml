@@ -219,6 +219,32 @@
                 </Border>
             </Button>
         </DataTemplate>
+        <!-- One mark per subagent state, shared by the rows and the collapsed counts. Warning marks a
+             run in flight, as it does a running tool; green and danger are outcomes, and a hollow
+             ring is a run the session ended for it. A glyph inside a disc is sized to the disc: its
+             geometry is drawn at its own coordinates, so a box any tighter centres the bounds and
+             lands the mark off the disc's middle. -->
+        <DataTemplate x:Key="SubagentMark" x:DataType="vm:SubagentState">
+            <Panel Width="12" Height="12">
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Running}}">
+                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5" />
+                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Panel>
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Done}}">
+                    <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" />
+                    <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
+                          Data="M3,6 L5.2,8.2 L9,4" />
+                </Panel>
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Failed}}">
+                    <Ellipse Width="12" Height="12" Fill="{StaticResource KcapDangerBrush}" />
+                    <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
+                          Data="M4,4 L8,8 M8,4 L4,8" />
+                </Panel>
+                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
+                         IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Stopped}}" />
+            </Panel>
+        </DataTemplate>
     </UserControl.Resources>
 
     <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1,0,0,0">
@@ -457,7 +483,27 @@
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SUBAGENTS" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <TextBlock x:Name="SubagentsHeaderText" Text="{Binding SubagentsHeader}" Classes="sectionMeta" />
+                                <TextBlock x:Name="SubagentsHeaderText" Text="{Binding SubagentsHeader}" Classes="sectionMeta"
+                                           IsVisible="{Binding SubagentsExpanded}" />
+                                <ItemsControl x:Name="SubagentsSummary" ItemsSource="{Binding SubagentCounts}" VerticalAlignment="Center"
+                                              IsVisible="{Binding !SubagentsExpanded}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="10" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:SubagentCount">
+                                            <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
+                                                <!-- Digits have no descender, so a centred line box sets them above the mark's
+                                                     middle: each moves a pixel toward the other, and onto the eyebrow's caps. -->
+                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center"
+                                                                RenderTransform="translateY(-1px)" />
+                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                                 <Panel Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SubagentsExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SubagentsExpanded}" />
@@ -475,27 +521,8 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:SubagentRow">
                                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                                        <!-- Warning marks a run in flight, as it does a running tool; green and danger are
-                                             outcomes, and a hollow ring is a run the session ended for it. A glyph inside a
-                                             disc is sized to the disc: its geometry is drawn at its own coordinates, so a
-                                             box any tighter centres the bounds and lands the mark off the disc's middle. -->
                                         <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                                            <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5"
-                                                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsRunning}" />
-                                            <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                                                    HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsRunning}" />
-                                            <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
-                                                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsDone}" />
-                                            <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
-                                                  Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                  IsVisible="{Binding IsDone}" />
-                                            <Ellipse Width="12" Height="12" Fill="{StaticResource KcapDangerBrush}"
-                                                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsFailed}" />
-                                            <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
-                                                  Data="M4,4 L8,8 M8,4 L4,8" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                  IsVisible="{Binding IsFailed}" />
-                                            <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
-                                                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsStopped}" />
+                                            <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
                                         </Panel>
                                         <StackPanel Grid.Column="1" Spacing="2">
                                             <TextBlock Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"

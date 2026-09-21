@@ -119,9 +119,18 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
+    static readonly SubagentState[] SubagentCountOrder =
+        [SubagentState.Running, SubagentState.Done, SubagentState.Failed, SubagentState.Stopped];
+
+    /// What the collapsed section shows: one entry per state something is in, so the numbers
+    /// add up to the list.
+    public IReadOnlyList<SubagentCount> SubagentCounts =>
+        [.. SubagentCountOrder.Select(state => new SubagentCount(state, _subagents.Count(state))).Where(c => c.Count > 0)];
+
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasSubagents));
         this.RaisePropertyChanged(nameof(SubagentsHeader));
+        this.RaisePropertyChanged(nameof(SubagentCounts));
     }
 
     internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {

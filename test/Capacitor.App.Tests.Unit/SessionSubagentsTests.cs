@@ -317,7 +317,7 @@ public class SessionSubagentsTests {
         await Assert.That(s.Rows[2].State).IsEqualTo(SubagentState.Running);
         await Assert.That(s.RunningCount).IsEqualTo(2);
         s.SessionOver = false;
-        await Assert.That(changes).IsEqualTo(3);
+        await Assert.That(changes).IsEqualTo(4);
     }
 
     [Test]
@@ -330,6 +330,45 @@ public class SessionSubagentsTests {
         s.Apply(Result("c3", isError: true));
         await Assert.That(s.RunningCount).IsEqualTo(1);
         await Assert.That(s.Rows.Select(r => r.Name)).IsEquivalentTo(new[] { "second", "first", "third" }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task Every_presented_state_has_its_own_count_and_session_over_moves_running_to_stopped() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2"), Started("c3"), Started("c4"), Started("c5")));
+        s.Apply(Result("c1"));
+        s.Apply(Result("c2"));
+        s.Apply(Result("c3", isError: true));
+        s.Apply(Signals(Finished("c4", null, SubagentOutcome.Stopped)));
+        await Assert.That(s.Count(SubagentState.Running)).IsEqualTo(1);
+        await Assert.That(s.Count(SubagentState.Done)).IsEqualTo(2);
+        await Assert.That(s.Count(SubagentState.Failed)).IsEqualTo(1);
+        await Assert.That(s.Count(SubagentState.Stopped)).IsEqualTo(1);
+
+        s.SessionOver = true;
+        await Assert.That(s.Count(SubagentState.Running)).IsEqualTo(0);
+        await Assert.That(s.Count(SubagentState.Stopped)).IsEqualTo(2);
+
+        s.Clear();
+        await Assert.That(s.Count(SubagentState.Done)).IsEqualTo(0);
+        await Assert.That(s.Count(SubagentState.Stopped)).IsEqualTo(0);
+    }
+
+    /// The running count and the row count both stand still here, so only the per-state counts
+    /// can tell a listener that the numbers it shows have moved.
+    [Test]
+    public async Task A_bare_stop_revised_to_failed_moves_the_counts_and_raises_changed() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddSeconds(62))));
+        await Assert.That(s.Count(SubagentState.Done)).IsEqualTo(1);
+        var changes = 0;
+        s.Changed += () => changes++;
+
+        s.Apply(Signals(Finished("c1", "a1", SubagentOutcome.Failed, at: T0.AddSeconds(90))));
+        await Assert.That(s.Count(SubagentState.Done)).IsEqualTo(0);
+        await Assert.That(s.Count(SubagentState.Failed)).IsEqualTo(1);
+        await Assert.That(changes).IsEqualTo(1);
     }
 
     [Test]

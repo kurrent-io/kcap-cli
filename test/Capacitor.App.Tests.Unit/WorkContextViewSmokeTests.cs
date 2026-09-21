@@ -16,6 +16,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
 namespace Capacitor.App.Tests.Unit;
@@ -332,7 +333,8 @@ public class WorkContextViewSmokeTests {
     }
 
     /// Each row carries its state in words as well as in the dot, and the failed word is painted
-    /// danger; the section hides whole when the session spawned none and folds on its toggle.
+    /// danger; the section hides whole when the session spawned none, starts folded and opens on
+    /// its toggle.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_subagents_section_lists_rows_by_state_and_hides_when_the_session_spawned_none() {
@@ -353,6 +355,12 @@ public class WorkContextViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(section.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
+
+            await host.Vm.ToggleSubagentsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(host.Find<ItemsControl>("SubagentsSummary").IsEffectivelyVisible).IsFalse();
             await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").Text).IsEqualTo("1 of 2 running");
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             await Assert.That(texts).Contains("Explore");
@@ -370,7 +378,41 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<ItemsControl>("SubagentsSummary").IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    /// Collapsed, the header carries one count per state beside the rows' own mark, and a state
+    /// nothing is in shows neither mark nor number.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_subagents_header_shows_a_marked_count_per_state_and_omits_empty_states() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var now = host.Time.GetUtcNow();
+            host.Subagents.Apply(new ChatProjectionResult([], [], [
+                new SubagentSignal.Started("c1", "Explore", "", now.AddSeconds(-18)),
+                new SubagentSignal.Started("c2", "Reviewer", "", now.AddMinutes(-3)),
+                new SubagentSignal.Started("c3", "Planner", "", now.AddMinutes(-4)),
+                new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(-132)),
+                new SubagentSignal.Finished("c3", null, SubagentOutcome.Failed, now.AddSeconds(-140)),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var summary = host.Find<ItemsControl>("SubagentsSummary");
+            await Assert.That(summary.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("SubagentsHeaderText").IsEffectivelyVisible).IsFalse();
+            var numbers = summary.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
+            await Assert.That(numbers).IsEquivalentTo(new[] { "1", "2" }, CollectionOrdering.Matching);
+
+            var marks = summary.GetVisualDescendants().OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToList();
+            var warning = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapWarningBrush")!).Color;
+            var danger = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapDangerBrush")!).Color;
+            await Assert.That(marks.Select(e => ((ISolidColorBrush)(e.Fill ?? e.Stroke)!).Color))
+                .IsEquivalentTo(new[] { warning, danger }, CollectionOrdering.Matching);
+            await Assert.That(summary.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
         });
     }
 
@@ -389,6 +431,7 @@ public class WorkContextViewSmokeTests {
                 new SubagentSignal.Started("c1", longName, "", now.AddSeconds(-18)),
                 new SubagentSignal.Detached("c1", "a1"),
             ]));
+            await host.Vm.ToggleSubagentsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
 
