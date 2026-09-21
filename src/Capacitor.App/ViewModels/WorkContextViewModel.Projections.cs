@@ -166,7 +166,7 @@ public sealed partial class WorkContextViewModel {
     }
     bool _sessionExpanded;
     public bool SessionExpanded { get => _sessionExpanded; private set => this.RaiseAndSetIfChanged(ref _sessionExpanded, value); }
-    bool _subagentsExpanded = true;
+    bool _subagentsExpanded;
     public bool SubagentsExpanded { get => _subagentsExpanded; private set => this.RaiseAndSetIfChanged(ref _subagentsExpanded, value); }
 
     public ReactiveCommand<Unit, Unit> TogglePartsCommand { get; private set; } = null!;

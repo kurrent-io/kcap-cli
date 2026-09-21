@@ -6,6 +6,20 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The sidebar's subagents section starts folded to a count per state
+
+A session that spawns many subagents pushed the rest of the work-context pane off screen, so the
+section starts collapsed and its header carries one number per state beside the mark the rows use.
+A state nothing is in shows nothing, and stopped is counted on its own rather than folded into
+completed or failed: the numbers have to add up to the list, and a run the session ended is neither.
+
+The tracker raises `Changed` when any per-state count moves, not only the running count or the row
+count. A bare stop reads as done until a notification says the run failed, and that revision moves
+neither — the collapsed numbers would have stayed wrong until the next start or finish.
+
+The mark is one template keyed on the state, used by the rows and the counts alike, so the two
+cannot drift apart.
+
 ## Notification access is requested in the foreground and its refusal is visible
 
 macOS settles an unanswered permission prompt as denied, and its prompt is a banner whose Allow
