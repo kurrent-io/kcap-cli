@@ -1600,6 +1600,13 @@ daemon graph, no tray) and hands the outcome channel to the normal graph's consu
 permanently past the quiesce cap (decision 2/§6a). The §7 streaming `IProcessRunner` backs the
 Import step's live, bounded-tail log pane.
 
+The wizard's workspace discovery is single sign-on only, matching the CLI's default: a server on
+GitHub App auth is reached by name or URL, where its own `/auth/config` picks the flow.
+`SignInStepViewModel` is hosted twice, and what follows a commit is the host's: the step raises
+`Completed` and takes its success detail from whoever composed it, so the wizard moves on after
+`SuccessHold` while the re-auth dialog refreshes and closes. `Completed` waits for a consent
+quarantine notice to be acknowledged, and `TryAdvanceFrom` refuses once the user has left the step.
+
 ## Session workspace terminal
 
 **AI-2195** (spec: `docs/superpowers/specs/2026-08-24-ai2195-session-workspace-terminal-design.md`)

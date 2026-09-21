@@ -100,6 +100,14 @@ public sealed class OnboardingViewModel : ReactiveObject {
         return true;
     }
 
+    /// Move on from a step that finished by itself. Refused once the user has left that step —
+    /// a late call must not pull them off the page they chose — and once the wizard has closed.
+    internal bool TryAdvanceFrom(WizardStepId id) {
+        if (_closed || Current.Id != id || _index >= Steps.Count - 1) return false;
+
+        return TryGoTo(Steps[_index + 1].Id);
+    }
+
     async Task NavigateAsync(WizardNavigation direction) {
         if (_navigating) return; // defense in depth — canExecute already blocks a bound button
         Navigating = true;

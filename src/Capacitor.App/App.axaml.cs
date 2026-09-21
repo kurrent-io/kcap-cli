@@ -863,13 +863,10 @@ public partial class App : Application {
         window.Show();
     }
 
-    /// How long a successful re-auth keeps the dialog open so the success line is not a flash.
-    internal static readonly TimeSpan SignInSuccessHold = TimeSpan.FromMilliseconds(1600);
-
     async Task CloseSignInAfterSuccessAsync(Window window) {
         var refresh = RefreshAfterReauthAsync();
         try {
-            await Task.WhenAll(refresh, Task.Delay(SignInSuccessHold, _time)).ConfigureAwait(true);
+            await Task.WhenAll(refresh, Task.Delay(SignInStepViewModel.SuccessHold, _time)).ConfigureAwait(true);
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: post-sign-in refresh failed: {ex.Message}");
         }
