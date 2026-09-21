@@ -144,9 +144,8 @@ public class ToolCallBudgetTests {
         await Assert.That(clock.Elapsed).IsLessThan(McpFlowsServer.ToolCallBudget);
     }
 
-    /// <summary>Codex aborts an MCP tool call at 300 s, the shortest timeout among the harnesses that
-    /// drive flows. A call the harness aborts never delivers its "still running" reply, and that reply
-    /// is the only place a start hands the driver its flow_run_id.</summary>
+    /// <summary>Mirrors <see cref="McpFlowsServer.ShortestHarnessToolTimeout"/>, pinned locally like
+    /// <see cref="PollCap"/>: raising the production ceiling must not quietly loosen this test.</summary>
     static readonly TimeSpan ShortestHarnessToolTimeout = TimeSpan.FromSeconds(300);
 
     /// <summary>What a call can still spend once its deadline has passed: a GET already in flight
@@ -168,5 +167,51 @@ public class ToolCallBudgetTests {
         var text = JsonNode.Parse(response)!["result"]!["content"]![0]!["text"]!.GetValue<string>();
         await Assert.That(text).Contains("Flow still running");
         await Assert.That(text).Contains("flow-budget");
+    }
+
+    /// <summary>Holds every POST open until its own token is cancelled, as a server absorbing an
+    /// admission wait does. A request that reaches it with no deadline never returns.</summary>
+    sealed class HeldOpenHandler(VirtualFlowRetryClock clock) : HttpMessageHandler {
+        public int Posts { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Posts++;
+            // Far past every bound: a token that arrived is cancelled by now, one that did not never is.
+            clock.Advance(TimeSpan.FromHours(1));
+            ct.ThrowIfCancellationRequested();
+
+            throw new InvalidOperationException("the POST reached the server with no deadline on it");
+        }
+    }
+
+    /// <summary>A model-bearing start is a single POST outside the settlement-retry lane, so nothing
+    /// there bounds it. It is held open server-side like any other start, and must still be cut short
+    /// and reported as retryable rather than left for the harness to abort.</summary>
+    [Test]
+    public async Task A_model_start_held_open_by_the_server_is_cut_short_and_reported_retryable() {
+        var clock   = new VirtualFlowRetryClock();
+        var handler = new HeldOpenHandler(clock);
+
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("http://budget.test") };
+
+        var arguments = StartArguments();
+        arguments["vendor"] = "codex";
+        arguments["model"]  = "some-model";
+
+        var request = new JsonObject {
+            ["params"] = new JsonObject { ["name"] = "start_review_flow", ["arguments"] = arguments }
+        };
+
+        var response = await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, request, client, "http://budget.test",
+            cwd: "/tmp/cwd", repoRoot: null, repoInfo: null,
+            clock: clock, backoff: SettlementBackoff.Seeded(7));
+
+        // One POST, never re-sent: a second would mint and launch a second run.
+        await Assert.That(handler.Posts).IsEqualTo(1);
+
+        var result = JsonNode.Parse(response)!["result"]!.AsObject();
+        await Assert.That(result["isError"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(result["content"]![0]!["text"]!.GetValue<string>()).Contains("This is retryable");
     }
 }

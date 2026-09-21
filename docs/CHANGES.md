@@ -16,10 +16,12 @@ running, and a driver with no supported way back to it.
 
 The bounds are sized to 300 s for every harness rather than per client. `ToolCallBudget` is 4
 minutes: with a GET still in flight when it expires and the ack POST after it, the call ends around
-275 s. `PollCap`, which alone bounds a `wait: true` status call, is 3m30s.
+275 s. `PollCap`, which alone bounds a `wait: true` status call, is 3m30s. A model-bearing start is
+one POST outside the settlement lane — re-sending it would launch a second run — and had no deadline
+at all; it takes the 3-minute bound a first settlement attempt gets.
 
-`SettlementElapsedDeadline` stays at 3 minutes because it is not ours to move: it is one cycle of the
-server's reconcile sweep, the thing that proves a prior reviewer agent gone so a
+`SettlementElapsedDeadline` stays at 3 minutes because it is not ours to move: it is the server's
+reconcile sweep interval, and the sweep is what proves a prior reviewer agent gone so a
 `participant_unreachable` retry can succeed. That leaves `SettlementAbsoluteDeadline` 30 s of room
 above it, so a daemon lane that keeps making progress now re-arms the window for 30 s, not five
 minutes, before the caller gets the retryable busy error. The cost falls on Claude Code too, which

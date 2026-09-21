@@ -227,10 +227,10 @@ class McpFlowsServer(
 
                 var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? new SettlementSendResult.Response(await StartFlowAsync(client, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId))
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock)
                         : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     "start_flow"          => wasModelStart
-                        ? new SettlementSendResult.Response(await StartFlowAsync(client, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId))
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock)
                         : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     // Round submission also retries the coded participant_unreachable 409 (see
                     // ParticipantUnreachableCode) — never a start, which can't return it.
@@ -488,9 +488,9 @@ class McpFlowsServer(
     /// absorbs an admission wait by holding the request open for up to about a minute, so a budget
     /// that summed only the backoff delays would overrun <see cref="ToolCallBudget"/>.
     ///
-    /// <para>Three minutes is one full cycle of the server's reconcile sweep, which is what proves a
+    /// <para>Three minutes is the server's reconcile sweep interval, and the sweep is what proves a
     /// prior reviewer agent gone and lets a <see cref="ParticipantUnreachableCode"/> retry succeed.
-    /// Any shorter and that retry can never win.</para>
+    /// A window any shorter would routinely expire between two sweeps.</para>
     ///
     /// <para>A retryable 409's <c>last_processed_seq</c> re-arms the window from that response when it
     /// is the first seq observed or strictly higher than the previous one. An equal or lower seq is
@@ -585,6 +585,26 @@ class McpFlowsServer(
         }
 
         return null;
+    }
+
+    /// <summary>One POST under <see cref="SettlementElapsedDeadline"/>, never re-sent: the lane for a
+    /// model-bearing start, where a second POST would mint and launch a second run. The server holds
+    /// it open like any other start, so it takes the same bound a first settlement attempt gets; a
+    /// cancelled POST reads server-side as a cancel, which is what tears a half-launched reviewer down.</summary>
+    static async Task<SettlementSendResult> SendOnceWithDeadlineAsync(
+            HttpClient                                                    client,
+            Func<HttpClient, CancellationToken, Task<HttpResponseMessage>> send,
+            FlowRetryClock                                                clock
+        ) {
+        var startedAt = clock.UtcNow;
+
+        using var scope = clock.CreateDeadline(SettlementElapsedDeadline, CancellationToken.None);
+
+        try {
+            return new SettlementSendResult.Response(await send(client, scope.Token));
+        } catch (OperationCanceledException) when (scope.DeadlineFired) {
+            return new SettlementSendResult.DeadlineExhausted(null, null, 1, clock.UtcNow - startedAt);
+        }
     }
 
     /// <summary>
@@ -2126,7 +2146,7 @@ class McpFlowsServer(
             "get_review_flow_status",
             "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
             "Long rounds are normal — a reviewer round can legitimately run well past a single check. " +
-            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
+            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on that cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
@@ -2194,7 +2214,7 @@ class McpFlowsServer(
             "get_flow_status",
             "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
             "Long rounds are normal — a participant round can legitimately run well past a single check. " +
-            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
+            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on that cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
