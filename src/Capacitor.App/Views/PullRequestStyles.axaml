@@ -64,14 +64,14 @@
         <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
     </Style>
     <Style Selector="Button.prStatusRow">
-        <!-- Own class (not prButton): Fluent paints hover on the presenter, so rest and hover pin
-             it. Bleed left into the body indent; inset right so the raised fill shows radius. -->
+        <!-- Stay inside sectionBody — a negative left margin is clipped by the hairline border.
+             Icons share the content edge with lifecycle; right inset keeps the raised radius visible. -->
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        <Setter Property="Padding" Value="8,6" />
-        <Setter Property="Margin" Value="-8,0,8,0" />
+        <Setter Property="Padding" Value="0,6" />
+        <Setter Property="Margin" Value="0,0,8,0" />
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
