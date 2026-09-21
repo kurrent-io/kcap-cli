@@ -348,4 +348,23 @@ public class TerminalTranscriptTests {
 
         await Assert.That(line0).IsEqualTo("hello");
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_reset_clears_what_was_fed_before_it() {
+        // The daemon repairs a desynced mirror with ESC c followed by a replay, so a remote
+        // viewer that ignored the reset would paint the replay over stale content.
+        var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+            var surface = new XtermTerminalSurface(cols: 80, rows: 24);
+            surface.Feed("stale");
+            var first = surface.Model.Terminal.Engine.GetLine(0);
+
+            surface.Feed("\u001bcfresh");
+
+            return (first, surface.Model.Terminal.Engine.GetLine(0));
+        });
+
+        await Assert.That(before).IsEqualTo("stale");
+        await Assert.That(after).IsEqualTo("fresh");
+    }
 }
