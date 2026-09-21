@@ -134,6 +134,48 @@ public class ActivityViewModelTests {
         await Assert.That(ActivityViewModel.SourceLabelOf(source)).IsEqualTo(expected);
     }
 
+    [Test]
+    [Arguments("short@co.io", "short@co.io")]
+    [Arguments("very.long.local-part@company.com", "very.long.…@company.com")]
+    [Arguments("Ada Lovelace", "Ada Lovelace")]
+    public async Task TruncateRequester_default_cases(string input, string expected) {
+        await Assert.That(ActivityViewModel.TruncateRequester(input)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task TruncateRequester_keeps_domain_when_local_is_long() {
+        await Assert.That(ActivityViewModel.TruncateRequester("verylonglocalpartname@example.org", localHead: 8))
+            .IsEqualTo("verylong…@example.org");
+    }
+
+    [Test]
+    public async Task TruncateRequester_middle_truncates_non_email() {
+        await Assert.That(ActivityViewModel.TruncateRequester("abcdefghijklmnopqrstuvwxyz", head: 4, tail: 4))
+            .IsEqualTo("abcd…wxyz");
+    }
+
+    [Test]
+    [Arguments("allowed", "Allowed")]
+    [Arguments("denied", "Denied")]
+    [Arguments("weird", "weird")]
+    public async Task Outcome_labels(string raw, string expected) {
+        await Assert.That(ActivityViewModel.OutcomeLabelOf(raw)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task PrimaryDetail_omits_agent_kind() {
+        await Assert.That(ActivityViewModel.PrimaryDetailOf("claude", "agent")).IsEqualTo("claude");
+        await Assert.That(ActivityViewModel.PrimaryDetailOf("codex", "review-flow")).IsEqualTo("codex · Review flow");
+    }
+
+    [Test]
+    public async Task SecondaryLine_omits_you_source() {
+        await Assert.That(ActivityViewModel.SecondaryLineOf("ada@x.com", "kcap-cli", "you"))
+            .IsEqualTo("ada@x.com · kcap-cli");
+        await Assert.That(ActivityViewModel.SecondaryLineOf("ada@x.com", "kcap-cli", "rule"))
+            .IsEqualTo("ada@x.com · kcap-cli · rule");
+    }
+
     // ---- 2: Complete replaces, including to empty ----
 
     [Test]

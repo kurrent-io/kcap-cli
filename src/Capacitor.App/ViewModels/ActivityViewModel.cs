@@ -185,4 +185,37 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         "prompt_no_ui"   => "no UI attached",
         _ => source.StartsWith("rule[", StringComparison.Ordinal) && source.EndsWith(']') ? "rule" : source,
     };
+
+    internal static string MiddleTruncate(string value, int head = 10, int tail = 8) {
+        if (value.Length <= head + tail + 1) return value;
+        return string.Concat(value.AsSpan(0, head), "…", value.AsSpan(value.Length - tail));
+    }
+
+    internal static string TruncateRequester(string value, int localHead = 10, int head = 10, int tail = 8) {
+        var at = value.LastIndexOf('@');
+        if (at > 0 && at < value.Length - 1) {
+            var local = value.AsSpan(0, at);
+            var domain = value.AsSpan(at + 1);
+            if (domain.Length > 48) return MiddleTruncate(value, head, tail);
+            if (local.Length <= localHead) return value;
+            return string.Concat(local[..localHead], "…@", domain);
+        }
+        return MiddleTruncate(value, head, tail);
+    }
+
+    internal static string OutcomeLabelOf(string outcome) => outcome switch {
+        "allowed" => "Allowed",
+        "denied"  => "Denied",
+        _         => outcome,
+    };
+
+    internal static string PrimaryDetailOf(string vendor, string kind) {
+        var kindLabel = kind == "agent" ? null : ConsentPromptViewModel.KindLabelOf(kind);
+        return kindLabel is null ? vendor : $"{vendor} · {kindLabel}";
+    }
+
+    internal static string SecondaryLineOf(string requesterDisplay, string repoLeaf, string sourceLabel) {
+        if (sourceLabel == "you") return $"{requesterDisplay} · {repoLeaf}";
+        return $"{requesterDisplay} · {repoLeaf} · {sourceLabel}";
+    }
 }
