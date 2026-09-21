@@ -93,6 +93,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly Action<string>? _openSession;
     readonly Func<int>? _navigationGeneration;
     readonly Action<string, int>? _openSessionIfCurrent;
+    readonly Action<string>? _launchFailed;
     readonly CompositeDisposable _disposables = new();
 
     string _selectedRepoPath = ScratchRepoPath;
@@ -407,6 +408,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// <param name="directory">The merged local+remote rows (IAgentDirectory.Rows). A row for a
     /// tracked id is success confirmation and stops tracking it. Null ⇒ only a LaunchFailed or the
     /// pending entry's own 10-minute timeout ever stops tracking.</param>
+    /// <param name="launchFailed">A tracked launch failed (MainWindowViewModel.CloseFailedLaunch):
+    /// its auto-opened workspace would otherwise cover the StartError this view just set.</param>
     public HomeViewModel(
             IDaemonClientService daemon, IAppStateStore state, ILaunchClient launch,
             Func<Task<string[]>> knownRepos, TimeProvider time, CancellationToken shutdown = default,
@@ -417,7 +420,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
             IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            IAttachmentUploader? uploader = null, string? appServerUrl = null) {
+            IAttachmentUploader? uploader = null, string? appServerUrl = null, Action<string>? launchFailed = null) {
+        _launchFailed = launchFailed;
         _daemon = daemon;
         _state = state;
         _launch = launch;
@@ -1217,7 +1221,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // local target.
         if (tracked && !draft.Remote)
             _directory?.AddPlaceholder(agentId, draft.Vendor, draft.RepoPath, AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
-        if (!draft.Remote) _openSessionIfCurrent?.Invoke(agentId, generation);
+        // Untracked with no row is a failure that beat the call's own return: opening would cover
+        // the launcher that has just worded it.
+        if (!draft.Remote && (tracked || RowExists(agentId, AgentOrigin.Local)))
+            _openSessionIfCurrent?.Invoke(agentId, generation);
     }
 
     async Task<bool> OwnsConnectedAsync(string machine) =>
@@ -1311,6 +1318,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (pending is null) return;
         ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason);
         _directory?.RemovePlaceholder(agentId);
+        _launchFailed?.Invoke(agentId);
     }
 
     /// A text-only launch just renders its reason. A launch that carried files hands the draft

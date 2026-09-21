@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services;
@@ -104,7 +105,7 @@ public class WorkspaceNavigationTests {
         return nav.Attach.Created[^1];
     }
 
-    static HomeViewModel NewHome(Nav nav, ILaunchClient launch, string statePath) {
+    static HomeViewModel NewHome(Nav nav, ILaunchClient launch, string statePath, IObservable<LaunchFailure>? failures = null) {
         // StartCommand's canExecute gates on daemon + server both up; these tests launch, so the
         // fixture models the connected steady state.
         nav.Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
@@ -113,7 +114,103 @@ public class WorkspaceNavigationTests {
             TimeProvider.System,
             openSession: id => nav.Vm.OpenSession(id),
             navigationGeneration: () => nav.Vm.NavigationGeneration,
-            openSessionIfCurrent: nav.Vm.OpenSessionIfCurrent);
+            openSessionIfCurrent: nav.Vm.OpenSessionIfCurrent,
+            launchFailures: failures, launchFailed: nav.Vm.CloseFailedLaunch);
+    }
+
+    /// Reports the failure before the launch call returns: the race where a LaunchFailed lands
+    /// while the invoke is still in flight.
+    sealed class FailureBeforeReturnLaunchClient(Subject<LaunchFailure> failures) : ILaunchClient {
+        public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {
+            failures.OnNext(new LaunchFailure(Id1, "launch_denied_by_owner: default"));
+            return Task.FromResult(new LaunchOutcome(true, Id1, null));
+        }
+    }
+
+    /// The failure is worded on the launcher, which an open workspace covers: a launch that fails
+    /// before the daemon reports its agent hands the screen back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_launch_closes_its_auto_opened_workspace() {
+        await RunOnUiAsync(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var nav = NewNav();
+            var failures = new Subject<LaunchFailure>();
+            using var home = NewHome(nav, new FixedLaunchClient(), path, failures);
+
+            await home.SelectRepositoryAsync("/repo/myproj");
+            home.Goal = "do the thing";
+            await home.StartCommand.Execute();
+            await Assert.That(nav.Vm.CurrentWorkspace?.AgentId).IsEqualTo(Id1);
+
+            failures.OnNext(new LaunchFailure(Id1, "launch_denied_by_owner: default"));
+
+            await Assert.That(nav.Vm.CurrentWorkspace).IsNull();
+            await Assert.That(home.StartError).Contains("consent policy denied");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_launch_leaves_another_open_workspace_alone() {
+        await RunOnUiAsync(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var nav = NewNav();
+            var failures = new Subject<LaunchFailure>();
+            using var home = NewHome(nav, new FixedLaunchClient(), path, failures);
+
+            await home.SelectRepositoryAsync("/repo/myproj");
+            home.Goal = "do the thing";
+            await home.StartCommand.Execute();
+            await OpenAttachedAsync(nav, Id2);
+
+            failures.OnNext(new LaunchFailure(Id1, "launch_denied_by_owner: default"));
+
+            await Assert.That(nav.Vm.CurrentWorkspace?.AgentId).IsEqualTo(Id2);
+            await Assert.That(home.StartError).Contains("consent policy denied");
+        });
+    }
+
+    /// A failure report can trail the agent it names; a workspace the daemon has already filled is
+    /// a live session, not a failed launch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_after_the_daemon_reported_the_agent_keeps_its_workspace() {
+        await RunOnUiAsync(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var nav = NewNav();
+            var failures = new Subject<LaunchFailure>();
+            using var home = NewHome(nav, new FixedLaunchClient(), path, failures);
+
+            await home.SelectRepositoryAsync("/repo/myproj");
+            home.Goal = "do the thing";
+            await home.StartCommand.Execute();
+            nav.Daemon.Agents.AddOrUpdate(Agent(Id1));
+            await (((WorkspaceViewModel)nav.Vm.CurrentWorkspace!).Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            failures.OnNext(new LaunchFailure(Id1, "launch_denied_by_owner: default"));
+
+            await Assert.That(nav.Vm.CurrentWorkspace?.AgentId).IsEqualTo(Id1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_launch_that_failed_before_its_call_returned_opens_no_workspace() {
+        await RunOnUiAsync(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var nav = NewNav();
+            var failures = new Subject<LaunchFailure>();
+            using var home = NewHome(nav, new FailureBeforeReturnLaunchClient(failures), path, failures);
+
+            await home.SelectRepositoryAsync("/repo/myproj");
+            home.Goal = "do the thing";
+            await home.StartCommand.Execute();
+
+            await Assert.That(home.StartError).Contains("consent policy denied");
+            await Assert.That(nav.Opened).IsEmpty();
+            await Assert.That(nav.Vm.CurrentWorkspace).IsNull();
+        });
     }
 
     [Test]
