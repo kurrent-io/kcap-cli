@@ -699,7 +699,7 @@ Stdio MCP server that lets coding agents correlate the current session to the SD
 
 It provides ten tools:
 
-- **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (e.g. `"AI-1234"`), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
+- **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (a tracker key such as `"AI-1234"`, an issue number in the session's repository such as `"#123"`, a qualified `"owner/repo#123"`, or a GitHub issue URL), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
 - **`get_session_work_items`** — list the work items the current session is attached to.
 - **`declare_loose_end`** — record one concrete piece of work this session leaves unfinished (`text`), so it appears in the user's next-work loose-ends ledger. Idempotent per session, owner and normalized text; the server refuses none-class text (`"none"`, `"n/a"`, …).
 - **`declare_work_breakdown`** — declare that a work item is broken into parts (`parent_id` + `part_ids`). Idempotent; a part has at most one parent, and every item must be visible to the caller — a part may live in a different repository than its parent.
