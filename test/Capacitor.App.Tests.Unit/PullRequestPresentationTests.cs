@@ -111,7 +111,7 @@ public class PullRequestPresentationTests {
         await Assert.That(row.Bounds.Width).IsLessThanOrEqualTo(width);
         var status = row.GetVisualDescendants().OfType<PullRequestStatusLabel>().Single();
         await Assert.That(status.FindControl<TextBlock>("StatusText")!.Text).IsEqualTo("Commented");
-        await Assert.That(status.GetVisualDescendants().OfType<Path>().Single().Data).IsNotNull();
+        await Assert.That(status.GetVisualDescendants().OfType<Path>().Single(path => path.IsEffectivelyVisible).Data).IsNotNull();
         await Assert.That(h.Model.Rows.Single().IsBot).IsTrue();
         var title = row.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == new string('r', 100));
         await Assert.That(title.Bounds.Width).IsGreaterThan(0);
@@ -174,7 +174,7 @@ public class PullRequestPresentationTests {
         var presenter = checks.GetVisualDescendants().OfType<ContentPresenter>().Single(item => item.Name == "PART_ContentPresenter" && item.TemplatedParent == checks);
         h.Window.MouseMove(checks.TranslatePoint(new Point(checks.Bounds.Width / 2, checks.Bounds.Height / 2), h.Window)!.Value);
         Dispatcher.UIThread.RunJobs();
-        await Assert.That(((ISolidColorBrush)presenter.Background!).Color).IsEqualTo(Color.Parse("#2A3040"));
+        await Assert.That(((ISolidColorBrush)presenter.Background!).Color).IsEqualTo(Color.Parse("#191D27"));
 
         h.Source.Failure = "transient";
         h.Time.Advance(TimeSpan.FromSeconds(21));
@@ -194,7 +194,8 @@ public class PullRequestPresentationTests {
         h.Model.SelectedTabIndex = 1;
         await h.SettleAsync();
         await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks passing");
-        await Assert.That(h.Model.ChecksStatus.Detail).IsEqualTo("GitHub summary: successful");
+        await Assert.That(h.Model.ChecksStatus.Detail).IsEqualTo("All checks have passed.");
+        await Assert.That(h.Model.ChecksStatus.Tip).IsEqualTo("All checks have passed.");
         await Assert.That(h.Model.CheckRows.Single().Status!.IsDanger).IsTrue();
         await h.Model.LoadMoreCommand.Execute();
         await h.SettleAsync();

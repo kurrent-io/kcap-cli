@@ -151,7 +151,7 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task Complete_current_checks_take_precedence_over_a_conflicting_advisory_rollup() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Source.TotalPages = 1; h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
-        await Assert.That(h.Vm.CheckSummary).Contains("GitHub summary");
+        await Assert.That(h.Vm.CheckSummary).Contains("All checks have passed");
         await h.Vm.ShowSectionCommand.Execute("checks");
         await WaitUntilAsync(() => h.Vm.Rows.Count == 1, what: "checks page");
         await Assert.That(h.Vm.CheckSummary).Contains("1 failed");

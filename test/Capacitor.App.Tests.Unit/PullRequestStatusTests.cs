@@ -36,6 +36,8 @@ public class PullRequestStatusTests {
         await Assert.That(new PullRequestStatus("Open", "open").Tip).Contains("open");
         await Assert.That(new PullRequestStatus("2 failed", "failure", "1 failed · 0 pending · 1 passed").Tip)
             .IsEqualTo("1 failed · 0 pending · 1 passed");
+        await Assert.That(new PullRequestStatus("Checks passing", "success", "All checks have passed.").Tip)
+            .IsEqualTo("All checks have passed.");
     }
 
     [Test]

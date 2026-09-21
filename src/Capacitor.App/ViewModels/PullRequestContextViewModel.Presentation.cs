@@ -57,25 +57,25 @@ public sealed partial class PullRequestContextViewModel {
                 && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < TimeSpan.FromSeconds(30)
                 && completed >= _overview?.Checks?.Availability.FetchedAt && checks.Pages.Sum(page => page.Rows.Length) == checks.Total.Value) {
                 var rows = checks.Pages.SelectMany(page => page.Rows).ToArray();
-                if (rows.Length == 0) return new("No checks reported", Detail: "No checks reported");
+                if (rows.Length == 0) return new("No checks reported", Detail: "No checks were reported for this commit.");
                 var failed = rows.Count(row => row.Outcome is "failure" or "timed_out" or "action_required");
                 var pending = rows.Count(row => row.Outcome == "pending");
                 var passed = rows.Count(row => row.Outcome == "success");
                 var other = rows.Length - failed - pending - passed;
-                var detail = $"{failed} failed · {pending} pending · {passed} passed" + (other > 0 ? $" · {other} other" : "");
-                // Sidebar is a verdict; counts belong in Detail (tooltip / reader). Fail and pending
-                // keep a count in Text because that changes urgency; all-green stays a short phrase.
-                return failed > 0 ? new($"{failed} failed", "failure", detail)
-                    : pending > 0 ? new($"{pending} pending", "pending", detail)
-                    : other > 0 ? new("Checks completed", Detail: detail)
-                    : new("Checks passing", "success", detail);
+                var counts = $"{failed} failed · {pending} pending · {passed} passed" + (other > 0 ? $" · {other} other" : "");
+                // Sidebar is a verdict; Tip carries a sentence (and counts when useful). Fail and
+                // pending keep a count in Text because that changes urgency; all-green stays short.
+                return failed > 0 ? new($"{failed} failed", "failure", $"One or more checks failed ({counts}).")
+                    : pending > 0 ? new($"{pending} pending", "pending", $"Checks are still running ({counts}).")
+                    : other > 0 ? new("Checks completed", Detail: $"Checks finished with mixed outcomes ({counts}).")
+                    : new("Checks passing", "success", $"All checks have passed ({counts}).");
             }
-            return _overview?.Checks?.Availability.Status != "ready" ? new("Checks unavailable", Detail: "Checks unavailable")
+            return _overview?.Checks?.Availability.Status != "ready" ? new("Checks unavailable", Detail: "Checks could not be loaded for this pull request.")
                 : _overview.Checks.Rollup switch {
-                    "success" => new("Checks passing", "success", "GitHub summary: successful"),
-                    "failure" => new("Checks failing", "failure", "GitHub summary: failing"),
-                    "pending" => new("Checks pending", "pending", "GitHub summary: pending"),
-                    _ => new("Checks unknown", Detail: "GitHub summary: unknown")
+                    "success" => new("Checks passing", "success", "All checks have passed."),
+                    "failure" => new("Checks failing", "failure", "One or more checks failed."),
+                    "pending" => new("Checks pending", "pending", "Checks are still running."),
+                    _ => new("Checks unknown", Detail: "GitHub has not reported a check summary yet.")
                 };
         }
     }
