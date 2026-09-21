@@ -219,8 +219,8 @@ public class StatusWaitArgumentTests {
             .IsEqualTo((int)(PollCap.TotalSeconds / PollInterval.TotalSeconds));
     }
 
-    /// <summary>Codex aborts an MCP tool call at 300 s, the shortest timeout among the harnesses that
-    /// drive flows; an aborted wait never delivers its "still running" reply.</summary>
+    /// <summary>Mirrors <see cref="McpFlowsServer.ShortestHarnessToolTimeout"/>, pinned locally like
+    /// <see cref="PollCap"/>: raising the production ceiling must not quietly loosen this test.</summary>
     static readonly TimeSpan ShortestHarnessToolTimeout = TimeSpan.FromSeconds(300);
 
     /// <summary>What a wait can still spend once its cap has passed: a GET already in flight
