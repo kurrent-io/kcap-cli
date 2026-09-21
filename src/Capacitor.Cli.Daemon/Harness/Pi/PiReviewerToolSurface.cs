@@ -17,21 +17,25 @@ internal static class PiReviewerToolSurface {
     internal static readonly ImmutableArray<string> PiBuiltInNames =
         ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 
+    /// <summary>Canonical output order — file tools, then the result channel, then every other
+    /// server — is fixed here regardless of where the caller placed the result channel in
+    /// <paramref name="servers"/>: a launcher assembling the server list has no reason to order it
+    /// this way, so the surface enforces it rather than trusting caller order.</summary>
     internal static IReadOnlyList<PiReviewerTool> For(IReadOnlyList<AcpMcpServerSpec> servers) {
-        if (!servers.Any(s => IsResultChannel(s.Name)))
+        var resultChannel = servers.FirstOrDefault(s => IsResultChannel(s.Name));
+
+        if (resultChannel is null)
             throw new InvalidOperationException(
                 "pi_reviewer_launch_context_incomplete: the launch carries no result channel.");
 
         var tools = new List<PiReviewerTool>();
         tools.AddRange(FileTools.Select(name => new PiReviewerTool(name, null, null)));
+        tools.AddRange(KcapMcpRegistry.ReservedResultChannelTools
+            .Where(t => t.UnattendedSafe)
+            .Select(t => new PiReviewerTool(t.Name, resultChannel.Name, t.Name)));
 
         foreach (var server in servers) {
-            if (IsResultChannel(server.Name)) {
-                tools.AddRange(KcapMcpRegistry.ReservedResultChannelTools
-                    .Where(t => t.UnattendedSafe)
-                    .Select(t => new PiReviewerTool(t.Name, server.Name, t.Name)));
-                continue;
-            }
+            if (IsResultChannel(server.Name)) continue;
 
             if (!KcapMcpRegistry.ReviewFlowUnattendedSafeTools.TryGetValue(server.Name, out var safe))
                 throw new InvalidOperationException(

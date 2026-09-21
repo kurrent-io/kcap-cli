@@ -46,7 +46,17 @@ public class PiReviewerToolSurfaceTests {
     [Test]
     public async Task A_launch_without_the_result_channel_throws() {
         await Assert.That(() => PiReviewerToolSurface.For([Server("kcap-review")]))
-            .Throws<InvalidOperationException>();
+            .Throws<InvalidOperationException>()
+            .WithMessageContaining("pi_reviewer_launch_context_incomplete");
+    }
+
+    [Test]
+    public async Task Result_channel_ordering_does_not_depend_on_input_position() {
+        var reordered = PiReviewerToolSurface.For([Server("kcap-review"), ResultChannel]);
+        var canonical  = PiReviewerToolSurface.For([ResultChannel, Server("kcap-review")]);
+
+        await Assert.That(reordered.Select(t => t.PiName)).IsEquivalentTo(
+            canonical.Select(t => t.PiName), TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]
