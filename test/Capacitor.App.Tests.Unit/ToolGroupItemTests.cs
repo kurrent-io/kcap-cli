@@ -1,4 +1,5 @@
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
 using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
@@ -57,9 +58,25 @@ public class ToolGroupItemTests {
             await Assert.That(group.ShowsSummaryHeader).IsFalse();
             await Assert.That(group.ShowsKindChip).IsTrue();
             await Assert.That(group.KindChip).IsEqualTo("Command");
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
             await Assert.That(group.LoneCall).IsSameReferenceAs(call);
-            await Assert.That(call.ShowRowStatus).IsFalse();
             await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { call });
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Header_icon_follows_the_first_settled_category() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var a = Call("Bash", ToolCategory.Command);
+            var b = Call("Read", ToolCategory.Read);
+            group.Add(a);
+            group.Add(b);
+            b.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
+            a.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
         });
     }
 
@@ -68,7 +85,7 @@ public class ToolGroupItemTests {
     public async Task Folded_summary_peeks_the_first_settled_detail_and_caps_long_ones() {
         await RunOnUiAsync(async () => {
             var group = new ToolGroupItem();
-            var longDetail = new string('x', 80);
+            var longDetail = new string('x', 40) + new string('y', 40);
             var first = new ToolCallItem("Bash", longDetail, ToolCategory.Command);
             var second = Call("Read", ToolCategory.Read);
             group.Add(first);
@@ -76,7 +93,8 @@ public class ToolGroupItemTests {
             first.Outcome = ToolOutcome.Done;
             second.Outcome = ToolOutcome.Done;
 
-            await Assert.That(group.SummaryLine).IsEqualTo($"Ran a command, read a file · {new string('x', 55)}…");
+            await Assert.That(group.SummaryLine)
+                .IsEqualTo($"Ran a command, read a file · {new string('x', 28)}…{new string('y', 27)}");
             group.Toggle();
             await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
         });

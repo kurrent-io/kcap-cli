@@ -1,24 +1,28 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:vm="clr-namespace:Capacitor.App.ViewModels">
+                    xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+                    xmlns:views="clr-namespace:Capacitor.App.Views">
     <!-- The three NEEDS YOU card kinds. Every pane that answers a prompt renders them from here,
          so a card looks and behaves the same whether the agent runs on this machine or another. -->
     <DataTemplate x:Key="PermissionCardTemplate" x:DataType="vm:PermissionCardViewModel">
-        <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="10" Padding="13,10" Margin="0,0,0,6">
+        <Border Classes="chatPromptCard">
             <StackPanel Spacing="6">
-                <TextBlock Classes="toolKindChip" Text="Permission" />
-                <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" />
-                <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                <views:ChatKindHeader Label="Permission" IconData="{x:Static views:ToolCategoryIcons.PermissionIcon}" />
+                <TextBlock Text="{Binding ToolName}" FontSize="13" TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
+                <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}"
+                           TextTrimming="{x:Static views:ChatTrimming.MiddleEllipsis}" />
                 <TextBlock Text="{Binding ErrorText}" FontSize="11" Foreground="{StaticResource KcapDangerBrush}"
                            IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding HasOptions}">
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <Button Content="{Binding Label}" Command="{Binding PickCommand}" ToolTip.Tip="{Binding Description}"
-                                    Margin="0,0,6,6" Padding="10,4" FontSize="12" CornerRadius="7"
-                                    Background="{StaticResource KcapSurfaceRaisedBrush}" Foreground="{StaticResource KcapTextBrush}" />
+                            <Button Command="{Binding PickCommand}" ToolTip.Tip="{Binding Description}"
+                                    Margin="0,0,6,6" Padding="10,4" FontSize="12" CornerRadius="7" MaxWidth="632"
+                                    HorizontalContentAlignment="Stretch"
+                                    Background="{StaticResource KcapSurfaceRaisedBrush}" Foreground="{StaticResource KcapTextBrush}">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -34,9 +38,7 @@
         </Border>
     </DataTemplate>
     <DataTemplate x:Key="QuestionCardTemplate" x:DataType="vm:QuestionCardViewModel">
-        <Border x:Name="QuestionCard"
-                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
+        <Border x:Name="QuestionCard" Classes="chatPromptCard">
             <Border.Styles>
                 <Style Selector="TextBlock.prompt">
                     <Setter Property="FontWeight" Value="SemiBold" />
@@ -140,7 +142,9 @@
                     <ContentControl.ContentTemplate>
                         <DataTemplate x:DataType="vm:QuestionGroupViewModel">
                             <StackPanel Spacing="8">
-                                <TextBlock Classes="toolKindChip" Text="{Binding Header}" IsVisible="{Binding ShowsHeader}" />
+                                <views:ChatKindHeader Label="{Binding Header}"
+                                                        IconData="{x:Static views:ToolCategoryIcons.QuestionIcon}"
+                                                        IsVisible="{Binding ShowsHeader}" />
                                 <TextBlock Classes="prompt" Text="{Binding Text}" />
                                 <ItemsControl ItemsSource="{Binding Options}">
                                     <ItemsControl.ItemsPanel>
@@ -227,9 +231,7 @@
         </Border>
     </DataTemplate>
     <DataTemplate x:Key="AcpQuestionCardTemplate" x:DataType="vm:AcpQuestionCardViewModel">
-        <Border x:Name="AcpQuestionCard"
-                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
+        <Border x:Name="AcpQuestionCard" Classes="chatPromptCard">
             <Border.Styles>
                 <Style Selector="Button.acpOption, ToggleButton.acpOption">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
@@ -247,15 +249,17 @@
                 </Style>
             </Border.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
-                <TextBlock Classes="toolKindChip" Text="Question" />
+                <views:ChatKindHeader Label="Question" IconData="{x:Static views:ToolCategoryIcons.QuestionIcon}" />
                 <TextBlock Text="{Binding Prompt}" FontWeight="SemiBold" FontSize="15" LineHeight="21" TextWrapping="Wrap"
                            Foreground="{StaticResource KcapTextBrush}" />
                 <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding IsMultiSelect}">
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <ToggleButton Classes="acpOption" Content="{Binding Label}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                          ToolTip.Tip="{Binding Description}" />
+                            <ToggleButton Classes="acpOption" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                          ToolTip.Tip="{Binding Description}">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </ToggleButton>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -263,8 +267,10 @@
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <Button Classes="acpOption" Content="{Binding Label}" Command="{Binding PickCommand}"
-                                    ToolTip.Tip="{Binding Description}" />
+                            <Button Classes="acpOption" Command="{Binding PickCommand}"
+                                    ToolTip.Tip="{Binding Description}">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
