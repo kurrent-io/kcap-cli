@@ -459,8 +459,26 @@
                     </StackPanel>
                 </StackPanel>
 
-                <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}"
-                                Margin="0,18,0,0" IsVisible="{Binding HasSeparateIssue}" />
+                <StackPanel x:Name="IssueSection" Margin="0,18,0,0" IsVisible="{Binding HasSeparateIssue}">
+                    <Button Classes="sectionHeader">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <TextBlock Text="ISSUE" Classes="eyebrow" />
+                            <TextBlock x:Name="IssueKey" Grid.Column="1" Text="{Binding Issue.Key}" Classes="sectionMeta"
+                                       IsVisible="{Binding Issue.Key, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </Grid>
+                    </Button>
+                    <Border Classes="sectionBody">
+                        <Button x:Name="IssueTitleButton" Classes="copyValue"
+                                Command="{Binding Issue.OpenCommand}"
+                                IsVisible="{Binding Issue.Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                ToolTip.Tip="{Binding Issue.Url}"
+                                HorizontalAlignment="Stretch">
+                            <TextBlock x:Name="IssueTitle" Text="{Binding Issue.Title}" FontSize="13" LineHeight="16"
+                                       TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}"
+                                       IsVisible="{Binding Issue.Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </Button>
+                    </Border>
+                </StackPanel>
 
                 <!-- Subagents: read from the transcript, so it renders in every pane phase. -->
                 <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasSubagents}" Margin="0,18,0,0">

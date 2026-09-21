@@ -797,7 +797,7 @@ public class WorkContextViewModelTests {
             window.UpdateLayout();
             await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsFalse();
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsFalse();
-            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(view.FindControl<StackPanel>("IssueSection")!.IsEffectivelyVisible).IsFalse();
             var open = view.FindControl<Button>("OpenWorkItemButton")!;
             await Assert.That(open.IsEffectivelyVisible).IsTrue();
             open.Command!.Execute(open.CommandParameter);
@@ -809,7 +809,7 @@ public class WorkContextViewModelTests {
             await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.Text).IsEqualTo("A useful title");
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsTrue();
-            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(view.FindControl<StackPanel>("IssueSection")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(open.IsEffectivelyVisible).IsTrue();
         } finally {
             window.Close();
@@ -840,7 +840,7 @@ public class WorkContextViewModelTests {
             await Assert.That(title.IsEffectivelyVisible).IsEqualTo(displayTitle.Length > 0);
             await Assert.That(title.Text).IsEqualTo(displayTitle);
             await Assert.That(view.FindControl<Button>("OpenWorkItemButton")!.IsEffectivelyVisible).IsTrue();
-            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsEqualTo(!inline);
+            await Assert.That(view.FindControl<StackPanel>("IssueSection")!.IsEffectivelyVisible).IsEqualTo(!inline);
             await Assert.That(h.Vm.Issue!.Title).IsEqualTo(issueTitle);
         } finally {
             window.Close();
