@@ -6,6 +6,7 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+<<<<<<< HEAD
 ## Notification access is requested in the foreground and its refusal is visible
 
 macOS settles an unanswered permission prompt as denied, and its prompt is a banner whose Allow
@@ -22,6 +23,17 @@ changes it in System Settings, outside the app; the window re-reads it on activa
 coming back from System Settings is. Platforms with no authorization to read report `Unknown` and
 show nothing. Authorization is keyed by bundle id, so a grant given to a development bundle says
 nothing about the shipped app.
+=======
+## The work-context pane keeps PR status inside section shells
+
+The chrome overhaul taught the pane a shared section grammar, then briefly replaced
+the pull-request card with a title that only opened the reader — checks and review
+left the sidebar. The card returned, but as a raised Fluent island. Pull request and
+issue now use the same eyebrow and left hairline as Session: the PR body still shows
+lifecycle, checks, review, and a `kcapField` picker when more than one PR is linked;
+the issue key is meta and its title wraps. Who's on it sits under the work item —
+it is about the item, not the session — and Session is last.
+>>>>>>> fd17c524 ([AI-3039] docs: Note work-context PR/issue section shells)
 
 ## An unplaced response settles a session's transcript questions
 
