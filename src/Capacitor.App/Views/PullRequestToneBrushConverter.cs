@@ -16,12 +16,12 @@ public sealed class PullRequestToneBrushConverter : IValueConverter {
         Application.Current?.FindResource(value is PullRequestTone tone ? KeyFor(tone) : "KcapFaintBrush") as IBrush;
 
     public static string KeyFor(PullRequestTone tone) => tone switch {
-        PullRequestTone.Ready => "KcapSuccessBrush",
+        PullRequestTone.Ready => "KcapMutedBrush",
         PullRequestTone.Draft => "KcapMutedBrush",
         PullRequestTone.ChecksRunning => "KcapMutedBrush",
         PullRequestTone.ChecksFailed => "KcapDangerBrush",
         PullRequestTone.Conflict => "KcapWarningBrush",
-        PullRequestTone.Merged => "KcapPurpleBrush",
+        PullRequestTone.Merged => "KcapSuccessBrush",
         PullRequestTone.Closed => "KcapDangerBrush",
         _ => "KcapFaintBrush",
     };

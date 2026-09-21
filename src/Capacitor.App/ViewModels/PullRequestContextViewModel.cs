@@ -193,8 +193,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     /// On a legacy or unsupported capability the reader would open onto a notice and nothing else,
     /// so a caller with a PR in hand opens its URL instead.
     public bool CanOpenReader => HasPullRequest && !_legacy;
+    /// Title opens Overview; checks/reviews rows use <see cref="ShowSection"/> for their tabs.
     public void OpenReader() {
         if (_disposed || !CanOpenReader) return;
+        if (CanReveal) { ShowSection("overview"); return; }
+        _section = "overview";
+        _thread = null;
+        ScrollOffset = 0;
         _openReader();
         SetReaderVisible(true);
     }

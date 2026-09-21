@@ -100,8 +100,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     /// Head and tail of a long id, so a 32-hex session id stays one line in the 320px pane.
     public string SessionIdDisplay => MiddleTruncate(_sessionIdText);
     public bool CanCopySessionId => _sessionIdText.Length > 0 && _sessionIdText != "resolving…";
-    string _sessionSummaryLine = "—";
-    public string SessionSummaryLine { get => _sessionSummaryLine; private set => this.RaiseAndSetIfChanged(ref _sessionSummaryLine, value); }
 
     /// The session's subagents, shared with the chat tab; a session-local fact like the ones
     /// under SESSION, so it renders in every pane phase.
@@ -292,7 +290,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
-        SessionSummaryLine = $"{Harness} · {Transport}";
         if (_current is null) SessionIdText = dto.SessionId ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }

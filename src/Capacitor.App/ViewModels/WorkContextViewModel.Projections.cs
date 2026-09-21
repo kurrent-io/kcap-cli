@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Reactive;
 using Avalonia.Collections;
+using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
@@ -16,6 +18,7 @@ public sealed partial class WorkContextViewModel {
     readonly AvaloniaList<WorkContextPartViewModel> _parts = new();
     readonly AvaloniaList<string> _blockedBy = new();
     readonly AvaloniaList<WorkContextLinkViewModel> _links = new();
+    readonly AvaloniaList<WorkContextLinkViewModel> _issues = new();
     readonly List<WorkContextLinkViewModel> _summaryPrs = [];
     readonly List<WorkContextLinkViewModel> _workItemPrs = [];
     readonly AvaloniaList<WorkContextPersonViewModel> _contributors = new();
@@ -34,6 +37,7 @@ public sealed partial class WorkContextViewModel {
     public IAvaloniaReadOnlyList<WorkContextPartViewModel> Parts => _parts;
     public IAvaloniaReadOnlyList<string> BlockedBy => _blockedBy;
     public IAvaloniaReadOnlyList<WorkContextLinkViewModel> Links => _links;
+    public IAvaloniaReadOnlyList<WorkContextLinkViewModel> Issues => _issues;
     public IAvaloniaReadOnlyList<WorkContextPersonViewModel> Contributors => _contributors;
 
     string? _key;
@@ -46,18 +50,46 @@ public sealed partial class WorkContextViewModel {
         get => _title;
         private set { this.RaiseAndSetIfChanged(ref _title, value); NotifyIdentity(); }
     }
-    bool IsPrimaryIssue => Issue is not null && string.Equals(Issue.Key, Key, StringComparison.OrdinalIgnoreCase);
-    bool IsFallbackIssueTitle => Issue is not null && (Issue.Title.Length == 0 || string.Equals(Issue.Title, Issue.Key, StringComparison.OrdinalIgnoreCase)
-        || string.Equals(Issue.Title, $"Issue {Issue.Key}", StringComparison.OrdinalIgnoreCase));
+    bool IsPrimaryIssue(WorkContextLinkViewModel? issue) =>
+        issue is not null && string.Equals(issue.Key, Key, StringComparison.OrdinalIgnoreCase);
+    static bool IsFallbackIssueTitle(WorkContextLinkViewModel issue) =>
+        issue.Title.Length == 0 || string.Equals(issue.Title, issue.Key, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(issue.Title, $"Issue {issue.Key}", StringComparison.OrdinalIgnoreCase);
+    WorkContextLinkViewModel? PrimaryIssue =>
+        _issues.FirstOrDefault(IsPrimaryIssue) ?? _issues.FirstOrDefault();
     public string DisplayTitle => Title.Length > 0 && !string.Equals(Title, Key, StringComparison.OrdinalIgnoreCase) ? Title
-        : IsPrimaryIssue && !IsFallbackIssueTitle ? Issue!.Title : "";
-    public bool HasInlineIssue => IsPrimaryIssue && (IsFallbackIssueTitle || string.Equals(Issue!.Title, DisplayTitle, StringComparison.OrdinalIgnoreCase));
-    public bool HasSeparateIssue => HasIssue && !HasInlineIssue;
+        : PrimaryIssue is { } primary && IsPrimaryIssue(primary) && !IsFallbackIssueTitle(primary) ? primary.Title : "";
+    public bool HasInlineIssue => PrimaryIssue is { } primary && IsPrimaryIssue(primary)
+        && (IsFallbackIssueTitle(primary) || string.Equals(primary.Title, DisplayTitle, StringComparison.OrdinalIgnoreCase));
+    /// Issues the section should show: every link-class issue except a primary absorbed into the work-item title.
+    public IEnumerable<WorkContextLinkViewModel> SeparateIssues =>
+        HasInlineIssue ? _issues.Where(i => !IsPrimaryIssue(i)) : _issues;
+    /// The issue the section shows when there is only one separate entry — not the raw first
+    /// server seed, which may be absorbed into the work-item title.
+    public WorkContextLinkViewModel? SeparateIssue => SeparateIssues.FirstOrDefault();
+    public bool HasSeparateIssue => SeparateIssue is not null;
+    public bool HasMultipleIssues => SeparateIssues.Skip(1).Any();
+    /// Issue titles wrap taller than person rows, so the cap is tighter than Who's on it.
+    internal const int VisibleIssuesCap = 2;
+    public bool IssuesOverflows => SeparateIssues.Skip(VisibleIssuesCap).Any();
+    public IEnumerable<WorkContextLinkViewModel> VisibleSeparateIssues =>
+        IssuesExpanded || !IssuesOverflows ? SeparateIssues : SeparateIssues.Take(VisibleIssuesCap);
+    public string IssueSectionEyebrow => HasMultipleIssues ? "ISSUES" : "ISSUE";
+    public string IssueSectionMeta => HasMultipleIssues
+        ? SeparateIssues.Count().ToString(CultureInfo.InvariantCulture)
+        : SeparateIssue?.Key ?? "";
 
     void NotifyIdentity() {
         this.RaisePropertyChanged(nameof(DisplayTitle));
         this.RaisePropertyChanged(nameof(HasInlineIssue));
         this.RaisePropertyChanged(nameof(HasSeparateIssue));
+        this.RaisePropertyChanged(nameof(SeparateIssue));
+        this.RaisePropertyChanged(nameof(HasMultipleIssues));
+        this.RaisePropertyChanged(nameof(IssuesOverflows));
+        this.RaisePropertyChanged(nameof(VisibleSeparateIssues));
+        this.RaisePropertyChanged(nameof(IssueSectionEyebrow));
+        this.RaisePropertyChanged(nameof(IssueSectionMeta));
+        this.RaisePropertyChanged(nameof(SeparateIssues));
         RaiseRelated();
     }
     string? _overview;
@@ -164,6 +196,14 @@ public sealed partial class WorkContextViewModel {
             this.RaisePropertyChanged(nameof(VisibleContributors));
         }
     }
+    bool _issuesExpanded;
+    public bool IssuesExpanded {
+        get => _issuesExpanded;
+        private set {
+            this.RaiseAndSetIfChanged(ref _issuesExpanded, value);
+            this.RaisePropertyChanged(nameof(VisibleSeparateIssues));
+        }
+    }
     bool _sessionExpanded;
     public bool SessionExpanded { get => _sessionExpanded; private set => this.RaiseAndSetIfChanged(ref _sessionExpanded, value); }
     bool _subagentsExpanded;
@@ -171,12 +211,18 @@ public sealed partial class WorkContextViewModel {
 
     public ReactiveCommand<Unit, Unit> TogglePartsCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> TogglePeopleCommand { get; private set; } = null!;
+    public ReactiveCommand<Unit, Unit> ToggleIssuesCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleSessionCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleSubagentsCommand { get; private set; } = null!;
 
     void InitializeProjections() {
         TogglePartsCommand   = Toggle(() => PartsExpanded = !PartsExpanded);
         TogglePeopleCommand  = Toggle(() => { if (PeopleOverflows) PeopleExpanded = !PeopleExpanded; });
+        ToggleIssuesCommand  = Toggle(() => {
+            if (IssuesOverflows) IssuesExpanded = !IssuesExpanded;
+            else if (!HasMultipleIssues && SeparateIssue is { CanOpen: true } issue)
+                LinkPolicy.Open(_opener, issue.Url);
+        });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
         ToggleSubagentsCommand = Toggle(() => SubagentsExpanded = !SubagentsExpanded);
     }
@@ -220,6 +266,8 @@ public sealed partial class WorkContextViewModel {
         Overview = null;
         ApplyState(null);
         _parts.Clear();
+        _issues.Clear();
+        IssuesExpanded = false;
         Issue = null;
         _contributors.Clear();
         SessionCount = 0;
@@ -301,7 +349,7 @@ public sealed partial class WorkContextViewModel {
             .ToList();
         Replace(_parts, parts, p => (p.Title, p.Mark));
 
-        ApplyIssue(item.Links.FirstOrDefault(l => l.Kind == "issue" && l.LinkClass == "link"));
+        ApplyIssues(item.Links.Where(l => l.Kind == "issue" && l.LinkClass == "link"));
         _workItemPrs.Clear();
         _workItemPrs.AddRange(ProjectWorkItemPullRequests(item.Links));
 
@@ -355,15 +403,31 @@ public sealed partial class WorkContextViewModel {
         IsClosed  = kind == "closed";
     }
 
-    void ApplyIssue(WorkItemLinkDto? link) {
-        if (link is null) {
-            Issue = null;
-            return;
+    void ApplyIssues(IEnumerable<WorkItemLinkDto> links) {
+        var cards = new List<WorkContextLinkViewModel>();
+        foreach (var link in links) {
+            if (IsDuplicateIssue(cards, link)) continue;
+            var title = FirstNonBlank(link.Title) ?? "";
+            cards.Add(new WorkContextLinkViewModel("ISSUE", link.ShortKey, title, link.Url, _opener,
+                identity: IssueIdentity(link)));
         }
-        var title = FirstNonBlank(link.Title) ?? "";
-        if (Issue is { } current && current.Key == link.ShortKey && current.Title == title && current.Url == link.Url) return;
-        Issue = new WorkContextLinkViewModel("ISSUE", link.ShortKey, title, link.Url, _opener);
+        Replace(_issues, cards, i => (i.Key, i.Title, i.Url, i.Identity));
+        Issue = _issues.FirstOrDefault();
+        NotifyIdentity();
     }
+
+    /// ShortKey is display text only: two null-URL issues from different repos can share `#42`.
+    /// Prefer URL when both have one; otherwise the server's kind/provider/value tuple.
+    static bool IsDuplicateIssue(List<WorkContextLinkViewModel> cards, WorkItemLinkDto link) {
+        var identity = IssueIdentity(link);
+        return cards.Exists(c =>
+            link.Url is { Length: > 0 } url && c.Url is { Length: > 0 } existing
+                && string.Equals(existing, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c.Identity, identity, StringComparison.Ordinal));
+    }
+
+    static string IssueIdentity(WorkItemLinkDto link) =>
+        string.Join('\u001f', link.Kind, link.Provider, link.Value);
 
     void ApplyTopology(WorkItemTopologyDto topology) {
         PartOfTitle = topology.PartOf?.Title;
