@@ -24,13 +24,14 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
     readonly Channel<byte[]> _queue = Channel.CreateUnbounded<byte[]>(
         new UnboundedChannelOptions { SingleReader = true });
 
-    volatile bool             _completed;
-    long                      _queuedBytes;
-    long                      _deadline = long.MaxValue;
-    Task?                     _termination;
+    volatile bool _completed;
+    long          _queuedBytes;
+    long          _deadline = long.MaxValue;
+    Task?         _termination;
+
     // CancelAfter is banned (it can't take a TimeProvider); a shorter StopAsync call instead
     // supersedes this timer with a fresh one and disposes the one it replaces.
-    CancellationTokenSource?  _deadlineTimer;
+    CancellationTokenSource? _deadlineTimer;
 
     public CloudTerminalSink(
             string                                        agentId,
