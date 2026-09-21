@@ -88,10 +88,9 @@
                     </StackPanel>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:SystemNoteItem">
-                    <Border Classes="systemNote" MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12" Padding="14,10" CornerRadius="10"
-                            Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
+                    <Border Classes="systemNote chatSystemCard" Margin="0,8,0,12">
                         <StackPanel Spacing="6">
-                            <TextBlock Classes="toolKindChip" Text="Note" />
+                            <views:ChatKindHeader Label="Note" IconData="{x:Static views:ToolCategoryIcons.NoteIcon}" />
                             <views:MarkdownView Text="{Binding Text}"
                                                 OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                 RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
@@ -130,20 +129,11 @@
                     </Grid>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:ToolGroupItem">
-                    <!-- Stretch to the chat column (capped like assistant text) so lone cards are
-                         not content-width pills. -->
-                    <Border Classes="toolGroup" Classes.packsWithCard="{Binding PacksWithCard}"
-                            Classes.folded="{Binding !IsExpanded}"
-                            MaxWidth="660" MinWidth="320" Padding="12,10" CornerRadius="10"
-                            Background="{StaticResource KcapSurfaceBrush}"
-                            BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
-                            HorizontalAlignment="Stretch">
+                    <Border Classes="toolGroup chatSystemCard" Classes.packsWithCard="{Binding PacksWithCard}"
+                            Classes.folded="{Binding !IsExpanded}">
                         <StackPanel Spacing="6">
-                            <!-- Lone call: kind label + status on one header row; detail below.
-                                 Plain text (no chip chrome) so it lines up with the detail. -->
                             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding ShowsKindChip}">
-                                <TextBlock Classes="toolKindChip" Text="{Binding KindChip}"
-                                           VerticalAlignment="Center" />
+                                <views:ChatKindHeader Label="{Binding KindChip}" IconData="{Binding HeaderIconData}" />
                                 <Panel Grid.Column="1" DataContext="{Binding LoneCall}" VerticalAlignment="Center">
                                     <Border Classes="toolStatus" Width="14" Height="8" CornerRadius="4"
                                             VerticalAlignment="Center" IsVisible="{Binding IsSettled}"
@@ -164,8 +154,14 @@
                                      in that box). The −2 top margin lifts the stroke onto the
                                      letters' cap-height: layout-centre is the em box, which sits
                                      low of the glyphs because of descent. -->
-                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" VerticalAlignment="Center">
-                                    <Panel Width="12" Height="12" VerticalAlignment="Center" Margin="0,-2,0,0">
+                                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="9" VerticalAlignment="Center">
+                                    <Panel Width="14" Height="14" VerticalAlignment="Center" Margin="0,-2,0,0"
+                                           IsVisible="{Binding HeaderIconData, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                        <Path Width="14" Height="14" Stretch="Uniform" Data="{Binding HeaderIconData}"
+                                              Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4"
+                                              StrokeLineCap="Round" StrokeJoin="Round" />
+                                    </Panel>
+                                    <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center" Margin="0,-2,0,0">
                                         <Path Width="12" Height="12" Stretch="None"
                                               Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
                                               StrokeLineCap="Round" StrokeJoin="Round"
@@ -175,7 +171,7 @@
                                               StrokeLineCap="Round" StrokeJoin="Round"
                                               Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
                                     </Panel>
-                                    <TextBlock Grid.Column="1" Text="{Binding SummaryLine}" FontSize="13.5"
+                                    <TextBlock Grid.Column="2" Text="{Binding SummaryLine}" FontSize="13.5"
                                                Foreground="{StaticResource KcapMutedBrush}"
                                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                                 </Grid>
