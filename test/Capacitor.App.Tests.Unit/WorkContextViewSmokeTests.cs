@@ -142,7 +142,7 @@ public class WorkContextViewSmokeTests {
                 await Assert.That(linkTitle.IsEffectivelyVisible).IsFalse();
 
                 var issueHeader = host.Find<Button>("IssueHeader");
-                await Assert.That(host.Vm.Issue!.CanOpen).IsTrue();
+                await Assert.That(host.Vm.SeparateIssue!.CanOpen).IsTrue();
                 await Assert.That(issueHeader.Command).IsSameReferenceAs(host.Vm.ToggleIssuesCommand);
                 await host.Vm.ToggleIssuesCommand.Execute();
                 await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { $"https://linear.app/x/issue/{issueKey}" });

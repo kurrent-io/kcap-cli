@@ -491,8 +491,12 @@ public class WorkContextViewModelTests {
     static WorkItemPartDto Part(string id, string title, int ordinal, bool settled = false) =>
         new() { WorkItemId = id, Title = title, Ordinal = ordinal, IsSettled = settled };
 
-    static WorkItemLinkDto Link(string kind, string shortKey, string? url = null, string? title = null, string linkClass = "link") =>
-        new() { Kind = kind, Provider = "github", Value = shortKey, ShortKey = shortKey, Url = url, Title = title, LinkClass = linkClass };
+    static WorkItemLinkDto Link(string kind, string shortKey, string? url = null, string? title = null, string linkClass = "link",
+            string? value = null, string provider = "github") =>
+        new() {
+            Kind = kind, Provider = provider, Value = value ?? shortKey, ShortKey = shortKey,
+            Url = url, Title = title, LinkClass = linkClass,
+        };
 
     static WorkItemContributorDto Person(string userId, string? name, DateTimeOffset? at = null, string? avatar = null) =>
         new() { UserId = userId, DisplayName = name, LastActivityAt = at, AvatarUrl = avatar };
@@ -872,21 +876,97 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.HasIssue).IsTrue();
             await Assert.That(h.Vm.HasMultipleIssues).IsTrue();
             await Assert.That(h.Vm.Issues.Select(i => i.Key)).IsEquivalentTo(new[] { "#777", "#778" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.Issue!.Key).IsEqualTo("#777");
-            await Assert.That(h.Vm.Issue.Title).IsEqualTo("Read the work item");
-            await Assert.That(h.Vm.Issue.CanOpen).IsTrue();
-            await h.Vm.Issue.OpenCommand.Execute();
+            await Assert.That(h.Vm.SeparateIssue!.Key).IsEqualTo("#777");
+            await Assert.That(h.Vm.SeparateIssue.Title).IsEqualTo("Read the work item");
+            await Assert.That(h.Vm.SeparateIssue.CanOpen).IsTrue();
+            await h.Vm.SeparateIssue.OpenCommand.Execute();
             await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://github.com/kurrent-io/kcap-cli/issues/777" });
 
             await h.TickAsync();
-            await Assert.That(h.Vm.Issue!.Key).IsEqualTo("WK-2521");
+            await Assert.That(h.Vm.SeparateIssue!.Key).IsEqualTo("WK-2521");
             await Assert.That(h.Vm.HasMultipleIssues).IsFalse();
-            await Assert.That(h.Vm.Issue.Title).IsEqualTo("");
-            await Assert.That(h.Vm.Issue.CanOpen).IsFalse();
+            await Assert.That(h.Vm.SeparateIssue.Title).IsEqualTo("");
+            await Assert.That(h.Vm.SeparateIssue.CanOpen).IsFalse();
 
             await h.TickAsync();
             await Assert.That(h.Vm.Issue).IsNull();
             await Assert.That(h.Vm.HasIssue).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// An absorbed primary issue must not steal the section body or open action from the one
+    /// remaining separate issue.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_separate_issue_opens_itself_when_the_primary_is_inline() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "WK-2198"), Item(title: "WK-2198", enriched: null) with {
+                Links = [
+                    Link("issue", "WK-2198", "https://linear.app/x/issue/WK-2198", "WK-2198"),
+                    Link("issue", "#860", "https://github.com/example/repo/issues/860", "Secondary tracker"),
+                ],
+            }));
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.HasInlineIssue).IsTrue();
+            await Assert.That(h.Vm.HasMultipleIssues).IsFalse();
+            await Assert.That(h.Vm.IssueSectionMeta).IsEqualTo("#860");
+            await Assert.That(h.Vm.SeparateIssue!.Key).IsEqualTo("#860");
+            await Assert.That(h.Vm.SeparateIssue.Title).IsEqualTo("Secondary tracker");
+            await h.Vm.ToggleIssuesCommand.Execute();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://github.com/example/repo/issues/860" });
+            await h.Vm.SeparateIssue.OpenCommand.Execute();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] {
+                "https://github.com/example/repo/issues/860",
+                "https://github.com/example/repo/issues/860",
+            });
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// ShortKey is display text: same number from different repos must not collapse when URLs differ
+    /// or when identity is kind/provider/value without a URL.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Same_short_key_issues_from_different_repos_stay_distinct() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("issue", "#42", "https://github.com/kurrent-io/kcap-cli/issues/42", "CLI",
+                        value: "kurrent-io/kcap-cli#42"),
+                    Link("issue", "#42", "https://github.com/kurrent-io/kcap-server/issues/42", "Server",
+                        value: "kurrent-io/kcap-server#42"),
+                    Link("issue", "#42", title: "No url A", value: "org/a#42", provider: "github"),
+                    Link("issue", "#42", title: "No url B", value: "org/b#42", provider: "github"),
+                ],
+            }));
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.Issues.Select(i => i.Title).ToArray())
+                .IsEquivalentTo(new[] { "CLI", "Server", "No url A", "No url B" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Untitled multi-issue rows still open: the whole row carries OpenCommand, not only the title.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Untitled_multi_issue_rows_still_open() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
+                Links = [
+                    Link("issue", "#1", "https://github.com/o/r/issues/1"),
+                    Link("issue", "#2", "https://github.com/o/r/issues/2"),
+                ],
+            }));
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.HasMultipleIssues).IsTrue();
+            await Assert.That(h.Vm.Issues[0].Title).IsEqualTo("");
+            await Assert.That(h.Vm.Issues[0].CanOpen).IsTrue();
+            await h.Vm.Issues[0].OpenCommand.Execute();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://github.com/o/r/issues/1" });
             await h.Vm.TeardownAsync();
         });
     }

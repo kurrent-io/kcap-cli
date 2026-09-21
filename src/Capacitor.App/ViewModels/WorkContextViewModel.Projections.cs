@@ -64,7 +64,10 @@ public sealed partial class WorkContextViewModel {
     /// Issues the section should show: every link-class issue except a primary absorbed into the work-item title.
     public IEnumerable<WorkContextLinkViewModel> SeparateIssues =>
         HasInlineIssue ? _issues.Where(i => !IsPrimaryIssue(i)) : _issues;
-    public bool HasSeparateIssue => SeparateIssues.Any();
+    /// The issue the section shows when there is only one separate entry — not the raw first
+    /// server seed, which may be absorbed into the work-item title.
+    public WorkContextLinkViewModel? SeparateIssue => SeparateIssues.FirstOrDefault();
+    public bool HasSeparateIssue => SeparateIssue is not null;
     public bool HasMultipleIssues => SeparateIssues.Skip(1).Any();
     /// Issue titles wrap taller than person rows, so the cap is tighter than Who's on it.
     internal const int VisibleIssuesCap = 2;
@@ -74,12 +77,13 @@ public sealed partial class WorkContextViewModel {
     public string IssueSectionEyebrow => HasMultipleIssues ? "ISSUES" : "ISSUE";
     public string IssueSectionMeta => HasMultipleIssues
         ? SeparateIssues.Count().ToString(CultureInfo.InvariantCulture)
-        : SeparateIssues.FirstOrDefault()?.Key ?? "";
+        : SeparateIssue?.Key ?? "";
 
     void NotifyIdentity() {
         this.RaisePropertyChanged(nameof(DisplayTitle));
         this.RaisePropertyChanged(nameof(HasInlineIssue));
         this.RaisePropertyChanged(nameof(HasSeparateIssue));
+        this.RaisePropertyChanged(nameof(SeparateIssue));
         this.RaisePropertyChanged(nameof(HasMultipleIssues));
         this.RaisePropertyChanged(nameof(IssuesOverflows));
         this.RaisePropertyChanged(nameof(VisibleSeparateIssues));
@@ -216,7 +220,7 @@ public sealed partial class WorkContextViewModel {
         TogglePeopleCommand  = Toggle(() => { if (PeopleOverflows) PeopleExpanded = !PeopleExpanded; });
         ToggleIssuesCommand  = Toggle(() => {
             if (IssuesOverflows) IssuesExpanded = !IssuesExpanded;
-            else if (!HasMultipleIssues && Issue is { CanOpen: true } issue)
+            else if (!HasMultipleIssues && SeparateIssue is { CanOpen: true } issue)
                 LinkPolicy.Open(_opener, issue.Url);
         });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
@@ -402,13 +406,28 @@ public sealed partial class WorkContextViewModel {
     void ApplyIssues(IEnumerable<WorkItemLinkDto> links) {
         var cards = new List<WorkContextLinkViewModel>();
         foreach (var link in links) {
+            if (IsDuplicateIssue(cards, link)) continue;
             var title = FirstNonBlank(link.Title) ?? "";
-            AddUnlessDuplicate(cards, new WorkContextLinkViewModel("ISSUE", link.ShortKey, title, link.Url, _opener));
+            cards.Add(new WorkContextLinkViewModel("ISSUE", link.ShortKey, title, link.Url, _opener,
+                identity: IssueIdentity(link)));
         }
-        Replace(_issues, cards, i => (i.Key, i.Title, i.Url));
+        Replace(_issues, cards, i => (i.Key, i.Title, i.Url, i.Identity));
         Issue = _issues.FirstOrDefault();
         NotifyIdentity();
     }
+
+    /// ShortKey is display text only: two null-URL issues from different repos can share `#42`.
+    /// Prefer URL when both have one; otherwise the server's kind/provider/value tuple.
+    static bool IsDuplicateIssue(List<WorkContextLinkViewModel> cards, WorkItemLinkDto link) {
+        var identity = IssueIdentity(link);
+        return cards.Exists(c =>
+            link.Url is { Length: > 0 } url && c.Url is { Length: > 0 } existing
+                && string.Equals(existing, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c.Identity, identity, StringComparison.Ordinal));
+    }
+
+    static string IssueIdentity(WorkItemLinkDto link) =>
+        string.Join('\u001f', link.Kind, link.Provider, link.Value);
 
     void ApplyTopology(WorkItemTopologyDto topology) {
         PartOfTitle = topology.PartOf?.Title;

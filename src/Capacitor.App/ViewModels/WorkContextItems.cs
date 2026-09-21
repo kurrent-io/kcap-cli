@@ -26,19 +26,22 @@ public sealed class WorkContextPartViewModel(string title, WorkContextPartMark m
 /// A pull-request or issue card. The URL is server-returned, so it crosses the same trust boundary
 /// the chat tab applies before a link reaches the shell opener.
 public sealed class WorkContextLinkViewModel {
-    public string  Eyebrow { get; }
-    public string  Key     { get; }
-    public string  Title   { get; }
-    public string? Url     { get; }
-    public bool    CanOpen { get; }
+    public string  Eyebrow  { get; }
+    public string  Key      { get; }
+    public string  Title    { get; }
+    public string? Url      { get; }
+    /// Server kind/provider/value when projected from a work-item link; empty for legacy PR cards.
+    public string  Identity { get; }
+    public bool    CanOpen  { get; }
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
-    public WorkContextLinkViewModel(string eyebrow, string key, string title, string? url, IUrlOpener opener) {
-        Eyebrow = eyebrow;
-        Key     = key;
-        Title   = title;
-        Url     = url;
-        CanOpen = LinkPolicy.IsOpenable(url);
+    public WorkContextLinkViewModel(string eyebrow, string key, string title, string? url, IUrlOpener opener, string identity = "") {
+        Eyebrow  = eyebrow;
+        Key      = key;
+        Title    = title;
+        Url      = url;
+        Identity = identity;
+        CanOpen  = LinkPolicy.IsOpenable(url);
         OpenCommand = ReactiveCommand.Create(() => LinkPolicy.Open(opener, url), Observable.Return(CanOpen));
     }
 }
