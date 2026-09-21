@@ -78,11 +78,13 @@ static class InlineBuilder {
                 else Break();
                 return;
             }
+            if (token.Name != "img") return;
             var source = token.Attribute("src")?.Trim() ?? "";
             var label = ImageLabel.For(token.Attribute("alt"), source);
             if (_code is not null || mode == InlineBuildMode.Summary) { Append(label); return; }
             var image = new LinkInline(source, "") { IsImage = true };
             image.AppendChild(new LiteralInline(label));
+            ImageSize.From(token)?.Attach(image);
             _target.AppendChild(image);
         }
 
@@ -96,6 +98,7 @@ static class InlineBuilder {
                 Push(mode == InlineBuildMode.Summary || string.IsNullOrEmpty(target) ? null : new LinkInline(target, ""));
                 return;
             }
+            if (HtmlTags.IsTransparent(token.Name)) { Push(null); return; }
             HtmlTags.TryEmphasis(token.Name, out var delimiter, out var count);
             Push(new EmphasisInline { DelimiterChar = delimiter, DelimiterCount = count });
         }
@@ -138,8 +141,11 @@ static class InlineBuilder {
         }
     }
 
+    /// A line break at the end of a block shows no line in a browser, and a break-only block is a
+    /// gap the block spacing already provides.
     static void TrimEnd(ContainerInline container) {
         while (container.LastChild is { } last) {
+            if (last is LineBreakInline) { last.Remove(); continue; }
             if (last is LiteralInline literal) {
                 var trimmed = literal.Content.ToString().TrimEnd();
                 if (trimmed.Length == 0) { literal.Remove(); continue; }
