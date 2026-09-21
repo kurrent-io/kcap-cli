@@ -32,13 +32,14 @@ public class WorkContextViewSmokeTests {
         public BehaviorSubject<AgentStatusDto?> Presence { get; } = new(null);
         public FakeWorkContextSource Source { get; } = new();
         public FakeTimeProvider Time { get; } = new();
+        public RecordingOpener Opener { get; } = new();
         public SessionSubagents Subagents { get; }
         public WorkContextViewModel Vm { get; }
         public Window Window { get; }
 
         public Host() {
             Subagents = new SessionSubagents(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, new RecordingOpener(), Subagents);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Subagents);
             Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
@@ -64,7 +65,7 @@ public class WorkContextViewSmokeTests {
 
     /// A key-titled item with no tracker title, its seed issue untitled too, one contributor
     /// holding two sessions: the shape the server serves for a fresh key-only declaration.
-    static WorkContextRead KeyOnlyRead(string issueKey = "WK-2198") {
+    static WorkContextRead KeyOnlyRead(string issueKey = "WK-2198", string? issueTitle = null) {
         var row = new SessionWorkItemAssignmentDto { WorkItemId = "w1", Label = "WK-2198", Source = "mcp", Confidence = 1, IsPrimary = true };
         var item = new WorkItemDto {
             WorkItemId = "w1",
@@ -73,7 +74,7 @@ public class WorkContextViewSmokeTests {
             State = new WorkItemStateDto { Kind = "in_flight" },
             Links = [new WorkItemLinkDto {
                 Kind = "issue", Provider = "linear", Value = issueKey, ShortKey = issueKey,
-                Url = $"https://linear.app/x/issue/{issueKey}", LinkClass = "link", IsSeed = true,
+                Url = $"https://linear.app/x/issue/{issueKey}", Title = issueTitle, LinkClass = "link", IsSeed = true,
             }],
             Contributors = [new WorkItemContributorDto { UserId = "u1", DisplayName = "Ada" }],
             SessionCount = 2,
@@ -129,32 +130,35 @@ public class WorkContextViewSmokeTests {
                 .Because("the key is identity, not a status colour");
             await Assert.That(host.Find<TextBlock>("WorkContextTitle").IsEffectivelyVisible).IsFalse();
 
-            var issueCard = host.Find<ContentControl>("IssueCard");
+            var issueSection = host.Find<StackPanel>("IssueSection");
             var open = host.Find<Button>("OpenWorkItemButton");
             await Assert.That(open.IsEffectivelyVisible).IsTrue();
             await Assert.That(open.Parent).IsSameReferenceAs(host.Find<Button>("RefreshButton").Parent);
-            await Assert.That(issueCard.IsEffectivelyVisible).IsEqualTo(!inline);
+            await Assert.That(issueSection.IsEffectivelyVisible).IsEqualTo(!inline);
             if (!inline) {
-                var linkKey = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkKey");
-                var linkTitle = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkTitle");
+                var linkKey = host.Find<TextBlock>("IssueKey");
+                var linkTitle = ((WorkContextView)host.Window.Content!).FindControl<TextBlock>("IssueTitle")!;
                 await Assert.That(linkKey.Text).IsEqualTo(issueKey);
                 await Assert.That(linkKey.IsEffectivelyVisible).IsTrue();
                 await Assert.That(linkTitle.IsEffectivelyVisible).IsFalse();
+
+                var issueHeader = host.Find<Button>("IssueHeader");
+                await Assert.That(host.Vm.SeparateIssue!.CanOpen).IsTrue();
+                await Assert.That(issueHeader.Command).IsSameReferenceAs(host.Vm.ToggleIssuesCommand);
+                await host.Vm.ToggleIssuesCommand.Execute();
+                await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { $"https://linear.app/x/issue/{issueKey}" });
             }
         });
     }
 
-    /// The card is its own chrome: the wrapping button must paint nothing on hover, or the theme's
-    /// hover fill shows at the button's smaller corner radius behind the card's rounded border.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Hovering_a_link_card_paints_no_chrome_outside_its_rounded_border() {
+    public async Task Hovering_the_issue_title_paints_no_button_chrome() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
-            await host.ShowAsync(KeyOnlyRead("WK-2199"));
+            await host.ShowAsync(KeyOnlyRead("WK-2199", "A linked issue"));
 
-            var button = host.Find<ContentControl>("IssueCard").GetVisualDescendants().OfType<Button>().First();
-            var card = button.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("card"));
+            var button = host.Find<Button>("IssueTitleButton");
             var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
             host.Window.MouseMove(centre);
             Dispatcher.UIThread.RunJobs();
@@ -163,9 +167,22 @@ public class WorkContextViewSmokeTests {
             var presenter = button.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
             await Assert.That(Alpha(presenter.Background)).IsEqualTo((byte)0);
             await Assert.That(Alpha(presenter.BorderBrush)).IsEqualTo((byte)0);
-            await Assert.That(presenter.CornerRadius).IsEqualTo(card.CornerRadius);
-            await Assert.That(ReferenceEquals(card.BorderBrush, host.Window.FindResource("KcapFaintBrush"))).IsTrue()
-                .Because("the hover cue is the card's own border, inside its rounded outline");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Issue_title_wraps_instead_of_sharing_a_horizontal_row_with_the_key() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead("WK-2199", new string('x', 160)));
+
+            var key = host.Find<TextBlock>("IssueKey");
+            var title = host.Find<TextBlock>("IssueTitle");
+            await Assert.That(title.TextWrapping).IsEqualTo(TextWrapping.Wrap);
+            var row = title.Parent as StackPanel;
+            await Assert.That(row is null || row.Orientation != Orientation.Horizontal || !row.Children.Contains(key)).IsTrue();
+            await Assert.That(title.Bounds.Width).IsLessThanOrEqualTo(host.Find<ScrollViewer>("PaneScroll").Bounds.Width);
         });
     }
 
@@ -496,6 +513,40 @@ public class WorkContextViewSmokeTests {
         });
     }
 
+    /// Who's on it is work-item data: it sits under the work item, before pull request.
+    /// Session stays last (after subagents).
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Section_order_is_work_item_then_people_then_pr_then_issue_then_subagents_then_session() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var body = host.Find<ScrollViewer>("PaneScroll").Content as StackPanel
+                ?? throw new InvalidOperationException("pane stack");
+            int At(Control c) {
+                Control? walk = c;
+                while (walk is not null && !ReferenceEquals(walk.Parent, body))
+                    walk = walk.Parent as Control;
+                return body.Children.IndexOf(walk!);
+            }
+
+            var who = host.Find<StackPanel>("WhoSection");
+            var pr = host.Find<StackPanel>("PullRequestSection");
+            var issue = host.Find<StackPanel>("IssueSection");
+            var subagents = host.Find<StackPanel>("SubagentsSection");
+            var session = host.Find<Button>("SessionToggle");
+
+            await Assert.That(At(who)).IsLessThan(At(pr));
+            await Assert.That(At(pr)).IsLessThan(At(issue));
+            await Assert.That(At(issue)).IsLessThan(At(session));
+            if (subagents.IsEffectivelyVisible)
+                await Assert.That(At(subagents)).IsLessThan(At(session));
+            else
+                await Assert.That(At(issue)).IsLessThan(At(subagents));
+        });
+    }
+
     /// The card is the pane's live PR surface: its picker switches between the linked PRs and its
     /// checks and review rows read without opening the reader tab. Once the list settles empty
     /// the card yields to the pane's own empty copy rather than standing as a bare frame.
@@ -517,9 +568,18 @@ public class WorkContextViewSmokeTests {
                 var card = host.Find<PullRequestCard>("PullRequestCard");
                 await Assert.That(card.IsEffectivelyVisible).IsTrue();
                 await Assert.That(card.DataContext).IsSameReferenceAs(pullRequests);
+                var header = host.Find<Button>("PullRequestHeader");
+                await Assert.That(header.IsEffectivelyVisible).IsTrue();
+                var meta = host.Find<TextBlock>("PullRequestNumberMeta");
+                await Assert.That(meta.Text).IsEqualTo(pullRequests.SectionMeta);
+                await Assert.That(meta.Text).IsEqualTo("2");
+                await Assert.That(pullRequests.SectionEyebrow).IsEqualTo("PULL REQUESTS");
+                await Assert.That(host.Find<TextBlock>("LifecycleNumber").Text).IsEqualTo(pullRequests.NumberLabel);
+                await Assert.That(card.Content).IsTypeOf<StackPanel>();
                 var picker = host.Find<ComboBox>("PullRequestSelector");
                 await Assert.That(picker.IsEffectivelyVisible).IsTrue();
                 await Assert.That(((IEnumerable<PullRequestChoice>)picker.ItemsSource!).Count()).IsEqualTo(2);
+                await Assert.That(picker.Classes.Contains("kcapField")).IsTrue();
                 await Assert.That(host.Find<Button>("SidebarChecksButton").IsEffectivelyVisible).IsTrue();
                 await Assert.That(host.Find<Button>("SidebarReviewsButton").IsEffectivelyVisible).IsTrue();
                 await Assert.That(host.Find<TextBlock>("PullRequestEmptyText").IsEffectivelyVisible).IsFalse();
