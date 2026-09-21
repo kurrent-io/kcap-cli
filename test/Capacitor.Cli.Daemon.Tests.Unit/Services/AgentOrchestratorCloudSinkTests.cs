@@ -234,4 +234,74 @@ public class AgentOrchestratorCloudSinkTests {
 
         await Assert.That(orch.TryStartCloudSink(agent)).IsNull();
     }
+
+    static async Task<(ScriptedPtyProcess Pty, Task Loop)> StartWithOutputAsync(
+            AgentOrchestrator orch, CaptureServerConnection server, string agentId) {
+        var pty   = new ScriptedPtyProcess();
+        var agent = orch.SeedAgentForTest(agentId, pty: pty);
+        var loop  = orch.ReadAgentOutputForTest(agent);
+
+        pty.Emit("before;");
+        await WaitHarness.PollUntilAsync(() => server.TerminalSends.Count(s => s.AgentId == agentId) == 1);
+
+        return (pty, loop);
+    }
+
+    [Test]
+    public async Task A_re_registered_agent_gets_one_reset_and_replay_once_the_daemon_is_ready() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = Build(server);
+        var (pty, loop) = await StartWithOutputAsync(orch, server, "rereg");
+
+        // The registration bracket: readiness is down while agents re-register.
+        server.Ready = false;
+        await orch.ReRegisterAgentsForTestAsync();
+        pty.Emit("during;");
+        await Assert.That(ResetsFor(server, "rereg")).IsEqualTo(0);
+
+        server.Ready = true;
+        await WaitHarness.PollUntilAsync(() => string.Concat(MirrorOf(server, "rereg")) == "before;during;");
+        await Assert.That(ResetsFor(server, "rereg")).IsEqualTo(1);
+
+        pty.Exit();
+        await loop.WaitAsync(WaitHarness.Bounded);
+    }
+
+    [Test]
+    public async Task A_registration_that_landed_is_resynced_even_when_its_status_report_never_does() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = Build(server);
+        var (pty, loop) = await StartWithOutputAsync(orch, server, "mixed");
+
+        server.Ready              = false;
+        server.StatusChangedThrow = new InvalidOperationException("status report rejected");
+        await orch.ReRegisterAgentsForTestAsync(); // gives up after its retries
+
+        server.StatusChangedThrow = null;
+        server.Ready              = true;
+        await WaitHarness.PollUntilAsync(() => ResetsFor(server, "mixed") == 1);
+        await WaitHarness.PollUntilAsync(() => string.Concat(MirrorOf(server, "mixed")) == "before;");
+
+        pty.Exit();
+        await loop.WaitAsync(WaitHarness.Bounded);
+    }
+
+    [Test]
+    public async Task An_agent_whose_registration_never_succeeded_is_not_resynced() {
+        var server = new CaptureServerConnection { AgentRegisteredFailTimes = int.MaxValue };
+
+        await using var orch = Build(server);
+        var (pty, loop) = await StartWithOutputAsync(orch, server, "refused");
+
+        await orch.ReRegisterAgentsForTestAsync();
+
+        pty.Emit("after;");
+        await WaitHarness.PollUntilAsync(() => server.TerminalSends.Count(s => s.AgentId == "refused") == 2);
+        await Assert.That(ResetsFor(server, "refused")).IsEqualTo(0);
+
+        pty.Exit();
+        await loop.WaitAsync(WaitHarness.Bounded);
+    }
 }

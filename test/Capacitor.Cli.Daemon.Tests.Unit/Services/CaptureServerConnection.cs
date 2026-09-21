@@ -288,7 +288,12 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// only place a test can see whether the FIRST status a server saw already named the session.</summary>
     public List<(string AgentId, string Status, string? SessionId)> StatusChangedWithSession { get; } = [];
 
+    /// <summary>Thrown by every AgentStatusChangedAsync call while set.</summary>
+    public Exception? StatusChangedThrow { get; set; }
+
     public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) {
+        if (StatusChangedThrow is { } ex) return Task.FromException(ex);
+
         // Capture BEFORE recording: was a launch-window verdict already published when this
         // non-failure status was sent? (finding 1 — the invariant a check-to-send race breaks.)
         if (status is "Completed" or "Running" or "Starting"

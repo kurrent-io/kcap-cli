@@ -4925,6 +4925,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 try {
                     await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport);
 
+                    // The acknowledgement is what re-registered means: whatever was written to
+                    // the old connection may not have arrived, and that holds even if the sends
+                    // below then fail. The pump holds the replay until readiness returns.
+                    agent.CloudSink?.RequestResync();
+
                     // Re-gate the status send atomically under _reapLock, per attempt (finding 1
                     // refinement): the outer pre-check cannot cover a verdict published DURING the
                     // AgentRegistered await above (or on a later retry). The gate suppresses the send
@@ -4965,13 +4970,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         }
                     }
 
-                    // do NOT replay the full output buffer here: the server retains its own
-                    // per-agent buffer across a daemon rebind (it only clears on
-                    // reconcile-to-Failed), so late-joining web clients still get history via the
-                    // server's SubscribeToTerminal replay, and a replay here would duplicate it
-                    // and interleave with the read loop's concurrent live sends. The agent's cloud
-                    // sink holds its head-of-line chunk and retries once the connection reports
-                    // ready again, so continuity across THIS reconnect needs no help here.
+                    // No replay from here: the agent's cloud sink was asked to resync above, and
+                    // it sends a reset ahead of the ring on the same ordered lane as live output.
                     break;
                 } catch (Exception) when (attempt < ReRegisterMaxAttempts && !_shutdownCts.IsCancellationRequested) {
                     try {
