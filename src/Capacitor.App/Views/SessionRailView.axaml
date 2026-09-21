@@ -202,7 +202,6 @@
                                 <Flyout Placement="TopEdgeAlignedRight" VerticalOffset="6"
                                         FlyoutPresenterClasses="kcapPanel">
                                     <StackPanel Spacing="2" Margin="6" MinWidth="188">
-                                        <!-- Signed-out only: recovery leads, then a divider, then help. -->
                                         <Button x:Name="RailHelpSignInButton" Classes="kcapGhost" Content="Sign in"
                                                 Command="{Binding SignInCommand}" Click="OnHelpFlyoutItemClick"
                                                 IsVisible="{Binding SignInVisible}"
