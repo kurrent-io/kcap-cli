@@ -203,6 +203,15 @@
         <Style Selector="TextBlock.subagentState.failed">
             <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
         </Style>
+        <!-- A settled task steps back through the class, so a local Foreground must not be set on it. -->
+        <Style Selector="TextBlock.planTask">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="LineHeight" Value="16" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="TextBlock.planTask.settled">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
     </UserControl.Styles>
     <UserControl.Resources>
         <DataTemplate x:Key="LinkCard" x:DataType="vm:WorkContextLinkViewModel">
@@ -243,6 +252,25 @@
                 </Panel>
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
                          IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Stopped}}" />
+            </Panel>
+        </DataTemplate>
+        <!-- One template for the rows and the folded counts alike, so the two cannot drift apart. -->
+        <DataTemplate x:Key="PlanMark" x:DataType="vm:PlanTaskState">
+            <Panel Width="12" Height="12">
+                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5"
+                         IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.Pending}}" />
+                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5"
+                         IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.InProgress}}" />
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.Completed}}">
+                    <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" />
+                    <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
+                          Data="M3,6 L5.2,8.2 L9,4" />
+                </Panel>
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.Skipped}}">
+                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5" />
+                    <Path Width="12" Height="12" Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
+                          Data="M4,6 L8,6" />
+                </Panel>
             </Panel>
         </DataTemplate>
     </UserControl.Resources>
@@ -536,6 +564,96 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </Panel>
+                    </Border>
+                </StackPanel>
+
+                <!-- Plan: read from the server, so unlike SUBAGENTS it shows nothing while signed out. -->
+                <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.HasPlan}" Margin="0,18,0,0">
+                    <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <TextBlock Text="PLAN" Classes="eyebrow" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock x:Name="PlanHeaderText" Text="{Binding Plan.HeaderText}" Classes="sectionMeta">
+                                    <TextBlock.IsVisible>
+                                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                            <Binding Path="Plan.IsExpanded" />
+                                            <Binding Path="Plan.HasTasks" />
+                                        </MultiBinding>
+                                    </TextBlock.IsVisible>
+                                </TextBlock>
+                                <!-- The digits and marks are nudged toward each other as the subagent counts are. -->
+                                <StackPanel x:Name="PlanCounts" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
+                                            Background="Transparent" ToolTip.Tip="{Binding Plan.CountsTip}">
+                                    <StackPanel.IsVisible>
+                                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                            <Binding Path="!Plan.IsExpanded" />
+                                            <Binding Path="Plan.HasTasks" />
+                                        </MultiBinding>
+                                    </StackPanel.IsVisible>
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <ContentControl Content="{x:Static vm:PlanTaskState.Completed}" ContentTemplate="{StaticResource PlanMark}"
+                                                        VerticalAlignment="Center" RenderTransform="translateY(-1px)" />
+                                        <TextBlock x:Name="PlanDoneCount" Text="{Binding Plan.DoneCount}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <ContentControl Content="{x:Static vm:PlanTaskState.Pending}" ContentTemplate="{StaticResource PlanMark}"
+                                                        VerticalAlignment="Center" RenderTransform="translateY(-1px)" />
+                                        <TextBlock x:Name="PlanOpenCount" Text="{Binding Plan.OpenCount}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
+                                    </StackPanel>
+                                </StackPanel>
+                                <Panel Width="12" Height="12">
+                                    <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding Plan.IsExpanded}" />
+                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !Plan.IsExpanded}" />
+                                </Panel>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                    <Border x:Name="PlanBody" Classes="sectionBody" IsVisible="{Binding Plan.IsExpanded}">
+                        <StackPanel Spacing="12">
+                            <ItemsControl x:Name="PlanDocumentList" ItemsSource="{Binding Plan.Documents}" IsVisible="{Binding Plan.HasDocuments}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Spacing="6" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PlanDocumentRow">
+                                        <Grid ColumnDefinitions="46,*" ToolTip.Tip="{Binding Path}">
+                                            <TextBlock Text="{Binding Kind}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}" />
+                                            <TextBlock Grid.Column="1" Text="{Binding FileName}" FontSize="13" LineHeight="16"
+                                                       Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <ItemsControl x:Name="PlanTaskList" ItemsSource="{Binding Plan.Tasks}" IsVisible="{Binding Plan.HasTasks}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Spacing="10" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PlanTaskRow">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                                            <!-- The pulse is the row's own: it stops when the session ends, and the
+                                                 ring stays so the task still reads as started. -->
+                                            <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
+                                                <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
+                                                        HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}" />
+                                            </Panel>
+                                            <StackPanel Grid.Column="1" Spacing="2">
+                                                <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
+                                                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                                                <TextBlock Text="{Binding Note}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}"
+                                                           TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Note}"
+                                                           IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </Border>
                 </StackPanel>
 

@@ -6,6 +6,43 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The work-context pane shows the session's plan
+
+A PLAN section sits between the pull request and SUBAGENTS: the documents the session declared,
+then its tasks, marked the way subagent rows are — a hollow ring for pending, the warning ring and
+pulse for in progress, the green tick for completed, a dimmed ring and dash for skipped. Its header
+follows the subagents section's: words while the list is open ("2 of 6 done"), and folded, a count
+of settled and of open tasks beside the marks the rows use, so a folded pane still answers "how far
+along is it". One template keyed on the task state draws the mark in both places. Skipped counts as
+settled because the server's own progress figure counts it so. A status the app has never heard of
+reads as pending rather than dropping the row. Document rows are labels: the path is the declaring
+machine's, and handing a server-supplied path to the OS shell is not something a sidebar should do
+on a click.
+
+The read is `GET /api/sessions/{id}/plans`, not the plan-artifacts route the CLI's validation uses:
+it resolves the continuation chain, needs only overview access, and carries no document bodies, so
+it is cheap enough to repeat. The section shows the plan the session last wrote to and, when there
+is none, the most recently touched one in the chain — a continued session has no plan of its own
+until its first write, and would otherwise open on an empty pane beside a plan in full flight.
+
+The server pushes nothing when a plan changes, so nearness to real time comes from the transcript.
+The agent writes its plan through the `kcap-plans` MCP tools, and the chat tab is already reading
+that transcript twice a second: a settled plan write there re-reads the server at once. Two details
+keep that honest. The tools are matched by their own names, which `PlanToolNames` now shares with
+the MCP server, because Codex records an MCP tool bare while Claude prefixes the server — a match on
+the server name would have missed every Codex session. And the chat applies its projection line by
+line, so the tracker is handed the whole read: a replayed history of forty writes is one server
+read, not forty. A write is read a second time two seconds later, since the server answers from a
+projection that can trail the append the tool call just made. The pane's thirty-second tick covers
+every writer the transcript cannot see — another session in the chain, an edit made on the web —
+and is all that is left if a vendor ever spells the tool names another way.
+
+The section reads on its own lease, keyed by session id like the pane's, so a slow plan read never
+holds the work item back and a late answer for the previous session is dropped. An unreachable
+server keeps the last plan on screen; a refusal or a sign-out clears it. A re-read of the same task
+list updates the rows in place, because replacing them would rebuild their containers and restart
+the in-progress pulse on every poll.
+
 ## Launcher “Launches” is the consent decision log, not session activity
 
 The chip formerly labeled Activity opened the local allow/deny log for daemon
