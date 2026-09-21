@@ -181,8 +181,9 @@
                     </Border>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:PendingCardItem">
-                    <ContentControl Classes="pendingCard" Classes.packsWithPrevious="{Binding PacksWithPrevious}"
-                                    Content="{Binding Card}" MaxWidth="660" HorizontalAlignment="Stretch">
+                    <ContentControl Classes="pendingCard chatPromptCard"
+                                    Classes.packsWithPrevious="{Binding PacksWithPrevious}"
+                                    Content="{Binding Card}">
                         <ContentControl.DataTemplates>
                             <StaticResource ResourceKey="PermissionCardTemplate" />
                             <StaticResource ResourceKey="QuestionCardTemplate" />
