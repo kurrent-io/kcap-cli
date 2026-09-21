@@ -137,20 +137,28 @@ public class AgentOrchestratorCloudSinkTests {
 
     [Test]
     public async Task No_terminal_send_starts_after_the_agent_unregisters() {
-        // OnAgentUnregistered is init-only, so the callback reaches the connection through the
-        // variable it is being assigned to.
-        var startsAtUnregister = -1;
+        // OnAgentUnregistered is init-only, so the callback reaches the connection and the agent
+        // through the variables they are being assigned to.
+        var startsAtUnregister      = -1;
+        var sinkClearedAtUnregister = false;
         CaptureServerConnection? server = null;
+        AgentInstance?           agent  = null;
         server = new CaptureServerConnection {
             TerminalSendGate    = (_, ct) => Task.Delay(Timeout.InfiniteTimeSpan, ct),
-            OnAgentUnregistered = () => startsAtUnregister = server!.TerminalSendStarts
+            OnAgentUnregistered = () => {
+                startsAtUnregister      = server!.TerminalSendStarts;
+                // The finally nulls CloudSink strictly after its StopAsync returned, so a null
+                // reading here — not just the unchanged start count — proves the stop already
+                // finished before this unregister.
+                sinkClearedAtUnregister = agent!.CloudSink is null;
+            }
         };
 
         await using var orch = Build(server);
 
-        var pty   = new ScriptedPtyProcess();
-        var agent = orch.SeedAgentForTest("ending", pty: pty);
-        var loop  = orch.ReadAgentOutputForTest(agent);
+        var pty = new ScriptedPtyProcess();
+        agent = orch.SeedAgentForTest("ending", pty: pty);
+        var loop = orch.ReadAgentOutputForTest(agent);
 
         pty.Emit("one");
         pty.Emit("two");
@@ -163,33 +171,55 @@ public class AgentOrchestratorCloudSinkTests {
 
         await Assert.That(startsAtUnregister).IsEqualTo(1);
         await Assert.That(server.TerminalSendStarts).IsEqualTo(1);
+        await Assert.That(sinkClearedAtUnregister).IsTrue();
     }
 
     [Test]
     public async Task Disposal_cancels_a_gated_send_even_while_its_read_loop_is_draining() {
-        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var server    = new CaptureServerConnection {
+        var cancelled   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePump = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new CaptureServerConnection {
             TerminalSendGate = async (_, ct) => {
                 try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
-                catch (OperationCanceledException) { cancelled.TrySetResult(); throw; }
+                catch (OperationCanceledException) {
+                    cancelled.TrySetResult();
+                    // Ignores ct from here: the pump stays genuinely unfinished until the test
+                    // releases it, so disposal's wait ON the pump — not just the cancel signal —
+                    // is what the assertions below can catch a regression in.
+                    await releasePump.Task;
+                    throw;
+                }
             }
         };
 
         // Disposed explicitly below; the run-once guard makes the scope's second dispose a no-op.
         await using var orch = Build(server);
-        orch.CloudSinkOptions = SmallBudget with { DrainBound = TimeSpan.FromMinutes(10) };
+        // CancellationGrace far exceeds this test's own bound, so disposal can only return once
+        // the pump genuinely ends — never because the grace window gave up on it.
+        orch.CloudSinkOptions = SmallBudget with {
+            DrainBound        = TimeSpan.FromMinutes(10),
+            CancellationGrace = TimeSpan.FromMinutes(1),
+        };
 
         var pty   = new ScriptedPtyProcess();
         var agent = orch.SeedAgentForTest("draining", pty: pty);
         var loop  = orch.ReadAgentOutputForTest(agent);
+        var sink  = agent.CloudSink!;
 
         pty.Emit("stuck");
         await WaitHarness.PollUntilAsync(() => server.TerminalSendStarts == 1);
         pty.Exit(); // the read loop is now inside its own ten-minute StopAsync
 
-        await orch.DisposeAsync().AsTask().WaitAsync(WaitHarness.Bounded);
+        var dispose = orch.DisposeAsync().AsTask();
 
-        await Assert.That(cancelled.Task.IsCompleted).IsTrue();
+        await cancelled.Task.WaitAsync(WaitHarness.Bounded);
+        await Task.Delay(100);
+        await Assert.That(dispose.IsCompleted).IsFalse();
+
+        releasePump.SetResult();
+        await dispose.WaitAsync(WaitHarness.Bounded);
+
+        await Assert.That(sink.PumpForTest.IsCompleted).IsTrue();
         await loop.WaitAsync(WaitHarness.Bounded);
     }
 

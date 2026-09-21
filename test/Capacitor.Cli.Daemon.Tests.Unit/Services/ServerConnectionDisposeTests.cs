@@ -52,8 +52,8 @@ public class ServerConnectionDisposeTests {
     public async Task Dispose_twice_after_connect_does_not_throw() {
         var conn = new DisposeTestConnection();
 
-        // Creates the linked terminal-sender CTS — the object the unguarded second pass
-        // re-cancelled after disposal (the production crash).
+        // Starts the event-processor task DisposeAsync must await, so this exercises the dispose
+        // body against live connection state rather than the all-null state above.
         await conn.ConnectAsync(CancellationToken.None).WaitAsync(HangGuard);
 
         await conn.DisposeAsync().AsTask().WaitAsync(HangGuard);

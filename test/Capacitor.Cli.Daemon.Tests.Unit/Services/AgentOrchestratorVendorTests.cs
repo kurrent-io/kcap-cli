@@ -1075,9 +1075,13 @@ public class AgentOrchestratorVendorTests {
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
+        // CancellationGrace carries headroom past its default: this test reads a witness the
+        // cancelled send sets, and a grace too tight lets a loaded scheduler abandon the pump
+        // before that witness fires, finalizing the agent on an unrelated timeout instead of on
+        // the send's own cancellation.
         orch.CloudSinkOptions = new CloudTerminalSinkOptions {
             DrainBound        = TimeSpan.FromMilliseconds(100),
-            CancellationGrace = TimeSpan.FromMilliseconds(100),
+            CancellationGrace = TimeSpan.FromSeconds(10),
         };
 
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
