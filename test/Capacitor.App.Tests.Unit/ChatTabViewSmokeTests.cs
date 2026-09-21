@@ -778,6 +778,7 @@ public class ChatTabViewSmokeTests {
             var card = host.View.GetVisualDescendants().OfType<Border>()
                 .Single(b => b.Classes.Contains("toolGroup"));
             await Assert.That(card.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+            await Assert.That(card.Width).IsEqualTo(660);
             await Assert.That(card.Classes.Contains("chatSystemCard")).IsTrue();
             await host.CloseAsync();
         });
@@ -797,6 +798,7 @@ public class ChatTabViewSmokeTests {
             var hostControl = host.View.GetVisualDescendants().OfType<ContentControl>()
                 .Single(c => c.Classes.Contains("pendingCard"));
             await Assert.That(hostControl.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Center);
+            await Assert.That(hostControl.Width).IsEqualTo(660);
             await Assert.That(hostControl.Classes.Contains("chatPromptCard")).IsTrue();
             await host.CloseAsync();
         });

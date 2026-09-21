@@ -13,12 +13,13 @@ public static class ToolCategoryIcons {
         ToolCategory.Search    => "M10,4 A6,6 0 1 1 10,16 A6,6 0 1 1 10,4 M15,15 L20,20",
         ToolCategory.WebSearch => "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M3,12 H21 M12,3 C8,8 8,16 12,21 C16,16 16,8 12,3",
         ToolCategory.Fetch     => "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M3,12 H21",
-        ToolCategory.Skill     => "M12,3 L13.5,9 H20 L15,12.5 17,19 12,15 7,19 9,12.5 4,9 H10.5 Z",
-        ToolCategory.Agent     => "M8,10 A3,3 0 1 0 8,4 A3,3 0 1 0 8,10 M16,10 A3,3 0 1 0 16,4 A3,3 0 1 0 16,10 M4,20 C4,16 20,16 20,20",
-        ToolCategory.Plan      => "M5,5 H19 M5,10 H19 M5,15 H14 M4,4 H6 V6 H4 Z M4,9 H6 V11 H4 Z M4,14 H6 V16 H4 Z",
-        ToolCategory.Question  => "M6,6 H18 V16 H13 L9,20 V16 H6 Z M12,9 V10 M12,13 H12.01",
-        ToolCategory.Other     => "M14.5,4 L19,9 9.5,18.5 5,19 5.5,14.5 Z M12,7 L16,11",
-        _                      => "M14.5,4 L19,9 9.5,18.5 5,19 5.5,14.5 Z M12,7 L16,11",
+        ToolCategory.Skill     => "M12,4 L13.2,9 H18.5 L14.3,12 L15.8,17.5 12,14.5 8.2,17.5 9.7,12 5.5,9 H10.8 Z",
+        // Briefcase — "Task" chip; a two-head GroupWork stroke reads as a cut face at 12px.
+        ToolCategory.Agent     => "M9,8 V6.5 A3,3 0 0 1 15,6.5 V8 H18 V19 H6 V8 Z M11,8 V7 A1,1 0 0 1 13,7 V8",
+        ToolCategory.Plan      => "M6,6 H18 M6,11 H18 M6,16 H14 M5,5 H7 V7 H5 Z M5,10 H7 V12 H5 Z M5,15 H7 V17 H5 Z",
+        ToolCategory.Question  => "M7,7 H17 V15 H13 L10,19 V15 H7 Z M12,10 V11 M12,14 H12.01",
+        ToolCategory.Other     => "M14,5 L18,9 10,17 6,17.5 6.5,13.5 Z M12,7.5 L15.5,11",
+        _                      => "M14,5 L18,9 10,17 6,17.5 6.5,13.5 Z M12,7.5 L15.5,11",
     };
 
     public static string ForFixedLabel(string label) => label switch {

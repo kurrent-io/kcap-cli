@@ -3,9 +3,11 @@
              x:Class="Capacitor.App.Views.ChatKindHeader"
              x:Name="Root">
     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-        <Panel Width="14" Height="14" VerticalAlignment="Center"
+        <!-- ClipToBounds off: a stroke on a Uniform path draws past the geometry box and would
+             otherwise shear the top/bottom of the glyph against the 14×14 panel. -->
+        <Panel Width="14" Height="14" VerticalAlignment="Center" ClipToBounds="False"
                IsVisible="{Binding #Root.IconData, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <Path Width="14" Height="14" Stretch="Uniform"
+            <Path Width="12" Height="12" Stretch="Uniform"
                   Data="{Binding #Root.IconData}"
                   Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4"
                   StrokeLineCap="Round" StrokeJoin="Round"
