@@ -165,9 +165,10 @@
     <Style Selector="mv|MarkdownViewer StackPanel.markdown-details-content">
         <Setter Property="Margin" Value="6,4,6,6" />
     </Style>
-    <!-- Past the nested summary's chevron (12) + gap (9) so body sits under the label, not flush with it. -->
+    <!-- Past the nested summary's chevron so body sits under the label; keep it modest — a list
+         inside already carries its own marker column. -->
     <Style Selector="mv|MarkdownViewer Border.markdown-details-nested StackPanel.markdown-details-content">
-        <Setter Property="Margin" Value="28,4,0,4" />
+        <Setter Property="Margin" Value="14,4,0,4" />
     </Style>
     <!-- Inside a section a pre is prose set in monospace, not a code sample: a box around it in a
          card that already has one reads as a box in a box. -->

@@ -13,6 +13,7 @@ public static class GitHubHtmlPass {
     public static void Run(MarkdownDocument document) {
         ProcessContainer(document, 0);
         BlockTidy.Run(document);
+        ProsConsLists.Run(document);
         var ordinal = 0;
         foreach (var details in document.Descendants<DetailsBlock>()) details.Ordinal = ordinal++;
     }

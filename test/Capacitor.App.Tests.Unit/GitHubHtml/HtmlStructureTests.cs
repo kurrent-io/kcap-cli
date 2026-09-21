@@ -117,18 +117,28 @@ public class HtmlStructureTests {
     }
 
     /// Qodo wraps every details body in `dl`/`dd`, nested items included. Leaving those indents
-    /// stacks with the nested section's own inset and pushes lists mid-pane.
+    /// stacks with the nested section's own inset and pushes lists mid-pane. Pros/cons written as
+    /// `- ➕` / `- ➖` become bold `+` / `-` paragraphs so the bullet and faint emoji drop away.
     [Test]
     public async Task An_indent_inside_a_details_section_is_unwrapped() {
         const string assessment =
             "<details>\n<summary>High-Level Assessment</summary>\n\n<dl>\n<dd>\n\n" +
             ">The following are alternatives:\n\n" +
-            "<details>\n<summary>1. Theme</summary>\n\n<dl>\n<dd>\n\n- plus\n- minus\n\n</dd>\n</dl>\n\n</details>\n\n" +
+            "<details>\n<summary>1. Theme</summary>\n\n<dl>\n<dd>\n\n" +
+            "- ➕ Could centralize templates.\n" +
+            "- ➖ Larger migration surface.\n\n" +
+            "</dd>\n</dl>\n\n</details>\n\n" +
             ">**Recommendation:** keep it.\n\n</dd>\n</dl>\n\n</details>";
         await Assert.That(Trees.Dump(assessment)).IsEqualTo(
             "doc(details#0{'High-Level Assessment'}(quote(p('The following are alternatives:'))," +
-            "details#1{'1. Theme'}(list(li(p('plus')),li(p('minus'))))," +
+            "details#1{'1. Theme'}(p(em*2('+'),' Could centralize templates.'),p(em*2('-'),' Larger migration surface.'))," +
             "quote(p(em*2('Recommendation:'),' keep it.'))))");
+    }
+
+    [Test]
+    public async Task A_plain_list_is_not_rewritten_as_pros_and_cons() {
+        await Assert.That(Trees.Dump("- one\n- two")).IsEqualTo("doc(list(li(p('one')),li(p('two'))))");
+        await Assert.That(Trees.Dump("- ➕ only one\n- plain")).IsEqualTo("doc(list(li(p('➕ only one')),li(p('plain'))))");
     }
 
     [Test]
