@@ -68,7 +68,7 @@ public sealed partial class PullRequestContextViewModel {
 
     /// Edits the visible list in place rather than replacing it: a row's control holds state its
     /// data does not — which sections a reader opened, a loaded image, the scroll extent it
-    /// contributes — and the list rebuilding every row on a page load or refresh lost all of it.
+    /// contributes — and replacing the list would discard that state on every page load or refresh.
     void ReconcileRows(PullRequestRow[] rows) {
         for (var i = 0; i < rows.Length && i < _visibleRows.Count; i++) if (_visibleRows[i] != rows[i]) _visibleRows[i] = rows[i];
         while (_visibleRows.Count > rows.Length) _visibleRows.RemoveAt(_visibleRows.Count - 1);
