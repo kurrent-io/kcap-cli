@@ -26,16 +26,9 @@ static class SkillsAutoSync {
             psi.ArgumentList.Add("--auto");
             // The child must not inherit the hook's ambient coding-agent pipe descriptors —
             // an inherited data-channel fd would hold the agent open until the sync exits.
-            ProcessHelpers.PreventInheritedHandles();
-            var child = starter.Start(psi);
-            if (child is not null) {
-                // Redirected pipes must not wedge the child once their buffers fill: drain both
-                // to null while this process lives (the child itself also silences its streams
-                // in --auto, which covers the window after this hook exits).
-                child.StandardInput.Close();
-                _ = child.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
-                _ = child.StandardError.BaseStream.CopyToAsync(Stream.Null);
-            }
+            // Detached, it has no streams to drain and cannot wedge on a full pipe buffer;
+            // it silences its own streams in --auto regardless.
+            starter.StartDetached(psi);
         } catch {
             // best effort — never break a hook
         }
