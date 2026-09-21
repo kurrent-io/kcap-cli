@@ -121,7 +121,7 @@ public class ActivityViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Rows_middle_truncate_email_requester() {
+    public async Task Rows_keep_full_email_requester() {
         var row = await AvaloniaSession.DispatchAsync(async () => {
             var reader = new ScriptedReader();
             reader.Set(new ConsentLogReadResult([
@@ -135,7 +135,7 @@ public class ActivityViewModelTests {
         });
 
         await Assert.That(row.RequesterFull).IsEqualTo("very.long.local-part@company.com");
-        await Assert.That(row.SecondaryLine).IsEqualTo("very.long.…@company.com · kcap-cli");
+        await Assert.That(row.SecondaryLine).IsEqualTo("very.long.local-part@company.com · kcap-cli");
         await Assert.That(row.PrimaryDetail).IsEqualTo("claude");
         await Assert.That(row.Outcome).IsEqualTo("Allowed");
     }
@@ -150,26 +150,6 @@ public class ActivityViewModelTests {
     [Arguments("something-weird", "something-weird")] // unrecognized renders verbatim
     public async Task Source_labels(string source, string expected) {
         await Assert.That(ActivityViewModel.SourceLabelOf(source)).IsEqualTo(expected);
-    }
-
-    [Test]
-    [Arguments("short@co.io", "short@co.io")]
-    [Arguments("very.long.local-part@company.com", "very.long.…@company.com")]
-    [Arguments("Ada Lovelace", "Ada Lovelace")]
-    public async Task TruncateRequester_default_cases(string input, string expected) {
-        await Assert.That(ActivityViewModel.TruncateRequester(input)).IsEqualTo(expected);
-    }
-
-    [Test]
-    public async Task TruncateRequester_keeps_domain_when_local_is_long() {
-        await Assert.That(ActivityViewModel.TruncateRequester("verylonglocalpartname@example.org", localHead: 8))
-            .IsEqualTo("verylong…@example.org");
-    }
-
-    [Test]
-    public async Task TruncateRequester_middle_truncates_non_email() {
-        await Assert.That(ActivityViewModel.TruncateRequester("abcdefghijklmnopqrstuvwxyz", head: 4, tail: 4))
-            .IsEqualTo("abcd…wxyz");
     }
 
     [Test]

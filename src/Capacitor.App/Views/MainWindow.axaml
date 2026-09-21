@@ -88,11 +88,18 @@
                                                             <Style Selector="ItemsControl > ContentPresenter">
                                                                 <Setter Property="HorizontalAlignment" Value="Stretch" />
                                                             </Style>
+                                                            <Style Selector="Border.activityRow">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+                                                                <Setter Property="BorderThickness" Value="0,0,0,1" />
+                                                                <Setter Property="Padding" Value="4,10" />
+                                                            </Style>
+                                                            <Style Selector="ContentPresenter:nth-last-child(1) > Border.activityRow">
+                                                                <Setter Property="BorderThickness" Value="0" />
+                                                            </Style>
                                                         </ItemsControl.Styles>
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate x:DataType="vm:ActivityRow">
-                                                                <Border BorderBrush="{StaticResource KcapBorderBrush}"
-                                                                        BorderThickness="0,0,0,1" Padding="4,10">
+                                                                <Border Classes="activityRow">
                                                                     <StackPanel Spacing="2">
                                                                         <Grid ColumnSpacing="0">
                                                                             <Grid.ColumnDefinitions>

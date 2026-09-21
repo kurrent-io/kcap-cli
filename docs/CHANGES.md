@@ -11,9 +11,8 @@ code moves on; where an entry disagrees with the code, the code wins.
 The chip formerly labeled Activity opened the local allow/deny log for daemon
 launches. The name and a seven-column table made that hard to read. The chip is
 **Launches**, the flyout title is **Launch approvals**, and each decision is a
-short feed row (outcome · vendor · kind; requester · repo · source; time). Email
-requesters keep the domain via middle ellipsis. The file, poll, and Complete
-rules are unchanged.
+short feed row (outcome · vendor · kind; requester · repo · source; time). The file, poll, and
+Complete rules are unchanged.
 
 ## The sidebar's subagents section starts folded to a count per state
 
