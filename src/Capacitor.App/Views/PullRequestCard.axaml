@@ -4,19 +4,12 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.PullRequestCard"
              x:DataType="vm:PullRequestContextViewModel">
-    <Border Margin="0" Padding="14" CornerRadius="8" BorderThickness="1"
-            Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
-        <StackPanel Spacing="9">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
-                    <TextBlock Text="Pull request" Classes="prMuted" />
-                    <TextBlock Text="{Binding NumberLabel}" FontSize="13" Foreground="{StaticResource KcapTextBrush}"
-                               IsVisible="{Binding NumberLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                </StackPanel>
-                <views:PullRequestStatusLabel Grid.Column="1" DataContext="{Binding LifecycleStatus}"
-                    IsVisible="{Binding $parent[views:PullRequestCard].((vm:PullRequestContextViewModel)DataContext).CanDisplay}" />
+    <StackPanel Spacing="9">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding CanDisplay}">
+                <views:PullRequestStatusLabel Grid.Column="1" DataContext="{Binding LifecycleStatus}" />
             </Grid>
-            <ComboBox x:Name="PullRequestSelector" ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+            <ComboBox x:Name="PullRequestSelector" Classes="kcapField"
+                      ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected, Mode=TwoWay}"
                       IsVisible="{Binding HasMultipleChoices}" HorizontalAlignment="Stretch" FontSize="13"
                       AutomationProperties.Name="Linked pull request">
                 <ComboBox.ItemTemplate>
@@ -67,6 +60,5 @@
             </Border>
             <Button Content="Sign in" Command="{Binding SignInCommand}" IsVisible="{Binding ShowsSignIn}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
             <Button Content="Link GitHub" Command="{Binding LinkGitHubCommand}" IsVisible="{Binding ShowsLinkGitHub}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
-        </StackPanel>
-    </Border>
+    </StackPanel>
 </UserControl>

@@ -427,8 +427,19 @@
                 <!-- Pull request: the card with its picker and live status, or link cards where the
                      server has no reader, or the empty note once both reads have settled. -->
                 <StackPanel x:Name="PullRequestSection" Margin="0,18,0,0" IsVisible="{Binding ShowsPullRequestSection}">
-                    <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}"
-                        IsVisible="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).ShowsPullRequestCard}" />
+                    <StackPanel IsVisible="{Binding ShowsPullRequestCard}">
+                        <Button x:Name="PullRequestHeader" Classes="sectionHeader">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                <TextBlock Text="PULL REQUEST" Classes="eyebrow" />
+                                <TextBlock x:Name="PullRequestNumberMeta" Grid.Column="1"
+                                           Text="{Binding PullRequests.NumberLabel}" Classes="sectionMeta"
+                                           IsVisible="{Binding PullRequests.NumberLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </Grid>
+                        </Button>
+                        <Border Classes="sectionBody">
+                            <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}" />
+                        </Border>
+                    </StackPanel>
                     <ItemsControl x:Name="LinkCards" ItemsSource="{Binding Links}" ItemTemplate="{StaticResource LinkCard}"
                                   IsVisible="{Binding ShowsLegacyLinkCards}">
                         <ItemsControl.ItemsPanel>

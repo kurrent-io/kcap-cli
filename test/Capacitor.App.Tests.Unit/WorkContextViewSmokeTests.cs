@@ -493,9 +493,15 @@ public class WorkContextViewSmokeTests {
                 var card = host.Find<PullRequestCard>("PullRequestCard");
                 await Assert.That(card.IsEffectivelyVisible).IsTrue();
                 await Assert.That(card.DataContext).IsSameReferenceAs(pullRequests);
+                var header = host.Find<Button>("PullRequestHeader");
+                await Assert.That(header.IsEffectivelyVisible).IsTrue();
+                var meta = host.Find<TextBlock>("PullRequestNumberMeta");
+                await Assert.That(meta.Text).IsEqualTo(pullRequests.NumberLabel);
+                await Assert.That(card.Content).IsTypeOf<StackPanel>();
                 var picker = host.Find<ComboBox>("PullRequestSelector");
                 await Assert.That(picker.IsEffectivelyVisible).IsTrue();
                 await Assert.That(((IEnumerable<PullRequestChoice>)picker.ItemsSource!).Count()).IsEqualTo(2);
+                await Assert.That(picker.Classes.Contains("kcapField")).IsTrue();
                 await Assert.That(host.Find<Button>("SidebarChecksButton").IsEffectivelyVisible).IsTrue();
                 await Assert.That(host.Find<Button>("SidebarReviewsButton").IsEffectivelyVisible).IsTrue();
                 await Assert.That(host.Find<TextBlock>("PullRequestEmptyText").IsEffectivelyVisible).IsFalse();
