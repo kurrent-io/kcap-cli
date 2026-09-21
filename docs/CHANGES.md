@@ -206,10 +206,11 @@ Two layout facts shaped the rendering. A paragraph's line height is exact, and a
 embedded control's full height as its ascent: a control taller than the font's ascent pushes the
 text down inside the line and clips its descenders. So a paragraph of nothing but images — a
 screenshot, a badge row, a divider — renders as a row of block images at natural size, capped to
-the viewer's width; an image beside text is embedded in the line at 18px, measured 6px shorter
+the pane's width; an image beside text is embedded in the line at 18px, measured 6px shorter
 than it is so it hangs into the descent the line already has instead of moving the baseline.
+A width the tag asks for that exceeds the pane is dropped so the picture can shrink with aspect.
 Until its bytes arrive an image shows its label, and keeps it if they never do; a press opens the
-enclosing anchor when the policy would, else the image itself.
+enclosing anchor when the policy would; a bare image is display-only.
 
 ## The restart setup asks for now carries its own message
 

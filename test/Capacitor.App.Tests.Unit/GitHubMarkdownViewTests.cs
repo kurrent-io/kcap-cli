@@ -31,7 +31,7 @@ public class GitHubMarkdownViewTests {
                 await Assert.That(All<TextBlock>(root).Select(Reads).Any(text => text.Contains('<'))).IsFalse();
                 var badge = Images(root).Single();
                 await Assert.That(badge.Url).IsEqualTo("https://img.shields.io/badge/Medium-634FD1");
-                await Assert.That(badge.Target).IsEqualTo("https://img.shields.io/badge/Medium-634FD1");
+                await Assert.That(badge.Target).IsNull();
                 await Assert.That(badge.Label).IsEqualTo("Remediation recommended");
                 await Assert.That(badge.ShowsPicture).IsFalse();
                 await Assert.That(All<Image>(badge).Single().Height).IsEqualTo(20);
@@ -63,18 +63,15 @@ public class GitHubMarkdownViewTests {
         });
     }
 
-    /// An image on its own opens itself; one inside an anchor opens the anchor, whatever the
-    /// anchor's markdown or HTML spelling and whatever emphasis sits between. Until its bytes
-    /// arrive it shows its alt text, or its file name when the tag has none.
+    /// An image inside an openable anchor opens that anchor, whatever the anchor's markdown or
+    /// HTML spelling and whatever emphasis sits between. Until its bytes arrive it shows its alt
+    /// text, or its file name when the tag has none.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    [Arguments("See ![the shot](https://h/x.png) here.", "https://h/x.png", "the shot")]
     [Arguments("[![badge](https://h/b.png)](https://outer.example)", "https://outer.example", "badge")]
     [Arguments("<a href=\"https://outer.example\"><img src=\"https://h/b.png\" alt=\"badge\"></a>", "https://outer.example", "badge")]
-    [Arguments("**![badge](https://h/b.png)**", "https://h/b.png", "badge")]
-    [Arguments("**![](https://h/name.png)**", "https://h/name.png", "name.png")]
-    [Arguments("p <a href=\"javascript:x\"><img src=\"https://h/b.png\" alt=\"badge\"></a>", "https://h/b.png", "badge")]
-    public async Task An_image_opens_its_target_through_the_command(string markdown, string target, string label) {
+    [Arguments("**[![badge](https://h/b.png)](https://outer.example)**", "https://outer.example", "badge")]
+    public async Task A_linked_image_opens_its_anchor_through_the_command(string markdown, string target, string label) {
         await RunOnUiAsync(async () => {
             var (window, root, opened) = Show(markdown, MarkdownFlavor.GitHub);
             try {
@@ -89,9 +86,32 @@ public class GitHubMarkdownViewTests {
         });
     }
 
+    /// A bare image, or one whose only anchor the policy refuses, has no Target and a press opens
+    /// nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("See ![the shot](https://h/x.png) here.", "the shot")]
+    [Arguments("**![badge](https://h/b.png)**", "badge")]
+    [Arguments("**![](https://h/name.png)**", "name.png")]
+    [Arguments("p <a href=\"javascript:x\"><img src=\"https://h/b.png\" alt=\"badge\"></a>", "badge")]
+    [Arguments("<img src=\"https://www.qodo.ai/wp-content/uploads/2025/11/light-grey-line.svg\" alt=\"Grey Divider\">", "Grey Divider")]
+    public async Task A_bare_image_is_not_a_link(string markdown, string label) {
+        await RunOnUiAsync(async () => {
+            var (window, root, opened) = Show(markdown, MarkdownFlavor.GitHub);
+            try {
+                var image = Images(root).Single();
+                await Assert.That(image.Label).IsEqualTo(label);
+                await Assert.That(image.Target).IsNull();
+                await Assert.That(All<TextBlock>(root).Select(Reads)).Contains(label);
+                ClickCentre(window, image);
+                await Assert.That(opened).IsEmpty();
+            } finally { window.Close(); }
+        });
+    }
+
     /// The bytes decode to a picture that replaces the label; an SVG — what every badge service
-    /// serves — is recognised by its text. A picture with no size of its own may not pass the
-    /// viewer's edge; one sized by its tag keeps that size.
+    /// serves — is recognised by its text. A picture may not pass the pane's edge, including one
+    /// whose tag asked for a width larger than the pane; a height-only tag keeps that height.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_image_shows_its_picture_once_its_bytes_arrive() {
@@ -113,8 +133,19 @@ public class GitHubMarkdownViewTests {
                 await Settled(window);
                 var picture = All<Image>(Images(root).Single()).Single();
                 await Assert.That(picture.Source).IsTypeOf<Avalonia.Svg.Skia.SvgImage>();
-                await Assert.That(picture.Bounds.Width).IsLessThanOrEqualTo(Viewer(root).Bounds.Width);
+                await Assert.That(picture.Bounds.Width).IsLessThanOrEqualTo(root.Bounds.Width);
                 await Assert.That(picture.Bounds.Width).IsGreaterThan(100);
+            } finally { window.Close(); }
+        }));
+        await RunOnUiAsync(() => WithImageBytes(svg, async () => {
+            var (window, root, _) = Show("<img src=\"https://h/wide\" alt=\"shot\" width=\"2000\" height=\"400\">", MarkdownFlavor.GitHub, width: 320);
+            try {
+                await Settled(window);
+                var image = Images(root).Single();
+                var picture = All<Image>(image).Single();
+                await Assert.That(image.ShowsPicture).IsTrue();
+                await Assert.That(picture.Bounds.Width).IsLessThanOrEqualTo(root.Bounds.Width);
+                await Assert.That(picture.Bounds.Width).IsLessThan(2000);
             } finally { window.Close(); }
         }));
     }
@@ -130,10 +161,12 @@ public class GitHubMarkdownViewTests {
                 var row = All<WrapPanel>(root).Single(p => p.Classes.Contains("markdown-image-row"));
                 var block = row.Children.OfType<MarkdownImage>().ToList();
                 await Assert.That(block.Select(i => i.Label)).IsEquivalentTo(["a", "b"]);
-                await Assert.That(block.Select(i => i.Target!)).IsEquivalentTo(["https://outer.example", "https://h/b.png"]);
+                await Assert.That(block[0].Target).IsEqualTo("https://outer.example");
+                await Assert.That(block[1].Target).IsNull();
                 await Assert.That(block.All(i => !i.IsInline)).IsTrue();
                 var inline = Images(root).Single(i => i.Label == "c");
                 await Assert.That(inline.IsInline).IsTrue();
+                await Assert.That(inline.Target).IsNull();
                 await Assert.That(All<Image>(inline).Single().MaxHeight).IsEqualTo(MarkdownImage.InlineHeight);
                 var paragraph = Paragraphs(root).Single(p => Reads(p).Contains("See"));
                 await Assert.That(paragraph.Inlines!.OfType<InlineUIContainer>().Single().Child).IsSameReferenceAs(inline);
@@ -381,7 +414,7 @@ public class GitHubMarkdownViewTests {
     }
 
     /// The refused normalisation shapes: deep under block quotes an autolink stays an autolink and
-    /// a childless image keeps its label, and each still reads and, where direct, still opens.
+    /// a childless image keeps its label; both still read, and a direct autolink still opens.
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Timeout(60_000)]

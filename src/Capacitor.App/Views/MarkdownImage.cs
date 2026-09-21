@@ -11,8 +11,8 @@ using MarkView.Avalonia;
 namespace Capacitor.App.Views;
 
 /// An image: its label until the picture arrives, the picture after, the label for good if it
-/// never does. A press opens `Target` through the view's link command, so a badge inside an
-/// anchor opens the anchor and a bare image opens itself.
+/// never does. A press opens `Target` through the view's link command when set; otherwise the
+/// image is display-only.
 public sealed class MarkdownImage : Panel {
     /// A paragraph's line height is exact, so an inline picture may be no taller than fits one
     /// line; a picture on a line of its own is a block and takes its natural size.
@@ -80,16 +80,23 @@ public sealed class MarkdownImage : Panel {
         _label.IsVisible = false;
     }
 
-    /// A picture with no width of its own may not pass the viewer's right edge. The limit is
-    /// measured from the left edge of the row or text block holding it, not the picture's own:
-    /// a picture wider than the rest of its line wraps to a line of its own rather than shrinking.
+    /// Caps the picture to the pane: measured from the left of the row or text block holding it
+    /// against `MarkdownView` (the scroll pane's child), not the viewer — the viewer can already
+    /// have grown with an unconstrained picture. A width the tag asked for that exceeds the pane
+    /// is dropped so Uniform can shrink with aspect; a height-only tag (badges) keeps its height.
     void OnLayoutUpdated(object? sender, EventArgs e) {
-        if (_size?.Width is not null || !_picture.IsVisible) return;
-        if (this.FindAncestorOfType<MarkdownViewer>() is not { } viewer) return;
-        var host = this.FindAncestorOfType<TextBlock>() ?? this.GetVisualParent() ?? this;
-        if (host.TranslatePoint(new Point(0, 0), viewer) is not { } origin) return;
-        var available = viewer.Bounds.Width - origin.X - 2;
-        if (available > 0 && Math.Abs(_picture.MaxWidth - available) > 0.5) _picture.MaxWidth = available;
+        if (!_picture.IsVisible) return;
+        var pane = (Control?)this.FindAncestorOfType<MarkdownView>() ?? this.FindAncestorOfType<MarkdownViewer>();
+        if (pane is null || pane.Bounds.Width <= 0) return;
+        var host = this.FindAncestorOfType<TextBlock>() ?? this.GetVisualParent() as Visual ?? this;
+        if (host.TranslatePoint(new Point(0, 0), pane) is not { } origin) return;
+        var available = pane.Bounds.Width - origin.X - 2;
+        if (available <= 0) return;
+        if (_picture.Width > available) {
+            _picture.Width = double.NaN;
+            if (_size?.Height is not null) _picture.Height = double.NaN;
+        }
+        if (Math.Abs(_picture.MaxWidth - available) > 0.5) _picture.MaxWidth = available;
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e) {

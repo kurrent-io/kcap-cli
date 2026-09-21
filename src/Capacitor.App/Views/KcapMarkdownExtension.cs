@@ -44,11 +44,11 @@ public sealed partial class KcapMarkdownExtension(MarkdownFlavor flavor) : IMark
         return link;
     }
 
-    /// The anchor around an image is what a press on it opens, when the policy would open the
-    /// anchor; otherwise the image opens itself, and a URL the policy refuses opens nothing.
+    /// Only an enclosing openable anchor makes an image a link; a bare image is display-only so a
+    /// divider or badge does not open its own CDN URL.
     static MarkdownImage CreateImage(LinkInline image, string? anchor, bool inline) {
-        var target = LinkPolicy.IsOpenable(anchor) ? anchor : image.Url;
-        return new MarkdownImage(image.Url ?? "", ImageLabel.For(Label(image), image.Url), ImageSize.Of(image), LinkPolicy.IsOpenable(target) ? target : null, inline);
+        var target = LinkPolicy.IsOpenable(anchor) ? anchor : null;
+        return new MarkdownImage(image.Url ?? "", ImageLabel.For(Label(image), image.Url), ImageSize.Of(image), target, inline);
     }
 
     static string Label(ContainerInline container) =>
