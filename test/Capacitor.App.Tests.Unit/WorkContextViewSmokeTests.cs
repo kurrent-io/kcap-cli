@@ -31,13 +31,14 @@ public class WorkContextViewSmokeTests {
         public BehaviorSubject<AgentStatusDto?> Presence { get; } = new(null);
         public FakeWorkContextSource Source { get; } = new();
         public FakeTimeProvider Time { get; } = new();
+        public RecordingOpener Opener { get; } = new();
         public SessionSubagents Subagents { get; }
         public WorkContextViewModel Vm { get; }
         public Window Window { get; }
 
         public Host() {
             Subagents = new SessionSubagents(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, new RecordingOpener(), Subagents);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Subagents);
             Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
@@ -139,6 +140,12 @@ public class WorkContextViewSmokeTests {
                 await Assert.That(linkKey.Text).IsEqualTo(issueKey);
                 await Assert.That(linkKey.IsEffectivelyVisible).IsTrue();
                 await Assert.That(linkTitle.IsEffectivelyVisible).IsFalse();
+
+                var issueHeader = host.Find<Button>("IssueHeader");
+                await Assert.That(host.Vm.Issue!.CanOpen).IsTrue();
+                await Assert.That(issueHeader.Command).IsSameReferenceAs(host.Vm.Issue.OpenCommand);
+                await host.Vm.Issue.OpenCommand.Execute();
+                await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { $"https://linear.app/x/issue/{issueKey}" });
             }
         });
     }

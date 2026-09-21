@@ -460,7 +460,9 @@
                 </StackPanel>
 
                 <StackPanel x:Name="IssueSection" Margin="0,18,0,0" IsVisible="{Binding HasSeparateIssue}">
-                    <Button Classes="sectionHeader">
+                    <Button x:Name="IssueHeader" Classes="sectionHeader"
+                            Command="{Binding Issue.OpenCommand}"
+                            ToolTip.Tip="{Binding Issue.Url}">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="ISSUE" Classes="eyebrow" />
                             <TextBlock x:Name="IssueKey" Grid.Column="1" Text="{Binding Issue.Key}" Classes="sectionMeta"
