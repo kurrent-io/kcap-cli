@@ -125,6 +125,56 @@ public class CloudTerminalSinkTests {
     }
 
     [Test]
+    public async Task A_later_call_with_a_shorter_bound_shortens_the_pending_deadline() {
+        var              time      = new FakeTimeProvider();
+        await using var  rig       = new Rig(Fast, time);
+        var              cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Mirror.OnSend = async (_, ct) => {
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
+            catch (OperationCanceledException) { cancelled.TrySetResult(); throw; }
+        };
+        _ = rig.Sink;
+
+        rig.Emit("stuck");
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Entered == 1);
+
+        var slow = rig.Sink.StopAsync(TimeSpan.FromSeconds(10));
+        var fast = rig.Sink.StopAsync(TimeSpan.FromSeconds(1));
+        await Assert.That(slow.IsCompleted).IsFalse();
+        await Assert.That(fast.IsCompleted).IsFalse();
+
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        await cancelled.Task.WaitAsync(HangGuard);
+        await slow.WaitAsync(HangGuard);
+        await fast.WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_later_call_with_a_longer_bound_does_not_extend_the_pending_deadline() {
+        var              time      = new FakeTimeProvider();
+        await using var  rig       = new Rig(Fast, time);
+        var              cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Mirror.OnSend = async (_, ct) => {
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
+            catch (OperationCanceledException) { cancelled.TrySetResult(); throw; }
+        };
+        _ = rig.Sink;
+
+        rig.Emit("stuck");
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Entered == 1);
+
+        var fast = rig.Sink.StopAsync(TimeSpan.FromSeconds(1));
+        var slow = rig.Sink.StopAsync(TimeSpan.FromSeconds(10));
+
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        await cancelled.Task.WaitAsync(HangGuard);
+        await fast.WaitAsync(HangGuard);
+        await slow.WaitAsync(HangGuard);
+    }
+
+    [Test]
     public async Task A_zero_bound_stop_shortens_a_stop_that_is_still_draining() {
         var             time = new FakeTimeProvider();
         await using var rig  = new Rig(Fast, time);
