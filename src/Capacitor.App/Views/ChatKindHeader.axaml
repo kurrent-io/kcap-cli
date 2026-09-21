@@ -1,0 +1,20 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Capacitor.App.Views.ChatKindHeader"
+             x:Name="Root">
+    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+        <Panel Width="14" Height="14" VerticalAlignment="Center"
+               IsVisible="{Binding #Root.IconData, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <Path Width="14" Height="14" Stretch="Uniform"
+                  Data="{Binding #Root.IconData}"
+                  Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4"
+                  StrokeLineCap="Round" StrokeJoin="Round"
+                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Panel>
+        <TextBlock Grid.Column="1" Classes="toolKindChip" Text="{Binding #Root.Label}"
+                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        <ContentPresenter Grid.Column="2" Content="{Binding #Root.Status}"
+                          VerticalAlignment="Center"
+                          IsVisible="{Binding #Root.Status, Converter={x:Static ObjectConverters.IsNotNull}}" />
+    </Grid>
+</UserControl>
