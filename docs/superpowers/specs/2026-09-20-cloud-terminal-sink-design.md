@@ -197,6 +197,15 @@ bytes already written to the transport pipe may still go out.
 
 Each pump has at most one send in flight, and sends for one agent are issued strictly in order.
 
+Moving from one sender to one pump per agent does not put more than one terminal message on the
+wire at a time: the SignalR client holds its connection lock across each send's write and flush,
+so the pumps take turns with each other and with control invocations (ping, permissions), each of
+which waits for at most one chunk per pump. Server-side concurrency was never bounded by the
+daemon — `SendAsync` returns on flush, not on the hub method's completion — so that is unchanged.
+What is new is the burst after a reconnect, when every registered agent replays at once; it is
+paced by that same lock and bounded by what the transport carries, and a further reconnect aborts
+and restarts the replays rather than stacking them.
+
 **Ordering is conditional on the server.** `SendAsync` orders the daemon's writes, not the server's
 handling of them, and the server lets one client run up to 100 invocations in parallel. What keeps
 one agent's chunks in order today, and the reset ahead of its replay under this design, is this:

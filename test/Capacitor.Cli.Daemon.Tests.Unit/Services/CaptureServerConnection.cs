@@ -295,7 +295,7 @@ sealed class CaptureServerConnection() : ServerConnection(
         if (StatusChangedThrow is { } ex) return Task.FromException(ex);
 
         // Capture BEFORE recording: was a launch-window verdict already published when this
-        // non-failure status was sent? (finding 1 — the invariant a check-to-send race breaks.)
+        // non-failure status was sent? That ordering is the invariant a check-to-send race breaks.
         if (status is "Completed" or "Running" or "Starting"
          && VerdictCaptureRuntime?.ReadVerdict() is { ReapedInsideLaunchWindow: true })
             NonFailureStatusSentAfterVerdictPublished = true;
@@ -335,7 +335,9 @@ sealed class CaptureServerConnection() : ServerConnection(
     public override Task UpdateRepoPathsAsync()
         => Task.CompletedTask;
 
-    /// <summary>Set both to make every terminal send block until its <c>ct</c> cancels.</summary>
+    /// <summary>Set both to make every terminal send block until its <c>ct</c> cancels, then throw —
+    /// so a send configured this way never reaches <see cref="TerminalSendGate"/> or
+    /// <see cref="TerminalSends"/>, and a test that sets both alongside this is exercising only this.</summary>
     public TaskCompletionSource? SendEntered   { get; init; }
     public TaskCompletionSource? SendUnblocked { get; init; }
 

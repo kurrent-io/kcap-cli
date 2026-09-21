@@ -9,11 +9,11 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// <summary>
 /// <see cref="ServerConnection.DisposeAsync"/> must be idempotent and non-throwing: the DI
 /// container tracks the singleton AND <c>DaemonRunner</c> disposes it explicitly, so it runs twice
-/// by construction on every shutdown. Before the run-once guard, the second pass re-entered the
-/// dispose body and re-disposed its resources — a fault that escaped into DI teardown and, under
-/// NativeAOT, aborted the process (SIGABRT) instead of exiting cleanly. Mirrors
-/// <see cref="ConnectWithRetryTests"/>' harness: no live SignalR transport; the internal seams are
-/// overridden so <c>ConnectAsync</c> reaches the DisposeAsync-relevant state without a server.
+/// by construction on every shutdown. These tests pin that disposing twice must not re-enter the
+/// dispose body: re-disposing its resources throws, and a fault escaping DI teardown aborts a
+/// NativeAOT process (SIGABRT) instead of exiting cleanly. Mirrors <see cref="ConnectWithRetryTests"/>'
+/// harness: no live SignalR transport; the internal seams are overridden so <c>ConnectAsync</c>
+/// reaches the DisposeAsync-relevant state without a server.
 /// </summary>
 public class ServerConnectionDisposeTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);

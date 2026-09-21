@@ -89,7 +89,7 @@ public class CloudTerminalSinkTests {
     [Test]
     public async Task A_send_that_fails_while_not_ready_is_held_and_delivered_in_order() {
         await using var rig   = new Rig();
-        var             fails = 3;
+        var             fails = 8;
         rig.Mirror.OnSend = (_, _) => {
             if (Interlocked.Decrement(ref fails) < 0) return Task.CompletedTask;
 
@@ -104,6 +104,10 @@ public class CloudTerminalSinkTests {
         rig.Emit("b");
         rig.Emit("c");
 
+        // Wait for the held chunks to actually land before stopping: a stop issued while a chunk
+        // is mid-retry now gives up on it the instant it next finds the connection not ready
+        // (the sink is already completing), racing the very recovery this test exercises.
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 3);
         await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
 
         var sent = rig.Mirror.SentText();
@@ -268,8 +272,22 @@ public class CloudTerminalSinkTests {
     }
 
     [Test]
+    public async Task A_stop_while_not_ready_does_not_wait_out_the_drain_bound() {
+        await using var rig = new Rig();
+        rig.Mirror.Ready = false;
+        _ = rig.Sink;
+
+        rig.Emit("held");
+
+        // A connection that never becomes ready cannot deliver this chunk, and the server deletes
+        // the mirror when the agent unregisters — a long drain bound must not be waited out for it.
+        await rig.Sink.StopAsync(TimeSpan.FromMinutes(10)).WaitAsync(HangGuard);
+        await Assert.That(rig.Mirror.Entered).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task A_backlog_past_the_budget_is_replaced_by_a_reset_and_the_ring() {
-        var gate = new StepGate();
+        using var gate = new StepGate();
         await using var rig = new Rig(Fast with { BacklogBudgetBytes = 8 });
         rig.Mirror.OnSend = gate.Wait;
         _ = rig.Sink;
@@ -345,8 +363,39 @@ public class CloudTerminalSinkTests {
     }
 
     [Test]
+    public async Task A_send_that_exhausts_after_the_sink_already_completed_logs_no_warning() {
+        var             log     = new CountingLogger();
+        await using var rig     = new Rig();
+        var             entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var             proceed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var             attempt = 0;
+        rig.Mirror.OnSend = async (_, _) => {
+            if (Interlocked.Increment(ref attempt) == 1) entered.TrySetResult();
+            else await proceed.Task;
+
+            throw new InvalidOperationException("always fails while ready");
+        };
+
+        await using var sink = new CloudTerminalSink(
+            "agent-1", rig.SinksLock, rig.Ring, rig.Mirror.Send, () => rig.Mirror.Ready,
+            log, TimeProvider.System, Fast with { FailingSendAttempts = 2 }, CancellationToken.None);
+
+        lock (rig.SinksLock) sink.TryEnqueue("x"u8.ToArray());
+        await entered.Task.WaitAsync(HangGuard);
+
+        // StopAsync sets completion synchronously, before the gated (exhausting) attempt below can
+        // run: the sink is already completed by the time the attempts run out.
+        var stop = sink.StopAsync(TimeSpan.FromMinutes(10));
+        proceed.SetResult();
+        await stop.WaitAsync(HangGuard);
+
+        await Assert.That(log.Warnings).IsEqualTo(0);
+        await Assert.That(sink.WakeupsWrittenForTest).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task An_overflow_during_a_replay_does_not_interrupt_it() {
-        var gate = new StepGate();
+        using var gate = new StepGate();
         await using var rig = new Rig(Fast with { BacklogBudgetBytes = 4 });
         rig.Mirror.OnSend = gate.Wait;
         _ = rig.Sink;
@@ -368,25 +417,27 @@ public class CloudTerminalSinkTests {
 
         // Wait for the second resync to have begun before stopping: a completed sink never
         // begins a resync, so a stop racing the lock ahead of it would cut this short.
-        await WaitHarness.PollUntilAsync(() => rig.Mirror.SentText().Count(t => t == "<RIS>") == 2);
+        await WaitHarness.PollUntilAsync(() => rig.Mirror.SentText().Count(t => t == "<RIS>") >= 2);
         await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
 
         var sent = string.Join(",", rig.Mirror.SentText());
-        await Assert.That(sent).StartsWith("r1,<RIS>,r1,r2,r3,r4,<RIS>,r1,r2,r3,r4,x1,x2,x3");
+        await Assert.That(sent).IsEqualTo("r1,<RIS>,r1,r2,r3,r4,<RIS>,r1,r2,r3,r4,x1,x2,x3");
+        await Assert.That(rig.Mirror.SentText().Count(t => t == "<RIS>")).IsEqualTo(2);
     }
 
     [Test]
     public async Task Sustained_overload_ends_synced_once_production_stops() {
-        await using var rig = new Rig(Fast with { BacklogBudgetBytes = 32 });
-        rig.Mirror.OnSend = (_, ct) => Task.Delay(1, ct);
+        // A tight budget, not a slow pump: a yielding send still lets a fast producer outrun it,
+        // so overload doesn't depend on wall-clock pacing.
+        await using var rig = new Rig(Fast with { BacklogBudgetBytes = 8 });
+        rig.Mirror.OnSend = async (_, _) => await Task.Yield();
         _ = rig.Sink;
 
         var emitted = new StringBuilder();
-        for (var i = 0; i < 400; i++) {
+        for (var i = 0; i < 120; i++) {
             var text = $"o{i:D4};";
             emitted.Append(text);
             rig.Emit(text);
-            if (i % 40 == 0) await Task.Yield();
         }
 
         rig.Emit("tail;");
@@ -396,6 +447,9 @@ public class CloudTerminalSinkTests {
         // the mirror converges on everything emitted.
         var expected = emitted.ToString();
         await WaitHarness.PollUntilAsync(() => string.Concat(rig.Mirror.Reconstruct()) == expected);
+
+        // The overload was real, not just possible in principle.
+        await Assert.That(rig.Mirror.SentText().Count(t => t == "<RIS>")).IsGreaterThanOrEqualTo(1);
 
         rig.Emit("live;");
         await WaitHarness.PollUntilAsync(() => string.Concat(rig.Mirror.Reconstruct()) == expected + "live;");
@@ -421,7 +475,7 @@ public class CloudTerminalSinkTests {
 
     [Test]
     public async Task A_resync_request_aborts_a_replay_in_progress() {
-        var gate = new StepGate();
+        using var gate = new StepGate();
         await using var rig = new Rig();
         rig.Mirror.OnSend = gate.Wait;
         _ = rig.Sink;
@@ -449,7 +503,7 @@ public class CloudTerminalSinkTests {
 
     [Test]
     public async Task Many_resync_requests_against_a_held_pump_coalesce_into_one() {
-        var gate = new StepGate();
+        using var gate = new StepGate();
         await using var rig = new Rig();
         rig.Mirror.OnSend = gate.Wait;
         _ = rig.Sink;
@@ -489,7 +543,7 @@ public class CloudTerminalSinkTests {
 
     [Test]
     public async Task A_stop_lets_a_replay_that_has_begun_finish_inside_the_bound() {
-        var gate = new StepGate();
+        using var gate = new StepGate();
         await using var rig = new Rig();
         rig.Mirror.OnSend = gate.Wait;
         _ = rig.Sink;

@@ -3080,7 +3080,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 try {
                     await cloud.StopAsync(_shutdownCts.IsCancellationRequested ? TimeSpan.Zero : CloudSinkOptions.DrainBound);
                 } catch (Exception ex) {
-                    LogOutputReadError(ex, agent.Id);
+                    LogCloudSinkStopFailed(ex, agent.Id);
                 }
 
                 lock (_cloudSinksLock) _cloudSinks.Remove(cloud);
@@ -4915,10 +4915,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // A published launch-window verdict (or its reported flag) means this agent is terminally
             // Failed and about to be unregistered by the finalizer — re-sending its (possibly stale
             // "Running") non-failure Status would clear the FailureReason the verdict's LaunchFailed
-            // set server-side (finding 2). The outer Status filter can still admit it during the race
-            // where the finalizer has flipped the flag but not yet the Status field, so this inner
-            // re-check — on the properly-ordered flag/verdict, not the plain Status — is what closes
-            // it. Skip re-registration entirely; the finalizer owns this agent's terminal transition.
+            // set server-side. The outer Status filter can still admit it during the race where the
+            // finalizer has flipped the flag but not yet the Status field, so this inner re-check —
+            // on the properly-ordered flag/verdict, not the plain Status — is what closes it. Skip
+            // re-registration entirely; the finalizer owns this agent's terminal transition.
             if (VerdictForbidsNonFailureStatus(agent)) continue;
 
             for (var attempt = 1; ; attempt++) {
@@ -4930,12 +4930,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // below then fail. The pump holds the replay until readiness returns.
                     agent.CloudSink?.RequestResync();
 
-                    // Re-gate the status send atomically under _reapLock, per attempt (finding 1
-                    // refinement): the outer pre-check cannot cover a verdict published DURING the
-                    // AgentRegistered await above (or on a later retry). The gate suppresses the send
-                    // if a verdict is now published, else initiates it before publication can proceed
-                    // so it is ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only
-                    // holds it across initiation), preserving the retry-on-failure semantics.
+                    // Re-gate the status send atomically under _reapLock, per attempt: the outer
+                    // pre-check cannot cover a verdict published DURING the AgentRegistered await
+                    // above (or on a later retry). The gate suppresses the send if a verdict is now
+                    // published, else initiates it before publication can proceed so it is
+                    // ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only holds
+                    // it across initiation), preserving the retry-on-failure semantics.
                     if (agent.Runtime is AcpHostedAgentRuntime acpRuntime) {
                         if (!acpRuntime.TryInitiateNonFailureStatusSend(
                                 () => _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId), out var statusSend))
@@ -5741,6 +5741,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error reading output for agent {AgentId}")]
     partial void LogOutputReadError(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stopping the terminal mirror for agent {AgentId} failed")]
+    partial void LogCloudSinkStopFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} failed during startup (exit code {ExitCode}): {Reason}")]
     partial void LogStartupFailed(string agentId, int? exitCode, string reason);

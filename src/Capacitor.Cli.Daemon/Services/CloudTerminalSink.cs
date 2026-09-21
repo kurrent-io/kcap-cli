@@ -112,9 +112,18 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
         _desynced = true;
         if (abortReplay) _abortReplay = true;
 
+        // The pump relies on _desynced + _completed to EXIT rather than send later chunks over a
+        // gap, so this is set unconditionally; but a completed sink's channel is already closed,
+        // so there is no wake-up to claim and no warning to log for a sink that is shutting down.
+        if (_completed) return;
+
         // One sentinel at most, however many requests arrive while the pump is held.
-        if (Interlocked.Exchange(ref _wakePending, 1) == 0 && _queue.Writer.TryWrite(Wake)) {
-            Interlocked.Increment(ref _wakeupsWritten);
+        if (Interlocked.Exchange(ref _wakePending, 1) == 0) {
+            if (_queue.Writer.TryWrite(Wake)) {
+                Interlocked.Increment(ref _wakeupsWritten);
+            } else {
+                Interlocked.Exchange(ref _wakePending, 0);
+            }
         }
 
         if (wasSynced) NoteDesyncLocked(cause);
@@ -289,8 +298,9 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
         return true;
     }
 
-    /// <summary>False when the chunk was given up because a desync superseded it. A budget
-    /// overflow does not supersede a replay chunk; only <c>_abortReplay</c> does.</summary>
+    /// <summary>False when the chunk was given up because a desync superseded it, or because the
+    /// sink completed while waiting on a connection that never became ready. A budget overflow
+    /// does not supersede a replay chunk; only <c>_abortReplay</c> does.</summary>
     async Task<bool> SendAsync(byte[] chunk, bool replay, CancellationToken ct) {
         var base64   = Convert.ToBase64String(chunk);
         var attempts = 0;
@@ -299,6 +309,11 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
             if (replay ? _abortReplay : _desynced) return false;
 
             if (!_isReady()) {
+                // A connection that is not ready cannot deliver this chunk, and the server deletes
+                // the mirror when the agent unregisters — waiting out the drain bound here would
+                // only delay finalization for an agent that has already ended.
+                if (_completed) return false;
+
                 attempts = 0;
                 await Task.Delay(_options.RetryDelay, _time, ct);
 
