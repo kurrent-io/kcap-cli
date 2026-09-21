@@ -400,7 +400,7 @@ internal sealed record AcpForwarderHandle(AcpTranscriptForwarder Forwarder, Task
 public class TerminalOutputBuffer {
     readonly List<byte[]> _chunks = [];
     int                   _totalBytes;
-    const int             MaxBytes = 2 * 1024 * 1024;
+    public const int      MaxBytes = 2 * 1024 * 1024;
 
     public void Append(byte[] data) {
         lock (_chunks) {
