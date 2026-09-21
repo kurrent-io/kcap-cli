@@ -438,6 +438,40 @@ public class WorkContextViewSmokeTests {
         });
     }
 
+    /// Who's on it is work-item data: it sits under the work item, before pull request.
+    /// Session stays last (after subagents).
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Section_order_is_work_item_then_people_then_pr_then_issue_then_subagents_then_session() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+
+            var body = host.Find<ScrollViewer>("PaneScroll").Content as StackPanel
+                ?? throw new InvalidOperationException("pane stack");
+            int At(Control c) {
+                Control? walk = c;
+                while (walk is not null && !ReferenceEquals(walk.Parent, body))
+                    walk = walk.Parent as Control;
+                return body.Children.IndexOf(walk!);
+            }
+
+            var who = host.Find<StackPanel>("WhoSection");
+            var pr = host.Find<StackPanel>("PullRequestSection");
+            var issue = host.Find<ContentControl>("IssueCard");
+            var subagents = host.Find<StackPanel>("SubagentsSection");
+            var session = host.Find<Button>("SessionToggle");
+
+            await Assert.That(At(who)).IsLessThan(At(pr));
+            await Assert.That(At(pr)).IsLessThan(At(issue));
+            await Assert.That(At(issue)).IsLessThan(At(session));
+            if (subagents.IsEffectivelyVisible)
+                await Assert.That(At(subagents)).IsLessThan(At(session));
+            else
+                await Assert.That(At(issue)).IsLessThan(At(subagents));
+        });
+    }
+
     /// The card is the pane's live PR surface: its picker switches between the linked PRs and its
     /// checks and review rows read without opening the reader tab. Once the list settles empty
     /// the card yields to the pane's own empty copy rather than standing as a bare frame.
