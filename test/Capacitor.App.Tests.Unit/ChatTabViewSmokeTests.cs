@@ -754,11 +754,50 @@ public class ChatTabViewSmokeTests {
             await Assert.That(OnlyGroup(host).ShowsKindChip).IsTrue();
             await Assert.That(OnlyGroup(host).KindChip).IsEqualTo("Search");
             await Assert.That(SummaryOrNull(host.View)?.IsVisible ?? false).IsFalse();
+            host.Settle();
+            var header = host.View.GetVisualDescendants().OfType<ChatKindHeader>()
+                .Single(h => h.IsEffectivelyVisible);
+            await Assert.That(header.Label).IsEqualTo("Search");
+            await Assert.That(header.IconData).IsNotEmpty();
             var chip = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible);
             await Assert.That(chip.Text).IsEqualTo("Search");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Done);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task System_tool_cards_align_left_not_stretch() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("align.jsonl", [ToolCallLine, ToolResultLine]));
+            host.Settle();
+            var card = host.View.GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Classes.Contains("toolGroup"));
+            await Assert.That(card.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+            await Assert.That(card.Classes.Contains("chatSystemCard")).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pending_prompt_host_is_centered() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("prompt-align.jsonl", [
+                """{"type":"user","message":{"role":"user","content":"hello"}}""",
+            ]));
+            host.Permissions.Add(PermissionEntries.Entry("r1", "a1", toolName: "Bash"));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+            var hostControl = host.View.GetVisualDescendants().OfType<ContentControl>()
+                .Single(c => c.Classes.Contains("pendingCard"));
+            await Assert.That(hostControl.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Center);
+            await Assert.That(hostControl.Classes.Contains("chatPromptCard")).IsTrue();
             await host.CloseAsync();
         });
     }
