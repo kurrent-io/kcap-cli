@@ -187,7 +187,9 @@ saved offset pointing into a document of different heights. Three shapes bots dr
 before rendering (`BlockTidy`): a rule at the start or end of its container, one rule of two in a
 row, and a quote or a `dd` holding only details sections — a hairline beside, or a second inset
 under, sections already set in; Qodo's file list wraps every level in `dl`/`dd`, so three levels
-came to over 100px of inset. A `pre` inside a section is prose set in monospace, so it loses its box.
+came to over 100px of inset — and a `dd` inside a details body is lifted outright, because the
+section already insets and Qodo wraps every body that way even when the content is prose or a list.
+A `pre` inside a section is prose set in monospace, so it loses its box.
 
 Those cards borrow the border colour the comment list used to rule comments apart, so a comment
 ending in a card ran into the next one. Comments now sit 22px off their rule, drawn in

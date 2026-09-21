@@ -104,7 +104,8 @@ public class HtmlStructureTests {
     }
 
     /// A `dl`/`dd` per level of sections is one bot's indentation, and a wrapper left holding
-    /// only sections once its own wrapper is gone is unwrapped in the same pass.
+    /// only sections once its own wrapper is gone is unwrapped in the same pass. A `dd` inside
+    /// a details section is lifted even with mixed content: nested sections already inset.
     [Test]
     public async Task An_indent_holding_only_details_sections_is_unwrapped() {
         await Assert.That(Trees.Dump("<details>\n<summary>Files</summary>\n\n<dl>\n<dd>\n\n<details>\n<summary>A</summary>\n\na\n\n</details>\n\n</dd>\n</dl>\n\n</details>"))
@@ -113,6 +114,21 @@ public class HtmlStructureTests {
             .IsEqualTo("doc(details#0{'A'}(p('a')))");
         await Assert.That(Trees.Dump("<dl>\n<dd>\n\nnote\n\n<details>\n<summary>A</summary>\n\na\n\n</details>\n\n</dd>\n</dl>"))
             .IsEqualTo("doc(indent(p('note'),details#0{'A'}(p('a'))))");
+    }
+
+    /// Qodo wraps every details body in `dl`/`dd`, nested items included. Leaving those indents
+    /// stacks with the nested section's own inset and pushes lists mid-pane.
+    [Test]
+    public async Task An_indent_inside_a_details_section_is_unwrapped() {
+        const string assessment =
+            "<details>\n<summary>High-Level Assessment</summary>\n\n<dl>\n<dd>\n\n" +
+            ">The following are alternatives:\n\n" +
+            "<details>\n<summary>1. Theme</summary>\n\n<dl>\n<dd>\n\n- plus\n- minus\n\n</dd>\n</dl>\n\n</details>\n\n" +
+            ">**Recommendation:** keep it.\n\n</dd>\n</dl>\n\n</details>";
+        await Assert.That(Trees.Dump(assessment)).IsEqualTo(
+            "doc(details#0{'High-Level Assessment'}(quote(p('The following are alternatives:'))," +
+            "details#1{'1. Theme'}(list(li(p('plus')),li(p('minus'))))," +
+            "quote(p(em*2('Recommendation:'),' keep it.'))))");
     }
 
     [Test]
@@ -182,7 +198,7 @@ public class HtmlStructureTests {
     [Test]
     public async Task A_qodo_summary_section_converts_whole() {
         const string section = "<details>\n<summary>AI Description</summary>\n\n<dl>\n<dd>\n<br/>\n\n><pre>\n>• Bound\n></pre>\n\n</dd>\n</dl>\n\n</details>";
-        await Assert.That(Trees.Dump(section)).IsEqualTo("doc(details#0{'AI Description'}(indent(quote(pre('• Bound')))))");
+        await Assert.That(Trees.Dump(section)).IsEqualTo("doc(details#0{'AI Description'}(quote(pre('• Bound'))))");
     }
 
     /// Dependabot writes a whole release-notes section as one HTML block, blockquote, headings
