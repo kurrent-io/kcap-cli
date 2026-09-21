@@ -212,7 +212,9 @@ the pane's width; an image beside text is embedded in the line at 18px, measured
 than it is so it hangs into the descent the line already has instead of moving the baseline.
 A width the tag asks for that exceeds the pane is dropped so the picture can shrink with aspect.
 Until its bytes arrive an image shows its label, and keeps it if they never do; a press opens the
-enclosing anchor when the policy would; a bare image is display-only.
+enclosing anchor when the policy would; a bare image is display-only. A bullet list whose every
+item opens with ➕ or ➖ (Qodo's High-Level Assessment) becomes bold `+` / `-` paragraphs, so the
+marker and the faint emoji do not stack.
 
 ## The restart setup asks for now carries its own message
 
