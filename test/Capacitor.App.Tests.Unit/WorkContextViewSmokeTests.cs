@@ -86,6 +86,32 @@ public class WorkContextViewSmokeTests {
         _                  => 255,
     };
 
+    /// Before the daemon reports the agent the pane knows no harness, checkout or requester, so the
+    /// sections that would hold only dashes stay out and the waiting note stands alone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Session_and_who_sections_wait_for_the_agent() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Window.Show();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(host.Vm.HasAgent).IsFalse();
+            await Assert.That(host.Find<TextBlock>("PhaseNoteText").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<Control>("SessionSection").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<Control>("WhoSection").IsEffectivelyVisible).IsFalse();
+
+            host.Presence.OnNext(WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj"));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(host.Vm.HasAgent).IsTrue();
+            await Assert.That(host.Find<Control>("SessionSection").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<Control>("WhoSection").IsEffectivelyVisible).IsTrue();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Arguments("WK-2198", true)]

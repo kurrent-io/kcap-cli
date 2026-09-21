@@ -1231,7 +1231,8 @@ public partial class App : Application {
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
-            modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl);
+            modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
+            launchFailed: agentId => vm?.CloseFailedLaunch(agentId));
         // Same knot as home above, over the SAME `service` instance — its own openSession
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
