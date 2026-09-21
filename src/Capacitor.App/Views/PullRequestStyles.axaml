@@ -64,28 +64,38 @@
         <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
     </Style>
     <Style Selector="Button.prStatusRow">
-        <!-- Match sectionHeader hover: pad out, pull back with margin so icons stay on the body edge. -->
+        <!-- Own class (not prButton): Fluent paints hover on the presenter, so rest and hover pin
+             it. Bleed left into the body indent; inset right so the raised fill shows radius. -->
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         <Setter Property="Padding" Value="8,6" />
-        <Setter Property="Margin" Value="-8,0" />
+        <Setter Property="Margin" Value="-8,0,8,0" />
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
     </Style>
-    <Style Selector="Button.prButton.prStatusRow /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.prStatusRow /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <Style Selector="Button.prButton.prStatusRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                     Button.prButton.prStatusRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.prStatusRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.prStatusRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <Style Selector="Button.prButton.prStatusRow:pressed">
+    <Style Selector="Button.prStatusRow:pressed">
         <Setter Property="RenderTransform" Value="scale(1)" />
+    </Style>
+    <Style Selector="Button.prStatusRow:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Opacity" Value="0.45" />
     </Style>
     <Style Selector="Button.prStatusButton">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />

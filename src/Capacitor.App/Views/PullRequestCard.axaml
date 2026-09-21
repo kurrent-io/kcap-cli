@@ -40,14 +40,14 @@
                            TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
             </Button>
             <StackPanel IsVisible="{Binding CanDisplay}">
-                <Button x:Name="SidebarChecksButton" Classes="prButton prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
+                <Button x:Name="SidebarChecksButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
                         IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
                         <Path Grid.Column="1" Classes="prChevron" />
                     </Grid>
                 </Button>
-                <Button x:Name="SidebarReviewsButton" Classes="prButton prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
+                <Button x:Name="SidebarReviewsButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
                         IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
