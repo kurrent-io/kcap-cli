@@ -361,7 +361,7 @@
                 </Border>
 
                 <!-- Who's on it: names stay visible; the chevron only appears when the list is longer than the cap. -->
-                <StackPanel Margin="0,18,0,0">
+                <StackPanel x:Name="WhoSection" Margin="0,18,0,0" IsVisible="{Binding HasAgent}">
                     <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader"
                             Classes.expandable="{Binding PeopleOverflows}">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
@@ -513,7 +513,7 @@
                 </StackPanel>
 
                 <!-- Session facts. -->
-                <StackPanel Margin="0,18,0,0">
+                <StackPanel x:Name="SessionSection" Margin="0,18,0,0" IsVisible="{Binding HasAgent}">
                     <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SESSION" Classes="eyebrow" />

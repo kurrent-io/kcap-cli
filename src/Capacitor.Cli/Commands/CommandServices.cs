@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
@@ -47,6 +48,7 @@ public static class CommandServices {
         services.AddSingleton(_ => HostedAgent.FromEnvironment());
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
+        services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),

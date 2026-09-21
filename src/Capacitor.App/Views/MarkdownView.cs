@@ -102,14 +102,37 @@ public sealed class MarkdownView : ContentControl {
     }
 
     /// Re-rendering rebuilds MarkView's selection index, so it always matches what is visible.
-    /// The header that was pressed is gone with the old tree; its successor gets the focus back.
+    /// The header that was pressed is gone with the old tree; its successor gets the focus back
+    /// and is held at the viewport Y the reader pressed it at: the height change lands above or
+    /// below it, and the scroll offset alone would let the header wander with it.
     void OnDetailsToggled(int ordinal, bool expanded) {
         _details.Set(ordinal, expanded);
-        var hadFocus = Header(ordinal)?.IsFocused == true;
+        var header = Header(ordinal);
+        var hadFocus = header?.IsFocused == true;
+        var scroll = this.FindAncestorOfType<ScrollViewer>();
+        var anchorY = scroll is not null ? header?.TranslatePoint(new Point(0, 0), scroll)?.Y : null;
         Dispatcher.UIThread.Post(() => {
             Render();
             if (hadFocus) Header(ordinal)?.Focus();
+            if (anchorY is { } y && scroll is not null) new ToggleAnchor(scroll, () => Header(ordinal), y).Hold();
         });
+    }
+
+    /// Restores the header once the new tree is laid out, and once more after the frame's
+    /// remaining layout has settled — then lets go, so a reader's own scroll a moment later is
+    /// not undone.
+    sealed class ToggleAnchor(ScrollViewer scroll, Func<ToggleButton?> header, double y) {
+        public void Hold() {
+            scroll.UpdateLayout();
+            Restore();
+            Dispatcher.UIThread.Post(Restore, DispatcherPriority.Background);
+        }
+
+        void Restore() {
+            if (header()?.TranslatePoint(new Point(0, 0), scroll) is not { } after) return;
+            var delta = after.Y - y;
+            if (Math.Abs(delta) >= 0.5) scroll.Offset = new Vector(scroll.Offset.X, scroll.Offset.Y + delta);
+        }
     }
 
     ToggleButton? Header(int ordinal) =>

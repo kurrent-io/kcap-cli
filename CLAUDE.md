@@ -94,6 +94,17 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   only place to switch between a session's linked PRs, and its checks and review rows are the live
   status a user reads without opening the reader tab. A compact header that collapses it to the
   first PR's title drops both, and the pane smoke test pins the picker and the status rows.
+- **Skills materialization nests one pair of locks only — migration outside the per-worktree
+  manifest lock — and holds no shared lock across a network request.** The repository lock is taken
+  alone, before any target starts and while nothing else is held, so it nests with neither and the
+  exclusion block can go in ahead of the first file. Acquiring the nested pair the other way round
+  deadlocks two checkouts of one repository against each other, and holding migration or repository
+  across a snapshot fetch serializes unrelated repositories on someone else's network.
+- **A skills identity retirement deletes before it fetches.** When the account or server a manifest
+  records is not the current one, every local path and every global copy that identity owned is
+  deleted first and unconditionally, and the ledger is saved owning nothing and carrying no refresh
+  stamp. Fetching first and deleting on success leaves a revoked account's skills loadable exactly
+  when the credential that would have replaced them has stopped working.
 
 ## Tech stack
 

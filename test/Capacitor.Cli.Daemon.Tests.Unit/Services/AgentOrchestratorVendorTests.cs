@@ -714,7 +714,7 @@ public class AgentOrchestratorVendorTests {
         await orch.HandleLaunchAgentForTest(cmd);
 
         await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
-        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_changed");
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_transient");
         await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
 
@@ -742,7 +742,7 @@ public class AgentOrchestratorVendorTests {
         await orch.HandleLaunchAgentForTest(cmd);
 
         await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
-        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_changed");
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_transient");
         await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
     }

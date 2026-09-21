@@ -917,6 +917,37 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// Until a session id arrives the pull request card has only the pane's own waiting note to
+    /// repeat, so the section stays out and the note is said once.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pull_request_card_waits_for_the_session_with_the_pane() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(Ready());
+            try {
+                await Assert.That(h.Vm.PhaseNote).IsEqualTo(WorkContextViewModel.WaitingNote);
+                await Assert.That(pullRequests.Notice).IsEqualTo(WorkContextViewModel.WaitingNote);
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+
+                await h.PushAsync(Dto(sessionId: null));
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
+
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Phase).IsNotEqualTo(WorkContextPhase.WaitingForSession);
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     /// An empty session list still offers the work-item PR so the in-app reader can open: reads
     /// route to the local `gh` reader, which needs no session admission.
     [Test]

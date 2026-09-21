@@ -113,10 +113,58 @@ public class PolicyDecisionJournalTests {
         await Assert.That(fifo.Ambiguous).IsTrue();
     }
 
+    /// <summary>Claude sends a call id at PreToolUse but none at PermissionRequest, so the prompt an
+    /// ask forced can only find that ask by input hash.</summary>
     [Test]
-    public async Task An_ask_recorded_with_a_call_id_is_not_consumable_by_hash_alone() {
+    public async Task An_ask_recorded_with_a_call_id_is_found_by_a_seam_that_has_none() {
         Journal.RecordAsk(Sid, "call-1", "h1");
+        var r = Journal.Consume(Sid, callId: null, inputHash: "h1");
+        await Assert.That(r.PendingAsk).IsTrue();
+        await Assert.That(r.ExactOutcome).IsNull();
+        await Assert.That(r.Ambiguous).IsTrue();
+        await Assert.That(Journal.Consume(Sid, null, "h2")).IsEqualTo(default(PolicyJournalConsume));
+    }
+
+    /// <summary>A hash cannot say which of several identical calls a prompt belongs to, so a match
+    /// by hash never spends the ask: a prompt the policy did not force could otherwise take the
+    /// guard and leave the forced prompt to a fresh evaluation that may allow it.</summary>
+    [Test]
+    public async Task A_hash_only_match_holds_every_identical_prompt_until_the_turn_ends() {
+        Journal.RecordAsk(Sid, "call-1", "h1");
+        await Assert.That(Journal.Consume(Sid, null, "h1").PendingAsk).IsTrue();
+        await Assert.That(Journal.Consume(Sid, null, "h1").PendingAsk).IsTrue();
+        // Still there for the exact lane, which is the only correlation entitled to spend it.
+        var exact = Journal.Consume(Sid, "call-1", "h1");
+        await Assert.That(exact.PendingAsk).IsTrue();
+        await Assert.That(exact.Ambiguous).IsFalse();
+        await Assert.That(Journal.Consume(Sid, null, "h1")).IsEqualTo(default(PolicyJournalConsume));
+    }
+
+    [Test]
+    public async Task Clear_turn_releases_an_ask_held_by_hash() {
+        Journal.RecordAsk(Sid, "call-1", "h1");
+        await Assert.That(Journal.Consume(Sid, null, "h1").PendingAsk).IsTrue();
+        Journal.ClearTurn(Sid);
+        await Assert.That(Journal.Consume(Sid, null, "h1")).IsEqualTo(default(PolicyJournalConsume));
+    }
+
+    /// <summary>Only an ask may be taken by hash: a journaled allow answering a later identical
+    /// call's prompt would auto-approve something a fresh evaluation might have asked about.</summary>
+    [Test]
+    public async Task A_terminal_recorded_with_a_call_id_is_never_consumable_by_hash_alone() {
+        Journal.RecordTerminal(Sid, "call-1", "allow", "h1");
+        Journal.RecordTerminal(Sid, "call-2", "deny", "h1");
         await Assert.That(Journal.Consume(Sid, callId: null, inputHash: "h1")).IsEqualTo(default(PolicyJournalConsume));
+        await Assert.That(Journal.Consume(Sid, "call-1", "h1").ExactOutcome).IsEqualTo("allow");
+    }
+
+    /// <summary>Two different call ids are provably two different calls, so one never spends the
+    /// other's ask.</summary>
+    [Test]
+    public async Task A_different_call_id_does_not_take_another_calls_ask() {
+        Journal.RecordAsk(Sid, "call-1", "h1");
+        await Assert.That(Journal.Consume(Sid, "call-2", "h1")).IsEqualTo(default(PolicyJournalConsume));
+        await Assert.That(Journal.Consume(Sid, "call-1", "h1").PendingAsk).IsTrue();
     }
 }
 

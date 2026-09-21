@@ -541,6 +541,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         OpenSession(agentId);
     }
 
+    /// The launcher words a launch failure, and an open workspace covers the launcher. Only a
+    /// workspace the daemon never filled is closed: a failure report can trail the agent it names.
+    public void CloseFailedLaunch(string agentId) {
+        if (CurrentWorkspace is WorkspaceViewModel { HasAgent: false } open
+            && AgentIds.Normalize(open.AgentId) == AgentIds.Normalize(agentId))
+            CloseWorkspace();
+    }
+
     /// The coordinator's close paths. Bumps unconditionally — a close-to-hide with no workspace
     /// open must still retire an in-flight launch's captured generation.
     public void CloseWorkspace() => SwapTo(null);

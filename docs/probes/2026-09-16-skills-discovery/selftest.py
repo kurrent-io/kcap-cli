@@ -1036,6 +1036,33 @@ class RunnerTests(unittest.TestCase):
             recs = self._runner(d, _AncestorAdapter()).run_scenario("print", "S8")
             self.assertEqual({r.arm: r.verdict for r in recs}, {"S8/ancestor": "visible_first_turn", "S8/local": "not_visible"})
 
+    def test_s3_and_s8_root_override(self):
+        with tempfile.TemporaryDirectory() as d:
+            native = self._runner(d)
+            native.run_scenario("print", "S1")
+            native_s3 = native.run_scenario("print", "S3")
+            native_s8 = native.run_scenario("print", "S8")
+
+            overridden = probe.Runner(FakeAdapter(), Path(d) / "out", runs=1, base=Path(d), root=".agents/skills")
+            s3 = overridden.run_scenario("print", "S3")
+            s8 = overridden.run_scenario("print", "S8")
+
+            self.assertEqual({x.root for x in s3}, {".agents/skills"})
+            self.assertEqual({x.arm for x in s3}, {"S3/gitignore-agents", "S3/info-exclude-agents"})
+            self.assertEqual({x.verdict for x in s3}, {"visible_first_turn"})
+
+            self.assertEqual({x.root for x in s8}, {".agents/skills"})
+            self.assertEqual({x.arm: x.verdict for x in s8},
+                             {"S8/ancestor-agents": "not_visible", "S8/local-agents": "visible_first_turn"})
+
+            # The native-root arms keep their original identity and are not overwritten.
+            self.assertEqual({x.arm for x in native_s3}, {"S3/gitignore", "S3/info-exclude"})
+            self.assertEqual({x.root for x in native_s3}, {".fake/skills"})
+            self.assertEqual({x.arm for x in native_s8}, {"S8/ancestor", "S8/local"})
+            all_runs = _load(Path(d) / "out")
+            s3_s8 = [r for r in all_runs if r.scenario in ("S3", "S8")]
+            self.assertEqual(len(s3_s8), len(native_s3) + len(native_s8) + len(s3) + len(s8))
+
     def test_s9_worktrees(self):
         with tempfile.TemporaryDirectory() as d:
             recs = self._runner(d).run_scenario("print", "S9")

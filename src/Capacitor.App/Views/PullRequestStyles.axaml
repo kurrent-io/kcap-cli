@@ -95,9 +95,12 @@
         <Setter Property="Padding" Value="0,11" />
     </Style>
     <Style Selector="Border.prDiscussion">
-        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="0,0,0,1" />
-        <Setter Property="Padding" Value="0,14" />
+        <Setter Property="Padding" Value="0,22" />
+    </Style>
+    <Style Selector="ContentPresenter:nth-last-child(1) > Border.prDiscussion:not(.thread)">
+        <Setter Property="BorderThickness" Value="0" />
     </Style>
     <Style Selector="Border.prDiscussion.thread">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
