@@ -466,8 +466,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// Returns <see langword="null"/> when no verdict was ever published, so the caller's own
     /// exception propagates completely untouched (byte-identical no-verdict path).
     /// </summary>
-    static AcpReviewerReapedException? ReclassifyIfReaped(AcpHostedAgentRuntime runtime, Exception ex) =>
-        runtime.Verdict is { } verdict
+    internal static AcpReviewerReapedException? ReclassifyIfReaped(ITerminationVerdictSource runtime, Exception ex) =>
+        runtime.ReadVerdict() is { } verdict
             ? new AcpReviewerReapedException($"{verdict.Reason} (transport: {DescribeTransportCause(ex)})", ex)
             : null;
 
