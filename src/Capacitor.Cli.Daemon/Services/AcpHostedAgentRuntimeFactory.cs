@@ -432,7 +432,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
     /// <summary>
     /// A reviewer launch reaped by a containment tripwire during <see cref="StartAsync"/> (design
-    /// spec §3.2) — the daemon's coded <see cref="AcpHostedAgentRuntime.TerminationVerdict"/>
+    /// spec §3.2) — the daemon's coded <see cref="TerminationVerdict"/>
     /// reclassified as the launch failure's headline, with the transport-level cause folded in
     /// parenthetically rather than lost. <see cref="Exception.InnerException"/> is whatever
     /// <see cref="AcpHostedAgentRuntime.StartAsync"/> (or the launch deadline) actually threw, so

@@ -46,7 +46,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>docs/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md</c>; the region
 /// comments below reference its section numbers.
 /// </summary>
-internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
+internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource, ITerminationVerdictSource {
     static readonly AcpMcpServerSpec[] NoMcpServers = [];
 
     /// <summary>
@@ -298,157 +298,25 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// for every launch/test that carries no journal.</summary>
     readonly TranscriptJournal? _journal;
 
-    /// <summary>
-    /// The in-flight out-of-band reap, if one was started. Awaited by disposal so cleanup never runs
-    /// ahead of the termination it depends on.
-    ///
-    /// <para>Guarded by <see cref="_reapLock"/> rather than <c>volatile</c>: volatility publishes the
-    /// reference but cannot make "flip the single-shot guard" and "publish the task" atomic, so a
-    /// disposal landing between them would read null and skip the wait. Both reap paths — the
-    /// tripwire/watchdog violation and the forbidden-interaction frame — publish through it.</para>
-    /// </summary>
-    Task? _reapTask;
-    readonly object _reapLock = new();
+    readonly ReapVerdictGate _gate;
 
-    /// <summary>The reap claim's fused, immutable outcome: the writer's coded reason (sanitized —
-    /// see <see cref="TryStartReap"/>) plus whether the claim landed while the launch window
-    /// (<see cref="_firstTurnSettled"/>) was still open. Published at most once, by whichever reap
-    /// wins the claim.</summary>
-    public sealed record TerminationVerdict(string Reason, bool ReapedInsideLaunchWindow);
+    public TerminationVerdict? Verdict => _gate.Verdict;
 
-    /// <summary>Null until a reap wins the claim (and forever null if none ever does, or the sole
-    /// claim's starter throws). Read by the orchestrator to reclassify a launch/registration failure
-    /// with the daemon's coded reason instead of surfacing as an unknown failure.
-    ///
-    /// <para>The plain auto-property is safe only for a reader that CANNOT race a concurrent claim —
-    /// the factory's launch path, which reads it strictly after an ordered
-    /// <see cref="DisposeAsync"/> that already awaited the reap. The orchestrator's finalizer CAN race
-    /// the claim (the reap's own <c>_cts.Cancel()</c> drives finalization on another thread while the
-    /// claimant still holds <see cref="_reapLock"/> and this is still null), so it must read through
-    /// <see cref="ReadVerdict"/> instead.</para></summary>
-    public TerminationVerdict? Verdict { get; private set; }
-
-    /// <summary>
-    /// The verdict, observed UNDER <see cref="_reapLock"/> — so a reader that can race a concurrent
-    /// claim blocks until the claimant has committed the publish (or observes the absence of any
-    /// claim), never the transient window where the slot is claimed but <see cref="Verdict"/> is not
-    /// yet assigned (finding 1). <see cref="TryStartReap"/> publishes the verdict at the tail of the
-    /// SAME critical section that claims the slot and runs the (connection-cancelling) starter, so a
-    /// finalizer reading the plain auto-property mid-claim would see null and skip
-    /// <c>LaunchFailed</c> permanently.
-    ///
-    /// <para><b>No deadlock:</b> the starter returns the reap Task WITHOUT awaiting termination (it
-    /// runs only synchronous log + <c>_cts.Cancel()</c> work before the first await inside
-    /// <see cref="ReapUnexpectedInteractionAsync"/>), so the claimant releases <see cref="_reapLock"/>
-    /// promptly and never itself waits on any finalizer — the lock is only ever held for that bounded
-    /// synchronous burst.</para>
-    /// </summary>
-    /// <summary>Test-only: fires at the TOP of <see cref="ReadVerdict"/>, before the lock — lets the
-    /// finding-1 barrier detect, deterministically, that the finalizer took the SYNCHRONISED read path
-    /// and is about to block on <see cref="_reapLock"/> (vs. the regressed plain-<see cref="Verdict"/>
-    /// read, which never calls this). That removes any wall-clock hold from the barrier. Null in
-    /// production (a single null check per read).</summary>
-    internal Action? BeforeReadVerdictLockForTest;
-
-    internal TerminationVerdict? ReadVerdict() {
-        // GUARDED: the hook is a fire-and-forget TEST signal (null in production). ReadVerdict is a
-        // load-bearing PRODUCTION read — the finalizer calls it to decide whether to send LaunchFailed
-        // for a launch-window reap — so a throwing hook (test contamination / a stray assignment) must
-        // never make it throw and skip the verdict observation. It still FIRES before the lock (the
-        // barrier's happy-path hook never throws), it just can't break the read.
-        try { BeforeReadVerdictLockForTest?.Invoke(); }
-        catch (Exception ex) { _logger.LogDebug(ex, "ACP: BeforeReadVerdictLockForTest hook threw; continuing to read the verdict."); }
-
-        lock (_reapLock) return Verdict;
+    internal Action? BeforeReadVerdictLockForTest {
+        get => _gate.BeforeReadVerdictLockForTest;
+        set => _gate.BeforeReadVerdictLockForTest = value;
     }
 
-    /// <summary>Test-only: invoked inside <see cref="TryInitiateNonFailureStatusSend"/> BETWEEN the
-    /// verdict check and the send initiation, while <see cref="_reapLock"/> is held — so a test can
-    /// prove a concurrent verdict publication cannot interleave there. Null in production.</summary>
-    internal Action? BeforeGatedSendHookForTest;
-
-    /// <summary>
-    /// ATOMICALLY, under <see cref="_reapLock"/> (the gate <see cref="TryStartReap"/> publishes the
-    /// verdict under): checks for a published launch-window verdict AND, if none, INITIATES
-    /// <paramref name="send"/> (finding-2 refinement). Verdict publication therefore cannot interleave
-    /// between the check and the send's initiation — either publication wins the lock first (this
-    /// returns <see langword="false"/>, nothing is sent), or <paramref name="send"/> is invoked before
-    /// the lock is released.
-    ///
-    /// <para><b>Ordering.</b> <paramref name="send"/> is <c>ServerConnection.AgentStatusChangedAsync</c>
-    /// → <c>HubConnection.InvokeAsync</c>, whose synchronous prefix enters the SignalR connection
-    /// send-semaphore (FIFO) before its first await — so the non-failure frame is queued while this
-    /// lock is still held, strictly before any <c>LaunchFailed</c> the finalizer can only send AFTER
-    /// publication (which needs this lock). On the single ordered hub connection the server processes
-    /// the non-failure status BEFORE the LaunchFailed and ends Failed+reason — never a non-failure
-    /// clear. <paramref name="sendTask"/> is the in-flight send so the caller can await COMPLETION
-    /// (the server round-trip) OUTSIDE the lock; the lock is only held across INITIATION.</para>
-    /// </summary>
-    internal bool TryInitiateNonFailureStatusSend(Func<Task> send, out Task sendTask) {
-        lock (_reapLock) {
-            if (Verdict is { ReapedInsideLaunchWindow: true }) {
-                sendTask = Task.CompletedTask;
-                return false;
-            }
-
-            BeforeGatedSendHookForTest?.Invoke();
-            sendTask = send();
-            return true;
-        }
+    internal Action? BeforeGatedSendHookForTest {
+        get => _gate.BeforeGatedSendHookForTest;
+        set => _gate.BeforeGatedSendHookForTest = value;
     }
 
-    /// <summary>
-    /// Claims the single reap slot and, on success, publishes the fused <see cref="TerminationVerdict"/>.
-    /// The claim, the launch-window snapshot, and the publication all happen under ONE lock, and
-    /// <see cref="TakeReap"/> waits on that same lock — so a disposal can no longer land in the gap
-    /// between "the guard flipped" and "the task/verdict exist" and conclude there is nothing to
-    /// await or classify. An interlocked flag alone cannot express that, because these are not one
-    /// operation.
-    ///
-    /// <para><paramref name="reason"/> is the writer's raw coded string — sanitized here (single-line
-    /// + length-capped via <see cref="SanitizeForForward"/>) before publication, since it can carry
-    /// agent-controlled text (e.g. a JSON-RPC method from an inbound frame). The window bit is
-    /// snapshotted from <see cref="_firstTurnSettled"/> BEFORE <paramref name="start"/> runs: the
-    /// reap's own <c>_cts.Cancel()</c> settles that marker in <see cref="ProcessAdmittedTurnAsync"/>'s
-    /// <c>finally</c>, so reading it after <paramref name="start"/> has run would be
-    /// self-contaminating — every claimed reap would read "settled" regardless of when it actually
-    /// fired.</para>
-    /// </summary>
-    internal bool TryStartReap(string reason, Func<Task> start) {
-        lock (_reapLock) {
-            if (_reapClaimed) return false;
-
-            _reapClaimed = true;
-
-            var insideLaunchWindow = !_firstTurnSettled.Task.IsCompleted;
-
-            // Started AND published inside the lock: claiming, releasing, then publishing leaves the
-            // gap this exists to close — a disposal taking the lock in between sees a claim with no
-            // task and concludes there is nothing to await.
-            //
-            // The callback runs SYNCHRONOUS work first (logging, _cts.Cancel()), so it can throw —
-            // notably when a dispatched notification races disposal past _cts.Dispose(). Unwinding
-            // out of here would release the lock with the slot claimed and no task published, which
-            // is precisely the prohibited state. So the claim is released on failure — and the
-            // verdict below is never reached, so nothing is published for this claim.
-            try {
-                _reapTask = start();
-            } catch {
-                _reapClaimed = false;
-                throw;
-            }
-
-            Verdict = new TerminationVerdict(SanitizeForForward(reason), insideLaunchWindow);
-
-            return true;
-        }
-    }
-
-    /// <summary>The in-flight reap, or null when none was ever claimed. A claim with no task yet
-    /// published cannot be observed: the claimant publishes before releasing the caller.</summary>
-    internal Task? TakeReap() { lock (_reapLock) return _reapTask; }
-
-    bool _reapClaimed;
+    public   TerminationVerdict? ReadVerdict() => _gate.ReadVerdict();
+    public   bool  TryInitiateNonFailureStatusSend(Func<Task> send, out Task sendTask) =>
+        _gate.TryInitiateNonFailureStatusSend(send, out sendTask);
+    internal bool  TryStartReap(string reason, Func<Task> start) => _gate.TryStartReap(reason, start);
+    internal Task? TakeReap() => _gate.TakeReap();
 
     /// <summary>
     /// How long the FIRST turn may produce nothing at all before the child is reaped. Null disables
@@ -654,6 +522,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _onDisposed        = onDisposed;
         _reconnect     = reconnect;
         _logger        = logger;
+        _gate          = new ReapVerdictGate(() => !_firstTurnSettled.Task.IsCompleted, _logger);
         _timeProvider  = time;
         _agentId       = agentId;
         _debugFrames   = debugFrames;

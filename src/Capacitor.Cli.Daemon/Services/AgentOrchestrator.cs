@@ -3185,7 +3185,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     try {
                         await _server.LaunchFailedAsync(
                             agent.Id,
-                            MapLaunchFailureReason(verdict.Reason, nameof(AcpHostedAgentRuntime.TerminationVerdict)));
+                            MapLaunchFailureReason(verdict.Reason, nameof(TerminationVerdict)));
                     } catch (Exception ex) {
                         LogVerdictReportFailed(ex, agent.Id);
                     }
