@@ -66,7 +66,7 @@
     <Style Selector="Button.prStatusRow">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-        <Setter Property="Padding" Value="2,6" />
+        <Setter Property="Padding" Value="0,6" />
     </Style>
     <Style Selector="Button.prStatusButton">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />

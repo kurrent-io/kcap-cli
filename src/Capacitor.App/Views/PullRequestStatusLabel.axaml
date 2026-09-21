@@ -7,36 +7,41 @@
         <Style Selector="TextBlock.statusText">
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
             <Setter Property="FontSize" Value="13" />
+            <Setter Property="LineHeight" Value="16" />
         </Style>
         <Style Selector="TextBlock.statusText.success"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
         <Style Selector="TextBlock.statusText.warning"><Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" /></Style>
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
     </UserControl.Styles>
-    <Grid ColumnDefinitions="18,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
-        <!-- Outcome discs match subagents / work-item parts (filled). Git lifecycle glyphs stay stroke line-art. -->
-        <Panel Width="16" Height="16" VerticalAlignment="Center">
+    <!-- Same icon column as work-item parts and subagents: 12×16 slot, nudged up half a pixel against the 13/16 text. -->
+    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
+        <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
             <Panel Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"
                    IsVisible="{Binding UsesDiscIcon}">
                 <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
                          IsVisible="{Binding IsSuccess}" />
                 <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
-                      Data="M3,6 L5.2,8.2 L9,4" IsVisible="{Binding IsSuccess}" />
+                      Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
+                      IsVisible="{Binding IsSuccess}" />
                 <Ellipse Width="12" Height="12" Fill="{StaticResource KcapDangerBrush}"
                          IsVisible="{Binding IsDanger}" />
                 <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
-                      Data="M4,4 L8,8 M8,4 L4,8" IsVisible="{Binding IsDanger}" />
+                      Data="M4,4 L8,8 M8,4 L4,8" HorizontalAlignment="Center" VerticalAlignment="Center"
+                      IsVisible="{Binding IsDanger}" />
                 <Ellipse Width="12" Height="12" Fill="{StaticResource KcapWarningBrush}"
                          IsVisible="{Binding IsWarning}" />
                 <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
-                      Data="M6,3.5 V7.2 M6,9 V9.5" IsVisible="{Binding IsWarning}" />
+                      Data="M6,3.5 V7.2 M6,9 V9.5" HorizontalAlignment="Center" VerticalAlignment="Center"
+                      IsVisible="{Binding IsWarning}" />
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
-                         IsVisible="{Binding IsPulsing}" />
+                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
                 <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapMutedBrush}"
                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
-                         IsVisible="{Binding IsNeutralDisc}" />
+                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsNeutralDisc}" />
                 <Path Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
-                      Data="M3.5,6 H8.5" IsVisible="{Binding IsNeutralDisc}" />
+                      Data="M3.5,6 H8.5" HorizontalAlignment="Center" VerticalAlignment="Center"
+                      IsVisible="{Binding IsNeutralDisc}" />
             </Panel>
             <Path Width="12" Height="12" Stretch="Uniform" Data="{Binding IconData}"
                   Stroke="{Binding #StatusText.Foreground}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
@@ -44,6 +49,6 @@
         </Panel>
         <TextBlock x:Name="StatusText" Grid.Column="1" Classes="statusText" Text="{Binding Text}" TextWrapping="Wrap"
                    Classes.success="{Binding IsSuccess}" Classes.warning="{Binding IsWarning}"
-                   Classes.danger="{Binding IsDanger}" VerticalAlignment="Center" />
+                   Classes.danger="{Binding IsDanger}" VerticalAlignment="Top" />
     </Grid>
 </UserControl>
