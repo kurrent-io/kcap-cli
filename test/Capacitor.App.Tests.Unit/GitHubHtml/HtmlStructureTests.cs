@@ -26,7 +26,7 @@ public class HtmlStructureTests {
 
     [Test]
     public async Task Paragraph_and_div_elements_are_transparent() {
-        await Assert.That(Trees.Dump("<p><a href=\"https://l.example/AI-1\">AI-1</a></p>")).IsEqualTo("doc(p(link[https://l.example/AI-1]('AI-1')))");
+        await Assert.That(Trees.Dump("<p><a href=\"https://l.example/ISS-1\">ISS-1</a></p>")).IsEqualTo("doc(p(link[https://l.example/ISS-1]('ISS-1')))");
         await Assert.That(Trees.Dump("<div>&#x2705; a <code>x</code></div>\n<div>b</div>")).IsEqualTo("doc(p('✅ a ',code('x')),p('b'))");
         await Assert.That(Trees.Dump("<div>\n\n**md**\n\n</div>")).IsEqualTo("doc(p(em*2('md')))");
     }
