@@ -65,5 +65,18 @@ internal sealed class ReapVerdictGate(Func<bool> insideLaunchWindow, ILogger log
 
     internal Task? TakeReap() { lock (_lock) return _reapTask; }
 
-    static string SanitizeReason(string reason) => reason.ReplaceLineEndings(" ").Trim();
+    /// <summary>Collapses line breaks to spaces and caps the length, surrogate-pair-safe — the
+    /// reason can carry agent-influenced text (an MCP server name, a monitor's "why" string) that
+    /// would otherwise degrade logs/reports downstream with no other cap in the path.</summary>
+    internal static string SanitizeReason(string reason, int maxLength = 500) {
+        var oneLine = reason.ReplaceLineEndings(" ").Trim();
+        if (oneLine.Length <= maxLength) return oneLine;
+
+        // A raw code-unit slice at maxLength can land between a surrogate pair's two halves. Back
+        // off one position when that would happen so the cut only ever falls on a whole character.
+        var cut = maxLength;
+        if (cut > 0 && char.IsHighSurrogate(oneLine[cut - 1])) cut--;
+
+        return oneLine[..cut] + "…";
+    }
 }

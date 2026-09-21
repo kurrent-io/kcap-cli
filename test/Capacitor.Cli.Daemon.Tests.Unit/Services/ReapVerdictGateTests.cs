@@ -103,4 +103,17 @@ public class ReapVerdictGateTests {
 
         await Assert.That(gate.ReadVerdict()!.Reason).IsEqualTo("line one line two");
     }
+
+    [Test]
+    public async Task An_oversized_multiline_reason_is_sanitised_to_one_capped_line() {
+        var gate  = Gate();
+        var input = "line one\nline two " + new string('x', 600); // well past the 500-char default cap
+
+        gate.TryStartReap(input, () => Task.CompletedTask);
+
+        var reason = gate.ReadVerdict()!.Reason;
+        await Assert.That(reason).DoesNotContain("\n");
+        await Assert.That(reason).EndsWith("…");
+        await Assert.That(reason.Length).IsLessThanOrEqualTo(501); // default maxLength(500) + "…"
+    }
 }
