@@ -8,16 +8,14 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One row of the decision log, projected for display. Time is a short local clock for the
-/// table; TimeTip carries the full local stamp for hover. An unparseable decided_at renders
-/// verbatim in both rather than throwing. IsAllowed drives the outcome color.
 public sealed record ActivityRow(
-    string Time, string TimeTip, string Outcome, bool IsAllowed, string Requester, string KindLabel,
-    string RepoLeaf, string RepoFull, string Vendor, string SourceLabel);
+    string Time, string TimeTip, string Outcome, bool IsAllowed,
+    string PrimaryDetail, string SecondaryLine, string SecondaryTip,
+    string RequesterFull, string RepoFull);
 
-/// Renders the consent decision log as the Activity tab (spec §7): pure file I/O via the injected
+/// Renders the consent decision log for the Launches flyout: pure file I/O via the injected
 /// `read`, so the feed works with the daemon stopped or unreachable. No FileSystemWatcher —
-/// refreshed on tab visibility, a 2-tick stat poll while visible, and an own-resolution nudge (App
+/// refreshed on flyout visibility, a 2-tick stat poll while visible, and an own-resolution nudge (App
 /// wires RequestRefresh into ConsentPromptViewModel's onConcluded callback).
 ///
 /// Constructed once at the composition root and lives for the app's lifetime, like ConsentService
@@ -71,7 +69,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         _tickSub.Dispose();
     }
 
-    /// Tab-visibility trigger (spec §7): a true transition (tab selected AND window visible, per
+    /// Flyout-visibility trigger: a true transition (flyout open AND window visible, per
     /// MainWindow.axaml.cs) does an immediate read and primes the poll's stat baseline so the very
     /// next tick doesn't immediately re-read the same unchanged content. A no-op on a repeated call
     /// with the same value.
@@ -84,7 +82,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         TriggerRefresh(RefreshMode.PrimeAndRead);
     }
 
-    /// Own-resolution nudge (spec §7): an immediate read now — the daemon appends the log record
+    /// Own-resolution nudge: an immediate read now — the daemon appends the log record
     /// AFTER completing the resolve (RunContinuationsAsynchronously), so this ack-triggered read
     /// can beat the append. Eventual consistency relies on the next stat-poll tick, not on this
     /// call firing a second time — including when the single-flight guard drops this call because
@@ -143,7 +141,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         if (result is not null) Apply(result);
     }
 
-    /// Display rule keyed off Complete (spec §7): a Complete read replaces the rows, including
+    /// Display rule keyed off Complete: a Complete read replaces the rows, including
     /// replacing them with the empty state when it is genuinely empty. An incomplete read never
     /// replaces existing rows — unless there are none yet, where the partial records are shown
     /// best-effort rather than leaving the feed with nothing at all.
@@ -156,10 +154,18 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
     static ActivityRow ToRow(ConsentDecisionRecord r) {
         var (time, tip) = FormatTime(r.DecidedAt);
+        var requester = RequesterOf(r);
+        var source = SourceLabelOf(r.Source);
+        var leaf = RepoLabel.Leaf(r.RepoPath);
         return new(
-            time, tip, r.Outcome, r.Outcome == "allowed", RequesterOf(r),
-            ConsentPromptViewModel.KindLabelOf(r.Kind), RepoLabel.Leaf(r.RepoPath), r.RepoPath, r.Vendor,
-            SourceLabelOf(r.Source));
+            time, tip,
+            OutcomeLabelOf(r.Outcome),
+            r.Outcome == "allowed",
+            PrimaryDetailOf(r.Vendor, r.Kind),
+            SecondaryLineOf(requester, leaf, source),
+            $"{requester}\n{r.RepoPath}",
+            requester,
+            r.RepoPath);
     }
 
     static string RequesterOf(ConsentDecisionRecord r) =>
@@ -185,4 +191,20 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         "prompt_no_ui"   => "no UI attached",
         _ => source.StartsWith("rule[", StringComparison.Ordinal) && source.EndsWith(']') ? "rule" : source,
     };
+
+    internal static string OutcomeLabelOf(string outcome) => outcome switch {
+        "allowed" => "Allowed",
+        "denied"  => "Denied",
+        _         => outcome,
+    };
+
+    internal static string PrimaryDetailOf(string vendor, string kind) {
+        var kindLabel = kind == "agent" ? null : ConsentPromptViewModel.KindLabelOf(kind);
+        return kindLabel is null ? vendor : $"{vendor} · {kindLabel}";
+    }
+
+    internal static string SecondaryLineOf(string requesterDisplay, string repoLeaf, string sourceLabel) {
+        if (sourceLabel == "you") return $"{requesterDisplay} · {repoLeaf}";
+        return $"{requesterDisplay} · {repoLeaf} · {sourceLabel}";
+    }
 }
