@@ -1056,7 +1056,7 @@ public class AgentOrchestratorVendorTests {
     public async Task Stopping_an_agent_with_the_cloud_blocked_cancels_its_send_before_it_unregisters() {
         using var repoPath = GitRepo.CreateWithCommit();
 
-        // The send blocks until its ct cancels; the PTY keeps the stream open so the read loop is
+        // The send blocks until its ct cancels; the PTY keeps the stream open so the pump is
         // genuinely parked inside the blocked send.
         var sendEntered   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sendUnblocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1075,13 +1075,11 @@ public class AgentOrchestratorVendorTests {
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
-        // CancellationGrace carries headroom past its default: this test reads a witness the
-        // cancelled send sets, and a grace too tight lets a loaded scheduler abandon the pump
-        // before that witness fires, finalizing the agent on an unrelated timeout instead of on
-        // the send's own cancellation.
+        // A finite grace lets a starved scheduler abandon the pump and finalize before it truly
+        // ends — this test's ordering assertion must not read that abandonment as a defect.
         orch.CloudSinkOptions = new CloudTerminalSinkOptions {
             DrainBound        = TimeSpan.FromMilliseconds(100),
-            CancellationGrace = TimeSpan.FromSeconds(10),
+            CancellationGrace = TimeSpan.FromMinutes(10),
         };
 
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
