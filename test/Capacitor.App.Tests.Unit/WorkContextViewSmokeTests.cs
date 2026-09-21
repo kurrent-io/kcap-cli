@@ -251,6 +251,21 @@ public class WorkContextViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Signed_out_sign_in_uses_primary_not_status_green() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(WorkContextRead.Of(WorkContextReadKind.SignedOut));
+
+            var signIn = host.Find<Button>("SignInButton");
+            await Assert.That(signIn.IsEffectivelyVisible).IsTrue();
+            await Assert.That(signIn.Classes.Contains("kcapPrimary")).IsTrue();
+            await Assert.That(ReferenceEquals(signIn.Background, host.Window.FindResource("KcapPrimaryBrush"))).IsTrue();
+            await Assert.That(ReferenceEquals(signIn.Background, host.Window.FindResource("KcapSuccessBrush"))).IsFalse();
+        });
+    }
+
     static Ellipse[] MarksBeside(ItemsControl list, string title) {
         var row = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == title).Parent as StackPanel;
         return row!.Children.OfType<Panel>().First().Children.OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToArray();
