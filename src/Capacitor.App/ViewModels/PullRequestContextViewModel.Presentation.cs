@@ -10,6 +10,8 @@ public sealed partial class PullRequestContextViewModel {
     public string NumberLabel => _selected is { } choice ? "#" + choice.Link.Number.ToString(CultureInfo.InvariantCulture) : "";
     public string ProviderLabel => _selected?.Subject.Provider switch { "github" => "GitHub", "gitlab" => "GitLab", _ => "Source" };
     public bool CanOpenSource => _selected is { IsAvailable: true };
+    /// Host exit beside status/repo once the card has settled — overview, legacy list, or unlisted refusal.
+    public bool ShowsOpenSource => CanOpenSource && (CanDisplay || IsLegacy || Notice == UnlistedNotice);
     public bool IsChecks => _section == "checks";
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
@@ -56,10 +58,12 @@ public sealed partial class PullRequestContextViewModel {
                 var passed = rows.Count(row => row.Outcome == "success");
                 var other = rows.Length - failed - pending - passed;
                 var detail = $"{failed} failed · {pending} pending · {passed} passed" + (other > 0 ? $" · {other} other" : "");
+                // Sidebar is a verdict; counts belong in Detail (tooltip / reader). Fail and pending
+                // keep a count in Text because that changes urgency; all-green stays a short phrase.
                 return failed > 0 ? new($"{failed} failed", "failure", detail)
                     : pending > 0 ? new($"{pending} pending", "pending", detail)
                     : other > 0 ? new("Checks completed", Detail: detail)
-                    : new($"{passed} passed", "success", detail);
+                    : new("Checks passing", "success", detail);
             }
             return _overview?.Checks?.Availability.Status != "ready" ? new("Checks unavailable", Detail: "Checks unavailable")
                 : _overview.Checks.Rollup switch {
@@ -73,7 +77,7 @@ public sealed partial class PullRequestContextViewModel {
 
     void NotifyPresentation() {
         foreach (var property in new[] { nameof(HasMultipleChoices), nameof(RepositoryLabel), nameof(NumberLabel), nameof(ProviderLabel),
-            nameof(CanOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
+            nameof(CanOpenSource), nameof(ShowsOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
             nameof(HasStaleOverview), nameof(OverviewFreshnessLabel),
             nameof(SelectedTabIndex), nameof(SelectedReviewTabIndex), nameof(LifecycleStatus), nameof(ReviewStatus), nameof(ChecksStatus),
             nameof(ReviewerRows), nameof(CheckRows), nameof(DiscussionRows) })

@@ -33,6 +33,32 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    public Task The_host_exit_waits_until_the_overview_or_a_legacy_settle() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var overview = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => overview.Task);
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.HasChoice && h.Source.Overviews == 1, what: "choice listed, overview pending");
+        await Assert.That(h.Vm.ShowsOpenSource).IsFalse();
+        overview.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
+        await WaitUntilAsync(() => h.Vm.CanDisplay, what: "overview admitted");
+        await Assert.That(h.Vm.ShowsOpenSource).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_legacy_list_shows_the_host_exit_without_an_overview() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Capability = PullRequestCapabilityKind.Legacy;
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.HasListed && h.Vm.IsLegacy, what: "legacy list applied");
+        await Assert.That(h.Vm.ShowsOpenSource).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
     public Task A_B_A_selection_cancels_the_old_request_and_rejects_its_late_result() => RunOnUiAsync(async () => {
         var h = new Harness();
         var old = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();

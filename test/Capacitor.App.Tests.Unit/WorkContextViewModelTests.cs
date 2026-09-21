@@ -88,7 +88,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Branch).IsEqualTo("feature/x");
             await Assert.That(h.Vm.Harness).IsEqualTo("Claude Code · Claude Opus 5");
             await Assert.That(h.Vm.Transport).IsEqualTo("PTY");
-            await Assert.That(h.Vm.SessionSummaryLine).IsEqualTo("Claude Code · Claude Opus 5 · PTY");
+            await Assert.That(h.Vm.SessionExpanded).IsFalse();
             await Assert.That(h.Vm.SessionIdText).IsEqualTo("resolving…");
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
             await Assert.That(h.Source.Requested).IsEmpty();
@@ -109,6 +109,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Branch).IsEqualTo("—");
             await Assert.That(h.Vm.Worktree).IsEqualTo("main checkout · borrowed");
             await Assert.That(h.Vm.Transport).IsEqualTo("PTY");
+            await Assert.That(h.Vm.SessionExpanded).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }
@@ -1012,8 +1013,8 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// A legacy server lists PRs but cannot serve a native read; the card still shows, with View PR
-    /// disabled and its GitHub button opening the selected PR on its host.
+    /// A legacy server lists PRs but cannot serve a native read; the card still shows, with the
+    /// title open disabled and its GitHub button opening the selected PR on its host.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_legacy_reader_keeps_the_card_and_opens_the_pull_request_on_its_host() {

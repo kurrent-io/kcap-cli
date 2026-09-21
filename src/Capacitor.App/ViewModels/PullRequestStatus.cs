@@ -4,9 +4,8 @@ public sealed record PullRequestStatus(string Text, string Kind = "neutral", str
     public bool IsSuccess => Kind is "success" or "open";
     public bool IsWarning => Kind is "conflict" or "warning";
     public bool IsDanger => Kind is "failure" or "closed";
-    public bool IsPurple => Kind == "merged";
-    /// A running check and a draft share the muted colour; only the check pulses.
-    public bool IsMuted => Kind is "pending" or "draft";
+    /// A running check, a draft, and a merge share the muted colour; only the check pulses.
+    public bool IsMuted => Kind is "pending" or "draft" or "merged";
     public bool IsPulsing => Kind == "pending";
     public string IconData => Kind switch {
         "open" or "draft" => "M4,5 A2,2 0 1 0 4,1 A2,2 0 1 0 4,5 M4,5 V13 M12,11 A2,2 0 1 0 12,15 A2,2 0 1 0 12,11 M12,11 V6 Q12,3 8,3 M10,1 L8,3 L10,5",

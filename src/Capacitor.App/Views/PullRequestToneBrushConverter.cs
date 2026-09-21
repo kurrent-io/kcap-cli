@@ -21,7 +21,7 @@ public sealed class PullRequestToneBrushConverter : IValueConverter {
         PullRequestTone.ChecksRunning => "KcapMutedBrush",
         PullRequestTone.ChecksFailed => "KcapDangerBrush",
         PullRequestTone.Conflict => "KcapWarningBrush",
-        PullRequestTone.Merged => "KcapPurpleBrush",
+        PullRequestTone.Merged => "KcapMutedBrush",
         PullRequestTone.Closed => "KcapDangerBrush",
         _ => "KcapFaintBrush",
     };

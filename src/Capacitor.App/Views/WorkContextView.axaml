@@ -475,7 +475,7 @@
                                 IsVisible="{Binding Issue.Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                                 ToolTip.Tip="{Binding Issue.Url}"
                                 HorizontalAlignment="Stretch">
-                            <TextBlock x:Name="IssueTitle" Text="{Binding Issue.Title}" FontSize="13" LineHeight="16"
+                            <TextBlock x:Name="IssueTitle" Text="{Binding Issue.Title}" FontSize="13" LineHeight="16" FontWeight="SemiBold"
                                        TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}"
                                        IsVisible="{Binding Issue.Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </Button>
@@ -555,56 +555,56 @@
                         </Grid>
                     </Button>
                     <Border Classes="sectionBody">
-                        <Panel>
-                            <TextBlock x:Name="SessionSummaryText" Text="{Binding SessionSummaryLine}" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
-                                       IsVisible="{Binding !SessionExpanded}" />
-                            <Grid x:Name="SessionFacts" ColumnDefinitions="108,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
-                                  RowSpacing="8"
-                                  IsVisible="{Binding SessionExpanded}">
-                                <Grid.Styles>
-                                    <Style Selector="TextBlock.factLabel">
-                                        <Setter Property="FontSize" Value="10.5" />
-                                        <Setter Property="FontWeight" Value="Bold" />
-                                        <Setter Property="LetterSpacing" Value="0.8" />
-                                        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
-                                        <Setter Property="VerticalAlignment" Value="Center" />
-                                        <Setter Property="Margin" Value="0,0,12,0" />
-                                    </Style>
-                                    <Style Selector="SelectableTextBlock.factValue">
-                                        <Setter Property="FontSize" Value="13" />
-                                        <Setter Property="LineHeight" Value="18" />
-                                        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                                        <Setter Property="TextWrapping" Value="Wrap" />
-                                        <Setter Property="VerticalAlignment" Value="Center" />
-                                    </Style>
-                                    <Style Selector="TextBlock.factValue">
-                                        <Setter Property="FontSize" Value="13" />
-                                        <Setter Property="LineHeight" Value="18" />
-                                        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                                        <Setter Property="VerticalAlignment" Value="Center" />
-                                    </Style>
-                                </Grid.Styles>
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="REPOSITORY" Classes="factLabel" />
-                                <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Repository}" Classes="factValue" ToolTip.Tip="{Binding RepositoryPath}" />
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="WORKTREE" Classes="factLabel" />
-                                <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Worktree}" Classes="factValue" ToolTip.Tip="{Binding WorktreePath}" />
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="BRANCH" Classes="factLabel" />
-                                <SelectableTextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Branch}" Classes="factValue" />
-                                <TextBlock Grid.Row="3" Grid.Column="0" Text="HARNESS" Classes="factLabel" />
-                                <SelectableTextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Harness}" Classes="factValue" />
-                                <TextBlock Grid.Row="4" Grid.Column="0" Text="TRANSPORT" Classes="factLabel" />
-                                <SelectableTextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Transport}" Classes="factValue" />
-                                <TextBlock Grid.Row="5" Grid.Column="0" Text="ID" Classes="factLabel" />
-                                <Button x:Name="SessionIdButton" Grid.Row="5" Grid.Column="1" Classes="copyValue" Click="OnSessionIdClick"
+                        <Grid x:Name="SessionFacts" ColumnDefinitions="108,*"
+                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                              RowSpacing="8">
+                            <Grid.Styles>
+                                <Style Selector="TextBlock.factLabel">
+                                    <Setter Property="FontSize" Value="10.5" />
+                                    <Setter Property="FontWeight" Value="Bold" />
+                                    <Setter Property="LetterSpacing" Value="0.8" />
+                                    <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="Margin" Value="0,0,12,0" />
+                                </Style>
+                                <Style Selector="SelectableTextBlock.factValue">
+                                    <Setter Property="FontSize" Value="13" />
+                                    <Setter Property="LineHeight" Value="18" />
+                                    <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+                                    <Setter Property="TextWrapping" Value="Wrap" />
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                </Style>
+                                <Style Selector="TextBlock.factValue">
+                                    <Setter Property="FontSize" Value="13" />
+                                    <Setter Property="LineHeight" Value="18" />
+                                    <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                </Style>
+                            </Grid.Styles>
+                            <!-- Orientation facts stay visible when collapsed so each value keeps its label. -->
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="BRANCH" Classes="factLabel" />
+                            <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Branch}" Classes="factValue" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="REPOSITORY" Classes="factLabel" />
+                            <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Repository}" Classes="factValue" ToolTip.Tip="{Binding RepositoryPath}" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="WORKTREE" Classes="factLabel" />
+                            <SelectableTextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Worktree}" Classes="factValue" ToolTip.Tip="{Binding WorktreePath}" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="HARNESS" Classes="factLabel" IsVisible="{Binding SessionExpanded}" />
+                            <SelectableTextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Harness}" Classes="factValue" IsVisible="{Binding SessionExpanded}" />
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="TRANSPORT" Classes="factLabel" IsVisible="{Binding SessionExpanded}" />
+                            <SelectableTextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Transport}" Classes="factValue" IsVisible="{Binding SessionExpanded}" />
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="ID" Classes="factLabel" IsVisible="{Binding SessionExpanded}" />
+                            <Panel Grid.Row="5" Grid.Column="1" IsVisible="{Binding SessionExpanded}">
+                                <Button x:Name="SessionIdButton" Classes="copyValue" Click="OnSessionIdClick"
                                         IsVisible="{Binding CanCopySessionId}"
                                         AutomationProperties.Name="Copy session ID"
                                         ToolTip.Tip="{Binding SessionIdText}">
                                     <TextBlock Text="{Binding SessionIdDisplay}" Classes="factValue" />
                                 </Button>
-                                <SelectableTextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SessionIdText}" Classes="factValue"
+                                <SelectableTextBlock Text="{Binding SessionIdText}" Classes="factValue"
                                                      IsVisible="{Binding !CanCopySessionId}" />
-                            </Grid>
-                        </Panel>
+                            </Panel>
+                        </Grid>
                     </Border>
                 </StackPanel>
             </StackPanel>

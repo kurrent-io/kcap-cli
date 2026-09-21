@@ -11,7 +11,6 @@
         <Style Selector="TextBlock.statusText.success"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
         <Style Selector="TextBlock.statusText.warning"><Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" /></Style>
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
-        <Style Selector="TextBlock.statusText.purple"><Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" /></Style>
     </UserControl.Styles>
     <Grid ColumnDefinitions="18,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
         <Panel Width="16" Height="16" VerticalAlignment="Center">
@@ -21,6 +20,6 @@
         </Panel>
         <TextBlock x:Name="StatusText" Grid.Column="1" Classes="statusText" Text="{Binding Text}" TextWrapping="Wrap"
                    Classes.success="{Binding IsSuccess}" Classes.warning="{Binding IsWarning}"
-                   Classes.danger="{Binding IsDanger}" Classes.purple="{Binding IsPurple}" VerticalAlignment="Center" />
+                   Classes.danger="{Binding IsDanger}" VerticalAlignment="Center" />
     </Grid>
 </UserControl>
