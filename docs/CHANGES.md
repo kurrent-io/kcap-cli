@@ -11,8 +11,10 @@ code moves on; where an entry disagrees with the code, the code wins.
 macOS settles an unanswered permission prompt as denied, and its prompt is a banner whose Allow
 control only appears on hover. Requested from the first notification — which by construction fires
 while the app is in the background — it reads as an ordinary banner, times out, and every later
-notification is refused with nothing in the app to say so. The request happens once, the first
-time an app window is active and at least one preference is on. The request inside `Show` stays as
+notification is refused with nothing in the app to say so. The request happens once, while an
+app window is active and at least one preference is on: on activation, or when a preference is
+switched on. The authorization read before it is asynchronous, so the foreground is checked again
+after it and a user who has left gets the request on the next activation instead. The request inside `Show` stays as
 the fallback for an app that never had an active window.
 
 Settings reads the authorization rather than remembering the request's outcome, because the user

@@ -40,6 +40,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     string? _message;
     string? _notificationMessage;
     DesktopNotificationAccess _access;
+    int _accessReads;
+    int _accessShown;
 
     public SettingsViewModel(
             SettingsProfileStore settings, IDaemonClientService service, ILocalControlOps ops,
@@ -286,22 +288,37 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     }
 
     /// Access changes in System Settings, outside the app, so the window re-reads it on activation.
-    public void RefreshNotificationAccess() => _ = ReadNotificationAccessAsync(request: false);
+    public void RefreshNotificationAccess() => _ = ReadNotificationAccessAsync();
 
     async Task ResolveNotificationAccessAsync() {
-        if (_access == DesktopNotificationAccess.NotDetermined) await ReadNotificationAccessAsync(request: true);
-        else if (_access == DesktopNotificationAccess.Denied) _notificationAccess?.OpenSystemSettings();
+        if (_notificationAccess is null) return;
+        if (_access == DesktopNotificationAccess.Denied) {
+            _notificationAccess.OpenSystemSettings();
+            return;
+        }
+        if (_access != DesktopNotificationAccess.NotDetermined) return;
+        try {
+            await _notificationAccess.RequestAsync();
+        } catch {
+        }
+        await ReadNotificationAccessAsync();
     }
 
-    async Task ReadNotificationAccessAsync(bool request) {
+    // Reads overlap (opening, every activation, after a request) and answer in any order, so only
+    // an answer to a later read than the one on screen is applied. A request is followed by a read
+    // of its own rather than applied directly: its prompt can stay open across many activations.
+    async Task ReadNotificationAccessAsync() {
         if (_notificationAccess is null) return;
+        var read = ++_accessReads;
         DesktopNotificationAccess access;
         try {
-            access = await (request ? _notificationAccess.RequestAsync() : _notificationAccess.GetAsync());
+            access = await _notificationAccess.GetAsync();
         } catch {
             return;
         }
-        if (_lifetime.IsCancellationRequested || access == _access) return;
+        if (_lifetime.IsCancellationRequested || read < _accessShown) return;
+        _accessShown = read;
+        if (access == _access) return;
         _access = access;
         this.RaisePropertyChanged(nameof(NotificationAccessText));
         this.RaisePropertyChanged(nameof(NotificationAccessAction));

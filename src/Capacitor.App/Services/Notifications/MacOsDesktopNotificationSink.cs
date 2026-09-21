@@ -80,8 +80,16 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
         try {
             using var pool = new Pool();
             // The settings object is only ours for the duration of the callback: read it there.
-            using var block = MacNotificationBlock.Completion(settings => result.TrySetResult(
-                settings == 0 ? DesktopNotificationAccess.Unknown : Access(Send(settings, Selector("authorizationStatus")))));
+            using var block = MacNotificationBlock.Completion(settings => {
+                try {
+                    result.TrySetResult(settings == 0 ? DesktopNotificationAccess.Unknown
+                        : Access(Send(settings, Selector("authorizationStatus"))));
+                } catch (Exception error) {
+                    // The block swallows what escapes it, which would leave the caller waiting forever.
+                    NativeDesktopNotificationSink.Report(error);
+                    result.TrySetResult(DesktopNotificationAccess.Unknown);
+                }
+            });
             SendVoid(_center, Selector("getNotificationSettingsWithCompletionHandler:"), block.Handle);
         } catch (Exception error) {
             NativeDesktopNotificationSink.Report(error);

@@ -380,6 +380,23 @@ public class SettingsViewModelTests {
     });
 
     [Test]
+    public Task A_slow_earlier_read_never_overwrites_a_later_one() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        var slow = new TaskCompletionSource<DesktopNotificationAccess>();
+        var access = new FakeDesktopNotificationAccess(DesktopNotificationAccess.Allowed) { NextRead = slow.Task };
+        using var vm = Make(Seed(), Connected(), notificationSettings: notifications, notificationAccess: access);
+
+        vm.RefreshNotificationAccess();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Assert.That(access.Reads).IsEqualTo(2);
+        slow.SetResult(DesktopNotificationAccess.Denied);
+        await Task.Delay(50);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        await Assert.That(vm.NotificationAccessText).IsNull();
+    });
+
+    [Test]
     [Arguments(DesktopNotificationAccess.Unknown)]
     [Arguments(DesktopNotificationAccess.Allowed)]
     public Task Access_that_needs_nothing_from_the_user_shows_no_notice(DesktopNotificationAccess current) => AvaloniaSession.RunOnUiAsync(async () => {

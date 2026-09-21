@@ -697,11 +697,12 @@ public partial class App : Application {
             var notificationSink = new NativeDesktopNotificationSink();
             _notificationSink = notificationSink;
             _notificationAccess = notificationSink;
-            var accessPrompt = new DesktopNotificationAccessPrompt(notificationSink, () => notificationSettings.Current);
-            _notificationAccessPrompt = Window.IsActiveProperty.Changed
-                .Where(change => change.NewValue.GetValueOrDefault() && !_shutdownStarted)
-                .Subscribe(change => { _ = accessPrompt.AskOnceAsync(); });
-            if (desktop.Windows.Any(window => window.IsActive)) _ = accessPrompt.AskOnceAsync();
+            _notificationAccessPrompt = new DesktopNotificationAccessPrompt(
+                notificationSink, notificationSettings.Changes,
+                Window.IsActiveProperty.Changed.Where(change => change.NewValue.GetValueOrDefault())
+                    .Select(_ => System.Reactive.Unit.Default),
+                () => !_shutdownStarted && desktop.Windows.Any(window => window.IsActive),
+                ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler);
             _desktopNotifications = new DesktopNotificationCoordinator(
                 permissions, directory, notificationSettings.Changes, _notificationSink,
                 () => _shutdownStarted || desktop.Windows.Any(window => window.IsActive),
