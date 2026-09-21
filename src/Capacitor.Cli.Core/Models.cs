@@ -996,6 +996,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(PlanArtifactDto))]
 [JsonSerializable(typeof(PlanArtifactsResponseDto))]
 [JsonSerializable(typeof(Plans.PlanLedgerDto))]
+[JsonSerializable(typeof(List<Plans.SessionPlanDto>))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]

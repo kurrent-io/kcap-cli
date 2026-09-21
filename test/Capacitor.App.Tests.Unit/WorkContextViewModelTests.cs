@@ -6,6 +6,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
@@ -30,12 +31,16 @@ public class WorkContextViewModelTests {
         public int SignInRequests;
         public List<string> OpenedWorkItems { get; } = [];
         public SessionSubagents Subagents { get; }
+        public FakePlanSource Plans { get; } = new();
+        public PlanActivity PlanActivity { get; } = new();
         public WorkContextViewModel Vm { get; }
 
         public Harness() {
             Subagents = new SessionSubagents(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Subagents, () => SignInRequests++, SignIn, OpenedWorkItems.Add);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Subagents, () => SignInRequests++, SignIn, OpenedWorkItems.Add, Plans, PlanActivity);
         }
+
+        public Task PlanSettledAsync() => Vm.Plan.PendingReadForTesting ?? Task.CompletedTask;
 
         /// For a read that will answer from the queue: pushes and awaits the read it starts.
         public async Task PushAsync(AgentStatusDto dto) {
@@ -1512,6 +1517,73 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4", "P5" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
 
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    static SessionPlansRead PlanOf(params string[] statuses) => new(SessionPlansReadKind.Ready, [new SessionPlanDto {
+        PlanId = "p1",
+        Tasks = [.. statuses.Select((status, i) => new PlanLedgerTaskDto { TaskId = $"t{i + 1}", Ordinal = i + 1, Title = $"Task {i + 1}", Status = status })],
+    }]);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_plan_section_reads_with_the_session_and_again_on_the_tick_the_refresh_and_a_sign_in() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(Ready());
+            h.Plans.Enqueue(PlanOf("pending"));
+            await h.PushAsync(Dto());
+            await h.PlanSettledAsync();
+            await Assert.That(h.Plans.Requested).IsEquivalentTo(new[] { SessionA });
+            await Assert.That(h.Vm.Plan.OpenCount).IsEqualTo(1);
+
+            await h.TickAsync();
+            await h.PlanSettledAsync();
+            await Assert.That(h.Plans.Requested.Count).IsEqualTo(2);
+
+            h.Vm.RefreshCommand.Execute().Subscribe();
+            await h.PlanSettledAsync();
+            await Assert.That(h.Plans.Requested.Count).IsEqualTo(3);
+
+            h.SignIn.OnNext(ReactiveUnit.Default);
+            await h.PlanSettledAsync();
+            await Assert.That(h.Plans.Requested.Count).IsEqualTo(4);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_change_moves_the_plan_section_to_the_new_session() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Plans.Enqueue(PlanOf("completed"), PlanOf("pending", "pending"));
+            await h.PushAsync(Dto());
+            await h.PlanSettledAsync();
+            await Assert.That(h.Vm.Plan.DoneCount).IsEqualTo(1);
+
+            await h.PushAsync(Dto(sessionId: SessionB));
+            await h.PlanSettledAsync();
+
+            await Assert.That(h.Plans.Requested).IsEquivalentTo(new[] { SessionA, SessionB }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(h.Vm.Plan.DoneCount).IsEqualTo(0);
+            await Assert.That(h.Vm.Plan.OpenCount).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Teardown_takes_the_plan_section_down_with_the_pane() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await h.PushAsync(Dto());
+            await h.PlanSettledAsync();
+            await h.Vm.TeardownAsync();
+
+            h.Vm.Plan.Refresh();
+
+            await Assert.That(h.Plans.Requested.Count).IsEqualTo(1);
         });
     }
 }

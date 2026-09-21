@@ -14,6 +14,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
@@ -32,12 +33,14 @@ public class WorkContextViewSmokeTests {
         public FakeWorkContextSource Source { get; } = new();
         public FakeTimeProvider Time { get; } = new();
         public SessionSubagents Subagents { get; }
+        public FakePlanSource Plans { get; } = new();
+        public PlanActivity PlanActivity { get; } = new();
         public WorkContextViewModel Vm { get; }
         public Window Window { get; }
 
         public Host() {
             Subagents = new SessionSubagents(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, new RecordingOpener(), Subagents);
+            Vm = new WorkContextViewModel(Presence, Source, Time, new RecordingOpener(), Subagents, plans: Plans, planActivity: PlanActivity);
             Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
@@ -47,6 +50,7 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             Presence.OnNext(WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: SessionA));
             await (Vm.PendingReadForTesting ?? Task.CompletedTask);
+            await (Vm.Plan.PendingReadForTesting ?? Task.CompletedTask);
             Dispatcher.UIThread.RunJobs();
             Window.UpdateLayout();
         }
@@ -451,6 +455,90 @@ public class WorkContextViewSmokeTests {
             } finally {
                 await pullRequests.TeardownAsync();
             }
+        });
+    }
+
+    static SessionPlansRead PlanRead(PlanDocumentDto[] documents, params (string Status, string Title, string? Note)[] tasks) =>
+        new(SessionPlansReadKind.Ready, [new SessionPlanDto {
+            PlanId = "p1",
+            IsCurrent = true,
+            Documents = [.. documents],
+            Tasks = [.. tasks.Select((task, i) => new PlanLedgerTaskDto { TaskId = $"t{i + 1}", Ordinal = i + 1, Title = task.Title, Status = task.Status, Note = task.Note })],
+        }]);
+
+    static double TopOf(Control control, Visual relativeTo) => control.TranslatePoint(new Point(0, 0), relativeTo)!.Value.Y;
+
+    /// The section sits below the pull request and above SESSION, counts settled and open tasks
+    /// in its header, and marks each task by status: only a task in progress pulses, and only
+    /// while the session runs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_plan_section_lists_documents_and_tasks_by_status_between_the_pull_request_and_the_session() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Plans.Enqueue(PlanRead(
+                [new PlanDocumentDto { DocumentKey = "k1", Kind = "spec", Path = "docs/specs/plan-widget-design.md" }],
+                ("completed", "Read the route", null), ("in_progress", "Draw the rows", "glyphs first"), ("pending", "Pin the order", null), ("skipped", "Animate the fold", null)));
+            await host.ShowAsync(KeyOnlyRead());
+
+            var section = host.Find<StackPanel>("PlanSection");
+            await Assert.That(section.IsEffectivelyVisible).IsTrue();
+            await Assert.That(TopOf(section, host.Window)).IsGreaterThan(TopOf(host.Find<StackPanel>("PullRequestSection"), host.Window));
+            await Assert.That(TopOf(section, host.Window)).IsLessThan(TopOf(host.Find<Button>("SessionToggle"), host.Window));
+
+            await Assert.That(host.Find<TextBlock>("PlanDoneCount").Text).IsEqualTo("2");
+            await Assert.That(host.Find<TextBlock>("PlanOpenCount").Text).IsEqualTo("2");
+            var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            await Assert.That(texts).Contains("spec");
+            await Assert.That(texts).Contains("plan-widget-design.md");
+            await Assert.That(texts).Contains("Read the route");
+            await Assert.That(texts).Contains("Draw the rows");
+            await Assert.That(texts).Contains("glyphs first");
+            await Assert.That(texts).Contains("Pin the order");
+            await Assert.That(texts).Contains("Animate the fold");
+
+            var muted = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapMutedBrush")!).Color;
+            var text = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapTextBrush")!).Color;
+            TextBlock Title(string title) => section.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == title);
+            await Assert.That(((ISolidColorBrush)Title("Read the route").Foreground!).Color).IsEqualTo(muted);
+            await Assert.That(((ISolidColorBrush)Title("Animate the fold").Foreground!).Color).IsEqualTo(muted);
+            await Assert.That(((ISolidColorBrush)Title("Draw the rows").Foreground!).Color).IsEqualTo(text);
+            await Assert.That(((ISolidColorBrush)Title("Pin the order").Foreground!).Color).IsEqualTo(text);
+
+            int Pulsing() => section.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible);
+            await Assert.That(Pulsing()).IsEqualTo(1);
+
+            host.PlanActivity.SessionOver = true;
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(Pulsing()).IsEqualTo(0);
+
+            await host.Vm.Plan.ToggleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(host.Find<Border>("PlanBody").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<TextBlock>("PlanDoneCount").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("PlanOpenCount").IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_plan_section_is_hidden_without_a_plan_and_shows_no_counts_for_documents_alone() {
+        await RunOnUiAsync(async () => {
+            await using (var none = new Host()) {
+                await none.ShowAsync(KeyOnlyRead());
+                await Assert.That(none.Find<StackPanel>("PlanSection").IsEffectivelyVisible).IsFalse();
+            }
+
+            await using var host = new Host();
+            host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "plan", Path = "PLAN.md" }]));
+            await host.ShowAsync(KeyOnlyRead());
+
+            await Assert.That(host.Find<StackPanel>("PlanSection").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<StackPanel>("PlanCounts").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<ItemsControl>("PlanDocumentList").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<ItemsControl>("PlanTaskList").IsEffectivelyVisible).IsFalse();
         });
     }
 }

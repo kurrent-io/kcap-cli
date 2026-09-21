@@ -102,7 +102,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
-            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null) {
+            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
+            IPlanSource? plans = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
         _disposables.Add(_lease);
@@ -115,7 +116,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .RefCount();
 
         var subagents = new SessionSubagents(time);
-        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb);
+        var planActivity = new PlanActivity();
+        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
@@ -195,7 +197,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer, planActivity);
             })
             .DisposeWith(_disposables);
 
