@@ -249,6 +249,12 @@ internal record AgentInstance(
     internal Dictionary<ITerminalSink, Dim> ClientDims { get; } = [];
     public readonly record struct Dim(ushort Cols, ushort Rows);
 
+    volatile CloudTerminalSink? _cloudSink;
+
+    /// <summary>The cloud mirror's sink while the read loop runs; null for a private agent. Kept
+    /// out of <see cref="LocalSinks"/>, which feeds the local dims clamp.</summary>
+    internal CloudTerminalSink? CloudSink { get => _cloudSink; set => _cloudSink = value; }
+
     /// <summary>The server-aggregated min size across all web viewers (one value per agent,
     /// computed server-side from per-connection web dims), folded into the same min-clamp as the
     /// local clients so a small web viewer and a large local terminal share the one PTY at the
@@ -266,15 +272,6 @@ internal record AgentInstance(
     /// and does not attach the SignalR sink. An explicit share (Phase 2) clears this.
     /// </summary>
     public bool IsPrivate { get; init; }
-
-    /// <summary>
-    /// True for agents started from a local terminal (`kcap agent start`), whether registered or
-    /// `--private`. Such an agent has a live local terminal as its primary surface, so the read
-    /// loop streams to the server <b>non-blocking</b> (drop+count on a full backlog) rather than
-    /// back-pressuring the PTY on a remote tunnel stall — the local terminal must not freeze when
-    /// the cloud hiccups. Hosted agents (server is the only consumer) keep lossless back-pressure.
-    /// </summary>
-    public bool IsLocalSpawned { get; init; }
 
     /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
     /// (the user's own checkout — never removed).</summary>
@@ -667,6 +664,34 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // server calls would still throw TaskCanceledException unguarded.
     readonly CancellationTokenSource _shutdownCts;
     readonly LaunchConsentGate _consentGate;
+
+    // Keyed by the sink, not the agent: a sink is tracked until its own stop returns, which can be
+    // after its agent left _agents.
+    readonly Lock                       _cloudSinksLock = new();
+    readonly HashSet<CloudTerminalSink> _cloudSinks     = [];
+    bool                                _cloudSinksClosed;
+
+    internal CloudTerminalSinkOptions CloudSinkOptions { get; set; } = new();
+
+    /// <summary>Null for a private agent, and once shutdown has closed the registry. Constructing
+    /// the sink starts its pump, so admission under the lock leaves no untracked pump and no
+    /// tracked sink that has not started.</summary>
+    internal CloudTerminalSink? TryStartCloudSink(AgentInstance agent) {
+        if (agent.IsPrivate) return null;
+
+        lock (_cloudSinksLock) {
+            if (_cloudSinksClosed) return null;
+
+            var sink = new CloudTerminalSink(
+                agent.Id, agent.SinksLock, agent.OutputBuffer,
+                _server.SendTerminalOutputAsync, () => _server.IsReady,
+                _logger, _time, CloudSinkOptions, _shutdownCts.Token);
+
+            _cloudSinks.Add(sink);
+
+            return sink;
+        }
+    }
 
     /// <summary>Guards <see cref="DisposeAsync"/> so its body runs exactly once — the DI
     /// container tracks this singleton AND <c>DaemonRunner</c> disposes it explicitly, so
@@ -2996,12 +3021,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task ReadAgentOutputAsync(AgentInstance agent) {
-        // The terminal-output enqueue back-pressures (awaits) when the send queue is
-        // full. Tie that await to BOTH this agent's stop (ReadCts) and daemon shutdown
-        // so HandleStopAgent releasing ReadCts unblocks the read loop — otherwise a
-        // stop mid-outage would leave the finally-block finalization/cleanup stalled
-        // until the whole daemon exits.
-        using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
+        var cloud = TryStartCloudSink(agent);
+        agent.CloudSink = cloud;
 
         // An UNATTENDED reviewer (bypassPermissions, no human present) can wedge forever on a
         // one-time consent/trust dialog — the original silent failure. Watch its PTY stream for the
@@ -3038,33 +3059,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     }
                 }
 
-                // Append to the replay buffer AND fan out to local sinks atomically under
-                // SinksLock — paired with attach taking its snapshot + subscribing under the
-                // same lock, so a chunk can't land in both a new client's replay and its live
-                // stream (duplication), nor in neither (gap). TryEnqueue is non-blocking so the
-                // lock is held only briefly; a slow client force-detaches inside TryEnqueue.
+                // Ring append and every sink's enqueue happen under one lock, paired with attach
+                // and with the cloud sink's resync taking their snapshots under it: a chunk lands
+                // in exactly one of a snapshot and the live stream. Every TryEnqueue is
+                // non-blocking — the read loop never awaits a consumer.
                 lock (agent.SinksLock) {
                     agent.OutputBuffer.Append(data);
                     foreach (var sink in agent.LocalSinks) sink.TryEnqueue(data);
-                }
-
-                if (!agent.IsPrivate) {
-                    var base64 = Convert.ToBase64String(data);
-
-                    if (agent.IsLocalSpawned) {
-                        // Local-first: a registered local agent has a live local terminal as its
-                        // primary surface, so NEVER block the PTY read loop on a remote tunnel
-                        // stall. Enqueue non-blocking; a full backlog (sustained outage) drops +
-                        // counts the chunk and the web mirror re-syncs from the server's own buffer
-                        // on reconnect. Keeps the local terminal responsive when the cloud hiccups.
-                        _server.TrySendTerminalOutput(agent.Id, base64);
-                    } else {
-                        // Hosted: the server is the only consumer, so back-pressure here when the
-                        // queue is full (slow/down transport) — a chunk is never dropped, since
-                        // losing one byte garbles the whole redraw-TUI mirror. sendCts
-                        // releases this await on agent stop or daemon shutdown.
-                        await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
-                    }
+                    cloud?.TryEnqueue(data);
                 }
             }
         } catch (OperationCanceledException) {
@@ -3072,11 +3074,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogOutputReadError(ex, agent.Id);
         } finally {
-            // Daemon shutdown: ServerConnection's _ct (= lifetime.ApplicationStopping)
-            // is cancelled and the hub is being disposed, so every server call here
-            // would throw TaskCanceledException. DisposeAsync owns the local cleanup
-            // path for in-flight agents; the server detects the daemon disconnection
-            // and ends its sessions on its own. Skip to avoid noisy warnings.
+            if (cloud is not null) {
+                // Before finalization: the server deletes the mirror when the agent unregisters,
+                // so nothing may be sent after that.
+                try {
+                    await cloud.StopAsync(_shutdownCts.IsCancellationRequested ? TimeSpan.Zero : CloudSinkOptions.DrainBound);
+                } catch (Exception ex) {
+                    LogOutputReadError(ex, agent.Id);
+                }
+
+                lock (_cloudSinksLock) _cloudSinks.Remove(cloud);
+                agent.CloudSink = null;
+            }
+
+            // On daemon shutdown the hub is going away and DisposeAsync owns local cleanup; the
+            // server ends the sessions itself when the daemon disconnects.
             if (!_shutdownCts.IsCancellationRequested) {
                 await FinalizeAgentRunAsync(agent);
             }
@@ -4953,18 +4965,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         }
                     }
 
-                    // do NOT replay the full output buffer here. The old
-                    // replay re-sent the entire 2 MB ring on every reconnect, which
-                    // the server appended to its own buffer and live-broadcast on
-                    // top of the current screen — duplicated, and interleaved with
-                    // the read loop's concurrent live sends, producing the garbled
-                    // Terminal tab. The server retains its own per-agent buffer
-                    // across a daemon rebind (it only clears on reconcile-to-Failed),
-                    // so late-joining web clients still get history via the server's
-                    // SubscribeToTerminal replay. Continuity of in-flight output is
-                    // handled by TerminalOutputSender, which holds unsent chunks
-                    // while the transport is down and flushes them, in order, once
-                    // the connection is back.
+                    // do NOT replay the full output buffer here: the server retains its own
+                    // per-agent buffer across a daemon rebind (it only clears on
+                    // reconcile-to-Failed), so late-joining web clients still get history via the
+                    // server's SubscribeToTerminal replay, and a replay here would duplicate it
+                    // and interleave with the read loop's concurrent live sends. The agent's cloud
+                    // sink holds its head-of-line chunk and retries once the connection reports
+                    // ready again, so continuity across THIS reconnect needs no help here.
                     break;
                 } catch (Exception) when (attempt < ReRegisterMaxAttempts && !_shutdownCts.IsCancellationRequested) {
                     try {
@@ -5415,6 +5422,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // child termination/cleanup below — and the run-once guard means the DI pass
                 // can never retry, stranding live child processes. Log and continue.
                 LogDisposeStepFailed(ex, "shutdown-cancel");
+            }
+
+            // Before the hub is disposed (DaemonRunner disposes it after this method returns):
+            // close admission, then end every pump, including one whose read loop is mid-drain.
+            try {
+                CloudTerminalSink[] sinks;
+
+                lock (_cloudSinksLock) {
+                    _cloudSinksClosed = true;
+                    sinks             = [.. _cloudSinks];
+                }
+
+                await Task.WhenAll(sinks.Select(s => s.StopAsync(TimeSpan.Zero)));
+            } catch (Exception ex) {
+                LogDisposeStepFailed(ex, "cloud-sinks");
             }
 
             // Drain and settle the execution lane BEFORE the child-teardown snapshot below. The token

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
@@ -137,7 +138,10 @@ sealed class CaptureServerConnection() : ServerConnection(
     // IsReady is overridden to true (no real hub connection exists in these tests) so that gating
     // resolves immediately instead of hanging forever waiting for a connection that never connects.
 
-    internal override bool IsReady => true;
+    /// <summary>Settable so a test can hold the daemon inside its registration bracket.</summary>
+    public bool Ready { get; set; } = true;
+
+    internal override bool IsReady => Ready;
 
     /// <summary>Every register/bind/events call, in the exact order the orchestrator issued them —
     /// the single source of truth for the bind-ordering and teardown-ordering assertions.</summary>
@@ -326,24 +330,34 @@ sealed class CaptureServerConnection() : ServerConnection(
     public override Task UpdateRepoPathsAsync()
         => Task.CompletedTask;
 
-    /// <summary>Set both to make the send block (simulating a full/down terminal
-    /// queue) until its <c>ct</c> is cancelled — used by the back-pressure
-    /// test. Left null for every other test, where the send is a no-op.</summary>
+    /// <summary>Set both to make every terminal send block until its <c>ct</c> cancels.</summary>
     public TaskCompletionSource? SendEntered   { get; init; }
     public TaskCompletionSource? SendUnblocked { get; init; }
 
+    /// <summary>Runs before a terminal send is recorded; a test gates or fails the send here.</summary>
+    public Func<string, CancellationToken, Task>? TerminalSendGate { get; set; }
+
+    public ConcurrentQueue<(string AgentId, byte[] Data)> TerminalSends { get; } = new();
+
+    int _terminalSendStarts;
+    public int TerminalSendStarts => Volatile.Read(ref _terminalSendStarts);
+
     public override async Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) {
-        if (SendEntered is null) return;
+        Interlocked.Increment(ref _terminalSendStarts);
 
-        SendEntered.TrySetResult();
+        if (SendEntered is not null) {
+            SendEntered.TrySetResult();
 
-        try {
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-        } catch (OperationCanceledException) {
-            /* released by the read loop's stop-linked token */
-        } finally {
-            SendUnblocked?.TrySetResult();
+            try {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            } finally {
+                SendUnblocked?.TrySetResult();
+            }
         }
+
+        if (TerminalSendGate is { } gate) await gate(agentId, ct);
+
+        TerminalSends.Enqueue((agentId, Convert.FromBase64String(base64Data)));
     }
 
     /// <summary>Every (agentId, event) pair passed to AppendAgentRunEventAsync, in call order.</summary>
