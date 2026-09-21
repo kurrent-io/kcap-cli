@@ -6,6 +6,23 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Notification access is requested in the foreground and its refusal is visible
+
+macOS settles an unanswered permission prompt as denied, and its prompt is a banner whose Allow
+control only appears on hover. Requested from the first notification — which by construction fires
+while the app is in the background — it reads as an ordinary banner, times out, and every later
+notification is refused with nothing in the app to say so. The request happens once, while an
+app window is active and at least one preference is on: on activation, or when a preference is
+switched on. The authorization read before it is asynchronous, so the foreground is checked again
+after it and a user who has left gets the request on the next activation instead. The request inside `Show` stays as
+the fallback for an app that never had an active window.
+
+Settings reads the authorization rather than remembering the request's outcome, because the user
+changes it in System Settings, outside the app; the window re-reads it on activation, which is what
+coming back from System Settings is. Platforms with no authorization to read report `Unknown` and
+show nothing. Authorization is keyed by bundle id, so a grant given to a development bundle says
+nothing about the shipped app.
+
 ## An unplaced response settles a session's transcript questions
 
 For a Claude `AskUserQuestion` the server keeps two ids that never meet. The hook's request id is

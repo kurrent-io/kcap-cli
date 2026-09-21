@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -10,15 +11,17 @@ namespace Capacitor.App.Services.Notifications;
 /// UserNotifications requires a real application bundle. A development `dotnet run` intentionally
 /// has no native sink; calling currentNotificationCenter from an unbundled process can abort it.
 [SupportedOSPlatform("macos")]
-internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
+internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, IDesktopNotificationAccess {
     sealed record Pending(DesktopNotification Source, string NativeId, string Category, Action<string?> Activated);
 
     static readonly ConcurrentDictionary<nint, WeakReference<MacOsDesktopNotificationSink>> Delegates = new();
+    const nint AlertOption = 4; // UNAuthorizationOptionAlert
     static nint _delegateClass;
     readonly Dictionary<string, Pending> _pending = new(StringComparer.Ordinal);
     readonly MacNotificationCategories _categories;
     readonly nint _center;
     readonly nint _delegate;
+    readonly string? _bundleId;
     bool _disposed;
 
     public MacOsDesktopNotificationSink() {
@@ -33,6 +36,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
 
             _center = Send(GetClass("UNUserNotificationCenter"), Selector("currentNotificationCenter"));
             if (_center == 0) return;
+            _bundleId = identifier;
             _delegate = Send(DelegateClass(), Selector("new"));
             if (_delegate == 0) throw new InvalidOperationException("Unable to initialize the notification delegate.");
             Delegates[_delegate] = new(this);
@@ -63,12 +67,69 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink {
                     Publish(pending);
                 });
             });
-            SendVoid(_center, Selector("requestAuthorizationWithOptions:completionHandler:"), 4, block.Handle);
+            SendVoid(_center, Selector("requestAuthorizationWithOptions:completionHandler:"), AlertOption, block.Handle);
         } catch (Exception error) {
             Close(notification.Id);
             NativeDesktopNotificationSink.Report(error);
         }
     }
+
+    public Task<DesktopNotificationAccess> GetAsync() {
+        if (_disposed || _center == 0) return Task.FromResult(DesktopNotificationAccess.Unknown);
+        var result = new TaskCompletionSource<DesktopNotificationAccess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try {
+            using var pool = new Pool();
+            // The settings object is only ours for the duration of the callback: read it there.
+            using var block = MacNotificationBlock.Completion(settings => {
+                try {
+                    result.TrySetResult(settings == 0 ? DesktopNotificationAccess.Unknown
+                        : Access(Send(settings, Selector("authorizationStatus"))));
+                } catch (Exception error) {
+                    // The block swallows what escapes it, which would leave the caller waiting forever.
+                    NativeDesktopNotificationSink.Report(error);
+                    result.TrySetResult(DesktopNotificationAccess.Unknown);
+                }
+            });
+            SendVoid(_center, Selector("getNotificationSettingsWithCompletionHandler:"), block.Handle);
+        } catch (Exception error) {
+            NativeDesktopNotificationSink.Report(error);
+            result.TrySetResult(DesktopNotificationAccess.Unknown);
+        }
+        return result.Task;
+    }
+
+    public async Task<DesktopNotificationAccess> RequestAsync() {
+        if (_disposed || _center == 0) return DesktopNotificationAccess.Unknown;
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try {
+            using var pool = new Pool();
+            using var block = MacNotificationBlock.Authorization((_, _) => answered.TrySetResult());
+            SendVoid(_center, Selector("requestAuthorizationWithOptions:completionHandler:"), AlertOption, block.Handle);
+        } catch (Exception error) {
+            NativeDesktopNotificationSink.Report(error);
+            return DesktopNotificationAccess.Unknown;
+        }
+        await answered.Task;
+        return await GetAsync();
+    }
+
+    public void OpenSystemSettings() {
+        if (_bundleId is null) return;
+        try {
+            using var process = Process.Start(new ProcessStartInfo("/usr/bin/open") {
+                ArgumentList = { "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=" + _bundleId },
+                UseShellExecute = false,
+            });
+        } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+    }
+
+    // UNAuthorizationStatus: provisional and ephemeral grants deliver too.
+    internal static DesktopNotificationAccess Access(nint authorizationStatus) => authorizationStatus switch {
+        0 => DesktopNotificationAccess.NotDetermined,
+        1 => DesktopNotificationAccess.Denied,
+        2 or 3 or 4 => DesktopNotificationAccess.Allowed,
+        _ => DesktopNotificationAccess.Unknown,
+    };
 
     void Publish(Pending pending) {
         using var pool = new Pool();
