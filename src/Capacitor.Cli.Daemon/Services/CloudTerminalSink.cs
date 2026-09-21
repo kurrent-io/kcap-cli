@@ -87,7 +87,8 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
         }
     }
 
-    /// <summary>Caller holds the sinks lock.</summary>
+    /// <summary>Caller holds the sinks lock and has already appended this chunk to the ring: a
+    /// chunk dropped here (desynced, or over budget) is recovered only by the replay.</summary>
     public void TryEnqueue(byte[] chunk) {
         if (_completed || _desynced) return;
 
