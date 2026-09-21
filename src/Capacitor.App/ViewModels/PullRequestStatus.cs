@@ -7,7 +7,8 @@ public sealed record PullRequestStatus(string Text, string Kind = "neutral", str
     /// A running check, a draft, and a merge share the muted colour; only the check pulses.
     public bool IsMuted => Kind is "pending" or "draft" or "merged";
     public bool IsPulsing => Kind == "pending";
-    /// Git lifecycle marks stay stroke glyphs; checks/reviews use the pane's filled discs.
+    /// Git lifecycle marks stay stroke glyphs. Outcome discs are filled; in-flight / waiting
+    /// kinds stay hollow (pending pulse, review-required ring) like subagent running.
     public bool UsesGlyphIcon => Kind is "open" or "draft" or "merged" or "conflict" or "commented";
     public bool UsesDiscIcon => !UsesGlyphIcon;
     public bool IsNeutralDisc => UsesDiscIcon && !IsSuccess && !IsWarning && !IsDanger && !IsPulsing;

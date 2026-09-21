@@ -35,8 +35,9 @@ link does not appear beside a half-built status stack. Who's on it sits under th
 the session, and Session is last. Collapsed Session keeps labeled BRANCH / REPOSITORY /
 WORKTREE rows so values stay named; expand reveals harness, transport, and id. Merged is muted (settled), not
 location purple; checks stay a short verdict when
-all green, with a count only for fail or pending. Checks and reviews use the same filled
-status discs as subagents; git lifecycle marks (open / merged / draft) stay stroke glyphs.
+all green, with a count only for fail or pending. Checks and reviews use filled discs for
+outcomes and hollow rings while pending or waiting on review — same grammar as subagents;
+git lifecycle marks (open / merged / draft) stay stroke glyphs.
 
 ## An unplaced response settles a session's transcript questions
 

@@ -28,11 +28,10 @@
                 <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
                       Data="M4,4 L8,8 M8,4 L4,8" HorizontalAlignment="Center" VerticalAlignment="Center"
                       IsVisible="{Binding IsDanger}" />
-                <Ellipse Width="12" Height="12" Fill="{StaticResource KcapWarningBrush}"
-                         IsVisible="{Binding IsWarning}" />
-                <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
-                      Data="M6,3.5 V7.2 M6,9 V9.5" HorizontalAlignment="Center" VerticalAlignment="Center"
-                      IsVisible="{Binding IsWarning}" />
+                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsWarning}" />
+                <Ellipse Width="5" Height="5" Fill="{StaticResource KcapWarningBrush}"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsWarning}" />
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
                          HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
                 <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapMutedBrush}"

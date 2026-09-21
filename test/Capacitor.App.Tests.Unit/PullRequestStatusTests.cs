@@ -53,7 +53,9 @@ public class PullRequestStatusTests {
         await Assert.That(new PullRequestStatus("", "success").UsesDiscIcon).IsTrue();
         await Assert.That(new PullRequestStatus("", "failure").UsesDiscIcon).IsTrue();
         await Assert.That(new PullRequestStatus("", "pending").UsesDiscIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "pending").IsPulsing).IsTrue();
         await Assert.That(new PullRequestStatus("", "warning").UsesDiscIcon).IsTrue();
+        await Assert.That(new PullRequestStatus("", "warning").IsWarning).IsTrue();
         await Assert.That(new PullRequestStatus("", "merged").UsesGlyphIcon).IsTrue();
         await Assert.That(new PullRequestStatus("", "open").UsesGlyphIcon).IsTrue();
         await Assert.That(new PullRequestStatus("", "conflict").UsesGlyphIcon).IsTrue();
