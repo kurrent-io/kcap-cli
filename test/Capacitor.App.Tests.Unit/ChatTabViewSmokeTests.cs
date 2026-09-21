@@ -111,11 +111,12 @@ public class ChatTabViewSmokeTests {
         /// `show: false` leaves the window unshown, so the view has no template and no
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
-        public Host(bool show = true) {
+        public Host(bool show = true, IObservable<string?>? sessionId = null) {
             Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Subagents);
+                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Subagents,
+                sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true));
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;
@@ -826,7 +827,7 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task System_tool_cards_align_left_not_stretch() {
+    public async Task System_tool_cards_are_left_aligned_at_660_on_a_wide_viewport() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("align.jsonl", [ToolCallLine, ToolResultLine]));
@@ -834,7 +835,8 @@ public class ChatTabViewSmokeTests {
             var card = host.View.GetVisualDescendants().OfType<Border>()
                 .Single(b => b.Classes.Contains("toolGroup"));
             await Assert.That(card.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
-            await Assert.That(card.Width).IsEqualTo(660);
+            await Assert.That(card.MaxWidth).IsEqualTo(660);
+            await Assert.That(card.Bounds.Width).IsEqualTo(660);
             await Assert.That(card.Classes.Contains("chatSystemCard")).IsTrue();
             await host.CloseAsync();
         });
@@ -842,7 +844,24 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Pending_prompt_host_is_centered() {
+    public async Task System_tool_cards_use_the_full_chat_column_when_the_viewport_is_narrow() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Window.Width = 480;
+            await host.LoadAsync(Tmp.CreateFile("align.jsonl", [ToolCallLine, ToolResultLine]));
+            host.Settle();
+            var card = host.View.GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Classes.Contains("toolGroup"));
+            await Assert.That(card.MaxWidth).IsEqualTo(660);
+            await Assert.That(card.Bounds.Width).IsLessThan(660);
+            await Assert.That(card.Bounds.Width).IsGreaterThan(400);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pending_prompt_host_is_left_aligned_at_660_on_a_wide_viewport() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("prompt-align.jsonl", [
@@ -853,8 +872,9 @@ public class ChatTabViewSmokeTests {
             host.Settle();
             var hostControl = host.View.GetVisualDescendants().OfType<ContentControl>()
                 .Single(c => c.Classes.Contains("pendingCard"));
-            await Assert.That(hostControl.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Center);
-            await Assert.That(hostControl.Width).IsEqualTo(660);
+            await Assert.That(hostControl.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+            await Assert.That(hostControl.MaxWidth).IsEqualTo(660);
+            await Assert.That(hostControl.Bounds.Width).IsEqualTo(660);
             await Assert.That(hostControl.Classes.Contains("chatPromptCard")).IsTrue();
             await host.CloseAsync();
         });
@@ -1156,6 +1176,25 @@ public class ChatTabViewSmokeTests {
             var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("systemNote"));
             var text = card.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("markdown-paragraph")).ToList();
             await Assert.That(text.Select(t => t.Inlines?.Text ?? t.Text ?? "")).IsEquivalentTo(new[] { "Agent finished", "All good." }, CollectionOrdering.Matching);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Acp_permission_option_labels_wrap_within_the_card_width() {
+        await RunOnUiAsync(async () => {
+            var host = new Host(sessionId: Observable.Return<string?>("s1"));
+            var longLabel = new string('w', 120);
+            host.Permissions.Add(PermissionEntries.AcpPermission(options: [
+                new() { OptionId = "allow", Label = longLabel, Kind = "allow_once" },
+            ]));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+            var option = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.MaxWidth == 632);
+            var label = option.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == longLabel);
+            await Assert.That(label.TextWrapping).IsEqualTo(TextWrapping.Wrap);
+            await Assert.That(option.Bounds.Width).IsLessThanOrEqualTo(632);
             await host.CloseAsync();
         });
     }

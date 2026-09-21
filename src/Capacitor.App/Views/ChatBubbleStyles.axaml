@@ -1,10 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- Width is locked to MaxWidth so expand/fold never resizes the card from content. Left
-         (not Stretch): Stretch+MaxWidth centers the leftover in Avalonia. -->
+    <!-- Width comes from the surrounding ChatCardRow; MaxWidth is the desktop cap. -->
     <Style Selector="Border.chatSystemCard">
         <Setter Property="HorizontalAlignment" Value="Left" />
-        <Setter Property="Width" Value="660" />
         <Setter Property="MaxWidth" Value="660" />
         <Setter Property="Padding" Value="14,10" />
         <Setter Property="CornerRadius" Value="10" />
@@ -22,8 +20,7 @@
         <Setter Property="Margin" Value="0,0,0,6" />
     </Style>
     <Style Selector="ContentControl.chatPromptCard">
-        <Setter Property="HorizontalAlignment" Value="Center" />
-        <Setter Property="Width" Value="660" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="MaxWidth" Value="660" />
     </Style>
 </Styles>

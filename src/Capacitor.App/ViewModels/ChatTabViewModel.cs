@@ -450,6 +450,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 initialValue: !IsReadOnlyParticipant && _input.Availability != SendAvailability.Ended)
             .DisposeWith(_disposables);
 
+        _input.WhenAnyValue(i => i.Availability)
+            .Subscribe(_ => SyncPendingCardItems())
+            .DisposeWith(_disposables);
+
         // The view reaches the gate through the sink, so its two members are the ones the binding
         // listens for: the channel's own notifications are republished under those names.
         Observable.Merge(
@@ -753,7 +757,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         break;
                     case AcpEventKind.ToolCall: {
                         var name = e.ToolName ?? "tool";
-                        var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root), ToolSummary.Categorize(name, e.ToolInputJson));
+                        var category = ToolSummary.Categorize(name, e.ToolInputJson);
+                        var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root, category), category);
                         if (e.ToolCallId is { } id) _pendingTools[id] = item;
                         if (_openGroup is null) {
                             _openGroup = new ToolGroupItem();

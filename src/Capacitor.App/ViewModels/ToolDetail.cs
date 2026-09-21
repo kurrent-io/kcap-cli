@@ -19,18 +19,21 @@ public static class ToolDetail {
     ];
     static readonly string[] PathKeys = ["file_path", "path", "notebook_path"];
 
-    public static string From(string? inputJson, string? root = null) {
+    public static string From(string? inputJson, string? root = null, ToolCategory category = ToolCategory.Other) {
         if (string.IsNullOrEmpty(inputJson)) return "";
         try {
             using var doc = JsonDocument.Parse(inputJson);
             if (!doc.RootElement.IsObject) return "";
-            if (doc.RootElement.TryGetProperty("questions", out var questions) && questions.ValueKind == JsonValueKind.Array) {
+            if (doc.RootElement.Arr("questions") is { } questions) {
                 foreach (var item in questions.EnumerateArray()) {
                     if (item.Str("question") is { } text && text.Trim().Length > 0)
                         return TextElision.End(FirstLine(text), MaxQuestionLength);
                 }
             }
+            if (category == ToolCategory.Question && doc.RootElement.Str("prompt") is { } prompt && prompt.Trim().Length > 0)
+                return TextElision.End(FirstLine(prompt), MaxQuestionLength);
             foreach (var key in Keys) {
+                if (category == ToolCategory.Question && key == "prompt") continue;
                 if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0)
                     return TextElision.Middle(FirstLine(PathKeys.Contains(key) ? Relative(s.Trim(), root) : s), MaxLength);
             }

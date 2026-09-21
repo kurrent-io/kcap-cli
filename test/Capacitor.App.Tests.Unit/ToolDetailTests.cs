@@ -29,6 +29,14 @@ public class ToolDetailTests {
     }
 
     [Test]
+    public async Task Request_user_input_prompt_uses_question_prose_elision() {
+        var prompt = new string('q', 450);
+        var detail = ToolDetail.From($$"""{"prompt":"{{prompt}}"}""", category: ToolCategory.Question);
+        await Assert.That(detail.Length).IsEqualTo(400);
+        await Assert.That(detail).IsEqualTo(new string('q', 399) + "\u2026");
+    }
+
+    [Test]
     public async Task Empty_when_nothing_applies() {
         await Assert.That(ToolDetail.From("""{"other":"x"}""")).IsEqualTo("");
         await Assert.That(ToolDetail.From("""{"command":"   "}""")).IsEqualTo("");

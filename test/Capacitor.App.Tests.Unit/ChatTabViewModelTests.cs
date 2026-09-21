@@ -629,6 +629,25 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_suppressed_question_group_returns_when_the_session_ends() {
+        await RunOnUiAsync(async () => {
+            var input = new AvailabilityInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            var group = (ToolGroupItem)h.Chat.Items[0];
+            await Assert.That(group.SuppressedForPendingQuestion).IsTrue();
+
+            input.SetAvailability(SendAvailability.Ended);
+            await Assert.That(group.SuppressedForPendingQuestion).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_later_transcript_row_unpacks_the_group_the_card_left() {
         await RunOnUiAsync(async () => {
             var h = Claude();
@@ -1629,6 +1648,25 @@ public class ChatTabViewModelTests {
         public override bool CanAttach => true;
         public override string? AttachHint => null;
         public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) => Task.FromResult(ChatSendOutcome.Accepted);
+        public override void Dispose() { }
+    }
+
+    sealed class AvailabilityInput : ChatInput {
+        SendAvailability _availability = SendAvailability.Ready;
+
+        public void SetAvailability(SendAvailability availability) {
+            _availability = availability;
+            this.RaisePropertyChanged(nameof(Availability));
+            this.RaisePropertyChanged(nameof(CanAcceptText));
+        }
+
+        public override SendAvailability Availability => _availability;
+        public override bool CanAcceptText => _availability == SendAvailability.Ready;
+        public override string Hint => "";
+        public override bool CanAttach => false;
+        public override string? AttachHint => null;
+        public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) =>
+            Task.FromResult(ChatSendOutcome.Accepted);
         public override void Dispose() { }
     }
 
