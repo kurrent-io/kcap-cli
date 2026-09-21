@@ -43,8 +43,10 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
     bool _warned;
 
     // CancelAfter is banned (it can't take a TimeProvider); a shorter StopAsync call instead
-    // supersedes this timer with a fresh one and disposes the one it replaces.
+    // supersedes this timer with a fresh one and disposes the one it replaces. Guarded by the sinks
+    // lock, as is _terminated: a timer armed after termination would have nothing left to dispose it.
     CancellationTokenSource? _deadlineTimer;
+    bool                     _terminated;
 
     public CloudTerminalSink(
             string                                        agentId,
@@ -73,6 +75,10 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
     public bool Detached => _completed;
 
     internal Task PumpForTest => _pump;
+
+    internal bool HasDeadlineTimerForTest {
+        get { lock (_sinksLock) return _deadlineTimer is not null; }
+    }
 
     // A single-reader unbounded channel cannot be counted, so the writes are.
     internal long WakeupsWrittenForTest => Interlocked.Read(ref _wakeupsWritten);
@@ -163,7 +169,7 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
                 ? long.MinValue
                 : _time.GetTimestamp() + (long)(drainBound.TotalSeconds * _time.TimestampFrequency);
 
-            if (deadline < _deadline) {
+            if (deadline < _deadline && !_terminated) {
                 _deadline = deadline;
 
                 if (immediate) {
@@ -223,9 +229,17 @@ internal sealed partial class CloudTerminalSink : ITerminalSink, IAsyncDisposabl
     }
 
     void DisposeSources() {
+        CancellationTokenSource? timer;
+
+        lock (_sinksLock) {
+            _terminated    = true;
+            timer          = _deadlineTimer;
+            _deadlineTimer = null;
+        }
+
         _pumpCts.Dispose();
         _deadlineCts.Dispose();
-        _deadlineTimer?.Dispose();
+        timer?.Dispose();
     }
 
     async Task PumpAsync(CancellationToken ct) {

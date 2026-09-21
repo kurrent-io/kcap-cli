@@ -189,6 +189,20 @@ public class CloudTerminalSinkTests {
     }
 
     [Test]
+    public async Task A_stop_after_termination_arms_no_deadline_timer() {
+        var             time = new FakeTimeProvider();
+        await using var rig  = new Rig(Fast, time);
+
+        // An idle sink terminates as soon as its channel completes, disposing what it owns.
+        await rig.Sink.StopAsync(TimeSpan.FromSeconds(10)).WaitAsync(HangGuard);
+
+        // A shorter bound would supersede the deadline — but nothing is left to dispose a new timer.
+        await rig.Sink.StopAsync(TimeSpan.FromSeconds(1)).WaitAsync(HangGuard);
+
+        await Assert.That(rig.Sink.HasDeadlineTimerForTest).IsFalse();
+    }
+
+    [Test]
     public async Task A_zero_bound_stop_shortens_a_stop_that_is_still_draining() {
         var             time = new FakeTimeProvider();
         await using var rig  = new Rig(Fast, time);
