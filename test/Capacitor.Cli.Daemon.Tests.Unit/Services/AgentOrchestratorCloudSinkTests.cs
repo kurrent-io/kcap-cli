@@ -194,11 +194,11 @@ public class AgentOrchestratorCloudSinkTests {
 
         // Disposed explicitly below; the run-once guard makes the scope's second dispose a no-op.
         await using var orch = Build(server);
-        // CancellationGrace far exceeds this test's own bound, so disposal can only return once
-        // the pump genuinely ends — never because the grace window gave up on it.
+        // A finite grace lets a starved scheduler abandon the pump, which would complete
+        // disposal with the pump still running.
         orch.CloudSinkOptions = SmallBudget with {
             DrainBound        = TimeSpan.FromMinutes(10),
-            CancellationGrace = TimeSpan.FromMinutes(1),
+            CancellationGrace = TimeSpan.FromMinutes(10),
         };
 
         var pty   = new ScriptedPtyProcess();
