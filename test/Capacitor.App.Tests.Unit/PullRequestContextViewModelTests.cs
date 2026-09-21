@@ -149,6 +149,21 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    public Task The_title_opens_the_overview_tab_even_after_another_section() => RunOnUiAsync(async () => {
+        var opened = 0;
+        var h = new Harness(onOpen: () => opened++);
+        h.Push(); await h.Show();
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Vm.IsChecks, what: "checks section open");
+        await Assert.That(opened).IsEqualTo(1);
+        await h.Vm.OpenReaderCommand.Execute();
+        await Assert.That(h.Vm.IsOverview).IsTrue();
+        await Assert.That(h.Vm.SelectedTabIndex).IsEqualTo(0);
+        await Assert.That(opened).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Complete_current_checks_take_precedence_over_a_conflicting_advisory_rollup() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Source.TotalPages = 1; h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
         await Assert.That(h.Vm.CheckSummary).Contains("All checks have passed");
@@ -277,9 +292,9 @@ public class PullRequestContextViewModelTests {
         internal FakePullRequestSource Source { get; }
         internal RecordingOpener Opener { get; } = new();
         internal PullRequestContextViewModel Vm { get; }
-        internal Harness(Func<PullRequestRepository?>? primary = null) {
+        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null) {
             Source = new(Time);
-            Vm = new(Presence, Source, Time, Opener, () => { }, primaryRepo: primary);
+            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }

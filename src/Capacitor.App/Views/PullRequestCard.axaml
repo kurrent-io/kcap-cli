@@ -35,7 +35,7 @@
             <Button x:Name="PullRequestTitleButton" Classes="copyValue" Command="{Binding OpenReaderCommand}"
                     IsEnabled="{Binding CanOpenReader}" HorizontalAlignment="Stretch"
                     IsVisible="{Binding Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                    AutomationProperties.Name="Open pull request reader">
+                    AutomationProperties.Name="Open pull request overview">
                 <TextBlock Text="{Binding Title}" FontSize="13" LineHeight="16" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="3"
                            TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
             </Button>
