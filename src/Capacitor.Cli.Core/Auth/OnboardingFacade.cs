@@ -108,6 +108,20 @@ static class CommitBoundary {
         return config with { Profiles = profiles };
     }
 
+    /// Every writer of <c>active_profile</c> settles the outgoing profile's legacy credential first,
+    /// so the name the legacy file follows never moves away from it. Null on success, else the line
+    /// to report.
+    internal static async Task<string?> SettleLegacyCredentialAsync(ConfigRoot root, TokenStore store, CancellationToken ct) {
+        if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var before))
+            return "Error: the configuration file could not be read.";
+        try {
+            await store.MigrateLegacyAsync(before.ActiveName, ct);
+            return null;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) {
+            return $"Error: could not move the saved sign-in of profile '{before.ActiveName}': {ex.Message}";
+        }
+    }
+
     /// <summary>Points a profile at the server only when it doesn't already name the same one.</summary>
     internal static ProfileConfig PointProfileAtServer(ProfileConfig config, string profileName, string serverUrl) {
         var existing = config.Profiles.GetValueOrDefault(profileName);
@@ -484,6 +498,9 @@ public sealed class OnboardingFacade(
         }
 
         var picked = outcome.Picked!;
+
+        if (await CommitBoundary.SettleLegacyCredentialAsync(root, store, ct) is { } settleError)
+            return Fail(settleError, settleError, ct);
 
         var request = new CommitRequest(
             identities, AuthProvider.GitHubApp, picked.ProfileName,

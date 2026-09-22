@@ -437,4 +437,27 @@ public class CommitBoundaryTests {
         await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsFalse();
         await Assert.That(TokenFileExists("acme")).IsFalse();
     }
+
+    [Test]
+    public async Task GitHub_discovery_leaves_the_outgoing_profiles_legacy_credential_in_its_own_file() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "old",
+            Profiles = new Dictionary<string, Profile> { ["old"] = new() { ServerUrl = "https://old.example" } }
+        });
+        var legacyPath = Config.PathTo("tokens.json");
+        await File.WriteAllTextAsync(legacyPath, System.Text.Json.JsonSerializer.Serialize(
+            new StoredTokens { AccessToken = "legacy", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), GitHubUsername = "old-user", Provider = AuthProvider.GitHubApp },
+            CapacitorJsonContext.Default.StoredTokens));
+        using var handler = GitHubDiscoveryScript();
+        var facade = NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst());
+
+        var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(ReadConfig().ActiveProfile).IsEqualTo("acme");
+        await Assert.That(File.Exists(legacyPath)).IsFalse();
+        await Assert.That((await NewTokenStore(Config.Root).LoadAsync("old"))!.GitHubUsername).IsEqualTo("old-user");
+    }
+
+    ProfileConfig ReadConfig() => ConfigMutator.LoadPure(ConfigPath);
 }

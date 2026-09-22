@@ -221,6 +221,12 @@ public static class WorkOSDiscovery {
             ServerUrl      = canonical
         };
 
+        if (await CommitBoundary.SettleLegacyCredentialAsync(root, store, ct) is { } settleError) {
+            progress.Error(settleError);
+
+            return new AuthResult.Failed(settleError);
+        }
+
         var request = new CommitRequest(
             [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
             ConfigMutation: config => TenantDiscovery.MergeProfiles(config, ready.Tenants, picked),
