@@ -20,8 +20,9 @@ public static class PiReviewerExtension {
         // part of its tool surface.
 
         import { spawn } from "node:child_process";
-        import { readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+        import { closeSync, openSync, readFileSync, readdirSync, readSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
         import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+        import { StringDecoder } from "node:string_decoder";
 
         const HANDSHAKE_TIMEOUT_MS = 10000;
         const TOOL_CALL_TIMEOUT_MS = 1200000;
@@ -29,10 +30,13 @@ public static class PiReviewerExtension {
 
         const MAX_READ_LINES = 2000;
         const MAX_READ_BYTES = 262144;
+        const READ_CHUNK_BYTES = 65536;
         const MAX_DIR_ENTRIES = 1000;
         const MAX_MATCHES = 200;
         const MAX_SEARCH_FILE_BYTES = 1048576;
         const SEARCH_BUDGET_MS = 10000;
+        const MAX_GLOB_LENGTH = 1024;
+        const MAX_GLOB_DOUBLE_STARS = 8;
 
         """;
 
@@ -58,10 +62,24 @@ public static class PiReviewerExtension {
           return buf.subarray(0, Math.min(buf.length, 8192)).includes(0);
         }
 
+        // The glob comes from the model, so a pattern crafted with many "**" segments would backtrack
+        // combinatorially against a deep path and wedge the synchronous event loop. Refused rather
+        // than matched.
+        function rejectComplexGlob(glob: string): void {
+          if (glob.length > MAX_GLOB_LENGTH) throw new Error("glob pattern is too complex");
+          let stars = 0;
+          for (const seg of glob.split("/")) if (seg === "**" && ++stars > MAX_GLOB_DOUBLE_STARS)
+            throw new Error("glob pattern is too complex");
+        }
+
         // "*" within a path segment, "**" across segments, everything else literal. No regular
-        // expression: nothing here may compile a pattern from text a model supplied.
-        function globMatches(glob: string, relPath: string): boolean {
+        // expression: nothing here may compile a pattern from text a model supplied. Memoised by
+        // (glob-seg, path-seg) so a crafted "**" run cannot backtrack, and the search deadline is
+        // carried in so a match aborts with the budget rather than after it.
+        function globMatches(glob: string, relPath: string, deadline: number): boolean {
           const g = glob.split("/"), p = relPath.split("/");
+          const width = p.length + 1;
+          const memo = new Map<number, boolean>();
 
           function segment(pattern: string, name: string): boolean {
             const parts = pattern.split("*");
@@ -78,12 +96,24 @@ public static class PiReviewerExtension {
           }
 
           function match(gi: number, ni: number): boolean {
-            if (gi === g.length) return ni === p.length;
-            if (g[gi] === "**") {
-              for (let k = ni; k <= p.length; k++) if (match(gi + 1, k)) return true;
-              return false;
+            const key = gi * width + ni;
+            const seen = memo.get(key);
+            if (seen !== undefined) return seen;
+            // Bounded by the memo to (g.length+1)*(p.length+1) fresh states, so this runs a bounded
+            // number of times even for a pattern built to backtrack.
+            if (Date.now() > deadline) return false;
+
+            let result: boolean;
+            if (gi === g.length) result = ni === p.length;
+            else if (g[gi] === "**") {
+              result = false;
+              for (let k = ni; k <= p.length; k++) if (match(gi + 1, k)) { result = true; break; }
+            } else {
+              result = ni < p.length && segment(g[gi], p[ni]) && match(gi + 1, ni + 1);
             }
-            return ni < p.length && segment(g[gi], p[ni]) && match(gi + 1, ni + 1);
+
+            memo.set(key, result);
+            return result;
           }
 
           return match(0, 0);
@@ -127,22 +157,60 @@ public static class PiReviewerExtension {
               run(params: any) {
                 const target = contained(params.path);
                 if (!statSync(target).isFile()) throw new Error("not a file");
-                const buf = readFileSync(target);
-                if (isBinary(buf)) throw new Error("binary file");
-                const lines = buf.toString("utf8").split("\n");
+
                 const offset = Math.max(0, Number(params.offset ?? 0) | 0);
                 const limit = Math.min(MAX_READ_LINES, Math.max(1, Number(params.limit ?? MAX_READ_LINES) | 0));
-                let text = "", taken = 0;
-                for (let n = offset; n < lines.length && taken < limit; n++) {
-                  const next = lines[n] + "\n";
-                  if (text.length + next.length > MAX_READ_BYTES) break;
-                  text += next;
-                  taken++;
+
+                // Streamed with a fixed buffer, never the whole file: a hostile large file must not be
+                // materialized to enforce the 2000-line / 256 KB bound, and the returned size is
+                // measured in UTF-8 bytes (Buffer.byteLength), not UTF-16 string length.
+                const fd = openSync(target, "r");
+                try {
+                  const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+                  const decoder = new StringDecoder("utf8");
+                  let carry = "", out = "", line = 0, taken = 0, bytes = 0, more = false, stop = false, first = true;
+
+                  function take(text: string, terminated: boolean): boolean {
+                    if (line < offset) { line++; return true; }
+                    if (taken >= limit) { more = true; return false; }
+                    const add = Buffer.byteLength(text, "utf8") + (terminated ? 1 : 0);
+                    if (bytes + add > MAX_READ_BYTES) { more = true; return false; }
+                    out += terminated ? text + "\n" : text;
+                    bytes += add; taken++; line++;
+                    return true;
+                  }
+
+                  while (!stop) {
+                    const n = readSync(fd, chunk, 0, chunk.length, null);
+                    if (n === 0) break;
+                    if (first) {
+                      first = false;
+                      if (chunk.subarray(0, Math.min(n, 8192)).includes(0)) throw new Error("binary file");
+                    }
+                    carry += decoder.write(chunk.subarray(0, n));
+
+                    let nl: number;
+                    while ((nl = carry.indexOf("\n")) >= 0) {
+                      const one = carry.slice(0, nl);
+                      carry = carry.slice(nl + 1);
+                      if (!take(one, true)) { stop = true; break; }
+                    }
+
+                    // A single line longer than the returnable budget would otherwise grow `carry` to
+                    // the whole file on a newline-free input.
+                    if (!stop && carry.length > MAX_READ_BYTES) { more = true; stop = true; }
+                  }
+
+                  if (!stop) {
+                    carry += decoder.end();
+                    if (carry.length > 0) take(carry, false);
+                  }
+
+                  const hint = more ? "\n[more content; call again with offset " + (offset + taken) + "]" : "";
+                  return textResult(out + hint);
+                } finally {
+                  closeSync(fd);
                 }
-                const more = offset + taken < lines.length
-                  ? "\n[" + (lines.length - offset - taken) + " more lines; call again with offset " + (offset + taken) + "]"
-                  : "";
-                return textResult(text + more);
               },
             },
 
@@ -174,7 +242,10 @@ public static class PiReviewerExtension {
                 if (!needleRaw) throw new Error("text is required");
                 const ignoreCase = params.ignore_case === true;
                 const needle = ignoreCase ? needleRaw.toLowerCase() : needleRaw;
+                const glob = params.glob ? String(params.glob) : null;
+                if (glob !== null) rejectComplexGlob(glob);   // refuse once, before the walk
                 const started = Date.now();
+                const deadline = started + SEARCH_BUDGET_MS;
                 const matches: string[] = [];
                 let truncated = "";
                 const stack = [contained(params.path ?? ".")];
@@ -187,9 +258,9 @@ public static class PiReviewerExtension {
                     const full = join(dir, e.name);
                     if (e.isDirectory()) { if (e.name !== ".git") stack.push(full); continue; }
                     if (!e.isFile()) continue;
-                    if (Date.now() - started > SEARCH_BUDGET_MS) { truncated = "\n[stopped: time budget reached]"; break walk; }
+                    if (Date.now() > deadline) { truncated = "\n[stopped: time budget reached]"; break walk; }
                     const rel = relative(rootReal, full).split(sep).join("/");
-                    if (params.glob && !globMatches(String(params.glob), rel)) continue;
+                    if (glob !== null && !globMatches(glob, rel, deadline)) continue;
                     if (statSync(full).size > MAX_SEARCH_FILE_BYTES) continue;
                     const buf = readFileSync(full);
                     if (isBinary(buf)) continue;

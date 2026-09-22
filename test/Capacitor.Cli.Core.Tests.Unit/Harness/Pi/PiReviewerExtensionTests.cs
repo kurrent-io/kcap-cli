@@ -26,6 +26,25 @@ public class PiReviewerExtensionTests {
     }
 
     [Test]
+    public async Task Read_file_streams_a_bounded_prefix_and_measures_returned_bytes_as_utf8() {
+        // Streamed with a fixed buffer over a file descriptor, never the whole file into a string, and
+        // the returned size is counted in UTF-8 bytes rather than UTF-16 code units.
+        await Assert.That(Ts).Contains("openSync(");
+        await Assert.That(Ts).Contains("readSync(");
+        await Assert.That(Ts).Contains("closeSync(");
+        await Assert.That(Ts).Contains("Buffer.byteLength(");
+    }
+
+    [Test]
+    public async Task The_glob_matcher_is_bounded_and_carries_the_search_deadline() {
+        // Memoised by (glob-seg, path-seg), an over-complex pattern refused, and the deadline threaded
+        // in so a crafted "**" run cannot wedge the event loop.
+        await Assert.That(Ts).Contains("memo.get(");
+        await Assert.That(Ts).Contains("glob pattern is too complex");
+        await Assert.That(Ts).Contains("Date.now() > deadline");
+    }
+
+    [Test]
     public async Task The_only_process_it_spawns_is_a_manifest_server() {
         // One spawn site, in the shared client, fed only by manifest fields.
         await Assert.That(CountOf(Ts, "spawn(")).IsEqualTo(1);
