@@ -3142,7 +3142,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     ///
     /// <para>Both signals are read with proper cross-thread ordering — the flag via
     /// <see cref="System.Threading.Volatile"/>, the verdict via the runtime's
-    /// lock-synchronised <see cref="AcpHostedAgentRuntime.ReadVerdict"/> — and ORed because the
+    /// lock-synchronised <see cref="ITerminationVerdictSource.ReadVerdict"/> — and ORed because the
     /// verdict is PUBLISHED (at reap-claim time) strictly before the finalizer's CAS flips the flag,
     /// so a same-tick emitter could otherwise read the flag as still 0 while the verdict already
     /// exists. Post-window reaps leave both false, preserving byte-identical teardown for that
@@ -3801,12 +3801,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // An unregistered agent has no server-side row to update.
             if (!agent.IsPrivate) {
-                // Atomic check + send-INITIATION under the runtime's own gate (finding 1
-                // refinement): the round-1 second check narrowed but did not CLOSE the check-to-send
-                // race — a verdict could publish between the check and this send. The gate holds the
-                // publication lock across BOTH, so a Completed frame, if sent at all, is initiated
-                // before publication and is therefore ordered-before any LaunchFailed on the single
-                // hub connection.
+                // Atomic check + send-INITIATION under the runtime's own gate: the round-1 second
+                // check narrowed but did not CLOSE the check-to-send race — a verdict could publish
+                // between the check and this send. The gate holds the publication lock across BOTH,
+                // so a Completed frame, if sent at all, is initiated before publication and is
+                // therefore ordered-before any LaunchFailed on the single hub connection.
                 if (agent.Runtime is ITerminationVerdictSource || !suppressCompleted)
                     TrySendAgentStatus(agent, "Completed", null, out _);
                 _ = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
@@ -4927,12 +4926,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 try {
                     await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport);
 
-                    // Re-gate the status send atomically under the runtime's own gate, per attempt
-                    // (finding 1 refinement): the outer pre-check cannot cover a verdict published
-                    // DURING the AgentRegistered await above (or on a later retry). The gate suppresses
-                    // the send if a verdict is now published, else initiates it before publication can
-                    // proceed so it is ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the
-                    // gate only holds it across initiation), preserving the retry-on-failure semantics.
+                    // Re-gate the status send atomically under the runtime's own gate, per attempt:
+                    // the outer pre-check cannot cover a verdict published DURING the AgentRegistered
+                    // await above (or on a later retry). The gate suppresses the send if a verdict is
+                    // now published, else initiates it before publication can proceed so it is
+                    // ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only holds
+                    // it across initiation), preserving the retry-on-failure semantics.
                     if (!TrySendAgentStatus(agent, agent.Status, null, out var statusSend))
                         break; // verdict published → terminal Failed; skip this agent's re-registration
                     await statusSend;
