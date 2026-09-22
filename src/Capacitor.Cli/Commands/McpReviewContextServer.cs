@@ -123,7 +123,8 @@ static class McpReviewContextServer {
             "Working-tree, unstaged, and untracked bytes are not included. Configs listed under " +
             "omittedForCapacity exist but were too large to ship: report them as unverifiable, " +
             "never as absent or clean.",
-            new McpInputSchema("object", [], []))
+            new McpInputSchema("object", [], []),
+            McpToolAnnotations.Read)
     ];
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>

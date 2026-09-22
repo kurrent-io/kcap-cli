@@ -698,7 +698,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     ["offset"] = new("integer", "Default 0, max 500.")
                 },
                 []
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "list_repo_sessions",
@@ -714,7 +715,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     ["offset"]        = new("integer", "Default 0, max 500.")
                 },
                 []
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "get_session_summary",
@@ -723,7 +725,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 "object",
                 new() { ["session_id"] = new("string", "Session ID returned by search_sessions") },
                 ["session_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "get_session_transcript",
@@ -742,7 +745,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     ["include_thinking"] = new("boolean", "Include assistant thinking blocks. Default false.")
                 },
                 ["session_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "get_turn",
@@ -754,7 +758,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     ["turn_index"] = new("integer", "Zero-based turn index.")
                 },
                 ["session_id", "turn_index"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "list_turns",
@@ -763,7 +768,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 "object",
                 new() { ["session_id"] = new("string", "Session ID (from search_sessions or get_session_summary).") },
                 ["session_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         )
     ];
 }

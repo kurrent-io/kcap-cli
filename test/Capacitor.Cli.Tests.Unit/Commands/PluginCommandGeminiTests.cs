@@ -42,14 +42,15 @@ public class PluginCommandGeminiTests {
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-flows");
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-memory");
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-analytics");
-        // Read-only servers auto-approved via Gemini's per-server trust; write/flow servers still prompt.
+        // Reads and own-record writers are trusted; the paid launcher and the page publisher still prompt.
         await Assert.That(servers["kcap-review"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-sessions"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-analytics"]!["trust"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(servers["kcap-memory"]!["trust"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(servers["kcap-workitems"]!["trust"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(servers["kcap-plans"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();
-        await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();
-        // kcap-workitems is registered for Gemini but writes, so it is never auto-trusted.
-        await Assert.That(servers["kcap-workitems"]!["trust"]).IsNull();
+        await Assert.That(servers["kcap-artefacts"]!["trust"]).IsNull();
         await Assert.That(servers["my-tool"]).IsNotNull();  // user server preserved
         await Assert.That(root["hooks"]).IsNotNull();       // hooks block preserved
         await Assert.That(root["theme"]!.GetValue<string>()).IsEqualTo("dark");  // unrelated setting preserved

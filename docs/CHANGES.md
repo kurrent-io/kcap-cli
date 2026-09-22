@@ -6,6 +6,22 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The ledger servers are pre-approved, and every tool advertises annotations
+
+Codex decides whether an MCP call needs approval from the tool's annotations, and with its automatic
+reviewer on, a call that needs approval is judged by a model that sees the tool description and the
+arguments and can end the turn outright. No kcap tool advertised annotations, and the MCP spec reads
+a missing one as destructive, open-world and not read-only, so every kcap call went to approval,
+pure reads included, and `declare_plan_document` was refused as an upload with no named destination.
+
+Registration now pre-approves `kcap-memory`, `kcap-workitems` and `kcap-plans` beside the three
+read-only servers: their writes land only in the user's own Capacitor workspace, the destination the
+session hooks already post to without a prompt. `kcap-flows` launches a paid hosted agent and
+`kcap-artefacts` can widen who may open a page, so both keep prompting. Every tool carries the
+annotations for what it does, so a harness deciding from them runs reads unprompted and reviews a
+write as additive or destructive rather than at the spec's worst case. The plans description names
+where the content goes, because the reviewer reads the description and never the server instructions.
+
 ## A flows tool call ends before the shortest harness timeout
 
 A start holds its tool call open while the first round runs, and the reply it ends on — the round

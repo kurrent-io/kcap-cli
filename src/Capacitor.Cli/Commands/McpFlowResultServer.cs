@@ -405,7 +405,8 @@ sealed class McpFlowResultServer(
                     ["findings"]    = new("string", "Your findings text; required when kind is \"findings\".")
                 },
                 Required: ["round_token", "kind"]
-            )
+            ),
+            Annotations: McpToolAnnotations.Create
         ),
         new(
             Name: "send_flow_message",
@@ -416,7 +417,8 @@ sealed class McpFlowResultServer(
                     ["text"] = new("string", "The message text for the driver.")
                 },
                 Required: ["text"]
-            )
+            ),
+            Annotations: McpToolAnnotations.Create
         )
     ];
 }

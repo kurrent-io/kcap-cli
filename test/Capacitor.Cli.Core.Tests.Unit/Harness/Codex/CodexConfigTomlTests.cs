@@ -248,23 +248,26 @@ public class CodexConfigTomlTests {
     }
 
     [Test]
-    public async Task RegisterKcapMcpServers_auto_approves_only_read_only_servers() {
+    public async Task RegisterKcapMcpServers_auto_approves_reads_and_own_record_writers_only() {
         using var tmp = new TempDir();
         var path = tmp.GetResolvedPath("config.toml");
 
         CodexConfigToml.RegisterKcapMcpServers(path);
 
-        var servers  = (TomlTable)ReadToml(path)["mcp_servers"];
-        var review   = (TomlTable)servers["kcap-review"];
-        var sessions = (TomlTable)servers["kcap-sessions"];
-        var flows    = (TomlTable)servers["kcap-flows"];
-        var memory   = (TomlTable)servers["kcap-memory"];
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        string? Mode(string name) =>
+            ((TomlTable)servers[name]).TryGetValue("default_tools_approval_mode", out var v) ? (string)v : null;
 
-        // Read-only servers auto-approve (never prompt); kcap-memory (writes via save) keeps the default.
-        await Assert.That((string)review["default_tools_approval_mode"]).IsEqualTo("approve");
-        await Assert.That((string)sessions["default_tools_approval_mode"]).IsEqualTo("approve");
-        await Assert.That(flows.ContainsKey("default_tools_approval_mode")).IsFalse();
-        await Assert.That(memory.ContainsKey("default_tools_approval_mode")).IsFalse();
+        // Reads, and writes that land only in the user's own Capacitor workspace, never prompt.
+        await Assert.That(Mode("kcap-review")).IsEqualTo("approve");
+        await Assert.That(Mode("kcap-sessions")).IsEqualTo("approve");
+        await Assert.That(Mode("kcap-analytics")).IsEqualTo("approve");
+        await Assert.That(Mode("kcap-memory")).IsEqualTo("approve");
+        await Assert.That(Mode("kcap-workitems")).IsEqualTo("approve");
+        await Assert.That(Mode("kcap-plans")).IsEqualTo("approve");
+        // A paid hosted launch and a page's audience stay behind a prompt.
+        await Assert.That(Mode("kcap-flows")).IsNull();
+        await Assert.That(Mode("kcap-artefacts")).IsNull();
     }
 
     [Test]

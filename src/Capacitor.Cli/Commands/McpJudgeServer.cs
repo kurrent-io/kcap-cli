@@ -226,7 +226,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         return envelope.ToJsonString();
     }
 
-    static McpTool[] BuildToolsList() => [
+    internal static McpTool[] BuildToolsList() => [
         new(
             "get_session_recap",
             "Get a short narrative recap of the session's user inputs, assistant replies, and tool invocations. "
@@ -235,7 +235,8 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 "object",
                 new() { ["session_id"] = new("string", "Session ID to recap (must match the judge's bound session)") },
                 ["session_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "get_session_errors",
@@ -245,7 +246,8 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 "object",
                 new() { ["session_id"] = new("string", "Session ID (must match the judge's bound session)") },
                 ["session_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "get_transcript",
@@ -259,7 +261,8 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                     ["take"]       = new("integer", "Number of events to return (for pagination)")
                 },
                 ["session_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "get_session_summary",
@@ -270,7 +273,8 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 "object",
                 new() { ["session_id"] = new("string", "Session ID (must match the judge's bound session)") },
                 ["session_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "search_session",
@@ -285,7 +289,8 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                     ["limit"]      = new("integer", "Max number of ranked excerpts to return (default 20, max 50)")
                 },
                 ["session_id", "query"]
-            )
+            ),
+            McpToolAnnotations.Read
         ),
         new(
             "get_tool_result",
@@ -299,7 +304,8 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                     ["call_id"]    = new("string", "call_id from a tool_invocation/tool_result pair (e.g. toolu_01abc...)")
                 },
                 ["session_id", "call_id"]
-            )
+            ),
+            McpToolAnnotations.Read
         )
     ];
 

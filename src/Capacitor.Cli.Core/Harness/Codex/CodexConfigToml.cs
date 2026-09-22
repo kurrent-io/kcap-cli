@@ -226,7 +226,7 @@ public static class CodexConfigToml {
             ["command"] = command,
             ["args"] = ToTomlArray(descriptor.Args)
         };
-        if (descriptor.ReadOnly) table["default_tools_approval_mode"] = "approve";
+        if (descriptor.AutoApprove) table["default_tools_approval_mode"] = "approve";
         return table;
     }
 
