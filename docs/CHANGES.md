@@ -6,6 +6,18 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Profiles in Settings, and every credential write under its profile lock
+
+The desktop app lists profiles from `config.json` and grades each with the same refresh-free gate
+the app starts with, so a row never spends a single-use refresh token. Removal is one operation in
+Core shared with `kcap profile remove`: it decides on the locked config, refuses the active profile
+instead of resetting the selection to an empty `default`, and deletes the credential under the
+profile's token lock only when no remaining profile can still read that file. Every token write
+now takes that lock, a refresh re-reads under it rather than reviving a file deleted while it
+waited, and the legacy `tokens.json` is moved into its owner's slot before any writer of
+`active_profile` changes the selection. Mutations whose decision depends on what the file says go
+through a strict variant that refuses an unreadable config rather than publishing a default over it.
+
 ## Desktop notifications follow pending requests and completed turns
 
 Notifications belong to the app lifetime so hiding the window does not stop permission and
