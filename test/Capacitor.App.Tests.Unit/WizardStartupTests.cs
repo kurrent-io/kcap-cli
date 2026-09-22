@@ -990,9 +990,12 @@ public class WizardStartupTests {
         }).WaitAsync(TimeSpan.FromSeconds(30));
     }
 
-    /// A user who navigated during the hold stays where they went.
+    /// A user who navigated during the hold stays where they went — including back on Sign in
+    /// itself, where the step id alone would let the stale hold through.
     [Test]
-    public async Task A_committed_sign_in_never_pulls_the_user_off_a_step_they_chose() {
+    [Arguments(false, WizardStepId.Connect)]
+    [Arguments(true, WizardStepId.SignIn)]
+    public async Task A_committed_sign_in_never_pulls_the_user_off_a_step_they_chose(bool returned, WizardStepId expected) {
         await AvaloniaSession.DispatchAsync(async () => {
             var time = new FakeTimeProvider();
             using var harness = new WizardFixtures.GraphHarness(Config.Root) { Time = time };
@@ -1001,11 +1004,12 @@ public class WizardStartupTests {
             var (graph, signIn) = await OnTheSignInStepAsync(harness);
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
             await graph.ViewModel.BackCommand.Execute().ToTask();
+            if (returned) await graph.ViewModel.NextCommand.Execute().ToTask();
 
             time.Advance(TimeSpan.FromSeconds(5));
             Dispatcher.UIThread.RunJobs();
 
-            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Connect);
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(expected);
 
             return true;
         }).WaitAsync(TimeSpan.FromSeconds(30));

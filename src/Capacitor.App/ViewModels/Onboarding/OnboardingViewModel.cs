@@ -100,10 +100,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
         return true;
     }
 
-    /// Move on from a step that finished by itself. Refused once the user has left that step —
-    /// a late call must not pull them off the page they chose — and once the wizard has closed.
-    internal bool TryAdvanceFrom(WizardStepId id) {
-        if (_closed || Current.Id != id || _index >= Steps.Count - 1) return false;
+    /// Bumped on every transition, so a callback armed during one visit to a step can tell a
+    /// later visit to the same step apart.
+    internal int Visit { get; private set; }
+
+    /// Move on from a step that finished by itself during <paramref name="visit"/>. Refused once
+    /// the user has navigated since — a late call must not pull them off the page they chose, even
+    /// when that page is the same step again — and once the wizard has closed.
+    internal bool TryAdvanceFrom(WizardStepId id, int visit) {
+        if (_closed || Visit != visit || Current.Id != id || _index >= Steps.Count - 1) return false;
 
         return TryGoTo(Steps[_index + 1].Id);
     }
@@ -142,6 +147,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     // Caller holds the Navigating gate and the leaving step has already released it.
     async Task MoveToAsync(int index) {
         _index = index;
+        Visit++;
         Current = Steps[_index];
         await SafeEnterAsync(Current);
     }
