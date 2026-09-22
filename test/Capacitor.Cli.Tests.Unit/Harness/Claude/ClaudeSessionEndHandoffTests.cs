@@ -118,8 +118,9 @@ public class ClaudeSessionEndHandoffTests {
     public async Task A_child_that_never_receives_the_payload_is_killed_before_the_inline_fallback() {
         Skip.When(OperatingSystem.IsWindows(), "uses /bin/sh to stand in for the continuation");
 
-        // A started child whose stdin was not redirected: the payload write throws after the
-        // process exists, the shape of any post-start failure.
+        // A started child whose stdin was not redirected: the hand-off fails once the process
+        // already exists, the shape of any post-start failure. Nothing may outlive it — the inline
+        // path is about to run, and a surviving child would post the same event twice.
         var pid = 0;
         var identity = "";
         var starter = FakeProcessStarter.Running(_ => {
