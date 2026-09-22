@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+        xmlns:views="clr-namespace:Capacitor.App.Views"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="Kurrent Capacitor — Settings"
@@ -77,6 +78,11 @@
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="ProfilesTab" Classes="kcapSettingsTab" Header="Profiles"
+                     IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
             </TabItem>
 
             <TabItem x:Name="NotificationsTab" Classes="kcapSettingsTab" Header="Notifications">

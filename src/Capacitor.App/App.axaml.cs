@@ -633,7 +633,7 @@ public partial class App : Application {
                 notifier.Notify("No server is configured. Run kcap setup first.");
                 return;
             }
-            OpenSignInDialog(profiles.Name, serverUrl, refreshAppState: true, notifier);
+            OpenSignInDialog(profiles.Name, serverUrl, refreshAppState: true);
         };
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
@@ -743,6 +743,18 @@ public partial class App : Application {
             return;
         }
 
+        var tokenStore = _foreignHttp.GetRequiredService<TokenStore>();
+        var profilesVm = new ProfilesSettingsViewModel(
+            _config, tokenStore, new OnboardingGate(_config, tokenStore, _serverEnv, _time), settings.ProfileName,
+            openSignIn: (profile, serverUrl, _) => {
+                OpenSignInDialog(profile, serverUrl, refreshAppState: profile == settings.ProfileName);
+                return Task.CompletedTask;
+            },
+            confirmRemove: (name, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow,
+                new LifecyclePrompt(LifecyclePrompt.KindRemoveProfile, null, null, false,
+                    $"Remove profile {name}? Its saved sign-in is deleted too. Nothing on the server changes."), ct),
+            appLifetime: _shutdown.Token);
+
         SettingsViewModel vm;
         try {
             vm = new SettingsViewModel(settings, service, ops,
@@ -751,7 +763,7 @@ public partial class App : Application {
                 ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
-                notificationSettings: _notificationSettings);
+                notificationSettings: _notificationSettings, profiles: profilesVm);
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -761,6 +773,10 @@ public partial class App : Application {
         _settingsWindow = window;
         window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
         window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
+        // The list is re-read whenever the window regains focus, so a `kcap use` or `kcap profile
+        // add` made in a terminal shows up on return without a file watcher.
+        window.Activated += (_, _) => _ = profilesVm.RefreshAsync();
+        _ = profilesVm.RefreshAsync();
         window.Show();
         window.Activate();
     }
@@ -813,7 +829,7 @@ public partial class App : Application {
     /// A graph is built per open — a settled attempt's rendered state must never leak into the next
     /// sign-in. The commit checks the profile still names the server, so a row edited while the
     /// browser was open is refused rather than stamped.
-    void OpenSignInDialog(string profile, string serverUrl, bool refreshAppState, IAppNotifier notifier) {
+    void OpenSignInDialog(string profile, string serverUrl, bool refreshAppState) {
         if (_signInWindow is { } open) {
             open.Activate();
             return;

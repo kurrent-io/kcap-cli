@@ -47,11 +47,12 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         PathDegraded      = prompt.PathDegraded;
         ShowDeclineButton = prompt.Kind is not (LifecyclePrompt.KindQuarantine or LifecyclePrompt.KindUpdateInfo);
         AcceptButtonText  = prompt.Kind switch {
-            LifecyclePrompt.KindQuarantine  => "Acknowledge",
-            LifecyclePrompt.KindUpdateInfo  => "OK",
-            LifecyclePrompt.KindUpdateReady => "Restart now",
-            LifecyclePrompt.KindRename      => "Rename and restart",
-            _                               => "Continue",
+            LifecyclePrompt.KindQuarantine     => "Acknowledge",
+            LifecyclePrompt.KindUpdateInfo     => "OK",
+            LifecyclePrompt.KindUpdateReady    => "Restart now",
+            LifecyclePrompt.KindRename         => "Rename and restart",
+            LifecyclePrompt.KindRemoveProfile  => "Remove",
+            _                                  => "Continue",
         };
 
         AcceptCommand  = ReactiveCommand.Create(() => Resolve(tcs, true));
@@ -74,6 +75,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         LifecyclePrompt.KindUpdateReady   => "Update ready",
         LifecyclePrompt.KindUpdateInfo    => "Software update",
         LifecyclePrompt.KindRename        => "Rename daemon",
+        LifecyclePrompt.KindRemoveProfile => "Remove profile",
         _                                 => "Repair daemon service", // KindRepair and any future kind
     };
 }

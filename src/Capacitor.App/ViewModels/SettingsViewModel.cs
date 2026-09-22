@@ -46,7 +46,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Func<CancellationToken, Task<bool>> relaunch, bool canRenameOnPlatform,
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
             bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
-            NotificationSettingsService? notificationSettings = null) {
+            NotificationSettingsService? notificationSettings = null, ProfilesSettingsViewModel? profiles = null) {
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -58,6 +58,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         _startupSettled = startupSettled;
         _canRetire = canRetire;
         _notificationSettings = notificationSettings;
+        Profiles = profiles;
         _nameOverridden = nameOverridden;
         _needsAppRestart = needsAppRestart;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
@@ -113,6 +114,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     }
 
     public bool CanManageNotifications => _notificationSettings is not null;
+
+    public ProfilesSettingsViewModel? Profiles { get; }
 
     public bool NotifyOnPermissions {
         get => _notifyOnPermissions;
