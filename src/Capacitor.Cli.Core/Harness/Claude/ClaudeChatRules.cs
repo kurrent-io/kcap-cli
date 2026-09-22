@@ -14,10 +14,6 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     const string StoppedTaskMessage = "Successfully stopped task";
 
-    /// Marks a bang command and its output so the chat can pair the two records. Unused on any
-    /// other envelope.
-    public const string ShellKind = "shell";
-
     ClaudeChatRules() { }
 
     public string? SubmittedInput(CanonicalEvent evt, AcpEventEnvelope raw, AcpEventEnvelope? displayed) {
@@ -48,9 +44,9 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 // A bang command is its own user record: the command in bash-input, the output in
                 // bash-stdout/stderr. A message that only quotes those tags is left as written.
                 if (BashCommand(raw) is { } command)
-                    return envelope with { Text = "! " + WithoutAttachmentTrailer(command), ToolKind = ShellKind };
+                    return envelope with { Text = "! " + WithoutAttachmentTrailer(command), ToolKind = ChatDisplayKind.Shell };
                 if (BashOutput(raw) is { } output)
-                    return output.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = output, ToolKind = ShellKind };
+                    return output.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = output, ToolKind = ChatDisplayKind.Shell };
                 var text = StripWrappers(raw);
                 return text.Length == 0 ? null : envelope with { Text = text };
             }

@@ -10,7 +10,6 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -753,7 +752,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             }
             foreach (var e in projected.Envelopes) {
                 switch (e.Kind) {
-                    case AcpEventKind.UserMessage when e.ToolKind == ClaudeChatRules.ShellKind:
+                    case AcpEventKind.UserMessage when e.ToolKind == ChatDisplayKind.Shell:
                         _openGroup = null;
                         _openShell = new ShellCommandItem(e.Text ?? "");
                         fresh.Add(_openShell);
@@ -768,11 +767,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         _openShell = null;
                         fresh.Add(new AssistantTextItem(e.Text ?? ""));
                         break;
-                    case AcpEventKind.SystemNote when e.ToolKind == ClaudeChatRules.ShellKind && _openShell is { HasOutput: false } shell:
+                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell && _openShell is { HasOutput: false } shell:
                         _openGroup = null;
                         shell.Output = e.Text ?? "";
                         break;
-                    case AcpEventKind.SystemNote when e.ToolKind == ClaudeChatRules.ShellKind:
+                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell:
                         _openGroup = null;
                         _openShell = null;
                         fresh.Add(new ShellCommandItem("") { Output = e.Text ?? "" });
