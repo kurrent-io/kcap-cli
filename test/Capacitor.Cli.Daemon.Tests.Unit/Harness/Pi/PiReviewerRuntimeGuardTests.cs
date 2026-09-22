@@ -193,6 +193,25 @@ public class PiReviewerRuntimeGuardTests {
     }
 
     [Test]
+    public async Task Dispose_stays_bounded_when_the_reaps_terminate_never_completes() {
+        // Small graces so the reap's own bounded ladder (abort grace + stop grace + slack) is short.
+        var guards = new PiReviewerGuards(TimeSpan.FromSeconds(600), TimeSpan.FromMilliseconds(10));
+        var (runtime, process) = NewRuntime(reviewerGuards: guards, stopGrace: TimeSpan.FromMilliseconds(10));
+        await runtime.WaitForSessionReadyAsync(CancellationToken.None);
+        process.TerminateOverride = () => new TaskCompletionSource().Task;   // terminate hangs forever
+
+        process.Push(DialogRequest("confirm"));   // triggers a reap whose terminate will never complete
+        await VerdictAsync(runtime);
+
+        // The outer WaitAsync fails loudly if the fix regressed to an unbounded wait; the inner assert
+        // proves dispose returns within the reap's own ladder rather than hanging on the stuck terminate.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await runtime.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+        sw.Stop();
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(8));
+    }
+
+    [Test]
     public async Task A_command_prompt_during_teardown_publishes_no_verdict() {
         var (runtime, process) = NewRuntime(reviewerGuards: Guards);
         await runtime.WaitForSessionReadyAsync(CancellationToken.None);

@@ -890,12 +890,21 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         // A claimed reap's verdict is published synchronously at claim time, but a caller that
         // disposes and then reads the verdict must see the reap's TERMINATE having run too. Seal
         // returns the reap that won the slot before EnterTerminal (above) closed it — so no claim
-        // racing this dispose can be missed, and a late terminate fault is observed, not dropped.
+        // racing this dispose can be missed.
         if (_gate.Seal() is { } reap) {
+            // Observe the reap's eventual fault unconditionally, BEFORE the bounded wait — RunReapAsync
+            // can outlast the wait, and an abandoned faulted task would otherwise surface as an
+            // UnobservedTaskException. The wait is sized to the reap's OWN bounded ladder (its abort
+            // grace plus the terminate stop grace) so a normal slow teardown is not cut short, while a
+            // truly stuck one still cannot hang dispose.
+            _ = reap.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+            var reapBudget = (_guards?.AbortGrace ?? PiReviewerGuards.DefaultAbortGrace) + _stopGrace + TimeSpan.FromSeconds(1);
             try {
-                await reap.WaitAsync(TimeSpan.FromSeconds(5), _time).ConfigureAwait(false);
+                await reap.WaitAsync(reapBudget, _time).ConfigureAwait(false);
             } catch (Exception ex) {
-                _logger.LogDebug(ex, "Pi: the reap did not finish within the dispose budget (agentId={AgentId}).", _agentId);
+                _logger.LogDebug(ex, "Pi: the reap did not finish within its bounded ladder at dispose (agentId={AgentId}).", _agentId);
             }
         }
 

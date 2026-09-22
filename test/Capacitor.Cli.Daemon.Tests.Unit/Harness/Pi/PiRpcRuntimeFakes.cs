@@ -45,6 +45,11 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
     /// as the reap's <c>abort</c>, without affecting every other write.</summary>
     public Func<string, Task>? WriteOverride { get; set; }
 
+    /// <summary>When set, <see cref="TerminateAsync"/> returns this instead of completing — lets a test
+    /// park the child's termination to prove dispose stays bounded when a reap's terminate hangs. The
+    /// call is still counted.</summary>
+    public Func<Task>? TerminateOverride { get; set; }
+
     public int  Pid            { get; }              = 4242;
     public bool HasExited      { get; private set; }
     public int? ExitCode       { get; private set; }
@@ -96,6 +101,7 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 
     public Task TerminateAsync(TimeSpan? timeout = null) {
         TerminateCalls++;
+        if (TerminateOverride is { } o) return o();
         HasExited = true;
         ExitCode ??= -1;
         _lines.Writer.TryComplete();
