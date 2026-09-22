@@ -102,6 +102,19 @@ public class TokenStoreProfileTests {
     }
 
     [Test]
+    public async Task Save_for_default_under_an_unreadable_config_leaves_the_legacy_file() {
+        var configPath = AppConfig.GetConfigPath(Config.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        await File.WriteAllTextAsync(configPath, "{ not json");
+        await File.WriteAllTextAsync(LegacyPath,
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", MakeTokens("who"));
+
+        await Assert.That(File.Exists(LegacyPath)).IsTrue();
+    }
+
+    [Test]
     public async Task SaveAsync_waits_for_a_peer_holding_the_profile_lock() {
         Directory.CreateDirectory(TokensDir);
         var store = AuthFixtures.NewTokenStore(Config.Root);

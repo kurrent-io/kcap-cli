@@ -286,11 +286,11 @@ public sealed class TokenStore(
     // The legacy credential's owner is the on-disk active profile, with an absent/empty value
     // normalizing to "default". Deliberately NOT "profile == active || profile == default": with
     // active profile Y, a resolution landing on "default" must not pick up Y's legacy credential.
-    // A pure read: the migrating loader could take the config lock under the token lock.
-    bool IsLegacyOwner(string profile) {
-        ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg);
-        return string.Equals(profile, cfg.ActiveName, StringComparison.Ordinal);
-    }
+    // A pure read: the migrating loader could take the config lock under the token lock. An
+    // unreadable config names no owner — it must not authorize deleting another profile's credential.
+    bool IsLegacyOwner(string profile) =>
+        ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg)
+        && string.Equals(profile, cfg.ActiveName, StringComparison.Ordinal);
 
     public Task DeleteAsync() {
         if (File.Exists(LegacyTokenPath)) {
