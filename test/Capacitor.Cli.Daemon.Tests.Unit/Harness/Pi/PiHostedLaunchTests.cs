@@ -184,30 +184,6 @@ public class PiHostedLaunchTests {
     }
 
     [Test]
-    public async Task SupportsUnattended_IsFalse_InPr1() {
-        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
-
-        await Assert.That(factory.SupportsUnattended).IsFalse();
-    }
-
-    [Test]
-    public async Task DescribeUnattendedSupport_WithheldReasonIsNull_PiNeverClaimedUnattendedSupport() {
-        // WithheldReason is reserved for a vendor this daemon's OWN config is refusing to offer —
-        // Pi simply doesn't support it yet, so the default IHostedAgentRuntimeFactory implementation
-        // (no override here) must report null, not a reason. A prior revision's override reported a
-        // non-null reason, which made every daemon with pi installed log a false "restart to enable"
-        // operator instruction at boot.
-        IHostedAgentRuntimeFactory factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
-
-        // A default interface member is only reachable through the interface type — there is no
-        // override on the concrete class to call directly, which is the whole point of this fix.
-        var support = factory.DescribeUnattendedSupport();
-
-        await Assert.That(support.Supported).IsFalse();
-        await Assert.That(support.WithheldReason).IsNull();
-    }
-
-    [Test]
     public async Task SupportsModelSelection_IsTrue() {
         var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
 
@@ -227,19 +203,6 @@ public class PiHostedLaunchTests {
             () => factory.StartAsync(Ctx(isReview: true), CancellationToken.None));
 
         await Assert.That(ex!.Message).Contains("pi_pr_review_unsupported");
-    }
-
-    [Test]
-    public async Task StartAsync_RefusesAReviewFlowLaunch() {
-        var factory = new PiRpcHostedAgentRuntimeFactory(
-            new DaemonConfig(), NullLoggerFactory.Instance,
-            TimeProvider.System,
-            processSource: (_, _) => throw new InvalidOperationException("must not spawn"));
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => factory.StartAsync(Ctx(isReviewFlow: true), CancellationToken.None));
-
-        await Assert.That(ex!.Message).Contains("pi_reviewer_not_implemented");
     }
 
     [Test]

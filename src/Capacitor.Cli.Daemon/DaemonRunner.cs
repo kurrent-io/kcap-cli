@@ -534,8 +534,7 @@ public static partial class DaemonRunner {
 
         // Not an ACP factory either: pi speaks its own LF-framed JSONL-RPC over one LONG-LIVED
         // process for the whole hosted session (see IPiRpcProcess), unlike Antigravity's
-        // exec-per-turn shape above. PR-1 only — interactive hosting; the reviewer lane
-        // (SupportsUnattended) is not implemented yet.
+        // exec-per-turn shape above. Serves both interactive hosting and a gated unattended reviewer.
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new PiRpcHostedAgentRuntimeFactory(
                 sp.GetRequiredService<DaemonConfig>(),
