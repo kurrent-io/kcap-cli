@@ -15,19 +15,23 @@ static class McpSessionId {
 
     internal static string Resolve(JsonObject? args) => Resolve(args, Environment.GetEnvironmentVariable);
 
-    internal static string Resolve(JsonObject? args, Func<string, string?> getEnv) {
-        if (args?["session_id"] is { } node) {
-            // Shape-tested like RequireString: a number or object here must answer as a field error,
-            // not fall out of the dispatcher as a generic internal failure.
-            if (node is not JsonValue value || !value.TryGetValue<string>(out var explicitId))
-                throw new ArgumentException("'session_id' must be a string.");
-            if (explicitId.Length > 0)
-                return WorkContextIds.CanonicalSessionId(explicitId) ?? throw new ArgumentException(NoSessionIdMessage);
-        }
+    internal static string Resolve(JsonObject? args, Func<string, string?> getEnv) =>
+        Explicit(args) ?? ResolveWithin(args, HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId);
 
-        var ambient = HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId;
-        if (WorkContextIds.CanonicalSessionId(ambient) is { } fromEnv) return fromEnv;
+    /// <summary>For a server that resolved its harness session once at startup and hands it down:
+    /// an explicit argument still wins, and the environment is never consulted here.</summary>
+    internal static string ResolveWithin(JsonObject? args, string? ambientSessionId) =>
+        Explicit(args)
+        ?? WorkContextIds.CanonicalSessionId(ambientSessionId)
+        ?? throw new ArgumentException(NoSessionIdMessage);
 
-        throw new ArgumentException(NoSessionIdMessage);
+    static string? Explicit(JsonObject? args) {
+        if (args?["session_id"] is not { } node) return null;
+        // Shape-tested like RequireString: a number or object here must answer as a field error,
+        // not fall out of the dispatcher as a generic internal failure.
+        if (node is not JsonValue value || !value.TryGetValue<string>(out var explicitId))
+            throw new ArgumentException("'session_id' must be a string.");
+        if (explicitId.Length == 0) return null;
+        return WorkContextIds.CanonicalSessionId(explicitId) ?? throw new ArgumentException(NoSessionIdMessage);
     }
 }
