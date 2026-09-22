@@ -97,8 +97,8 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// AT SEND TIME (via the lock-synchronised ReadVerdict); if a launch-window verdict is already
     /// published, <see cref="NonFailureStatusSentAfterVerdictPublished"/> latches true — the exact
     /// "non-failure status after publication" invariant violation finding 1 closes.</summary>
-    public AcpHostedAgentRuntime? VerdictCaptureRuntime                     { get; set; }
-    public bool                   NonFailureStatusSentAfterVerdictPublished { get; private set; }
+    public ITerminationVerdictSource? VerdictCaptureRuntime                     { get; set; }
+    public bool                       NonFailureStatusSentAfterVerdictPublished { get; private set; }
 
     /// <summary>Every (agentId, model) pair the orchestrator registered — proves the AgentInstance
     /// the server sees carries the model the process actually runs (the pinned explicit-reviewer
