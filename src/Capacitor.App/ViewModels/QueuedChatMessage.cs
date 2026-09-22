@@ -53,11 +53,21 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         if (_generation != generation || _offset is not { } baseline || offset < baseline) return false;
         var sent = Normalize(Text);
         var seen = Normalize(text);
-        if (AttachmentIds.Count == 0) return sent == seen;
+        if (AttachmentIds.Count == 0) return SamePrompt(sent, seen);
         return seen.Length > sent.Length
             && seen.StartsWith(sent, StringComparison.Ordinal)
             && seen.AsSpan(sent.Length).TrimStart().StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
     }
 
     static string Normalize(string text) => text.Replace("\r\n", "\n").Trim();
+
+    /// A bang command's receipt drops the space the composer may have put after the bang.
+    static bool SamePrompt(string sent, string seen) =>
+        sent == seen || BangBody(sent) is { } a && BangBody(seen) is { } b && a == b;
+
+    static string? BangBody(string text) {
+        if (text.Length == 0 || text[0] != '!') return null;
+        var body = text[1..].TrimStart();
+        return body.Length == 0 ? null : body;
+    }
 }
