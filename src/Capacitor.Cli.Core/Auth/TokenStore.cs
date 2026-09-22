@@ -235,7 +235,18 @@ public sealed class TokenStore(
         }
     }
 
-    public void Delete(string profile) {
+    /// Deletes the profile's credential under its lock when <paramref name="guard"/> holds against
+    /// the config as it is at that moment; a null guard always deletes. A lock that cannot be taken
+    /// or a delete that fails throws, so a caller can report the file it could not remove.
+    public async Task<GuardedWriteOutcome> DeleteGuardedAsync(
+            string profile, Func<ProfileConfig, bool>? guard, CancellationToken ct = default) {
+        using var lockStream = await AcquireProfileLockAsync(profile, ct);
+        var outcome = Evaluate(guard);
+        if (outcome == GuardedWriteOutcome.Written) DeleteLocked(profile);
+        return outcome;
+    }
+
+    void DeleteLocked(string profile) {
         var path = ProfileTokenPath(profile);
         if (File.Exists(path)) File.Delete(path);
         SweepLeakedTemps(profile);
@@ -292,23 +303,28 @@ public sealed class TokenStore(
         ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg)
         && string.Equals(profile, cfg.ActiveName, StringComparison.Ordinal);
 
-    public Task DeleteAsync() {
-        if (File.Exists(LegacyTokenPath)) {
-            try { File.Delete(LegacyTokenPath); } catch { /* best-effort */ }
-        }
-
+    /// Logout. Each credential goes under its own lock, so a refresh holding one finishes and its
+    /// result is deleted rather than recreated after the fact; the legacy file goes under the active
+    /// profile's lock, the one a legacy-only refresh holds.
+    public async Task DeleteAsync(CancellationToken ct = default) {
+        ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg);
+        var names = new HashSet<string>(cfg.Profiles.Keys, StringComparer.Ordinal);
         if (Directory.Exists(TokenDir)) {
-            try {
-                foreach (var file in Directory.EnumerateFiles(TokenDir, "*.json")) {
-                    try { File.Delete(file); } catch { /* best-effort */ }
-                }
-            } catch { /* best-effort */ }
+            foreach (var file in Directory.EnumerateFiles(TokenDir, "*.json"))
+                names.Add(Path.GetFileNameWithoutExtension(file));
         }
 
-        // Also remove any leaked temps (they carry token secrets) so logout leaves nothing behind.
-        SweepLeakedTemps();
+        foreach (var name in names) {
+            try { await DeleteGuardedAsync(name, guard: null, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort, per file */ }
+        }
 
-        return Task.CompletedTask;
+        try {
+            using var lockStream = await AcquireProfileLockAsync(cfg.ActiveName, ct);
+            if (File.Exists(LegacyTokenPath)) File.Delete(LegacyTokenPath);
+        } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort */ }
+
+        SweepLeakedTemps();
     }
 
     /// <summary>

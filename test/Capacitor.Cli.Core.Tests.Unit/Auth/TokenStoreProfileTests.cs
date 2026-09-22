@@ -154,7 +154,7 @@ public class TokenStoreProfileTests {
         await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("acme", MakeTokens("alice"));
         await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("contoso", MakeTokens("bob"));
 
-        AuthFixtures.NewTokenStore(Config.Root).Delete("acme");
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteGuardedAsync("acme", guard: null);
 
         await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("acme")).IsNull();
         await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("contoso"))!.GitHubUsername).IsEqualTo("bob");
@@ -285,7 +285,7 @@ public class TokenStoreProfileTests {
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"), "secret");
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "contoso.json.2.bbbb.tmp"), "other");
 
-        AuthFixtures.NewTokenStore(Config.Root).Delete("acme");
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteGuardedAsync("acme", guard: null);
 
         await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(TokensDir, "contoso.json.2.bbbb.tmp"))).IsTrue();
@@ -322,4 +322,59 @@ public class TokenStoreProfileTests {
         GitHubUsername = username,
         Provider       = AuthProvider.GitHubApp
     };
+
+    [Test]
+    public async Task DeleteGuardedAsync_deletes_only_when_the_guard_passes() {
+        var store = AuthFixtures.NewTokenStore(Config.Root);
+        await store.SaveAsync("acme", MakeTokens("alice"));
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            Profiles = new Dictionary<string, Profile> { ["acme"] = new() { ServerUrl = "https://acme.example" } }
+        });
+
+        var refused = await store.DeleteGuardedAsync("acme", cfg => !cfg.Profiles.ContainsKey("acme"));
+        await Assert.That(refused).IsEqualTo(GuardedWriteOutcome.GuardRefused);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsTrue();
+
+        await ConfigMutator.MutateAsync(Config.Root, c => c with { Profiles = new Dictionary<string, Profile>() });
+        var deleted = await store.DeleteGuardedAsync("acme", cfg => !cfg.Profiles.ContainsKey("acme"));
+        await Assert.That(deleted).IsEqualTo(GuardedWriteOutcome.Written);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Logout_waits_for_a_refresh_holding_the_lock_and_then_deletes_its_result() {
+        var store = AuthFixtures.NewTokenStore(Config.Root);
+        await store.SaveAsync("alpha", MakeTokens("alice"));
+        var alphaPath = Path.Combine(TokensDir, "alpha.json");
+
+        Task logout;
+        using (new FileStream(Path.Combine(TokensDir, "alpha.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            logout = store.DeleteAsync();
+            await Task.Delay(200);
+            await Assert.That(File.Exists(alphaPath)).IsTrue();
+            // The refresh that holds the lock persists its result before releasing.
+            await File.WriteAllTextAsync(alphaPath,
+                System.Text.Json.JsonSerializer.Serialize(MakeTokens("refreshed"), CapacitorJsonContext.Default.StoredTokens));
+        }
+        await logout;
+
+        await Assert.That(File.Exists(alphaPath)).IsFalse();
+    }
+
+    [Test]
+    public async Task Logout_deletes_a_legacy_only_credential_under_the_active_profiles_lock() {
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(LegacyPath,
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+
+        Task logout;
+        using (new FileStream(Path.Combine(TokensDir, "default.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            logout = AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
+            await Task.Delay(200);
+            await Assert.That(File.Exists(LegacyPath)).IsTrue();
+        }
+        await logout;
+
+        await Assert.That(File.Exists(LegacyPath)).IsFalse();
+    }
 }
