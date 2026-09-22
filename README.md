@@ -1965,6 +1965,8 @@ kcap profile show work
 kcap profile remove work
 ```
 
+`kcap profile remove` also deletes the profile's saved sign-in (`~/.config/kcap/tokens/<name>.json`). The active profile cannot be removed — select another with `kcap use <name> --global` first.
+
 The `--remote` flag associates a profile with git remote patterns. When you open a repo whose remote matches a pattern, that profile activates automatically.
 
 #### Switching profiles
