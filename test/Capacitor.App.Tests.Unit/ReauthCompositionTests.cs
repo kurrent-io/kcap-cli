@@ -79,6 +79,37 @@ public class ReauthCompositionTests {
         });
     }
 
+    /// The precondition is an optional null-defaulted parameter at every hop between here and
+    /// LoginAsync, so a dropped one refuses nothing and no other test notices.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_commit_precondition_reaches_the_facade_spec() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var config = new TempConfigRoot();
+            CommitPrecondition? captured = null;
+
+            var graph = ReauthComposition.Build(
+                config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
+                new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
+                "default", ServerUrl,
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                new ConsentFlipClaims(config.Root),
+                new AppStateStore(config.PathTo("app-state.json")),
+                new RecordingOpener(),
+                TimeProvider.System,
+                spec => {
+                    captured = spec.Precondition;
+                    return (_, _) => Task.FromResult<AuthResult>(new AuthResult.Cancelled());
+                },
+                new CommitPrecondition.ExpectServer(ServerUrl));
+
+            await graph.SignIn.SignInCommand.Execute().ToTask();
+
+            await Assert.That(captured).IsTypeOf<CommitPrecondition.ExpectServer>();
+            await Assert.That(((CommitPrecondition.ExpectServer)captured!).Url).IsEqualTo(ServerUrl);
+        });
+    }
+
     /// The dialog renders the SAME sign-in view the wizard shows, and entering it announces the
     /// pinned server — the user must see where they are signing in to.
     [Test]

@@ -154,6 +154,34 @@ public class WizardCompositionHappyPathTests {
     }
 }
 
+/// The Paste arm is the one the re-auth dialog runs, and it is the only arm that can carry a
+/// precondition: a mismatch can only be refused if the operation forwarded it to LoginAsync.
+public class WizardSignInOperationPreconditionTests {
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
+    const string ProfileName = "acme";
+    const string ServerUrl   = "https://acme.kcap.ai";
+
+    [Test]
+    public async Task A_paste_sign_in_is_refused_when_the_profile_does_not_name_the_expected_server() {
+        WizardCompositionFixtures.WriteConfig(Config.Root,
+            new ProfileConfig {
+                ActiveProfile = ProfileName,
+                Profiles      = new() { [ProfileName] = new Profile { ServerUrl = ServerUrl } }
+            });
+
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var operation = WizardSignInOperation.For(
+            AuthFixtures.NewFacade(Config.Root, new RecordingAuthProgress(), handler), ProfileName,
+            new CommitPrecondition.ExpectServer("https://elsewhere.example"));
+
+        var result = await operation(new ConnectIntent.Paste(ServerUrl), CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Failed>();
+        await Assert.That(File.Exists(Config.PathTo("tokens", $"{ProfileName}.json"))).IsFalse();
+    }
+}
+
 /// (b) Abandon before sign-in: staging a valid Connect intent and closing WITHOUT ever calling
 /// Begin must leave nothing durable — no claim, no lane traffic, no CLI spawn, and the config
 /// file untouched.
