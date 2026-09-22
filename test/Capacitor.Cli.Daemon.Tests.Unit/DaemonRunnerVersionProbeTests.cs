@@ -10,6 +10,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// first word onto the version, advertising <c>"1.0.75.\nRun"</c> — which no version parser accepts.
 /// Each case below is real observed output from the installed CLI.</para>
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonRunnerVersionProbeTests {
     [Test]
     public async Task Copilot_multiline_output_yields_just_the_version() {
