@@ -30,6 +30,7 @@ public static class PiReviewerExtension {
 
         const MAX_READ_LINES = 2000;
         const MAX_READ_BYTES = 262144;
+        const MAX_READ_FILE_BYTES = 1048576;
         const READ_CHUNK_BYTES = 65536;
         const MAX_DIR_ENTRIES = 1000;
         const MAX_MATCHES = 200;
@@ -156,7 +157,13 @@ public static class PiReviewerExtension {
               },
               run(params: any) {
                 const target = contained(params.path);
-                if (!statSync(target).isFile()) throw new Error("not a file");
+                const info = statSync(target);
+                if (!info.isFile()) throw new Error("not a file");
+                // A line-based offset is honoured by scanning to it, so a large offset on a large file
+                // would traverse the whole thing regardless of the returned-byte cap. Refuse a file over
+                // the read ceiling outright, and cap total bytes scanned per call as a backstop, so the
+                // synchronous loop can never run unbounded and stall the reviewer's abort RPC.
+                if (info.size > MAX_READ_FILE_BYTES) throw new Error("file is too large to read");
 
                 const offset = Math.max(0, Number(params.offset ?? 0) | 0);
                 const limit = Math.min(MAX_READ_LINES, Math.max(1, Number(params.limit ?? MAX_READ_LINES) | 0));
@@ -168,7 +175,7 @@ public static class PiReviewerExtension {
                 try {
                   const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
                   const decoder = new StringDecoder("utf8");
-                  let carry = "", out = "", line = 0, taken = 0, bytes = 0, more = false, stop = false, first = true;
+                  let carry = "", out = "", line = 0, taken = 0, bytes = 0, scanned = 0, more = false, stop = false, first = true;
 
                   function take(text: string, terminated: boolean): boolean {
                     if (line < offset) { line++; return true; }
@@ -183,6 +190,10 @@ public static class PiReviewerExtension {
                   while (!stop) {
                     const n = readSync(fd, chunk, 0, chunk.length, null);
                     if (n === 0) break;
+                    // Counts every byte consumed — including those skipped to reach a large offset — so a
+                    // file that grew past its stat size cannot make this loop traverse without bound.
+                    scanned += n;
+                    if (scanned > MAX_READ_FILE_BYTES) { more = true; stop = true; }
                     if (first) {
                       first = false;
                       if (chunk.subarray(0, Math.min(n, 8192)).includes(0)) throw new Error("binary file");

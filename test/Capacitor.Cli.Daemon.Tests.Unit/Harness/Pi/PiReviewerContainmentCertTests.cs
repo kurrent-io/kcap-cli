@@ -93,6 +93,22 @@ public class PiReviewerContainmentCertTests {
     }
 
     [Test]
+    public async Task Read_file_refuses_a_file_over_the_read_ceiling() {
+        RequireGate();
+        await using var bench = PiContainmentBench.Create(plantCanaries: false);
+        // Just over the 1 MB read ceiling. A large offset on such a file must NOT let the reviewer's
+        // synchronous read loop traverse the whole thing — it is refused before any scan.
+        File.WriteAllText(Path.Combine(bench.Worktree, "big.txt"), new string('x', 1048576 + 4096));
+
+        var run = await bench.RunAsync(null,
+            new PiScriptedStep(Tool: "read_file", ArgsJson: """{"path":"big.txt","offset":900000}""", Id: "r1"),
+            new PiScriptedStep(Text: "done"));
+
+        await Assert.That(run.ToolResults).Contains(r => r.Contains("too large"));
+        await Assert.That(string.Join("\n", run.ToolResults)).DoesNotContain("xxxxxxxxxx");
+    }
+
+    [Test]
     [Arguments("""{"path":"OUTSIDE_ABS"}""")]
     [Arguments("""{"path":"../outside/secret.txt"}""")]
     [Arguments("""{"path":"SIBLING_PREFIX"}""")]

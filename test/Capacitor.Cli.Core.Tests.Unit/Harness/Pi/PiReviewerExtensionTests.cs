@@ -36,6 +36,14 @@ public class PiReviewerExtensionTests {
     }
 
     [Test]
+    public async Task Read_file_caps_total_bytes_scanned_independent_of_the_offset() {
+        // A large offset must not make the read loop traverse an arbitrarily large file: the file size
+        // is refused over a ceiling, and total bytes scanned are capped as a backstop.
+        await Assert.That(Ts).Contains("file is too large to read");
+        await Assert.That(Ts).Contains("scanned > MAX_READ_FILE_BYTES");
+    }
+
+    [Test]
     public async Task The_glob_matcher_is_bounded_and_carries_the_search_deadline() {
         // Memoised by (glob-seg, path-seg), an over-complex pattern refused, and the deadline threaded
         // in so a crafted "**" run cannot wedge the event loop.
