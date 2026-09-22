@@ -77,9 +77,13 @@ its startup matrix; the matrix returns at once for a running service, whatever
 profile that service is pinned to, installs a unit when none exists, and starts
 a stopped one. It converges on `active_profile` only when no daemon of another
 profile is running under the bound name. The status snapshot a daemon returns
-on attach carries its `Name` and `ServerUrl`, and nothing compares them to the
-profile the app resolved: an attached daemon serving another profile's server
-is reported as connected.
+on attach carries its `Name` and `ServerUrl` but not the profile it resolved
+at boot, and nothing compares them to the profile the app resolved: an
+attached daemon serving another profile's server is reported as connected, and
+two profiles that share a server and a daemon name while differing in
+credentials, visibility or exclusions are indistinguishable from the snapshot.
+The lane's evidence predicate compares server and name only, for the same
+reason.
 
 **The service transaction locks do not exclude a runtime start.** A daemon
 takes its own runtime lock before it publishes its pid file, and
@@ -161,15 +165,22 @@ profile's cross-process lock; under the lock it falls back to that pre-lock
 copy when the file is absent, refreshes it and saves it again through
 `SaveAsync`. `SaveAsync` and `Delete` take no lock. The legacy `tokens.json`
 backs exactly one profile, the on-disk active one, while its per-profile file
-is absent; `SaveAsync` for any profile deletes it, so saving a token for
-profile B removes active profile A's only credential. Ownership follows
-`active_profile` at read time, so a switch from A to B strands A's legacy
-credential: A can no longer read it and B's next save deletes it. The owner
+is absent; `SaveAsync` for any profile deletes it, best-effort, so saving a
+token for profile B removes active profile A's only credential, and a failed
+delete leaves both files side by side. A legacy credential may carry no
+`ServerUrl`, so the binding check cannot tell whose it is, and a corrupt
+per-profile file deliberately does not fall back to it. Ownership follows
+`active_profile` at read time, so a change of selection from A to B strands
+A's legacy credential: A can no longer read it, B can claim it as a fallback,
+and B's next save deletes it. `active_profile` is written by `kcap use`
+(`--global`, and also without it outside a repository), by tenant discovery's
+`MergeProfiles` on the GitHub and WorkOS paths, and by nothing else. The owner
 check `IsLegacyOwnerAsync` reads config through `AppConfig.LoadProfileConfig`,
 which can persist a v1 migration through `ConfigMutator`. `kcap logout` calls
 the parameterless `DeleteAsync()`, which deletes the legacy file, every
 per-profile file and every temp file with no lock; the synchronous
-`Delete(profile)` has no caller.
+`Delete(profile)` has no caller. The token lock's wait is bounded at 30
+seconds, a WorkOS refresh budget plus margin.
 
 **`SettingsProfileStore` is bound to the profile the app started on.** It
 refuses once that profile is missing or points at another server. It does not
@@ -329,9 +340,10 @@ profile gone, so the caller shows the path.
 
 `kcap use` decides inside its mutation: the profile must exist at that moment
 for the global, binding and `--save` arms alike, else the command refuses with
-the same message it prints today. Before the global arm's mutation it migrates
-the legacy credential to the outgoing active profile (see Token lock), so a
-selection change never strands it.
+the same message it prints today. Before its global arm's mutation, taken with
+`--global` and also without it outside a repository, it migrates the legacy
+credential to the outgoing active profile (see Token lock), so a selection
+change never strands it.
 
 `kcap profile remove` calls `RemoveAsync` and prints a line per outcome; for
 `IsActive` it names `kcap use <other> --global`, for `RemovedTokenRetained` the
@@ -361,13 +373,20 @@ The profile's cross-process refresh lock becomes the lock for every write to
   `tokens.json` still on disk is found by the reload, refreshed and migrated.
 - The legacy `tokens.json` is deleted after a save only when the saved profile
   is its owner by that same pure check. A save for another profile leaves it.
-- `MigrateLegacyAsync(owner)` moves `tokens.json` to `tokens/<owner>.json`
-  under the owner's lock when the legacy file exists and the per-profile file
-  does not, and is a no-op otherwise. Every change of `active_profile` calls
-  it for the outgoing active profile before the config write: `kcap use
-  --global` and the `--activate` transaction. Ownership of the legacy file is
-  therefore settled before the name it follows moves, and switching back to
-  the previous profile finds its credential in its own file.
+- `MigrateLegacyAsync(owner)` settles the legacy file under the owner's lock:
+  when `tokens.json` exists and `tokens/<owner>.json` does not, it moves it
+  there; when the per-profile file exists, valid or corrupt, it deletes the
+  legacy file, which is redundant or superseded; when no legacy file exists it
+  is a no-op. It throws when the move or delete fails. Every writer of
+  `active_profile` calls it for the outgoing active name, read immediately
+  before its own mutation, and refuses the selection change when it throws:
+  `kcap use` on its global arm, with or without `--global`; the GitHub and
+  WorkOS discovery commits, before the commit boundary's config mutation; and
+  the `--activate` transaction. Two writers racing each migrate the name they
+  read; the file lands with the first, the second finds none. The legacy
+  file is therefore never readable under a name other than the one that owned
+  it when it was last the sole credential, and switching back to the previous
+  profile finds its credential in its own file.
 - The parameterless `DeleteAsync()` (logout) deletes each per-profile file and
   sweeps its temps under that profile's lock, one profile at a time, over the
   union of config's profile names and the files present; the legacy file goes
@@ -443,13 +462,39 @@ The one thing the transaction cannot exclude is a runtime start racing the
 interval between its stop confirmation and its bootstrap: `kcap daemon start`
 for the old profile under the same name takes the daemon's runtime lock, not
 the service transaction lock, and can win the name so that the target's
-bootstrap fails and the intruder survives rollback. The repair is at attach:
-the lifecycle controller compares the attached daemon's `Name` and `ServerUrl`
-to the resolution's daemon name and canonical server, and on a mismatch
-surfaces attention — "Daemon <name> is running for <server>, not <expected>" —
-with a **Replace** repair that runs the ordinary `Replace` for the resolved
-profile, gated on idle. The same check is what turns a `kcap use --global`
-made while a daemon runs from a silent mismatch into a repairable one.
+bootstrap fails and the intruder survives rollback. The repair is at attach.
+
+### Attach identity check
+
+`DaemonInfoDto` gains `Profile`, the name the daemon resolved at boot, an
+appended nullable field an older daemon leaves absent. When the lifecycle
+controller's attach reaches `Connected`, it compares the snapshot's `Name`,
+`ServerUrl` and, when present, `Profile` to the graph's bound resolution: its
+daemon name, its canonical server and its profile name. The expected identity
+is that resolution, never a re-read of `active_profile`, so an external
+selection change reports nothing here and cannot move the daemon out from
+under the app. On a mismatch it surfaces attention — "Daemon <name> is running
+for <what differs>, not <expected>" — and:
+
+- when the resolution carries a valid profile name, offers a **Replace** repair
+  that runs the ordinary `Replace` for it, gated on idle;
+- under a `KCAP_URL` or `--server-url` launch, where the resolution has no
+  profile name and the factory refuses a request, reports only, with the
+  guidance to relaunch without the override or run
+  `kcap daemon service install --replace --verify --profile <name>`;
+- with auto actions closed after an abandoned wizard, reports only.
+
+Wizard-first mode has no daemon graph and no check. An older daemon that
+reports no `Profile` is compared on name and server only, and a survivor of
+the runtime race that shares both with the target is then not detected; the
+manual path is `kcap daemon stop --name <name>`, after which the startup
+matrix installs the target's unit. The same check is what turns a
+`kcap use --global` made while a daemon runs from a silent mismatch into a
+reported one.
+
+The lane's evidence predicate compares `Profile` the same way for an `Activate`
+request: a daemon that reports a profile other than the target is not
+`Succeeded`, and one that reports none is judged on server and name as today.
 
 ### Lane
 
@@ -486,7 +531,9 @@ admission refusal, a queued `Replace` for the previous profile could take over
 the target's freshly installed unit, because `Replace` does not run the start
 gate's identity check.
 
-The rename's timeout for a request with a retire id applies unchanged.
+The rename's longer process timeout applies to every `Activate` request, not
+only to one with a retire id: the preparation step can wait the token lock's
+full 30 seconds before the forward phase begins.
 
 ### CLI
 
@@ -507,7 +554,7 @@ Rules:
 `--activate` requires `--replace --verify` and a non-empty
 `KCAP_EXPECT_SERVER_URL` in the invocation; either missing is an argument
 error (`expect_server_required` for the variable) before anything runs. It
-changes the transaction in four places; without it the transaction is
+changes the transaction in five places; without it the transaction is
 unchanged, so a rename keeps its semantics.
 
 - **Viability** gains two checks, evaluated with the existing ones, before
@@ -516,6 +563,14 @@ unchanged, so a rename keeps its semantics.
   equal to the pinned profile's resolved URL, and `daemon_name_mismatch` when
   `DaemonNameResolver` over the pinned profile's `daemon.name` does not equal
   `--name`.
+- **Preparation**, after viability and before leftover-marker recovery, still
+  with nothing touched: `MigrateLegacyAsync` for the active name from a pure
+  read, on the token lock's own 30-second wait, outside the forward budget. A
+  throw stops the transaction with `activation_migration_failed`. Running it
+  here rather than beside the config write keeps a refresh that holds the
+  outgoing profile's lock from consuming the forward budget after the old
+  daemon is already stopped; the migration is harmless if the transaction
+  later fails, since the owner is still the active profile.
 - **Retire** of an absent plist additionally requires the retired label
   confirmed stopped by the transaction's own predicate, no validated pid and no
   hello reply, else `retire_reason=live_owner_without_unit`, nothing touched: a
@@ -527,14 +582,14 @@ unchanged, so a rename keeps its semantics.
   label's previous owner gone, before the unit is written. Immediately before
   the write it confirms, by the same stop predicate, that no owner answers
   under the target label or, with `--retire`, the retired label; either
-  refuses with `activation_owner_alive`, nothing written. It then migrates the
-  legacy credential to the outgoing active profile (`MigrateLegacyAsync` over
-  the active name from a pure read). The write is one `ConfigMutator` mutation
-  whose callback rechecks, on the locked config, that the pinned profile still
-  exists by exact name, still resolves to `KCAP_EXPECT_SERVER_URL` and still
-  resolves to `--name`, then sets `active_profile`; a recheck that fails leaves
-  the config unchanged and the transaction stops with `activation_stale`. A
-  mutation that throws stops it with `activation_failed`. In both cases
+  refuses with `activation_owner_alive`, nothing written. The write is one
+  `ConfigMutator` mutation, inside the forward budget with its lock wait
+  bounded by the config lock's own timeout, whose callback rechecks, on the
+  locked config, that the pinned profile still exists by exact name, still
+  resolves to `KCAP_EXPECT_SERVER_URL` and still resolves to `--name`, then
+  sets `active_profile`; a recheck that fails leaves the config unchanged and
+  the transaction stops with `activation_stale`. A mutation that throws stops
+  it with `activation_failed`. In both cases
   nothing is written for the new unit, the old owner is already gone, and
   `active_profile` still names the previous selection, so the next start
   reinstalls or restarts that profile's daemon. On success the transaction
@@ -555,12 +610,13 @@ closes it.
 1. **List, status, Sign in, Remove.** The tab and `ProfilesSettingsViewModel`;
    `ExpectServer`, `CredentialSaved` and the two-part save guard;
    `ProfileRemoval` and the token lock seams, including the owner-aware legacy
-   delete, `MigrateLegacyAsync`, the locked logout and the removal of
-   `Delete(profile)`; `kcap use` deciding in its mutation and migrating the
-   legacy credential; `kcap profile remove`; README and help text.
+   delete, `MigrateLegacyAsync` at every selection writer, the locked logout
+   and the removal of `Delete(profile)`; `kcap use` deciding in its mutation;
+   `kcap profile remove`; README and help text.
 2. **Add.** The dialog, `IsValidProfileName`, `ExpectAbsent`, `SeedFrom`.
-3. **Switch.** `--activate` with its four changes and `--retire-profile`;
-   `RetireProfile`, `Activate`, `ActivationEvidence` and the restart latch with
+3. **Switch.** `--activate` with its five changes and `--retire-profile`;
+   `DaemonInfoDto.Profile`; `RetireProfile`, `Activate`, `ActivationEvidence`,
+   the profile leg of the evidence predicate and the restart latch with
    admission refusal; the attach identity check with its Replace repair; the
    flow; README and help text.
 
@@ -575,16 +631,20 @@ closes it.
 - `TokenStoreTests`: an expired, refreshable legacy-only token is refreshed and
   migrated on the reactive and proactive paths; a save for profile B leaves
   active profile A's legacy file, also with a concurrent refresh of A;
-  `MigrateLegacyAsync` moves the file once and is a no-op when the per-profile
-  file exists; the guarded save skips when the profile is absent or names
-  another server; the refresh path saves under the lock it already holds; no
-  config write occurs under the token lock; logout against a refresh holding
-  its lock ends with no file, for a per-profile and for a legacy-only
-  credential, and logout sweeps temps without racing a live save.
+  `MigrateLegacyAsync` moves the file when the per-profile file is absent,
+  deletes it when a valid or a corrupt per-profile file exists, is a no-op
+  without a legacy file, and throws on a failed move or delete; after any of
+  these, selecting an uncredentialed B reads no credential; the guarded save
+  skips when the profile is absent or names another server; the refresh path
+  saves under the lock it already holds; no config write occurs under the
+  token lock; logout against a refresh holding its lock ends with no file,
+  for a per-profile and for a legacy-only credential, and logout sweeps temps
+  without racing a live save.
 - `UseCommandTests`: a profile removed between read and mutation is refused on
   the global, binding and `--save` arms; a global selection away from A with a
-  legacy-only credential leaves it in `tokens/A.json`, and selecting A again
-  reads it.
+  legacy-only credential, with and without `--global` outside a repository,
+  leaves it in `tokens/A.json`, and selecting A again reads it; a migration
+  that throws refuses the selection.
 - `ProfileCommandTests` (CLI): remove prints each outcome and leaves no token.
 - Facade tests: `ExpectAbsent` (including a case-variant created during
   authentication) and `ExpectServer` refuse at commit with no token written,
@@ -595,8 +655,10 @@ closes it.
   token save throws or its guard fails, true for a `None` server; the
   foreign-profile `kcap login` save is unchanged for an existing and for a
   never-existing profile; a `kcap login` paused after its config commit while
-  the profile is removed saves nothing and exits non-zero; `active_profile` is
-  untouched by a known-server sign-in.
+  the profile is removed saves nothing and exits non-zero; GitHub and WorkOS
+  discovery moving the selection from a legacy-only A to B leave A's
+  credential in `tokens/A.json`; `active_profile` is untouched by a
+  known-server sign-in.
 - `ServiceVerify`: `--retire-profile` match, mismatch, unit with no
   `KCAP_PROFILE`, absent, unreadable, and the unchanged default; `--activate`
   refused without `--replace --verify` and with an empty or unset
@@ -607,8 +669,11 @@ closes it.
   `activation_owner_alive` for an owner appearing under either label after
   the matrix, by hello alone as well as by pid; `activation_stale` for a
   target removed, repointed or renamed between viability and activation, with
-  nothing written for the new unit; the legacy credential migrated to the
-  outgoing profile before the write; `active_profile` unchanged after
+  nothing written for the new unit; the legacy credential migrated in
+  preparation, before recovery and retire, a migration delayed by a refresh
+  holding the lock not shortening the forward budget, and a migration that
+  throws stopping with `activation_migration_failed` and nothing touched;
+  `active_profile` unchanged after
   viability, contention and retire refusals, written only after both labels
   are confirmed stopped, and still written after a readiness rollback, a
   `restore_verification` return and a rollback that gives up on a foreign
@@ -629,8 +694,15 @@ closes it.
   start attaches to a running target daemon, installs the target's unit when
   none exists, and surfaces attention on residue; before activation, with the
   old unit retired, it reinstalls the previous profile's; an attached daemon
-  whose `ServerUrl` or `Name` differs from the resolution's surfaces attention
-  with the Replace repair, and the repair is refused while agents are active.
+  whose `ServerUrl`, `Name` or reported `Profile` differs from the bound
+  resolution's surfaces attention with the Replace repair, refused while
+  agents are active; an older daemon reporting no `Profile` that matches on
+  server and name is accepted; under a `KCAP_URL` launch and with auto actions
+  closed the mismatch is reported without a repair; an external
+  `active_profile` change alone reports nothing.
+- `DaemonMutationLaneTests` (evidence): an `Activate` request whose daemon
+  reports another profile is not `Succeeded`; one reporting none is judged on
+  server and name.
 - `ProfilesSettingsViewModelTests`, in the `SettingsViewModelTests` pattern
   (`TempConfigRoot`, fake lane, confirm and relaunch): row status for each
   verdict, an empty `default`, an invalid URL, a `None` stamp and one
