@@ -310,8 +310,10 @@ public sealed class TokenStore(
         ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg);
         var names = new HashSet<string>(cfg.Profiles.Keys, StringComparer.Ordinal);
         if (Directory.Exists(TokenDir)) {
-            foreach (var file in Directory.EnumerateFiles(TokenDir, "*.json"))
-                names.Add(Path.GetFileNameWithoutExtension(file));
+            try {
+                foreach (var file in Directory.EnumerateFiles(TokenDir, "*.json"))
+                    names.Add(Path.GetFileNameWithoutExtension(file));
+            } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort: config's names still get deleted */ }
         }
 
         foreach (var name in names) {
