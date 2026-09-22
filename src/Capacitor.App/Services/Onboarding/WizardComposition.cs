@@ -142,8 +142,20 @@ internal static class WizardComposition {
         // A WorkOS "I already have a workspace" prefills the Connect step; without the navigation
         // the prefill would sit on a page the user is not looking at.
         signIn.RetargetRequested += _ => wizard.TryGoTo(WizardStepId.Connect);
+        signIn.Completed += () => _ = AdvanceAfterHoldAsync(wizard, wizard.Visit, options.Time, options.ShutdownToken);
 
         return new WizardGraph(wizard, auth, steps, import);
+    }
+
+    static async Task AdvanceAfterHoldAsync(
+            OnboardingViewModel wizard, int visit, TimeProvider time, CancellationToken ct) {
+        try {
+            await Task.Delay(SignInStepViewModel.SuccessHold, time, ct).ConfigureAwait(true);
+        } catch (OperationCanceledException) {
+            return;
+        }
+
+        wizard.TryAdvanceFrom(WizardStepId.SignIn, visit);
     }
 
     /// The Done step's rows: outcome labels, not the in-wizard step titles. Connect picks a
@@ -174,11 +186,10 @@ internal static class WizardComposition {
     };
 
     static string ConnectNote(ConnectStepViewModel step) => step.Intent switch {
-        ConnectIntent.Discover { Provider: AuthProvider.GitHubApp } => "Find workspaces with GitHub",
-        ConnectIntent.Discover                                      => "Find workspaces with single sign-on",
-        ConnectIntent.Paste paste                                   => paste.ServerInput,
-        ConnectIntent.Create                                        => "Create a new workspace",
-        _                                                           => "Workspace chosen",
+        ConnectIntent.Discover    => "Find workspaces with single sign-on",
+        ConnectIntent.Paste paste => paste.ServerInput,
+        ConnectIntent.Create      => "Create a new workspace",
+        _                         => "Workspace chosen",
     };
 
     static string DefaultsNote(DefaultsStepViewModel step) {
