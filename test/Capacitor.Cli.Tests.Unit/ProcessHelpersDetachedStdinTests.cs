@@ -36,10 +36,17 @@ public class ProcessHelpersDetachedStdinTests {
                 writer.Write("""{"hook_event_name":"SessionEnd","session_id":"abc"}""");
             }
 
-            var deadline = DateTime.UtcNow.AddSeconds(10);
+            // Read only once the child has exited: until cmd closes its redirect the file is open
+            // for write, and Windows refuses a reader for as long as it is. The child's handle in
+            // DetachedChild keeps the pid from being reused, so looking it up by pid is safe; a
+            // lookup that fails means it has already exited, which is the state being waited for.
+            using var exitBound = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-            while (DateTime.UtcNow < deadline && (!File.Exists(sink) || new FileInfo(sink).Length == 0)) {
-                await Task.Delay(50);
+            try {
+                using var process = Process.GetProcessById(pid);
+                await process.WaitForExitAsync(exitBound.Token);
+            } catch (ArgumentException) {
+                // Already exited.
             }
 
             await Assert.That(File.ReadAllText(sink).Trim())
