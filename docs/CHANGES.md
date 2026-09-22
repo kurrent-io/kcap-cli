@@ -6,6 +6,28 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A flows tool call ends before the shortest harness timeout
+
+A start holds its tool call open while the first round runs, and the reply it ends on — the round
+result, or "Flow still running" — is the only place the driver is handed its `flow_run_id`. Codex
+aborts an MCP tool call at 300 s. The call was bounded at 9 minutes, so on Codex any round over five
+minutes ended in the harness's own timeout error instead: no id, no guidance, a reviewer still
+running, and a driver with no supported way back to it.
+
+The bounds are sized to 300 s for every harness rather than per client. `ToolCallBudget` is 4
+minutes: with a GET still in flight when it expires and the ack POST after it, the call ends around
+275 s. `PollCap`, which alone bounds a `wait: true` status call, is 3m30s. A model-bearing start is
+one POST outside the settlement lane — re-sending it would launch a second run — and had no deadline
+at all; it takes the 3-minute bound a first settlement attempt gets.
+
+`SettlementElapsedDeadline` stays at 3 minutes because it is not ours to move: it is the server's
+reconcile sweep interval, and the sweep is what proves a prior reviewer agent gone so a
+`participant_unreachable` retry can succeed. That leaves `SettlementAbsoluteDeadline` 30 s of room
+above it, so a daemon lane that keeps making progress now re-arms the window for 30 s, not five
+minutes, before the caller gets the retryable busy error. The cost falls on Claude Code too, which
+sat through the longer bounds without trouble; a long round there takes more status calls. A
+per-client budget would avoid that, at the price of a second set of bounds to keep honest.
+
 ## The work-context pane shows the session's plan
 
 A PLAN section sits between the pull request and SUBAGENTS: the documents the session declared,
