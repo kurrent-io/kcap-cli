@@ -602,7 +602,20 @@ public sealed class TokenStore(
         }
 
         try {
-            var latest = await LoadAsync(profile) ?? current;
+            // Re-read under the lock. A file deleted since the pre-lock read is a sign-out, not a
+            // credential to bring back from the copy in hand; a file the pre-lock read parsed but
+            // is corrupt now is refreshed from that copy, as a corrupt file always was.
+            var (state, onDisk) = await ReadTokenFileAsync(ProfileTokenPath(profile));
+            StoredTokens latest;
+            if (state == TokenFileState.Loaded) {
+                latest = onDisk!;
+            } else if (state == TokenFileState.Missing) {
+                var legacy = IsLegacyOwner(profile) ? (await ReadTokenFileAsync(LegacyTokenPath)).Tokens : null;
+                if (legacy is null) return null;
+                latest = legacy;
+            } else {
+                latest = current;
+            }
 
             // A peer refreshed while we waited for the lock (the persisted token changed) and its
             // result is still valid → don't refresh again, even if the fresh token is still inside
