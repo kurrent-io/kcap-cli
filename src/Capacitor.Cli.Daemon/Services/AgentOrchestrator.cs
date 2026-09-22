@@ -2672,7 +2672,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!runtime.EmitsTerminalOutput) {
                 SetAgentStatus(agent, "Running");
                 agent.HasReceivedOutput = true;
-                if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+                if (!agent.IsPrivate) TrySendAgentStatus(agent, "Running", null, out _);
 
                 // LaunchStage is Starting-only; cleared at the exact instant this agent leaves it.
                 agent.ActivityClock.ClearLaunchStage();
@@ -3046,7 +3046,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (agent.Status == "Starting") {
                     SetAgentStatus(agent, "Running");
-                    if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+                    if (!agent.IsPrivate) TrySendAgentStatus(agent, "Running", null, out _);
                 }
 
                 // Consent/trust dialogs are a PRE-SESSION concern: they render once at startup, before
@@ -3123,7 +3123,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (!agent.IsPrivate) {
             _ = _server.LaunchFailedAsync(agent.Id, reason);
-            _ = _server.AgentStatusChangedAsync(agent.Id, "Failed", agent.SessionId);
+            TrySendAgentStatus(agent, "Failed", null, out _);
             _ = _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped("failed", null));
         }
 
@@ -3154,7 +3154,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     ///
     /// <para>Both signals are read with proper cross-thread ordering — the flag via
     /// <see cref="System.Threading.Volatile"/>, the verdict via the runtime's
-    /// lock-synchronised <see cref="AcpHostedAgentRuntime.ReadVerdict"/> — and ORed because the
+    /// lock-synchronised <see cref="ITerminationVerdictSource.ReadVerdict"/> — and ORed because the
     /// verdict is PUBLISHED (at reap-claim time) strictly before the finalizer's CAS flips the flag,
     /// so a same-tick emitter could otherwise read the flag as still 0 while the verdict already
     /// exists. Post-window reaps leave both false, preserving byte-identical teardown for that
@@ -3162,7 +3162,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     static bool VerdictForbidsNonFailureStatus(AgentInstance agent) =>
         Volatile.Read(ref agent.LaunchFailureVerdictReported) != 0
-     || (agent.Runtime is AcpHostedAgentRuntime runtime
+     || (agent.Runtime is ITerminationVerdictSource runtime
          && runtime.ReadVerdict() is { ReapedInsideLaunchWindow: true });
 
     async Task FinalizeAgentRunAsync(AgentInstance agent) {
@@ -3178,8 +3178,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // racing us on another thread, publishing it at the tail of a critical section its own
             // _cts.Cancel() drove us into — reading the plain property there sees null and skips the
             // report permanently (finding 1). ReadVerdict blocks until the claim has committed.
-            if (agent.Runtime is AcpHostedAgentRuntime acpRuntime
-                && acpRuntime.ReadVerdict() is { ReapedInsideLaunchWindow: true } verdict
+            if (agent.Runtime is ITerminationVerdictSource runtime
+                && runtime.ReadVerdict() is { ReapedInsideLaunchWindow: true } verdict
                 && Interlocked.CompareExchange(ref agent.LaunchFailureVerdictReported, 1, 0) == 0) {
                 // Force terminal Failed BEFORE the report await, not after (finding 2). A concurrent
                 // status emitter — a reconnect re-registration, a racing stop — must observe the
@@ -3197,7 +3197,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     try {
                         await _server.LaunchFailedAsync(
                             agent.Id,
-                            MapLaunchFailureReason(verdict.Reason, nameof(AcpHostedAgentRuntime.TerminationVerdict)));
+                            MapLaunchFailureReason(verdict.Reason, nameof(TerminationVerdict)));
                     } catch (Exception ex) {
                         LogVerdictReportFailed(ex, agent.Id);
                     }
@@ -3259,7 +3259,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 // PrivateLocal agents make no per-agent server calls (deny-all).
                 if (!agent.IsPrivate) {
-                    await _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
+                    if (TrySendAgentStatus(agent, status, null, out var statusSend)) await statusSend;
 
                     var stopReason = status == "Completed" ? "exited" : "failed";
 
@@ -3813,18 +3813,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // An unregistered agent has no server-side row to update.
             if (!agent.IsPrivate) {
-                // Atomic check + send-INITIATION under _reapLock for an ACP runtime (finding 1
-                // refinement): the round-1 second check narrowed but did not CLOSE the check-to-send
-                // race — a verdict could publish between the check and this send. The gate holds the
-                // publication lock across BOTH, so a Completed frame, if sent at all, is initiated
-                // before publication and is therefore ordered-before any LaunchFailed on the single
-                // hub connection. Non-ACP runtimes never carry a launch-window verdict, so the
-                // snapshot is authoritative for them.
-                if (agent.Runtime is AcpHostedAgentRuntime acpRuntime)
-                    acpRuntime.TryInitiateNonFailureStatusSend(
-                        () => _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId), out _);
-                else if (!suppressCompleted)
-                    _ = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
+                // Atomic check + send-INITIATION under the runtime's own gate: the round-1 second
+                // check narrowed but did not CLOSE the check-to-send race — a verdict could publish
+                // between the check and this send. The gate holds the publication lock across BOTH,
+                // so a Completed frame, if sent at all, is initiated before publication and is
+                // therefore ordered-before any LaunchFailed on the single hub connection.
+                if (agent.Runtime is ITerminationVerdictSource || !suppressCompleted)
+                    TrySendAgentStatus(agent, "Completed", null, out _);
                 _ = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
             }
 
@@ -4536,6 +4531,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         );
     }
 
+    /// <summary>The only caller of <c>AgentStatusChangedAsync</c>. A failure status is always sent. Any
+    /// other status for a runtime that can publish a termination verdict is initiated under that runtime's
+    /// gate, so it cannot follow — and clear — a launch failure.</summary>
+    internal bool TrySendAgentStatus(AgentInstance agent, string status, string? sessionId, out Task send) {
+        Task Send() => _server.AgentStatusChangedAsync(agent.Id, status, sessionId ?? agent.SessionId);
+
+        if (string.Equals(status, "Failed", StringComparison.Ordinal) || agent.Runtime is not ITerminationVerdictSource source) {
+            send = Send();
+            return true;
+        }
+
+        return source.TryInitiateNonFailureStatusSend(Send, out send);
+    }
+
     /// <summary>
     /// Binds the ACP canonical session to <paramref name="agent"/> (<c>AcpSessionStarted</c>) —
     /// this call MUST run after <see cref="RegisterAgentAsync"/> has already registered the agent (the server rejects a
@@ -4934,20 +4943,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // below then fail. The pump holds the replay until readiness returns.
                     agent.CloudSink?.RequestResync();
 
-                    // Re-gate the status send atomically under _reapLock, per attempt: the outer
-                    // pre-check cannot cover a verdict published DURING the AgentRegistered await
-                    // above (or on a later retry). The gate suppresses the send if a verdict is now
-                    // published, else initiates it before publication can proceed so it is
+                    // Re-gate the status send atomically under the runtime's own gate, per attempt:
+                    // the outer pre-check cannot cover a verdict published DURING the AgentRegistered
+                    // await above (or on a later retry). The gate suppresses the send if a verdict is
+                    // now published, else initiates it before publication can proceed so it is
                     // ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only holds
                     // it across initiation), preserving the retry-on-failure semantics.
-                    if (agent.Runtime is AcpHostedAgentRuntime acpRuntime) {
-                        if (!acpRuntime.TryInitiateNonFailureStatusSend(
-                                () => _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId), out var statusSend))
-                            break; // verdict published → terminal Failed; skip this agent's re-registration
-                        await statusSend;
-                    } else {
-                        await _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId);
-                    }
+                    if (!TrySendAgentStatus(agent, agent.Status, null, out var statusSend))
+                        break; // verdict published → terminal Failed; skip this agent's re-registration
+                    await statusSend;
 
                     // Re-send the fixed PTY dims. The server stores them in memory, so a
                     // server restart (not just a daemon blip) wipes them — without this
@@ -5083,7 +5087,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (agent.IsPrivate) return;
                 await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunHeartbeat(winner.SessionId));
-                await _server.AgentStatusChangedAsync(agent.Id, agent.Status, winner.SessionId);
+                if (TrySendAgentStatus(agent, agent.Status, winner.SessionId, out var detected)) await detected;
             }, cts.Token);
 
             if (!found && !cts.IsCancellationRequested) LogSessionIdNotDetected(agent.Id, SessionIdPollTimeout.TotalSeconds);

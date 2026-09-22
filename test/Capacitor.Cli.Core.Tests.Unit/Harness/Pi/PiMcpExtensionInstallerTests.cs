@@ -61,7 +61,7 @@ public class PiMcpExtensionInstallerTests {
         await Assert.That(content).Contains("throw new Error");
         // Dependency-free spawn of the stdio servers.
         await Assert.That(content).Contains("node:child_process");
-        await Assert.That(content).Contains("\"mcp\", this.server");
+        await Assert.That(content).Contains("new McpStdioClient(server, \"kcap\", [\"mcp\", server], {})");
     }
 
     [Test]

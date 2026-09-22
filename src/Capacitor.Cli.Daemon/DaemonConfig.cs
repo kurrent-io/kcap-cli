@@ -366,9 +366,9 @@ public class DaemonConfig {
     public int OpenCodeReviewerLaunchTimeoutSeconds { get; set; } = 120;
 
     /// <summary>Path or bare command for Pi's RPC entry point, spawned as
-    /// <c>{PiPath} --mode rpc</c> by <c>PiRpcHostedAgentRuntimeFactory</c>. Interactive hosting only
-    /// in PR-1 — the reviewer lane is not implemented yet. Availability is
-    /// <c>Binaries.Finds(PiPath)</c>. Overridable via <c>KCAP_PI_PATH</c>.</summary>
+    /// <c>{PiPath} --mode rpc</c> by <c>PiRpcHostedAgentRuntimeFactory</c> for both interactive hosting
+    /// and the gated unattended reviewer. Availability is <c>Binaries.Finds(PiPath)</c>. Overridable
+    /// via <c>KCAP_PI_PATH</c>.</summary>
     public string PiPath { get; set; } = Core.Harness.Pi.PiHarness.CliBinary;
 
     /// <summary>
@@ -383,6 +383,15 @@ public class DaemonConfig {
     /// vendor's <c>ResolveModel</c>).</para>
     /// </summary>
     public string? PiModel { get; set; }
+
+    /// <summary>Whether THIS daemon may run Pi as an unattended review-flow reviewer. **Default TRUE —
+    /// the variable is an opt-OUT** (<c>KCAP_PI_UNATTENDED_REVIEWER=0</c> disables), matching the other
+    /// gated reviewers and the never-gated Claude/Codex/Cursor/Copilot ones that carry the same
+    /// authority. See <c>PiReviewerCapability</c>.</summary>
+    public bool PiUnattendedReviewerEnabled { get; set; } = true;
+
+    /// <summary>Ceiling on a Pi reviewer turn. Matches the Antigravity reviewer's turn limit.</summary>
+    public int PiReviewerTurnTimeoutSeconds { get; set; } = 600;
 
     /// <summary>Path or bare command for Google Gemini CLI's ACP entry point, spawned as
     /// <c>{GeminiPath} --experimental-acp …</c> by <c>AcpHostedAgentRuntimeFactory</c>. It drives

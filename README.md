@@ -574,7 +574,7 @@ It provides four generic tools:
 
 - **`start_flow`** — start a new flow from either `definition_id` (the server's flow-definition catalog, e.g. `spec-review`, `code-review`, or a custom definition) **or** `definition_yaml` (an inline dynamic flow definition — the full YAML, same schema as catalog definitions); provide exactly one of the two. Catalog starts use the guarded v2 protocol. A `definition_yaml` flow has extra constraints: every participant must declare `workspace: none` and a concrete, priced model (no `default`), the server clamps `limits`/`mcp` to its own caps rather than trusting the definition, may reject the whole thing with a coded error, and requires a server with dynamic flows enabled. Also provide `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`. A single-participant definition starts its first round eagerly; a multi-participant definition starts **round-less** — the response carries no round, and each declared role's agent launches lazily on its first `send_to_participant`. Optional `mode`: by default, when the daemon runs on the same machine and the selected vendor declares a borrowed-context containment strategy, the participant sees current tracked, dirty, and non-ignored untracked checkout content; the safety boundary is vendor-specific. Cursor runs in a daemon-owned snapshot refreshed before follow-up rounds, while direct borrowing is reserved for runtimes with a native read-only tool clamp. The capability is advertised for whatever build of the vendor CLI is installed — it is not gated on a per-version validation record, since a vendor auto-update would then silently drop the participant back onto a stale committed base. It IS gated per platform where the containment boundary has not been measured: **GitHub Copilot advertises borrowed review only on macOS/ARM64, and only on a daemon that can both enforce an OS sandbox (`sandbox-exec`) and broker a token** (`COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN`) — widening its tool surface enough to read a snapshot also widens what a read tool can be pointed at, so the boundary is an OS sandbox rather than the vendor's own permission prompts, and that sandbox grants neither your keychain nor your Copilot state (see [Borrowed-context Copilot reviews](#borrowed-context-copilot-reviews)). Where any of the three is missing, a Copilot borrowed request returns `vendor_containment_unreadable` naming the daemon and the remedies; `mode="context-only"` works and is the remedy. Pass `mode="context-only"` to opt out. Claude review flows currently use owned worktrees because it declares no borrowed-review containment strategy. Optional `vendor`: for reserved `spec-review`/`code-review`, explicitly selects the reviewer independently of the driver; when omitted, resolution falls through to the definition's authored vendor when it declares one, then to your saved `flows.reviewer_vendor` preference (applied via one automatic retry, with the response saying so), and finally a coded `reviewer_vendor_required` if neither is set — ask the user which reviewer vendor to use, pass it explicitly, and offer to save it with `kcap config set flows.reviewer_vendor <vendor>`. Custom single-participant catalog definitions retain their authored vendor unless explicitly overridden. The server records requested/applied vendor plus selection source, and rejects an unavailable or uncertified vendor without silent fallback. Dynamic (`definition_yaml`) flows reject a top-level vendor override because each participant declares its own vendor. Optional `model`: a per-run reviewer **model** override for a single-participant catalog review — REQUIRES `vendor` (the model is interpreted against that vendor; there is no vendor→model table anywhere in the CLI, so `model` without `vendor` is rejected locally before any request is sent) and is rejected on a `definition_yaml` (dynamic) or multi-participant start (each participant already pins its own model). Pass the vendor's own model id or alias verbatim, case-sensitive — the CLI never translates, canonicalizes, or guesses it.
 - **`send_to_participant`** — send a follow-up message to a participant role declared by the flow definition (single-participant definitions use `"reviewer"`; the server rejects an unknown role, naming the valid ones). One round runs at a time per role — a second send to a busy role is rejected naming the busy round, while other roles remain addressable. Returns the new round's findings.
-- **`get_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow run. Optional `wait` (boolean, default `false`): when `true`, blocks — via repeated bounded internal checks, never a raw long-poll — until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately. A long-running round is expected, not an error; on the 8-minute cap this returns the same benign "still running" text an unset/false `wait` already returns on the round-submission path, so simply call it again with `wait: true`.
+- **`get_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow run. Optional `wait` (boolean, default `false`): when `true`, blocks — via repeated bounded internal checks, never a raw long-poll — until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately. A long-running round is expected, not an error; on that cap this returns the same benign "still running" text an unset/false `wait` already returns on the round-submission path, so simply call it again with `wait: true`.
 - **`close_flow`** — mark a completed flow run as closed.
 
 Every flow response reports which **workspace** the reviewer actually used, so you can tell whether it saw your uncommitted work:
@@ -630,7 +630,7 @@ Requires `kcap login` **and a running daemon with this repo checked out**. Disco
 kcap mcp flow-result   # launched by the daemon — not meant to be run manually
 ```
 
-Stdio MCP server the **daemon injects into hosted flow participant sessions** (Claude, Codex, Cursor, and GitHub Copilot participants). It exposes two tools: **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the participant's round result to the Capacitor server — the **only** delivery channel: the server does not read the participant's transcript, so ending a reply with `FINDINGS:`/`NO FINDINGS` markers delivers nothing (servers ≥ Flows Phase E-0) — and **`send_flow_message`** (`text`), which pushes a short out-of-band note to the flow driver between rounds (a notable observation, a blocking question); the driver sees it as `pending_messages` on its next flow call, so delivery is not immediate. Messages are retry-safe (client-generated `message_id`, deduplicated server-side) and are NOT a substitute for round results. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow.
+The daemon gives every unattended reviewer this stdio MCP server as its result channel, by whatever mechanism the vendor supports. It exposes two tools: **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the participant's round result to the Capacitor server — the **only** delivery channel: the server does not read the participant's transcript, so ending a reply with `FINDINGS:`/`NO FINDINGS` markers delivers nothing (servers ≥ Flows Phase E-0) — and **`send_flow_message`** (`text`), which pushes a short out-of-band note to the flow driver between rounds (a notable observation, a blocking question); the driver sees it as `pending_messages` on its next flow call, so delivery is not immediate. Messages are retry-safe (client-generated `message_id`, deduplicated server-side) and are NOT a substitute for round results. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow.
 
 Cursor reviewers run only in daemon-owned worktrees and launch with Cursor's native `--force --approve-mcps --trust` controls so command, MCP-server, and workspace-trust prompts are suppressed at the source. kcap does not auto-approve or route a fallback interaction to a human: any permission, elicitation, or unknown ACP interaction frame violates the zero-prompt contract and immediately reaps the reviewer. Copilot reviewers require an authenticated Copilot CLI with access to the requested model; the daemon preloads this MCP configuration and clamps Copilot's available tools to the validated flow allowlist. That clamp is exclusive, so an owned-worktree Copilot reviewer has no ambient file or shell tool at all. A **borrowed-context** Copilot reviewer is granted read/search tools (`view`, `grep`, `glob`) so it can read the snapshot, and is confined by an OS sandbox instead of by the clamp — see below. There is nothing to register or configure.
 
@@ -1089,13 +1089,15 @@ minimum version automatically at startup and refuses anything older. Use `kcap d
 --vendor <name>` to move that floor past a build you have found to be bad. It is remediation, not
 permission, and it never blocks a first launch.
 
-**To disable a vendor**, set its variable to `0` (or `false`/`no`/`off`) in the **daemon's** environment:
+**To disable a vendor**, set its variable to `0` (or `false`/`no`/`off`) in the **daemon's** environment
+(Gemini, Kiro, OpenCode, Antigravity, and Pi):
 
 ```bash
 export KCAP_GEMINI_UNATTENDED_REVIEWER=0        # this DAEMON's environment — not a server setting
 export KCAP_KIRO_UNATTENDED_REVIEWER=0
 export KCAP_OPENCODE_UNATTENDED_REVIEWER=0
 export KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=0
+export KCAP_PI_UNATTENDED_REVIEWER=0
 ```
 
 Unset means enabled. A value the daemon cannot read as true or false is treated as **disabled**, and
@@ -1104,7 +1106,7 @@ so an unreadable value is a failed "off" rather than an ambiguous input. Surroun
 (`"0"` works), since a mis-quoted service-unit entry is the usual way that happens.
 
 **On a service-installed daemon, set it before you install.** `kcap daemon service install` copies these
-four variables into the service unit — on every platform — but a supervised daemon inherits nothing from
+five variables into the service unit — on every platform — but a supervised daemon inherits nothing from
 your shell afterwards, so its environment is frozen at install time. Exporting an opt-out later has no
 effect until you reinstall the service:
 
@@ -1287,6 +1289,37 @@ supported on this vendor either** — that agent needs the `kcap mcp review` too
 PTY-backed vendors are given, so an Antigravity PR-review launch is refused with
 `antigravity_pr_review_unsupported` rather than started without its review tools. Use Claude for a PR
 review.
+
+#### Unattended Pi reviews
+
+Enabled by default; `KCAP_PI_UNATTENDED_REVIEWER=0` in the daemon's environment disables it.
+
+A Pi reviewer runs in a daemon-owned worktree with none of your interactive Pi configuration reaching
+it — no extensions, no skills, no prompt templates, and no `AGENTS.md`/`SYSTEM.md`; an explicit
+system prompt replaces Pi's own. It can inspect the worktree with `read_file`, `list_directory` and
+`search_files` and report a verdict through the injected result channel; it has no shell and cannot
+write anywhere, in or out of the worktree — a path outside the worktree is refused by the tool
+itself, not merely left untrusted. It runs offline, so a repository cannot trigger a package install
+either.
+
+It authenticates as **you**: whatever Pi provider credentials and default model your account already
+has, or `KCAP_PI_MODEL` to pick a specific one — the same override a hosted Pi agent uses.
+
+**Minimum version.** That containment is a behaviour of the installed `pi` build, so the daemon
+refuses a `pi` older than the oldest build its containment was measured on, and older than the build
+you first enabled the reviewer with; any newer build is accepted with no action from you.
+
+```bash
+kcap daemon reviewer affirm --vendor pi
+```
+
+Same command and the same model as Gemini, Kiro and Antigravity: run it to move the recorded minimum
+to whatever is installed now. It records the version and nothing else — it does not enable the
+reviewer, and no kcap release is ever needed.
+
+POSIX only: the per-launch directory holds the reviewer's own transcript and manifest and cannot be
+created owner-only on Windows. Borrowed (in-place) review is not offered; a borrowed request falls
+back to a daemon-owned worktree, same as Antigravity.
 
 #### Hosted Antigravity agents run without permission prompts
 
@@ -1795,18 +1828,22 @@ KCAP_PI_MODEL=claude-opus-4-5 kcap daemon
 
 Two things are worth knowing before you pick Pi:
 
-- **Your Pi extension does not load in a hosted agent.** kcap's global Pi live-ingest extension
-  (`~/.pi/agent/extensions/kcap.ts`) auto-loads inside every `pi` process on the machine, hosted or
-  not, so the daemon spawns the hosted child with `KCAP_PI_PURE=1` — read by the extension at the
-  top of its exported function, which then returns immediately and registers no handlers. Without
-  it a hosted session would be captured twice: once over the RPC wire this runtime already speaks,
-  and once by the extension's own `session_start`/`session_shutdown` hooks. Sessions you start
-  yourself are untouched: the extension keeps its whole job there.
-- **Interactive hosting only, in an owned worktree only, in this release.** Pi has no reviewer lane
-  yet — `start_review_flow(vendor="pi")` and a Pi PR review (`kcap review <pr>` / the dashboard's
-  Review PR action) are both refused, the latter because that surface needs the `kcap mcp review`
-  tool set only the PTY-backed vendors are given. There is also no borrowed-workspace containment
-  for Pi, so a hosted Pi launch always runs in a daemon-owned worktree, never your own checkout.
+- **kcap's capture extension stands down in a hosted agent; the MCP-bridge extension does not.**
+  kcap's global Pi live-ingest extension (`~/.pi/agent/extensions/kcap.ts`) auto-loads inside every
+  `pi` process on the machine, hosted or not, so the daemon spawns the hosted child with
+  `KCAP_PI_PURE=1` — read by that extension at the top of its exported function, which then returns
+  immediately and registers no handlers, since a hosted session is already captured over the RPC
+  wire this runtime speaks and would otherwise be captured twice. The MCP-bridge extension
+  (`~/.pi/agent/extensions/kcap-mcp.ts`) is unaffected by that gate and still loads, so the kcap MCP
+  servers it exposes remain available as native Pi tools. Sessions you start yourself are untouched
+  either way: both extensions keep their whole job there.
+- **Interactive hosting and unattended review flows, in a daemon-owned worktree only.**
+  `start_review_flow(vendor="pi")` launches a real reviewer — see [Unattended Pi
+  reviews](#unattended-pi-reviews) below. A Pi PR review (`kcap review <pr>` / the dashboard's
+  Review PR action) is still refused, because that surface needs the `kcap mcp review` tool set
+  only PTY-backed vendors are given. There is also no borrowed-workspace containment for Pi, so a
+  hosted Pi launch — interactive or reviewer — always runs in a daemon-owned worktree, never your
+  own checkout.
 
 #### Review-flow reviewer backstops & crash-survivor reaping
 
