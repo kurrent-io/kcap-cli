@@ -159,6 +159,14 @@ start.
 plain read, then writes `active_profile` or a binding in a mutation that does
 not recheck, so a removal between the two makes a missing profile active.
 
+**`ConfigMutator.MutateAsync` publishes over a file it could not read.** Under
+its lock it reads through `LoadPure`, which discards the failure `TryLoadPure`
+reports for a malformed file and hands the callback a fresh default; the
+callback's result is then published in its place. A `config.json` corrupted
+while a browser sign-in is open would be replaced by defaults plus the new
+profile, every other profile, binding and setting lost and `active_profile`
+reset. Only `TryLoadPure` tells an absent file from an unreadable one.
+
 **The token store's writes are unlocked, and one of them deletes another
 profile's credential.** The refresh path loads the token before taking the
 profile's cross-process lock; under the lock it falls back to that pre-lock
@@ -278,10 +286,23 @@ then shows signed out with Sign in. The row sign-in dialog reports the same
 way, so a re-authentication whose new token failed to save over a rejected old
 one is not called a success.
 
+### Strict config mutation
+
+`ConfigMutator.MutateStrictAsync` takes the same lock and reads with
+`TryLoadPure`; when the file exists and cannot be read it invokes no callback,
+publishes nothing and throws `ConfigUnreadableException`; an absent file is a
+fresh config, as today. Every mutation this spec adds goes through it: a
+precondition-bearing commit (`Failed` "config unreadable", no token
+published), `ProfileRemoval` (a `ConfigUnreadable` outcome, nothing touched),
+`kcap use`'s decision (refused), and the `--activate` write
+(`activation_config_unreadable`). Deciding a precondition or a recheck against
+a synthesized default would pass it for the wrong reason and then publish the
+default. Existing callers are unchanged.
+
 ### Commit guards
 
-`CommitRequest` gains an optional precondition, evaluated inside the config
-mutation on the config as it is at commit:
+`CommitRequest` gains an optional precondition, evaluated inside a strict
+config mutation on the config as it is at commit:
 
 - `ExpectAbsent`: no profile whose name equals the target's ignoring case
   exists.
@@ -317,14 +338,14 @@ The wizard's paths pass no precondition and keep their behaviour.
 `Capacitor.Cli.Core/Config/ProfileRemoval.cs`:
 
 ```csharp
-public enum ProfileRemovalOutcome { Removed, RemovedTokenRetained, NotFound, IsDefault, IsActive }
+public enum ProfileRemovalOutcome { Removed, RemovedTokenRetained, NotFound, IsDefault, IsActive, ConfigUnreadable }
 
 public sealed record ProfileRemovalResult(ProfileRemovalOutcome Outcome, string? Detail);
 
 public static Task<ProfileRemovalResult> RemoveAsync(ConfigRoot config, TokenStore tokens, string name, CancellationToken ct)
 ```
 
-One `ConfigMutator` mutation decides and applies: refuse `default`, refuse a
+One strict config mutation decides and applies: refuse `default`, refuse a
 missing profile, refuse the profile `active_profile` names at that moment, else
 drop the profile and every binding pointing at it. Deciding inside the mutation
 is what stops a concurrent `kcap use --global` from making the removed profile
@@ -338,9 +359,9 @@ because the file now belongs to a remaining profile. A deletion that throws
 returns `RemovedTokenRetained` with the file path as detail; a retry finds the
 profile gone, so the caller shows the path.
 
-`kcap use` decides inside its mutation: the profile must exist at that moment
-for the global, binding and `--save` arms alike, else the command refuses with
-the same message it prints today. Before its global arm's mutation, taken with
+`kcap use` decides inside a strict mutation: the profile must exist at that
+moment for the global, binding and `--save` arms alike, else the command
+refuses with the same message it prints today. Before its global arm's mutation, taken with
 `--global` and also without it outside a repository, it migrates the legacy
 credential to the outgoing active profile (see Token lock), so a selection
 change never strands it.
@@ -604,13 +625,14 @@ unchanged, so a rename keeps its semantics.
   the write it confirms, by the same stop predicate, that no owner answers
   under the target label or, with `--retire`, the retired label; either
   refuses with `activation_owner_alive`, nothing written. The write is one
-  `ConfigMutator` mutation, inside the forward budget with its lock wait
+  strict config mutation, inside the forward budget with its lock wait
   bounded by the config lock's own timeout, whose callback rechecks, on the
   locked config, that the pinned profile still exists by exact name, still
   resolves to `KCAP_EXPECT_SERVER_URL` and still resolves to `--name`, then
-  sets `active_profile`; a recheck that fails leaves the config unchanged and
-  the transaction stops with `activation_stale`. A mutation that throws stops
-  it with `activation_failed`. In both cases
+  sets `active_profile`; a recheck that fails throws inside the callback so
+  nothing is published, and the transaction stops with `activation_stale`; an
+  unreadable file stops it with `activation_config_unreadable`. A mutation
+  that throws otherwise stops it with `activation_failed`. In every case
   nothing is written for the new unit, the old owner is already gone, and
   `active_profile` still names the previous selection, so the next start
   reinstalls or restarts that profile's daemon. On success the transaction
@@ -629,7 +651,8 @@ Three PRs, each green on its own, each referencing #1093 and AI-3072; the last
 closes it.
 
 1. **List, status, Sign in, Remove.** The tab and `ProfilesSettingsViewModel`;
-   `ExpectServer`, `CredentialSaved` and the two-part save guard;
+   `MutateStrictAsync`; `ExpectServer`, `CredentialSaved` and the two-part
+   save guard;
    `ProfileRemoval` and the token lock seams, including the owner-aware legacy
    delete, `MigrateLegacyAsync` at every selection writer, the locked logout
    and the removal of `Delete(profile)`; `kcap use` deciding in its mutation;
@@ -643,8 +666,12 @@ closes it.
 
 ## Testing
 
+- `ConfigMutatorTests`: `MutateStrictAsync` on a malformed file invokes no
+  callback, leaves the bytes unchanged and throws; on an absent file it
+  publishes the callback's result.
 - `ProfileRemovalTests` (Core): token deleted; bindings dropped; each refusal;
-  a profile made active between load and mutation is refused; a delete that
+  `ConfigUnreadable` on a malformed config with nothing touched; a profile
+  made active between load and mutation is refused; a delete that
   throws returns `RemovedTokenRetained` with the path; a case-alias and a
   same-name recreation keep the file with `Removed`; a refresh waiting on the
   lock while removal runs ends signed out with no file written; a refresh that
@@ -673,7 +700,9 @@ closes it.
 - Facade tests: `ExpectAbsent` (including a case-variant created during
   authentication) and `ExpectServer` refuse at commit with no token written,
   for a change made before and after `LoginTarget` is built, including a
-  same-server Paste; under `ExpectAbsent` the profile is created and seeded
+  same-server Paste; a `config.json` corrupted after `LoginTarget` is built
+  and before commit yields `Failed`, the on-disk bytes unchanged and no token,
+  while an absent file commits into a fresh config; under `ExpectAbsent` the profile is created and seeded
   even when `LoginTarget` saw a same-server profile that has since vanished;
   a missing seed falls back to defaults; `CredentialSaved` is false when the
   token save throws or its guard fails, true for a `None` server; the
@@ -763,5 +792,8 @@ closes it.
   daemon cannot hold; the attach identity check is the repair.
 - Renaming the token files to close the case-alias sharing at its root; the
   file name is a persistence contract shared with the CLI and the daemon.
+- Moving the existing `ConfigMutator.MutateAsync` callers onto the strict
+  variant: the publish-over-unreadable hazard predates this work and is the
+  same for every one of them.
 - A foreign writer replacing the target's unit after activation: the same
   exposure a rename has, surfaced as attention, not repaired.
