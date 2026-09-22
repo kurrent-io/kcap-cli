@@ -13,6 +13,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// <c>AntigravityReviewerLaunchTests</c>); what these pin is that the list this daemon advertises
 /// derives from that ladder rather than from a second, separately-maintained narrowing pass.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonRunnerAntigravityFloorTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
@@ -273,8 +274,7 @@ public class DaemonRunnerAntigravityFloorTests {
     [UnsupportedOSPlatform("windows")]
     static TempDir StubAgy(string version, out string stubPath) {
         var tmp = new TempDir();
-        stubPath = tmp.CreateFile("agy", $"#!/bin/sh\necho 'Antigravity CLI {version}'\n");
-        File.SetUnixFileMode(stubPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        stubPath = tmp.CreateExecutable("agy", $"#!/bin/sh\necho 'Antigravity CLI {version}'\n");
         return tmp;
     }
 

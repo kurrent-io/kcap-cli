@@ -10,6 +10,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// first word onto the version, advertising <c>"1.0.75.\nRun"</c> — which no version parser accepts.
 /// Each case below is real observed output from the installed CLI.</para>
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonRunnerVersionProbeTests {
     [Test]
     public async Task Copilot_multiline_output_yields_just_the_version() {
@@ -66,10 +67,8 @@ public class DaemonRunnerVersionProbeTests {
         // `yes | head` pipeline could overrun it and be killed before it ever reached the stdout
         // echo, leaving stderr's flood as the only output to parse. 200 KB still exceeds the buffer
         // by 3x while finishing comfortably inside the budget.
-        var cli = tmp.CreateFile(
+        var cli = tmp.CreateExecutable(
             "faketool", "#!/bin/sh\nyes 0123456789ABCDEFGHIJ | head -c 200000 1>&2\necho 'faketool 9.9.9'\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
     }
@@ -82,10 +81,8 @@ public class DaemonRunnerVersionProbeTests {
     public async Task A_version_at_the_front_survives_a_trailing_flood_on_the_same_stream() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary is a POSIX shell script.");
         using var tmp = new TempDir();
-        var cli = tmp.CreateFile(
+        var cli = tmp.CreateExecutable(
             "faketool", "#!/bin/sh\necho 'faketool 9.9.9'\nyes 0123456789ABCDEFGHIJ | head -c 500000\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
     }
@@ -102,10 +99,8 @@ public class DaemonRunnerVersionProbeTests {
         using var tmp = new TempDir();
         // Prints the version, then leaves a child holding the inherited stdout open after the CLI
         // itself exits — the shape that made ProbeCliVersionOnce block on a drain that never saw EOF.
-        var cli = tmp.CreateFile(
+        var cli = tmp.CreateExecutable(
             "faketool", "#!/bin/sh\necho 'faketool 9.9.9'\nsleep 20 &\nexit 0\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var version = await Task.Run(() => DaemonRunner.ProbeCliVersionForLaunch(cli));
