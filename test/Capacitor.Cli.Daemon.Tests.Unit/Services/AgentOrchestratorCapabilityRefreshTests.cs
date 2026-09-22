@@ -17,12 +17,8 @@ public class AgentOrchestratorCapabilityRefreshTests {
 
     const string MissingCli = "/definitely/missing/claude";
 
-    string StubClaude(string version) {
-        var path = Tmp.CreateFile("claude", $"#!/bin/sh\necho '{version} (Claude Code)'\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        return path;
-    }
+    string StubClaude(string version) =>
+        Tmp.CreateExecutable("claude", $"#!/bin/sh\necho '{version} (Claude Code)'\n");
 
     static UnattendedVendorCapability Advertised(string? version) =>
         new("claude", version, DaemonRunner.ClaudeLauncherPolicyVersion, false);
