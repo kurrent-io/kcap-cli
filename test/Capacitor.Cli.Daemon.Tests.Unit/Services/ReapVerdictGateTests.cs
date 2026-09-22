@@ -86,6 +86,31 @@ public class ReapVerdictGateTests {
     }
 
     [Test]
+    public async Task A_claim_after_seal_is_refused_and_publishes_nothing() {
+        var gate = Gate();
+
+        var won = gate.Seal();                       // teardown seals first; nothing had claimed
+        var late = gate.TryStartReap("pi_reviewer_turn_timeout", () => Task.CompletedTask);
+
+        await Assert.That((object?)won).IsNull();
+        await Assert.That(late).IsFalse();
+        await Assert.That(gate.ReadVerdict()).IsNull();
+    }
+
+    [Test]
+    public async Task A_claim_that_won_before_seal_is_returned_by_seal() {
+        var gate = Gate();
+        var tcs  = new TaskCompletionSource();
+        gate.TryStartReap("pi_reviewer_turn_timeout", () => tcs.Task);
+
+        var won = gate.Seal();
+
+        // object cast: TUnit awaits a Task-typed value, and tcs.Task never completes.
+        await Assert.That((object?)won).IsSameReferenceAs(tcs.Task);
+        await Assert.That(gate.ReadVerdict()!.Reason).IsEqualTo("pi_reviewer_turn_timeout");
+    }
+
+    [Test]
     public async Task TakeReap_returns_the_started_task() {
         var gate = Gate();
         var tcs  = new TaskCompletionSource();

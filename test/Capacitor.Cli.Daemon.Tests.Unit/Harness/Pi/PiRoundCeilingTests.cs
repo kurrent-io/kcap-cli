@@ -1,4 +1,6 @@
 using Capacitor.Cli.Daemon.Harness.Pi;
+using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
@@ -140,6 +142,35 @@ public class PiRoundCeilingTests {
 
         await Assert.That(r.Ceiling.IsArmed).IsFalse();
         await Assert.That(r.Ceiling.InvariantHolds).IsTrue();
+    }
+
+    // The ceiling's Expire fires onExpired outside its own lock, so a teardown can run in the gap. The
+    // reap gate's seal is what makes that race benign: a sealed gate refuses the stale timeout.
+    [Test]
+    public async Task A_ceiling_timeout_after_the_gate_seals_publishes_no_verdict() {
+        var time = new FakeTimeProvider();
+        var gate = new ReapVerdictGate(() => true, NullLogger.Instance);
+        using var ceiling = new PiRoundCeiling(Limit, time,
+            () => gate.TryStartReap("pi_reviewer_turn_timeout", () => Task.CompletedTask));
+        ceiling.PromptWriting("1");                 // outstanding work: the timer is armed
+
+        _ = gate.Seal();                            // ordinary teardown wins the race
+        time.Advance(Limit + TimeSpan.FromSeconds(1));
+
+        await Assert.That(gate.ReadVerdict()).IsNull();
+    }
+
+    [Test]
+    public async Task A_ceiling_timeout_before_any_seal_publishes_the_verdict() {
+        var time = new FakeTimeProvider();
+        var gate = new ReapVerdictGate(() => true, NullLogger.Instance);
+        using var ceiling = new PiRoundCeiling(Limit, time,
+            () => gate.TryStartReap("pi_reviewer_turn_timeout", () => Task.CompletedTask));
+        ceiling.PromptWriting("1");
+
+        time.Advance(Limit + TimeSpan.FromSeconds(1));   // Expire wins before any seal
+
+        await Assert.That(gate.ReadVerdict()!.Reason).IsEqualTo("pi_reviewer_turn_timeout");
     }
 
     [Test]

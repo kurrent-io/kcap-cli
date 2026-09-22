@@ -164,4 +164,49 @@ public class PiReviewerRuntimeGuardTests {
         await Assert.That(runtime.ReadVerdict()).IsNull();
         await runtime.DisposeAsync();
     }
+
+    [Test]
+    public async Task Rounds_beyond_the_echo_cache_still_close_the_ceiling() {
+        var time = new FakeTimeProvider();
+        var (runtime, process) = NewRuntime(reviewerGuards: Guards, time: time);
+        await runtime.WaitForSessionReadyAsync(CancellationToken.None);
+
+        // More prompts than the 16-entry transcript-dedup cache retains, each accepted and echoed. The
+        // echoes of the earliest rounds were evicted from that cache, so only a round tally decoupled
+        // from it keeps the ceiling's owed count correct — otherwise it reaps a settled reviewer.
+        const int rounds = 20;
+        for (var i = 0; i < rounds; i++) await runtime.SendUserInputAsync("round " + i);
+        for (var i = 0; i < rounds; i++) process.Push(PromptResponse("kcap-" + (i + 1), success: true));
+        for (var i = 0; i < rounds; i++) process.Push(UserMessage("round " + i));
+        process.Push(AgentStart);
+        process.Push(AgentSettled);
+        process.Push(AssistantText("settled-sentinel"));
+
+        // Channel FIFO: reading the sentinel proves the pump handled every echo and the settle first.
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            while ((await runtime.Envelopes.ReadAsync(cts.Token)).Text != "settled-sentinel") { }
+
+        time.Advance(Guards.RoundLimit + TimeSpan.FromSeconds(1));
+
+        await Assert.That(runtime.ReadVerdict()).IsNull();
+        await runtime.DisposeAsync();
+    }
+
+    [Test]
+    public async Task A_command_prompt_during_teardown_publishes_no_verdict() {
+        var (runtime, process) = NewRuntime(reviewerGuards: Guards);
+        await runtime.WaitForSessionReadyAsync(CancellationToken.None);
+
+        process.EndOfStream(exitCode: 0);
+        // ReadOutputAsync parks until EnterTerminal — which seals the reap gate — has run.
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            await foreach (var _ in runtime.ReadOutputAsync(cts.Token)) { }
+
+        // The leading-'/' guard runs before the method's lifecycle checks, but the sealed gate refuses
+        // its reap, so an ordinary teardown is not misreported as a command-prompt reap.
+        await Assert.That(async () => await runtime.SendUserInputAsync("/llama")).Throws<InvalidOperationException>();
+        await Assert.That(runtime.ReadVerdict()).IsNull();
+
+        await runtime.DisposeAsync();
+    }
 }

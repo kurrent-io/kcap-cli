@@ -143,6 +143,13 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     readonly Lock         _echoGate    = new();
     readonly List<string> _sentPrompts = [];
 
+    /// <summary>Reviewer-only round tally, decoupled from the bounded <see cref="_sentPrompts"/> dedup
+    /// cache above. A reviewer's accepted prompt must decrement the ceiling's owed count when Pi echoes
+    /// it; the 16-entry cap on <see cref="_sentPrompts"/> would drop an echo whose send was evicted,
+    /// stranding the ceiling armed and reaping a settled reviewer as a false timeout. Not capped — a
+    /// reviewer sends few prompts, each consumed on its echo. Guarded by <see cref="_echoGate"/>.</summary>
+    readonly List<string> _reviewerRoundEchoes = [];
+
     readonly Lock                         _turnGate    = new();
     readonly List<TaskCompletionSource>   _idleWaiters = [];
     bool                                  _busy;
@@ -376,9 +383,17 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         var envelopes = PiRpc.ToEnvelopes(frame, _resolvedModel ?? _requestedModel);
         if (envelopes.Count == 0) return;
 
+        // A reviewer's round accounting rides its own uncapped tally, NOT the bounded transcript-dedup
+        // cache consulted by IsOurOwnEcho: an echo whose send was evicted from that cache still starts a
+        // round, so the ceiling must still see its UserEcho or it reaps a settled reviewer.
+        if (_guards is not null
+            && frame.Type == "message_end"
+            && envelopes is [{ Kind: AcpEventKind.UserMessage, Text: { } echoText }]
+            && TryConsumeReviewerRoundEcho(echoText))
+            _ceiling?.UserEcho();
+
         if (IsOurOwnEcho(frame, envelopes)) {
             _logger.LogDebug("Pi: dropped the echo of a prompt this daemon sent (agentId={AgentId}).", _agentId);
-            _ceiling?.UserEcho();
             return;
         }
 
@@ -568,6 +583,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             // message with identical text (a retry of exactly what just failed is the likeliest
             // thing to happen next), which is the dedupe misfiring on real content.
             TryConsumeSentPrompt(text);
+            if (_guards is not null) TryConsumeReviewerRoundEcho(text);
 
             // Best-effort: dropped when the channel is already completed (the common case if the
             // write failed BECAUSE the session is ending), which is fine — the session ending is
@@ -642,6 +658,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
         lock (_echoGate) {
             _sentPrompts.Add(text);
+            if (_guards is not null) _reviewerRoundEchoes.Add(text);
 
             // Oldest-first eviction: an entry that has waited this long was never echoed.
             while (_sentPrompts.Count > SentPromptMemory) {
@@ -666,6 +683,22 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
                 if (!string.Equals(_sentPrompts[i], text, StringComparison.Ordinal)) continue;
 
                 _sentPrompts.RemoveAt(i);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>Reviewer-only, FIFO: consumes one accepted-prompt entry matching an echo, driving the
+    /// ceiling's per-round UserEcho independently of the capped transcript-dedup cache. Exactly one
+    /// entry per echo keeps the ceiling's owed count correct however many rounds queue.</summary>
+    bool TryConsumeReviewerRoundEcho(string text) {
+        lock (_echoGate) {
+            for (var i = 0; i < _reviewerRoundEchoes.Count; i++) {
+                if (!string.Equals(_reviewerRoundEchoes[i], text, StringComparison.Ordinal)) continue;
+
+                _reviewerRoundEchoes.RemoveAt(i);
                 return true;
             }
 
@@ -785,6 +818,12 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     bool EnterTerminal() {
         if (Interlocked.Exchange(ref _terminal, 1) != 0) return false;
 
+        // Seal the reap gate FIRST, before disarming the ceiling: an ordinary teardown (EOF, cancel,
+        // dispose) must win the race against a stale round-timer, a buffered dialog, or a command-shaped
+        // input, so that once terminal none of them can publish a reviewer verdict over a normal death.
+        // A reap that already won is untouched — DisposeAsync awaits it via Seal's return.
+        _gate.Seal();
+
         _ceiling?.Terminal();
 
         _terminalTcs.TrySetResult();
@@ -849,8 +888,10 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         await _ownerCts.CancelAsync().ConfigureAwait(false);
 
         // A claimed reap's verdict is published synchronously at claim time, but a caller that
-        // disposes and then reads the verdict must see the reap's TERMINATE having run too.
-        if (_gate.TakeReap() is { } reap) {
+        // disposes and then reads the verdict must see the reap's TERMINATE having run too. Seal
+        // returns the reap that won the slot before EnterTerminal (above) closed it — so no claim
+        // racing this dispose can be missed, and a late terminate fault is observed, not dropped.
+        if (_gate.Seal() is { } reap) {
             try {
                 await reap.WaitAsync(TimeSpan.FromSeconds(5), _time).ConfigureAwait(false);
             } catch (Exception ex) {

@@ -12,6 +12,7 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed class ReapVerdictGate(Func<bool> insideLaunchWindow, ILogger logger) {
     readonly Lock _lock = new();
     bool  _claimed;
+    bool  _sealed;
     Task? _reapTask;
 
     public TerminationVerdict? Verdict { get; private set; }
@@ -46,7 +47,7 @@ internal sealed class ReapVerdictGate(Func<bool> insideLaunchWindow, ILogger log
     /// termination it begins.</summary>
     internal bool TryStartReap(string reason, Func<Task> start) {
         lock (_lock) {
-            if (_claimed) return false;
+            if (_sealed || _claimed) return false;
 
             _claimed = true;
             var inside = insideLaunchWindow();
@@ -64,6 +65,17 @@ internal sealed class ReapVerdictGate(Func<bool> insideLaunchWindow, ILogger log
     }
 
     internal Task? TakeReap() { lock (_lock) return _reapTask; }
+
+    /// <summary>Closes the slot: after this, <see cref="TryStartReap"/> refuses and publishes nothing,
+    /// so a teardown that seals first cannot be overwritten by a later timer/dialog/command claim.
+    /// Returns the reap task that already won the slot, if any, so a disposer can await its terminate
+    /// having run. Idempotent.</summary>
+    internal Task? Seal() {
+        lock (_lock) {
+            _sealed = true;
+            return _reapTask;
+        }
+    }
 
     /// <summary>Collapses line breaks to spaces and caps the length, surrogate-pair-safe — the
     /// reason can carry agent-influenced text (an MCP server name, a monitor's "why" string) that
