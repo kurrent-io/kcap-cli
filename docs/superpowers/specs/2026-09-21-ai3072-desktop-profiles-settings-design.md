@@ -11,8 +11,8 @@ remove one, and switch to one.
 - **Switch moves the app and the daemon together, in one CLI transaction.**
   `active_profile` changes only inside the daemon-replacing transaction, at the
   point where no other profile's daemon can be running, so at every moment the
-  config names the profile whose daemon the next start establishes. The app
-  runs one lane mutation and relaunches on success.
+  config names the profile whose daemon the next start establishes or attaches
+  to. The app runs one lane mutation and relaunches on success.
 - **Add takes a workspace name or a server URL, then signs in.** It never
   changes `active_profile`; switching to the new profile is a separate action.
 - **Remove deletes the profile, its bindings and its token**, through one
@@ -33,14 +33,21 @@ rename does.
 mismatch, and `DaemonConfig.Profiles` is never re-resolved. A switch is a lane
 mutation, not a config write.
 
-**The verify transaction is the one durable, ordered mutation on this
-machine.** `install --replace --verify` runs viability, leftover-marker
-recovery, retire (with `--retire`), the pre-query, the replace matrix that
-clears or kills the target label's owner and confirms it gone, then writes the
-unit, bootstraps and polls readiness. A failure after the unit is written rolls
-back by uninstalling only that unit; a retired unit is never restored; a crash
-leaves a marker the next transaction recovers by content. Nothing in it touches
-`config.json`.
+**The verify transaction is ordered and marker-journaled, and its rollback is
+bounded.** `install --replace --verify` runs viability, leftover-marker
+recovery, retire (with `--retire`, under the retired label's own lock, released
+when retire returns), the pre-query, the replace matrix that clears or kills the
+target label's owner and confirms it gone, then writes the unit, bootstraps and
+polls readiness. On a failure after the unit is written it uninstalls that unit
+when the plist on disk is still the one it wrote, confirms label and file
+absence, and gives up with a coded token when the plist is foreign or
+unreadable, when the label stays loaded, or when its budget runs out; a
+fingerprint mismatch found after readiness returns `restore_verification`
+without uninstalling. A retired unit is never restored; a retire that then
+finds the target label contended has already uninstalled the old unit. A crash
+leaves a marker the next transaction recovers by content. The app's own
+timeout can kill the CLI before its rollback runs. Nothing in the transaction
+touches `config.json`.
 
 **A same-id switch works today; a cross-id switch is refused.** The replace
 matrix takes over a live validated owner of the target label whatever profile
@@ -64,11 +71,12 @@ app's read and the install passes viability, the old unit is retired or
 cleared, and the new daemon refuses to boot with `server_expectation_mismatch`,
 so the transaction rolls back to no daemon at all.
 
-**The next start does not finish a failed switch.** The lifecycle controller's
-startup matrix returns at once for a running service, whatever profile that
-service is pinned to, installs a unit when none exists, and starts a stopped
-one. It converges on `active_profile` only when no daemon of another profile is
-running under the bound name.
+**The next start does not finish a failed switch.** The lifecycle controller
+attaches to a connected daemon and reports an incompatible one without running
+its startup matrix; the matrix returns at once for a running service, whatever
+profile that service is pinned to, installs a unit when none exists, and starts
+a stopped one. It converges on `active_profile` only when no daemon of another
+profile is running under the bound name.
 
 **The lane already speaks for the target.** Its executor is built per request
 from `request.Profile` and `request.CanonicalServer`, so a request naming the
@@ -79,8 +87,12 @@ server and daemon name.
 **The lane latches retired service ids only, and only in its own process.**
 After a rename it refuses every request touching the old id, which is also what
 closes the lifecycle controller's auto actions (`requiresAppRestart`). A same-id
-switch retires nothing. A `Refused` outcome is not proof that nothing was
-spawned: a boot refusal after bootstrap is reported as `Refused` too.
+switch retires nothing. Admission checks only that set, and a finished request
+admits the next queued one, so a lifecycle action that passed its restart check
+before the switch began is dispatched after it. A `Refused` outcome is not
+proof that nothing was spawned: a boot refusal after bootstrap is reported as
+`Refused` too. The lane keeps no raw CLI output on an outcome, and a timeout is
+classified before any output is read.
 
 **Credential status has a refresh-free evaluator.**
 `OnboardingGate.EvaluateResolvedAsync(name, profile)` reads the token raw and
@@ -95,8 +107,11 @@ that.
 **A known-server sign-in can create a profile and leaves `active_profile`
 alone.** The wizard's Paste path calls `LoginAsync(..., adoptServer: true)`;
 an absent profile is created by `PointProfileAtServer` and stamped in the same
-`ConfigMutator` mutation. Tenant discovery is different: `MergeProfiles`
-reassigns `active_profile`, which is why Add does not offer it.
+`ConfigMutator` mutation. `kcap login` calls it with `adoptServer: false`, and
+a profile that does not name the server then gets a credential for that server
+with neither `server_url` nor stamp written: a supported path. Tenant discovery
+is different: `MergeProfiles` reassigns `active_profile`, which is why Add does
+not offer it.
 
 **The commit boundary is ordered, not atomic, and decides its target before
 authentication.** `LoginTarget.PointsAtServer` is computed from a config read
@@ -129,12 +144,16 @@ start.
 plain read, then writes `active_profile` or a binding in a mutation that does
 not recheck, so a removal between the two makes a missing profile active.
 
-**A token refresh resurrects a deleted file.** The refresh path loads the token
-before taking the profile's cross-process lock; under the lock it falls back to
-that pre-lock copy when the file is absent, refreshes it and saves it again.
-`TokenStore.Delete` and `SaveAsync` take no lock. The legacy `tokens.json` is a
-legitimate source for exactly one profile, the on-disk active one, and only
-while its per-profile file is absent.
+**The token store's writes are unlocked, and one of them deletes another
+profile's credential.** The refresh path loads the token before taking the
+profile's cross-process lock; under the lock it falls back to that pre-lock
+copy when the file is absent, refreshes it and saves it again through
+`SaveAsync`. `SaveAsync` and `Delete` take no lock. The legacy `tokens.json`
+backs exactly one profile, the on-disk active one, while its per-profile file
+is absent; `SaveAsync` for any profile deletes it, so saving a token for
+profile B removes active profile A's only credential. The owner check
+`IsLegacyOwnerAsync` reads config through `AppConfig.LoadProfileConfig`, which
+can persist a v1 migration through `ConfigMutator`.
 
 **`SettingsProfileStore` is bound to the profile the app started on.** It
 refuses once that profile is missing or points at another server. It does not
@@ -148,7 +167,8 @@ with its own `ViewModels/ProfilesSettingsViewModel.cs`, exposed as
 `SettingsViewModel.Profiles`. `SettingsViewModel` keeps the Daemon and
 Notifications state it has; the profiles section is the first with its own view
 model because its dependencies (token store, sign-in composition, removal) are
-disjoint from the daemon section's.
+disjoint from the daemon section's. Both sections read the lane's restart
+state before every action, not once at construction.
 
 Two identities are tracked separately: the **active** profile (what
 `config.json` names now) and the **bound** profile (what this process resolved
@@ -243,16 +263,17 @@ mutation on the config as it is at commit:
 
 A failing precondition throws inside the mutation, so `ConfigMutator` publishes
 nothing, and `CommitAsync` returns `Failed` naming the reason before any token
-is published. The wizard's own paths pass no precondition and are unchanged.
-The precondition is what makes `LoginTarget`'s pre-authentication read safe: a
-profile repointed during authentication can neither be stamped for the old
-server nor repointed back by the Paste path's `adoptServer`.
+is published. The precondition is what makes `LoginTarget`'s pre-authentication
+read safe: a profile repointed during authentication can neither be stamped for
+the old server nor repointed back by the Paste path's `adoptServer`.
 
-The token publication that follows runs under the profile's cross-process
-token lock (see Token lock) with the guard "a profile of this exact name exists
-and names the token's server"; when the guard fails the token is not written
-and `CredentialSaved` is false. This closes the interval between the config
-commit and the token save against a concurrent removal.
+A request carrying a precondition also publishes its token under the profile's
+token lock with the guard "a profile of this exact name exists and names the
+token's server", evaluated under the lock; when the guard fails the token is
+not written and `CredentialSaved` is false. This closes the interval between
+the config commit and the token save against a concurrent removal. A request
+without a precondition — the wizard, `kcap login`, including its foreign-profile
+save — commits and saves exactly as today.
 
 ## Remove
 
@@ -296,20 +317,25 @@ behind a confirm dialog naming the profile and saying its sign-in is deleted.
 ### Token lock
 
 The profile's cross-process refresh lock becomes the lock for every write to
-`tokens/<profile>.json`:
+`tokens/<profile>.json`, through one pair of seams:
 
+- `SaveAsync(profile, tokens, guard?)` and `DeleteAsync(profile, guard)` take
+  the lock, evaluate the optional guard under it against a pure config read
+  (`ConfigMutator.TryLoadPure`, never the migrating loader), and write only when
+  it passes. A null guard writes unconditionally, as today.
+- `SaveLockedAsync` is the lock-held primitive the refresh path calls, since it
+  already holds the lock; the public methods wrap it. Nothing takes the lock
+  twice.
 - The refresh path, once it holds the lock, reloads from disk with the same
-  legacy fallback its pre-lock read used, instead of using the pre-lock copy.
-  Nothing on disk means signed out: it returns null and writes nothing. A
-  legacy `tokens.json` still on disk is found by the reload, refreshed and
-  migrated as today.
-- `TokenStore.Delete` and the commit boundary's token save take the lock and
-  evaluate their guard under it, reading config with `TryLoadPure`.
+  legacy fallback its pre-lock read used, the owner check made pure (the
+  active name from `TryLoadPure`), instead of using the pre-lock copy. Nothing
+  on disk means signed out: it returns null and writes nothing. A legacy
+  `tokens.json` still on disk is found by the reload, refreshed and migrated.
+- The legacy `tokens.json` is deleted after a save only when the saved profile
+  is its owner by that same pure check. A save for another profile leaves it.
 
-`Delete` is reachable only for a non-active profile, and the legacy file backs
-only the active one, so no legitimate credential is lost to the reload rule.
-The config lock is never held while the token lock is taken, and the token
-lock never nests a config mutation, only a read.
+The config lock is never held while the token lock is taken, and under the
+token lock config is only read.
 
 ## Switch
 
@@ -334,48 +360,77 @@ Then, in order:
    detached daemon `--retire` cannot touch, refused with "Stop the daemon
    <name> first (`kcap daemon stop --name <name>`); it is not running as a
    service, so switching cannot retire it"; an unreadable status is refused.
+   This is a courtesy check for a clear message; the transaction re-proves it.
 2. Confirm a lifecycle prompt: the daemon restarts for the target profile and
    the app relaunches.
 3. Recheck settled and idle. Probe the lane-selected CLI for `--activate` in
    `daemon --help`, refusing with "update kcap" when absent; this is the one
    capability probe, same-id and cross-id alike, and a CLI that has it has
    every check below. Build the request with
-   `MutationRequestFactory.TryBuild(Replace, target.Name, target.ServerUrl, targetDaemonName, out request, retireServiceId, retireProfile: bound.Name, activate: true)`,
-   `retireServiceId` being the bound name when the names differ and null
-   otherwise.
+   `MutationRequestFactory.TryBuild(Replace, target.Name, target.ServerUrl, targetDaemonName, out request, retireServiceId, retireProfile, activate: true)`,
+   where `retireServiceId` is the bound name and `retireProfile` the bound
+   profile when the names differ, and both are null otherwise.
 4. Run the request through the lane.
 5. `Succeeded` relaunches the app through `RelaunchForSettingsAsync`;
    unbundled, the form says to restart. Every other outcome is reported through
-   the lane's outcome consumer and the form, with the transaction's own token,
-   and the form says whether `active_profile` moved: the CLI prints
-   `activated=<target>` once it has, and the outcome carries that line.
+   the lane's outcome consumer and the form, with the transaction's own token
+   and the outcome's activation evidence (below): "The switch to <target> did
+   not finish", then which profile `config.json` names now, from a fresh read,
+   without claiming the transaction did or did not change it when the evidence
+   is unknown.
 
-The app writes nothing to `config.json` in this flow. When the lane reports a
-failure after `activated=`, no daemon is running: the old owner was confirmed
-gone before activation and the new unit was rolled back after it. The next
-start resolves the target and its startup matrix installs the target's unit.
-When the failure came before `activated=`, the old daemon may still be running
-and `active_profile` still names the bound profile, so nothing moved.
+The app writes nothing to `config.json` in this flow. What the next start does
+follows from where the transaction stopped:
+
+- Before activation: `active_profile` still names the previous active
+  selection. The old daemon may still be running, or may already be retired or
+  cleared (a retire that then finds the target label contended has uninstalled
+  the old unit). The next start attaches to the previous profile's daemon if it
+  runs, else reinstalls or restarts it.
+- After activation: no daemon of another profile is running, because the
+  transaction proved the old owner gone immediately before writing, and only
+  this transaction writes a unit under the target name. Any daemon found under
+  that name afterwards is the target's. The next start attaches to it when the
+  transaction or a late boot left it running, installs one when the rollback
+  left nothing, and otherwise surfaces the same attention states a failed
+  rename does: a foreign or unreadable plist, a label that stayed loaded, a
+  rollback that ran out of budget, or a marker left by a killed CLI, which the
+  next transaction recovers. None of these is a daemon of the wrong profile.
 
 ### Lane
 
 `MutationRequest` gains `string? RetireProfile` and `bool Activate`, set only by
-the factory and only for `Replace`; `RetireProfile` requires `RetireServiceId`.
-The `Replace` dispatch forwards `--retire <id>` as today, adds
-`--retire-profile <RetireProfile>` when set, and `--activate` when set.
-`IKcapCli.ServiceInstallVerifiedAsync` gains both, and rechecks `daemon --help`
-on the pinned executor before spawning for each flag it is about to emit, as it
-does for `--retire`, returning `retire_reason=cli_unsupported` when one is
-missing, so a CLI downgraded or repointed between the preflight and the
-dispatch is caught. `CanRetireAsync` gains the same checks for the preflight.
+the factory and only for `Replace`; `RetireProfile` requires `RetireServiceId`,
+and the factory refuses the combination otherwise, as it does today for an
+invalid retire target. The `Replace` dispatch forwards `--retire <id>` as
+today, adds `--retire-profile <RetireProfile>` when set, and `--activate` when
+set. `IKcapCli.ServiceInstallVerifiedAsync` gains both, and rechecks
+`daemon --help` on the pinned executor before spawning for each flag it is
+about to emit, as it does for `--retire`, returning
+`retire_reason=cli_unsupported` when one is missing, so a CLI downgraded or
+repointed between the preflight and the dispatch is caught. `CanRetireAsync`
+gains the same checks for the preflight.
+
+Every outcome of an `Activate` request carries `ActivationEvidence`:
+`Activated` when the CLI's stdout carried `activated=<profile>`, `NotActivated`
+when the request never reached the CLI (a pre-spawn `Refused`, or the
+executor's synthetic `cli_unsupported`), and `Unknown` otherwise, including a
+timeout, a kill, or an exit whose output lacks the line. The line is written to
+stdout after the config publish, so its absence never proves the publish did
+not happen.
 
 The lane latches restart-required once an `Activate` request has been
-dispatched to the executor, whatever its outcome, except when the executor's
-own preflight returned `cli_unsupported` without spawning. `requiresAppRestart`
-becomes `lane.IsRetired(daemonName) || lane.RestartRequired`. The latch closes
-this process's auto actions; it cannot destroy the new daemon anyway, because
-a start of a unit now pinned to another profile is refused by the start gate's
-identity check, but it stops the noise and makes the form say to restart.
+dispatched to the executor, whatever its outcome, except the synthetic
+`cli_unsupported`, which is distinguishable: the executor returns exit
+`RetireRefused` with `retire_reason=cli_unsupported`, a reason the CLI itself
+never emits. While the latch is set the lane refuses every later request at
+admission, queued or new, with `profile_switched_restart_app`, the same place
+the retired-id set is checked; a lifecycle action that passed its own restart
+check before the switch began is therefore still refused. `requiresAppRestart`
+becomes `lane.IsRetired(daemonName) || lane.RestartRequired`. Without the
+admission refusal, a queued `Replace` for the previous profile could take over
+the target's freshly installed unit, because `Replace` does not run the start
+gate's identity check.
 
 The rename's timeout for a request with a retire id applies unchanged.
 
@@ -395,28 +450,41 @@ Rules:
   a no-op, unreadable unit refused, a live validated owner under the target
   label is contended.
 
-`--activate` makes the transaction write `active_profile = <--profile>` through
-`ConfigMutator` at one point: after the replace matrix has confirmed the target
-label's previous owner gone (and, with `--retire`, the retired unit stopped),
-before the unit is written. It prints `activated=<profile>` and continues. The
-write is never rolled back: from that point no daemon of another profile is
-running, and every later failure ends in the unit this transaction wrote being
-uninstalled, so the next start's ordinary install converges on the activated
-profile. A write that throws is reported with `activation_failed` and the
-transaction stops there, nothing written for the new unit; the old unit or
-owner is already gone, and `active_profile` still names the previous profile,
-so the next start reinstalls or restarts that profile's daemon.
+`--activate` changes the transaction in four places; without it the transaction
+is unchanged, so a rename keeps its semantics.
 
-Viability gains two checks, evaluated with the existing ones, before
-leftover-marker recovery and before retire, nothing touched on refusal:
+- **Viability** gains two checks, evaluated with the existing ones, before
+  leftover-marker recovery and before retire, nothing touched on refusal:
+  `expect_server_mismatch` when the invocation carries `KCAP_EXPECT_SERVER_URL`
+  and it does not canonicalize equal to the pinned profile's resolved URL, and
+  `daemon_name_mismatch` when `DaemonNameResolver` over the pinned profile's
+  `daemon.name` does not equal `--name`.
+- **Retire** of an absent plist additionally requires no validated live owner
+  under the retired label, else `retire_reason=live_owner_without_unit`,
+  nothing touched: a detached daemon that appeared after the app's preflight
+  is refused here rather than left running beside the target. The retired
+  label's transaction lock is taken by the caller and held until activation is
+  written, so nothing can reinstall or restart the old id in between.
+- **Activation** happens after the replace matrix has confirmed the target
+  label's previous owner gone, before the unit is written. Immediately before
+  the write it re-probes for a validated live owner under the target label and,
+  with `--retire`, under the retired label; either refuses with
+  `activation_owner_alive`, nothing written. The write is one `ConfigMutator`
+  mutation whose callback rechecks, on the locked config, that the pinned
+  profile still exists by exact name, still resolves to the invocation's
+  `KCAP_EXPECT_SERVER_URL` and still resolves to `--name`, then sets
+  `active_profile`; a recheck that fails leaves the config unchanged and the
+  transaction stops with `activation_stale`. A mutation that throws stops it
+  with `activation_failed`. In both cases nothing is written for the new unit,
+  the old owner is already gone, and `active_profile` still names the previous
+  selection, so the next start reinstalls or restarts that profile's daemon.
+  On success the transaction prints `activated=<profile>` to stdout and
+  continues. The write is never rolled back: from that point no daemon of
+  another profile is running, and the next start converges on the activated
+  profile as described under Switch.
 
-- `expect_server_mismatch`: the invocation carries `KCAP_EXPECT_SERVER_URL` and
-  it does not canonicalize equal to the pinned profile's resolved URL.
-- `daemon_name_mismatch`, with `--activate` only: `DaemonNameResolver` over the
-  pinned profile's `daemon.name` does not equal `--name`, so the unit would be
-  installed under a name the next start would not resolve.
-
-The lane maps both to `Failed` with the token and the Attention surface.
+The lane maps every new token to `Failed` with the token and the Attention
+surface.
 
 `README.md`'s daemon service section and `help-daemon.txt` document the flags.
 
@@ -427,12 +495,13 @@ closes it.
 
 1. **List, status, Sign in, Remove.** The tab and `ProfilesSettingsViewModel`;
    `ExpectServer`, `CredentialSaved` and the guarded token save; `ProfileRemoval`
-   and the token lock rules; `kcap use` deciding in its mutation;
-   `kcap profile remove`; README and help text.
+   and the token lock seams, including the owner-aware legacy delete;
+   `kcap use` deciding in its mutation; `kcap profile remove`; README and help
+   text.
 2. **Add.** The dialog, `IsValidProfileName`, `ExpectAbsent`, `SeedFrom`.
-3. **Switch.** `--activate`, `--retire-profile`, `expect_server_mismatch` and
-   `daemon_name_mismatch`; `RetireProfile`, `Activate` and the restart latch;
-   the flow; README and help text.
+3. **Switch.** `--activate` with its four changes and `--retire-profile`;
+   `RetireProfile`, `Activate`, `ActivationEvidence` and the restart latch with
+   admission refusal; the flow; README and help text.
 
 ## Testing
 
@@ -443,8 +512,11 @@ closes it.
   lock while removal runs ends signed out with no file written; a refresh that
   saved before removal took the lock ends deleted.
 - `TokenStoreTests`: an expired, refreshable legacy-only token is refreshed and
-  migrated on the reactive and proactive paths; the guarded save skips when the
-  profile is absent or names another server.
+  migrated on the reactive and proactive paths; a save for profile B leaves
+  active profile A's legacy file, also with a concurrent refresh of A; the
+  guarded save skips when the profile is absent or names another server; the
+  refresh path saves under the lock it already holds; no config write occurs
+  under the token lock.
 - `UseCommandTests`: a profile removed between read and mutation is refused on
   the global, binding and `--save` arms.
 - `ProfileCommandTests` (CLI): remove prints each outcome and leaves no token.
@@ -454,24 +526,37 @@ closes it.
   same-server Paste; under `ExpectAbsent` the profile is created and seeded
   even when `LoginTarget` saw a same-server profile that has since vanished;
   a missing seed falls back to defaults; `CredentialSaved` is false when the
-  token save throws or its guard fails, true for a `None` server;
-  `active_profile` is untouched by a known-server sign-in.
+  token save throws or its guard fails, true for a `None` server; the
+  foreign-profile `kcap login` save is unchanged; `active_profile` is untouched
+  by a known-server sign-in.
 - `ServiceVerify`: `--retire-profile` match, mismatch, unit with no
-  `KCAP_PROFILE`, absent, unreadable, and the unchanged default;
-  `expect_server_mismatch` and `daemon_name_mismatch` refuse before recovery
-  and retire, an equal or unset expectation proceeds; with `--activate`,
-  `active_profile` is unchanged after viability, contention and retire
-  refusals, is written only after the old owner is confirmed gone, and stays
-  written through a readiness rollback; `activation_failed` stops before the
-  unit write.
+  `KCAP_PROFILE`, absent, unreadable, and the unchanged default; with
+  `--activate`: `expect_server_mismatch` and `daemon_name_mismatch` refuse
+  before recovery and retire; `live_owner_without_unit` for an absent plist
+  with a validated owner, and the unchanged no-op without `--activate`;
+  `activation_owner_alive` for an owner appearing under either label after
+  the matrix; `activation_stale` for a target removed, repointed or renamed
+  between viability and activation, with nothing written for the new unit;
+  `active_profile` unchanged after viability, contention and retire refusals,
+  written only after the old owner is confirmed gone, and still written after
+  a readiness rollback, a `restore_verification` return and a rollback that
+  gives up on a foreign plist; `activation_failed` stops before the unit
+  write; the retired label's lock is held through activation.
 - `KcapCliTests`: exact argv for a same-id request (`--activate`, no retire
-  flags) and a cross-id request (all three); `cli_unsupported` when a flag is
+  flags) and a cross-id request (all three); the factory refuses
+  `retireProfile` without `retireServiceId`; `cli_unsupported` when a flag is
   missing from help at dispatch.
 - `DaemonMutationLaneTests`: the restart latch is set by every dispatched
-  `Activate` request, including a post-bootstrap `Refused`, not by
-  `cli_unsupported` nor by a plain rename; `requiresAppRestart` reads it.
-- `DaemonLifecycleControllerTests`: after a failure past activation, the next
-  start's matrix installs the target's unit; before it, the bound profile's.
+  `Activate` request, including a post-bootstrap `Refused`, not by the
+  synthetic `cli_unsupported` nor by a plain rename; once set, a queued
+  `Replace`, `Install` and `StartVerified` and a new request are all refused
+  at admission; `ActivationEvidence` is `Activated` with the line, `Unknown`
+  on a timeout and on an exit without the line, `NotActivated` on a pre-spawn
+  refusal.
+- `DaemonLifecycleControllerTests`: after a failure past activation the next
+  start attaches to a running target daemon, installs the target's unit when
+  none exists, and surfaces attention on residue; before activation, with the
+  old unit retired, it reinstalls the previous profile's.
 - `ProfilesSettingsViewModelTests`, in the `SettingsViewModelTests` pattern
   (`TempConfigRoot`, fake lane, confirm and relaunch): row status for each
   verdict, an empty `default`, an invalid URL, a `None` stamp and one
@@ -479,8 +564,9 @@ closes it.
   active-but-not-bound row after an external `kcap use --global`; each switch
   gate, with the source matrix (running unit, stopped unit, absent with no
   reply, absent with a reply, unreadable); same-id and cross-id requests; the
-  form's report with and without `activated=`; remove gates for active, bound
-  and `default`; re-read on activation.
+  form's report for each `ActivationEvidence` value with the fresh active
+  name; the Daemon tab's rename refused after a switch; remove gates for
+  active, bound and `default`; re-read on activation.
 - `SettingsWindowSmokeTests`: the tab and its named controls, `kcapChip` and
   `kcapPrimary` classes, and the Active and This app marks using a purple
   brush, not a success one.
@@ -497,3 +583,5 @@ closes it.
   Profiles tab's Switch on the active-but-not-bound row is the repair.
 - Renaming the token files to close the case-alias sharing at its root; the
   file name is a persistence contract shared with the CLI and the daemon.
+- A foreign writer replacing the target's unit after activation: the same
+  exposure a rename has, surfaced as attention, not repaired.
