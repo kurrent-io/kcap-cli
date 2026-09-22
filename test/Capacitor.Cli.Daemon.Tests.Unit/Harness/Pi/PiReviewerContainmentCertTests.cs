@@ -3,16 +3,18 @@ using Capacitor.Cli.Daemon.Harness.Pi;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 
 /// <summary>
-/// GATED containment cert: the C# port of <c>docs/probes/2026-09-21-pi-reviewer/probe.py</c>, driving
-/// the real <c>pi --mode rpc</c> argv <see cref="PiRpcHostedAgentRuntimeFactory.BuildPsi(Capacitor.Cli.Daemon.DaemonConfig,Capacitor.Cli.Daemon.Services.RuntimeStartContext,PiReviewerLaunchPaths,IReadOnlyList{PiReviewerTool})"/>
-/// builds and the real reviewer extension against a scripted loopback provider. One canary per
-/// containment source from the probe's findings, plus hostile tool calls forced by the script rather
-/// than left to a model to volunteer or decline — a declined call proves nothing about whether the
-/// tool would have run.
+/// GATED containment cert: drives the real <c>pi --mode rpc</c> argv
+/// <see cref="PiRpcHostedAgentRuntimeFactory.BuildPsi(Capacitor.Cli.Daemon.DaemonConfig,Capacitor.Cli.Daemon.Services.RuntimeStartContext,PiReviewerLaunchPaths,IReadOnlyList{PiReviewerTool})"/>
+/// builds and the real reviewer extension against a scripted loopback provider, proving a reviewer is
+/// offered exactly its allowlisted tool surface, inherits no operator or repository context, and
+/// cannot read, list or search across the worktree boundary. One canary per containment source, plus
+/// hostile tool calls forced by the script rather than left to a model to volunteer or decline — a
+/// declined call proves nothing about whether the tool would have run.
 ///
 /// <para>Zero cost: no authentication, no server, no model request — the provider is a local scripted
 /// stand-in and the result channel is a stub MCP server over stdio.</para>
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class PiReviewerContainmentCertTests {
     const string Gate = "KCAP_PI_REVIEWER_CONTAINMENT";
 

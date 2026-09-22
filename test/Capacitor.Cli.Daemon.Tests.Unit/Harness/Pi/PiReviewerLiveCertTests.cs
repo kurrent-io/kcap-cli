@@ -34,6 +34,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 /// <c>KCAP_PATH</c>), and <c>KCAP_URL</c> pointed at a reachable server this machine has already run
 /// <c>kcap login</c> against.</para>
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class PiReviewerLiveCertTests {
     const string GateEnvVar = "KCAP_PI_REVIEWER_LIVE";
 

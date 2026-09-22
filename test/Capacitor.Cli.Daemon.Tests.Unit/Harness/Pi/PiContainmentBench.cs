@@ -11,9 +11,10 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 /// <c>pi --mode rpc</c> child and a scripted local provider — the C# bench for the containment cert.
 /// One scratch root holds an isolated <c>HOME</c> and <c>PI_CODING_AGENT_DIR</c> (the one deliberate
 /// difference from a production launch, applied in <see cref="RunAsync"/>) plus a worktree carrying a
-/// canary per discovery source from the Pi reviewer probe (<c>docs/probes/2026-09-21-pi-reviewer</c>),
-/// a sibling directory and symlinks a contained file-tool implementation must refuse, and a stub MCP
-/// result server standing in for <c>kcap mcp flow-result</c>.
+/// canary in every place Pi discovers context (operator and repository extensions, skills, prompt
+/// templates, system-prompt and AGENTS files), so a canary that never surfaces proves the reviewer
+/// suppressed that source. Alongside them sit a sibling directory and symlinks a contained file-tool
+/// implementation must refuse, and a stub MCP result server standing in for <c>kcap mcp flow-result</c>.
 /// </summary>
 internal sealed class PiContainmentBench : IAsyncDisposable {
     readonly TempDir _root;
@@ -348,12 +349,12 @@ internal sealed class PiContainmentBench : IAsyncDisposable {
     }
 
     static IReadOnlyList<string> ToolNames(JsonElement request) =>
-        request.TryGetProperty("tools", out var tools) && tools.ValueKind == JsonValueKind.Array
+        request.TryGetProperty("tools", out var tools) && tools.IsArray
             ? [.. tools.EnumerateArray().Select(t => t.GetProperty("function").GetProperty("name").GetString() ?? "")]
             : [];
 
     static IReadOnlyList<string> ToolResultTexts(JsonElement request) =>
-        request.TryGetProperty("messages", out var messages) && messages.ValueKind == JsonValueKind.Array
+        request.TryGetProperty("messages", out var messages) && messages.IsArray
             ? [.. messages.EnumerateArray()
                   .Where(m => m.TryGetProperty("role", out var role) && role.GetString() == "tool")
                   .Select(m => m.GetProperty("content").ToString())]
