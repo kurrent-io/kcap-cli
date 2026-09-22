@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Harness.Claude;
+
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.Claude;
 
 /// The chat-level view of Claude records: what the Chat tab shows for each record shape.
@@ -36,6 +38,7 @@ public class ClaudeChatRulesTests {
         var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"<bash-input>kubectl get pods</bash-input>"}}""", 1, Received, chat.CreateContext("a1", null));
         await Assert.That(result.Envelopes).Count().IsEqualTo(1);
         await Assert.That(result.Envelopes[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(result.Envelopes[0].ToolKind).IsEqualTo(ClaudeChatRules.ShellKind);
         await Assert.That(result.Envelopes[0].Text).IsEqualTo("! kubectl get pods");
         await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "!kubectl get pods" });
     }
@@ -45,6 +48,7 @@ public class ClaudeChatRulesTests {
         var chat = TranscriptChat.For("claude")!;
         var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"<bash-input>kubectl get pods\n\n[Attached files: .attached/x/a.png]</bash-input>"}}""", 1, Received, chat.CreateContext("a1", null));
         await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].ToolKind).IsEqualTo(ClaudeChatRules.ShellKind);
         await Assert.That(result.Envelopes[0].Text).IsEqualTo("! kubectl get pods");
         await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "!kubectl get pods\n\n[Attached files: .attached/x/a.png]" });
     }
@@ -54,6 +58,7 @@ public class ClaudeChatRulesTests {
         var shown = P("""{"type":"user","message":{"content":"<bash-stdout>NAME\nweb</bash-stdout><bash-stderr></bash-stderr>"}}""");
         await Assert.That(shown).Count().IsEqualTo(1);
         await Assert.That(shown[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(shown[0].ToolKind).IsEqualTo(ClaudeChatRules.ShellKind);
         await Assert.That(shown[0].Text).IsEqualTo("NAME\nweb");
 
         var stderr = P("""{"type":"user","message":{"content":"<bash-stdout></bash-stdout><bash-stderr>denied</bash-stderr>"}}""");

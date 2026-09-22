@@ -29,6 +29,7 @@ public static class ToolCategoryIcons {
         _            => "",
     };
 
+    public static string CommandIcon => ForCategory(ToolCategory.Command);
     public static string NoteIcon => ForFixedLabel("Note");
     public static string PermissionIcon => ForFixedLabel("Permission");
     public static string QuestionIcon => ForFixedLabel("Question");

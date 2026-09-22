@@ -45,7 +45,8 @@
              left edge hangs off the header's label, never its icon: 14px icon box plus the 8px gap
              ChatKindHeader puts after it. -->
         <Style Selector="Border.toolGroup > StackPanel > ItemsControl,
-                         Border.systemNote > StackPanel > views|MarkdownView">
+                         Border.systemNote > StackPanel > views|MarkdownView,
+                         Border.shellOutput > StackPanel > SelectableTextBlock">
             <Setter Property="Margin" Value="22,0,22,0" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
         </Style>
@@ -107,6 +108,25 @@
                         <views:MarkdownView Text="{Binding Text}"
                                             OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                             RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
+                    </StackPanel>
+                </DataTemplate>
+                <DataTemplate x:DataType="vm:ShellCommandItem">
+                    <StackPanel Margin="0,0,0,12">
+                        <Border Classes="shellCommand" HorizontalAlignment="Right" MaxWidth="520" Margin="0,8,0,0" Padding="14,11" CornerRadius="10"
+                                Background="{StaticResource KcapSurfaceRaisedBrush}"
+                                IsVisible="{Binding HasCommand}">
+                            <StackPanel Spacing="6">
+                                <TextBlock Classes="toolKindChip" Text="You" HorizontalAlignment="Left" />
+                                <SelectableTextBlock Classes="toolLine" Text="{Binding Command}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Classes="shellOutput chatSystemCard" Margin="0,8,0,0"
+                                IsVisible="{Binding HasOutput}">
+                            <StackPanel Spacing="6">
+                                <views:ChatKindHeader Label="Output" IconData="{x:Static views:ToolCategoryIcons.CommandIcon}" />
+                                <SelectableTextBlock Classes="toolLine prose" Text="{Binding Output}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:SystemNoteItem">
