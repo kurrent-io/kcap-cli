@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
 
@@ -21,7 +22,7 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("contoso", repoPath: "/repos/my-project", global: false, save: false, savePath: null);
+        var result = await new UseCommand(Config.Root, new WorkingDirectory(AppContext.BaseDirectory), AuthFixtures.NewTokenStore(Config.Root)).SetProfile("contoso", repoPath: "/repos/my-project", global: false, save: false, savePath: null);
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -45,7 +46,7 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("contoso", repoPath: null, global: true, save: false, savePath: null);
+        var result = await new UseCommand(Config.Root, new WorkingDirectory(AppContext.BaseDirectory), AuthFixtures.NewTokenStore(Config.Root)).SetProfile("contoso", repoPath: null, global: true, save: false, savePath: null);
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -69,7 +70,7 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("contoso", repoPath: repoRoot, global: false, save: true, savePath: repoRoot);
+        var result = await new UseCommand(Config.Root, new WorkingDirectory(AppContext.BaseDirectory), AuthFixtures.NewTokenStore(Config.Root)).SetProfile("contoso", repoPath: repoRoot, global: false, save: true, savePath: repoRoot);
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -95,8 +96,73 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("nonexistent", repoPath: "/repos/x", global: false, save: false, savePath: null);
+        var result = await new UseCommand(Config.Root, new WorkingDirectory(AppContext.BaseDirectory), AuthFixtures.NewTokenStore(Config.Root)).SetProfile("nonexistent", repoPath: "/repos/x", global: false, save: false, savePath: null);
 
         await Assert.That(result).IsEqualTo(1);
+    }
+
+    UseCommand Command() => new(Config.Root, new WorkingDirectory(AppContext.BaseDirectory), AuthFixtures.NewTokenStore(Config.Root));
+
+    async Task SeedTwo(string active) =>
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = active,
+            Profiles = new Dictionary<string, Profile> { ["a"] = new() { ServerUrl = "https://a.example" }, ["b"] = new() { ServerUrl = "https://b.example" } }
+        });
+
+    [Test]
+    public async Task Use_UnknownProfile_RefusesAndChangesNothing() {
+        await SeedTwo("a");
+        var before = await File.ReadAllTextAsync(AppConfig.GetConfigPath(Config.Root));
+
+        var result = await Command().SetProfile("zzz", repoPath: null, global: true, save: false, savePath: null);
+
+        await Assert.That(result).IsEqualTo(1);
+        await Assert.That(await File.ReadAllTextAsync(AppConfig.GetConfigPath(Config.Root))).IsEqualTo(before);
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Use_Global_MovesTheLegacyCredentialToTheOutgoingProfile(bool withGlobalFlag) {
+        await SeedTwo("a");
+        var legacy = Config.PathTo("tokens.json");
+        await File.WriteAllTextAsync(legacy, JsonSerializer.Serialize(
+            new StoredTokens { AccessToken = "at", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), GitHubUsername = "legacy-a", Provider = AuthProvider.GitHubApp },
+            CapacitorJsonContext.Default.StoredTokens));
+
+        // Without --global, a null repo path is the global arm too.
+        var result = await Command().SetProfile("b", repoPath: null, global: withGlobalFlag, save: false, savePath: null);
+
+        await Assert.That(result).IsEqualTo(0);
+        await Assert.That(File.Exists(legacy)).IsFalse();
+        await Assert.That(File.Exists(Config.PathTo("tokens", "a.json"))).IsTrue();
+        await Assert.That(ConfigMutator.LoadPure(AppConfig.GetConfigPath(Config.Root)).ActiveProfile).IsEqualTo("b");
+
+        await Command().SetProfile("a", repoPath: null, global: true, save: false, savePath: null);
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadForProfileAsync("a"))!.GitHubUsername).IsEqualTo("legacy-a");
+    }
+
+    [Test]
+    public async Task Use_Global_RefusesWhenTheMigrationFails() {
+        await SeedTwo("a");
+        await File.WriteAllTextAsync(Config.PathTo("tokens.json"), "{}");
+        await File.WriteAllTextAsync(Config.PathTo("tokens"), "a file where the directory should be");
+
+        var result = await Command().SetProfile("b", repoPath: null, global: true, save: false, savePath: null);
+
+        await Assert.That(result).IsEqualTo(1);
+        await Assert.That(ConfigMutator.LoadPure(AppConfig.GetConfigPath(Config.Root)).ActiveProfile).IsEqualTo("a");
+    }
+
+    [Test]
+    public async Task Use_RefusesAnUnreadableConfig() {
+        var path = AppConfig.GetConfigPath(Config.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{ not json");
+
+        var result = await Command().SetProfile("b", repoPath: "/repos/x", global: false, save: false, savePath: null);
+
+        await Assert.That(result).IsEqualTo(1);
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("{ not json");
     }
 }
