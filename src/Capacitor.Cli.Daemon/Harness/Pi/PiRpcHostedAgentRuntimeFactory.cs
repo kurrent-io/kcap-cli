@@ -274,8 +274,9 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
             if (PiReviewerReadiness.Verify(paths.Ready, tools) is { } mismatch)
                 throw new InvalidOperationException(mismatch);
 
-            if (!string.IsNullOrEmpty(ctx.Prompt))
-                await runtime.SendUserInputAsync(ctx.Prompt).ConfigureAwait(false);
+            // Unconditional: ValidateReviewerContext already refused a blank prompt, so the reviewer
+            // always gets the turn that arms its ceiling and lets it report.
+            await runtime.SendUserInputAsync(ctx.Prompt!).ConfigureAwait(false);
 
             if (runtime.ReadVerdict() is { } verdict)
                 throw new PiReviewerReapedException(verdict.Reason, inner: null);
@@ -313,6 +314,12 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         if (string.IsNullOrWhiteSpace(ctx.ServerUrl) || string.IsNullOrWhiteSpace(ctx.CapacitorPath) || string.IsNullOrWhiteSpace(ctx.AgentId))
             throw new InvalidOperationException(
                 "pi_reviewer_launch_context_incomplete: the result channel needs a server url, a kcap path and an agent id.");
+
+        // A blank first prompt would launch a reviewer with no turn started and no ceiling armed — it
+        // would then wait forever, since a reviewer only reports through a round it was actually given.
+        if (string.IsNullOrWhiteSpace(ctx.Prompt))
+            throw new InvalidOperationException(
+                "pi_reviewer_launch_context_incomplete: a reviewer needs a first prompt to run.");
 
         if (ctx.Prompt is { } prompt && prompt.AsSpan().TrimStart().StartsWith("/"))
             throw new InvalidOperationException(

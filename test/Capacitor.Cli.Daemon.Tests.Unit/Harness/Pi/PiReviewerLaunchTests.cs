@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 /// and refuses before creating a directory.</summary>
 public class PiReviewerLaunchTests {
     static RuntimeStartContext Ctx(
-            string? model = null, string? prompt = "", bool isReview = false, bool isReviewFlow = false,
+            string? model = null, string? prompt = "review this", bool isReview = false, bool isReviewFlow = false,
             WorkLocation work = WorkLocation.OwnedWorktree, string? serverUrl = "http://kcap.test",
             string daemonId = "", string daemonEpoch = "") => new(
         AgentId: "agent-1", Vendor: "pi", SourceRepoPath: "/repo",
@@ -108,20 +108,15 @@ public class PiReviewerLaunchTests {
 
     [Test, NotInParallel]
     public async Task Reviewer_env_names_the_manifest_and_drops_the_variables_that_repoint_pi() {
-        Environment.SetEnvironmentVariable("JITI_ALIAS", "x");
-        Environment.SetEnvironmentVariable("PI_EXPERIMENTAL", "1");
+        using var jiti = EnvScope.Exclusive("JITI_ALIAS", "x");
+        using var experimental = EnvScope.Exclusive("PI_EXPERIMENTAL", "1");
 
-        try {
-            var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(isReviewFlow: true), Paths, Tools);
+        var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(isReviewFlow: true), Paths, Tools);
 
-            await Assert.That(psi.Environment[PiReviewerExtension.ManifestEnvVar]).IsEqualTo(Paths.Manifest);
-            foreach (var name in new[] { "PI_PACKAGE_DIR", "PI_EXPERIMENTAL", "PI_CODING_AGENT_SESSION_DIR" })
-                await Assert.That(psi.Environment.ContainsKey(name)).IsFalse();
-            await Assert.That(psi.Environment.Keys.Any(k => k.StartsWith("JITI_", StringComparison.Ordinal))).IsFalse();
-        } finally {
-            Environment.SetEnvironmentVariable("JITI_ALIAS", null);
-            Environment.SetEnvironmentVariable("PI_EXPERIMENTAL", null);
-        }
+        await Assert.That(psi.Environment[PiReviewerExtension.ManifestEnvVar]).IsEqualTo(Paths.Manifest);
+        foreach (var name in new[] { "PI_PACKAGE_DIR", "PI_EXPERIMENTAL", "PI_CODING_AGENT_SESSION_DIR" })
+            await Assert.That(psi.Environment.ContainsKey(name)).IsFalse();
+        await Assert.That(psi.Environment.Keys.Any(k => k.StartsWith("JITI_", StringComparison.Ordinal))).IsFalse();
     }
 
     [Test]
@@ -215,6 +210,23 @@ public class PiReviewerLaunchTests {
 
         await Assert.That(async () => await Factory(config, process).StartAsync(Ctx(isReviewFlow: true, prompt: "/llama"), CancellationToken.None))
             .Throws<InvalidOperationException>().WithMessageContaining("pi_reviewer_prompt_is_command");
+        await Assert.That(Directory.Exists(LaunchRoot(config))).IsFalse();
+        await Assert.That(process.Writes).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task A_blank_first_prompt_refuses_before_a_launch_directory_exists(string? prompt) {
+        var config = ConfigWithState();
+        PiRpcHostedAgentRuntimeFactory.VersionStoreFor(config).Affirm("0.85.1");
+        var process = new FakePiRpcProcess();
+
+        // A blank prompt would leave the reviewer with no round started and no ceiling armed: it would
+        // hang forever rather than report, so the launch is refused before any child is spawned.
+        await Assert.That(async () => await Factory(config, process).StartAsync(Ctx(isReviewFlow: true, prompt: prompt), CancellationToken.None))
+            .Throws<InvalidOperationException>().WithMessageContaining("pi_reviewer_launch_context_incomplete");
         await Assert.That(Directory.Exists(LaunchRoot(config))).IsFalse();
         await Assert.That(process.Writes).IsEmpty();
     }
