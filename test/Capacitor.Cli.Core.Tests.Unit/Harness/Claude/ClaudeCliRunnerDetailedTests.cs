@@ -111,9 +111,7 @@ public class ClaudeCliRunnerDetailedTests {
         public FakeClaudeOnPath(string script) {
             _bin = new TempDir();
 
-            var path = _bin.CreateFile("claude", script);
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            _bin.CreateExecutable("claude", script);
 
             _path = EnvScope.Exclusive(
                 "PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
