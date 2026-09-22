@@ -281,8 +281,11 @@ public class CloudTerminalSinkTests {
         rig.Emit("held");
         await rig.Shutdown.CancelAsync();
 
-        await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
+        // Shutdown alone must end the pump: no stop has been requested yet.
+        await rig.Sink.PumpForTest.WaitAsync(HangGuard);
         await Assert.That(rig.Mirror.Entered).IsEqualTo(0);
+
+        await rig.Sink.StopAsync(TimeSpan.Zero).WaitAsync(HangGuard);
     }
 
     [Test]
