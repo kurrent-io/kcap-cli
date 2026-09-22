@@ -39,6 +39,10 @@ public static class ProfileRemoval {
             return outcome == GuardedWriteOutcome.ConfigUnreadable
                 ? new(ProfileRemovalOutcome.RemovedTokenRetained, "config unreadable")
                 : new(ProfileRemovalOutcome.Removed);
+        // A name config accepted but the token layout rejects: naming the file it would live in
+        // throws the same way, so the detail can only be the message.
+        } catch (ArgumentException ex) {
+            return new(ProfileRemovalOutcome.RemovedTokenRetained, ex.Message);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) {
             return new(ProfileRemovalOutcome.RemovedTokenRetained, $"{tokens.TokenPath(name)}: {ex.Message}");
         }

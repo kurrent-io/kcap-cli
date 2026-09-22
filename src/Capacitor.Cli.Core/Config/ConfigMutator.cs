@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Config;
 
-/// The ONE writer of config.json (spec decision 10). Field-scoped mutation under
+/// The ONE writer of config.json. Field-scoped mutation under
 /// ConfigFileLock: lock → re-read fresh → migrate in memory → apply the caller's mutation →
 /// publish via UNIQUE temp + rename. The critical section is synchronous on one thread —
 /// ConfigFileLock is a thread-affine named Mutex (WaitOne/ReleaseMutex), so no await may
@@ -45,9 +45,8 @@ public static class ConfigMutator {
         }
     }
 
-    /// Pure load: parse + migrate in memory, NEVER writes (decision 10 — the legacy
-    /// LoadProfileConfig persisted the v1→v2 migration during load, which under this API
-    /// would recursively acquire the same thread-affine mutex).
+    /// Pure load: parse + migrate in memory, NEVER writes — persisting the v1→v2 migration during
+    /// a load would recursively acquire the same thread-affine mutex.
     public static ProfileConfig LoadPure(string path) {
         TryLoadPure(path, out var config);
         return config;

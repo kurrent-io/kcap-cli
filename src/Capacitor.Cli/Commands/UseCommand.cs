@@ -53,10 +53,12 @@ public sealed class UseCommand(ConfigRoot config, WorkingDirectory workdir, Toke
                     : c with { ProfileBindings = new Dictionary<string, string>(c.ProfileBindings) { [repoPath!] = name } };
             });
         } catch (UnknownProfile) {
-            await Console.Error.WriteLineAsync($"Profile '{name}' not found. Run `kcap profile list` to see available profiles.");
+            await Console.Error.WriteLineAsync(
+                $"Profile '{name}' not found. Run `kcap profile list` to see available profiles; the active profile was not changed.");
             return 1;
         } catch (ConfigUnreadableException) {
-            await Console.Error.WriteLineAsync("The configuration file could not be read; nothing was changed.");
+            await Console.Error.WriteLineAsync(
+                "The configuration file could not be read; the active profile was not changed.");
             return 1;
         }
 

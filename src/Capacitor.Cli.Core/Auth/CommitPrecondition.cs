@@ -14,7 +14,7 @@ public abstract record CommitPrecondition {
             if (!config.Profiles.TryGetValue(profile, out var existing))
                 throw new CommitPreconditionFailedException($"profile '{profile}' was removed during sign-in; nothing saved.");
             if (!ServerIdentity.SameServer(existing.ServerUrl, Url))
-                throw new CommitPreconditionFailedException($"profile '{profile}' no longer points at {Url}; nothing saved.");
+                throw new CommitPreconditionFailedException($"profile '{profile}' does not name {Url}; nothing saved.");
         }
     }
 }

@@ -92,6 +92,22 @@ public class ProfileRemovalTests {
         await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsTrue();
     }
 
+    /// A name config accepts but the token layout rejects: the profile still goes, and the refusal
+    /// to touch its credential is reported rather than thrown.
+    [Test]
+    public async Task A_profile_the_token_layout_rejects_is_removed_with_its_token_retained() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "default",
+            Profiles = new Dictionary<string, Profile> { ["default"] = new(), ["bad/name"] = new() }
+        });
+        var store = AuthFixtures.NewTokenStore(Config.Root);
+
+        var result = await ProfileRemoval.RemoveAsync(Config.Root, store, "bad/name");
+
+        await Assert.That(result.Outcome).IsEqualTo(ProfileRemovalOutcome.RemovedTokenRetained);
+        await Assert.That(ConfigMutator.LoadPure(ConfigPath).Profiles.ContainsKey("bad/name")).IsFalse();
+    }
+
     [Test]
     public async Task A_token_that_cannot_be_deleted_is_reported_with_its_path() {
         await Seed();
