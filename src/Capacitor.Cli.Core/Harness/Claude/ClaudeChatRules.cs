@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Models.Transcripts.Harness.Claude;
 using Google.Protobuf.WellKnownTypes;
 
@@ -42,7 +43,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 var raw = envelope.Text ?? "";
                 // A bang command is its own user record: the command in bash-input, the output in
                 // bash-stdout/stderr. A message that only quotes those tags is left as written.
-                if (BashCommand(raw) is { } command) return envelope with { Text = "! " + command };
+                if (BashCommand(raw) is { } command) return envelope with { Text = "! " + WithoutAttachmentTrailer(command) };
                 if (BashOutput(raw) is { } output)
                     return output.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = output };
                 var text = StripWrappers(raw);
@@ -140,6 +141,15 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         if (!tag.Success || BashInput().Replace(text, "").Trim().Length > 0) return null;
         var command = tag.Groups[1].Value.Trim();
         return command.Length == 0 ? null : command;
+    }
+
+    /// The queue matches the daemon's attachment trailer. The chat shows the command that was typed.
+    static string WithoutAttachmentTrailer(string command) {
+        var split = command.LastIndexOf("\n\n", StringComparison.Ordinal);
+        if (split <= 0) return command;
+        if (!command.AsSpan(split + 2).StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal)) return command;
+        var typed = command[..split].TrimEnd();
+        return typed.Length == 0 ? command : typed;
     }
 
     /// Combined stdout and stderr when the whole message is those tags; empty when they are

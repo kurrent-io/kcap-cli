@@ -41,6 +41,15 @@ public class ClaudeChatRulesTests {
     }
 
     [Test]
+    public async Task An_attached_bang_command_shows_the_typed_command_and_keeps_the_trailer_for_the_queue() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"<bash-input>kubectl get pods\n\n[Attached files: .attached/x/a.png]</bash-input>"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].Text).IsEqualTo("! kubectl get pods");
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "!kubectl get pods\n\n[Attached files: .attached/x/a.png]" });
+    }
+
+    [Test]
     public async Task Bang_output_is_a_system_note_and_a_blank_one_is_dropped() {
         var shown = P("""{"type":"user","message":{"content":"<bash-stdout>NAME\nweb</bash-stdout><bash-stderr></bash-stderr>"}}""");
         await Assert.That(shown).Count().IsEqualTo(1);
