@@ -227,6 +227,7 @@ public static class CodexConfigToml {
             ["args"] = ToTomlArray(descriptor.Args)
         };
         if (descriptor.ReadOnly) table["default_tools_approval_mode"] = "approve";
+        if (descriptor.ToolTimeout is { } timeout) table["tool_timeout_sec"] = (long)timeout.TotalSeconds;
         return table;
     }
 

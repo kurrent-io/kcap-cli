@@ -5,8 +5,10 @@ namespace Capacitor.Cli.Core.Mcp;
 /// so it is safe to auto-approve on registration where the harness supports per-server trust —
 /// see <see cref="McpConfigShape.Trust"/>. Servers that write (kcap-memory's save) or launch work
 /// (kcap-flows' start_review_flow spawns a paid hosted reviewer) are NOT read-only and keep
-/// prompting.</summary>
-public sealed record KcapMcpServer(string Name, string[] Args, bool NeedsProjectCwd, string? Description, bool ReadOnly = false);
+/// prompting. <paramref name="ToolTimeout"/> is how long one of the server's tool calls may block;
+/// a harness with a per-server tool timeout has it written into the registration, so the harness
+/// never aborts a call the server itself bounds.</summary>
+public sealed record KcapMcpServer(string Name, string[] Args, bool NeedsProjectCwd, string? Description, bool ReadOnly = false, TimeSpan? ToolTimeout = null);
 
 /// <summary>The single source of truth for the kcap MCP servers. Every writer
 /// (Codex TOML, the JSON harnesses, the bundled `.mcp.json`) derives from this.</summary>
@@ -24,8 +26,11 @@ public static class KcapMcpServers {
             "PR review context tools — query implementation session transcripts.", ReadOnly: true),
         new("kcap-sessions", ["mcp", "sessions"], NeedsProjectCwd: true,
             "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided). Repo-aware; reach for it before git log or grep for history questions.", ReadOnly: true),
+        // A start or round call holds the tool call open while the reviewer works, bounded by the
+        // flows server at under 5 minutes; the registration's timeout sits well above that bound.
         new("kcap-flows",    ["mcp", "flows"],    NeedsProjectCwd: true,
-            "Structured AI agent flows — launches a SEPARATE hosted participant agent; requires login + a running daemon."),
+            "Structured AI agent flows — launches a SEPARATE hosted participant agent; requires login + a running daemon.",
+            ToolTimeout: TimeSpan.FromMinutes(10)),
         new("kcap-memory",   ["mcp", "memory"],   NeedsProjectCwd: true,
             "Team memory — search, read, and save durable learnings."),
         new("kcap-workitems", ["mcp", "workitems"], NeedsProjectCwd: true,
