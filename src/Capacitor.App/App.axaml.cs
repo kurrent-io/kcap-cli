@@ -626,7 +626,15 @@ public partial class App : Application {
         // placeholder only — TerminalControl resizes its model to the real pane the moment it is
         // attached to the visual tree (WorkspaceView's own header comment).
         var attachFactory = CoreTerminalAttachClient.Factory(() => _daemonStore.SocketPath(service.DaemonName));
-        Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
+        Action requestSignIn = () => {
+            // Reachable in the carve-out arm (gate Incomplete after an abandoned wizard), where the
+            // rail can show disconnected with no server to re-auth against.
+            if (profiles?.Resolution.ServerUrl is not { } serverUrl || !OnboardingGate.ValidServerUrl(serverUrl)) {
+                notifier.Notify("No server is configured. Run kcap setup first.");
+                return;
+            }
+            OpenSignInDialog(profiles.Name, serverUrl, refreshAppState: true, notifier);
+        };
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
@@ -801,19 +809,13 @@ public partial class App : Application {
         return true;
     }
 
-    /// Home's Sign in action: the re-auth dialog over a fresh ReauthComposition graph, pinned to
-    /// the resolved server. A graph is built per open — a settled attempt's rendered state must
-    /// never leak into the next sign-in.
-    void OpenSignInDialog(ProfileContext? profiles, IAppNotifier notifier) {
+    /// The re-auth dialog over a fresh ReauthComposition graph, pinned to one profile and server.
+    /// A graph is built per open — a settled attempt's rendered state must never leak into the next
+    /// sign-in. The commit checks the profile still names the server, so a row edited while the
+    /// browser was open is refused rather than stamped.
+    void OpenSignInDialog(string profile, string serverUrl, bool refreshAppState, IAppNotifier notifier) {
         if (_signInWindow is { } open) {
             open.Activate();
-            return;
-        }
-
-        // Reachable in the carve-out arm (gate Incomplete after an abandoned wizard), where the
-        // rail can show disconnected with no server to re-auth against.
-        if (profiles?.Resolution.ServerUrl is not { } serverUrl || !OnboardingGate.ValidServerUrl(serverUrl)) {
-            notifier.Notify("No server is configured. Run kcap setup first.");
             return;
         }
 
@@ -824,7 +826,7 @@ public partial class App : Application {
             _foreignHttp.GetRequiredService<IAuthProxyClient>(),
             _foreignHttp.GetRequiredService<GitHubOAuthClient>(),
             _foreignHttp.GetRequiredService<WorkOSClient>(),
-            profiles.Name, serverUrl,
+            profile, serverUrl,
             WizardComposition.BuildBridges(
                 action => Dispatcher.UIThread.Post(action),
                 _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time),
@@ -832,21 +834,22 @@ public partial class App : Application {
             new AppStateStore(_config.Path("app-state.json")),
             new ShellUrlOpener(),
             _time,
-            WizardComposition.NewOperation);
+            WizardComposition.NewOperation,
+            new CommitPrecondition.ExpectServer(serverUrl));
         var window = new SignInWindow { DataContext = graph.SignIn };
 
         // Hold the dialog on success so "Signed in…" is readable, refresh app state in parallel,
         // then close. Closed below is still the ONE finish path for cancel/quiesce.
         void OnSignInChanged(object? _, PropertyChangedEventArgs e) {
             if (e.PropertyName == nameof(SignInStepViewModel.Satisfied) && graph.SignIn.Satisfied)
-                _ = CloseSignInAfterSuccessAsync(window);
+                _ = CloseSignInAfterSuccessAsync(window, refreshAppState);
         }
 
         graph.SignIn.PropertyChanged += OnSignInChanged;
         window.Closed += (_, _) => {
             graph.SignIn.PropertyChanged -= OnSignInChanged;
             _signInWindow = null;
-            _reauthSettle = FinishSignInAsync(graph);
+            _reauthSettle = FinishSignInAsync(graph, refreshAppState);
         };
 
         _signInWindow = window;
@@ -856,8 +859,8 @@ public partial class App : Application {
     /// How long a successful re-auth keeps the dialog open so the success line is not a flash.
     internal static readonly TimeSpan SignInSuccessHold = TimeSpan.FromMilliseconds(1600);
 
-    async Task CloseSignInAfterSuccessAsync(Window window) {
-        var refresh = RefreshAfterReauthAsync();
+    async Task CloseSignInAfterSuccessAsync(Window window, bool refreshAppState) {
+        var refresh = refreshAppState ? RefreshAfterReauthAsync() : Task.CompletedTask;
         try {
             await Task.WhenAll(refresh, Task.Delay(SignInSuccessHold, _time)).ConfigureAwait(true);
         } catch (Exception ex) {
@@ -879,12 +882,12 @@ public partial class App : Application {
 
     /// Fire-and-forget from the dialog's Closed handler — nothing may block the UI close. The
     /// quiesce is what stops a still-running attempt from committing after the window is gone.
-    async Task FinishSignInAsync(ReauthGraph graph) {
+    async Task FinishSignInAsync(ReauthGraph graph, bool refreshAppState) {
         try {
             await graph.CloseAsync(CancellationToken.None);
             // Success path already refreshed before close; call again so a manual close after
             // Satisfied still clears the banner if the hold was interrupted.
-            if (graph.SignIn.Satisfied) await RefreshAfterReauthAsync();
+            if (refreshAppState && graph.SignIn.Satisfied) await RefreshAfterReauthAsync();
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: sign-in dialog teardown failed: {ex.Message}");
         }
