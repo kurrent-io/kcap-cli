@@ -743,20 +743,21 @@ public partial class App : Application {
             return;
         }
 
-        var tokenStore = _foreignHttp.GetRequiredService<TokenStore>();
-        var profilesVm = new ProfilesSettingsViewModel(
-            _config, tokenStore, new OnboardingGate(_config, tokenStore, _serverEnv, _time), settings.ProfileName,
-            openSignIn: (profile, serverUrl, _) => {
-                OpenSignInDialog(profile, serverUrl, refreshAppState: profile == settings.ProfileName);
-                return Task.CompletedTask;
-            },
-            confirmRemove: (name, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow,
-                new LifecyclePrompt(LifecyclePrompt.KindRemoveProfile, null, null, false,
-                    $"Remove profile {name}? Its saved sign-in is deleted too. Nothing on the server changes."), ct),
-            appLifetime: _shutdown.Token);
-
-        SettingsViewModel vm;
+        ProfilesSettingsViewModel profilesVm;
+        SettingsViewModel         vm;
         try {
+            var tokenStore = _foreignHttp.GetRequiredService<TokenStore>();
+            profilesVm = new ProfilesSettingsViewModel(
+                _config, tokenStore, new OnboardingGate(_config, tokenStore, _serverEnv, _time), settings.ProfileName,
+                openSignIn: (profile, serverUrl, _) => {
+                    OpenSignInDialog(profile, serverUrl, refreshAppState: profile == settings.ProfileName);
+                    return Task.CompletedTask;
+                },
+                confirmRemove: (name, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow,
+                    new LifecyclePrompt(LifecyclePrompt.KindRemoveProfile, null, null, false,
+                        $"Remove profile {name}? Its saved sign-in is deleted too. Nothing on the server changes."), ct),
+                appLifetime: _shutdown.Token);
+
             vm = new SettingsViewModel(settings, service, ops,
                 async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, _time, OneShotProbeTimeout, ct)).Reachable,
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),

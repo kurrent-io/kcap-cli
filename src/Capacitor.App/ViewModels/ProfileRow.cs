@@ -15,7 +15,7 @@ public sealed record ProfileRow(string Name, string? ServerUrl, bool IsActive, b
         _                                      => "Could not read sign-in status"
     };
 
-    public string ServerLabel => ServerUrl is { Length: > 0 } url ? url : "Add a server with Add profile or kcap profile add";
+    public string ServerLabel => ServerUrl is { Length: > 0 } url ? url : "Add a server with kcap profile add";
 
     public bool CanSignIn => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.NoSignInNeeded);
 

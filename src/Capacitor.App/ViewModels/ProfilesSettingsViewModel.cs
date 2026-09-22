@@ -100,6 +100,10 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
         Message = null;
         try {
             if (await CurrentAsync(row) is not { } current) return;
+            if (!current.CanSignIn) {
+                Message = "This profile has no server to sign in to.";
+                return;
+            }
             await _openSignIn(current.Name, current.ServerUrl!, _lifetime);
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {

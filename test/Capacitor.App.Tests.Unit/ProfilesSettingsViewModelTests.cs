@@ -136,6 +136,18 @@ public class ProfilesSettingsViewModelTests {
     });
 
     [Test]
+    public Task SignIn_of_a_row_with_no_server_is_refused() => AvaloniaSession.RunOnUiAsync(async () => {
+        var opened = false;
+        var vm = Make(await Seed(), openSignIn: (_, _, _) => { opened = true; return Task.CompletedTask; });
+        await vm.RefreshAsync();
+
+        await vm.SignInCommand.Execute(vm.Rows.Single(r => r.Name == "default")).ToTask();
+
+        await Assert.That(opened).IsFalse();
+        await Assert.That(vm.Message).IsEqualTo("This profile has no server to sign in to.");
+    });
+
+    [Test]
     public Task Refresh_reports_an_unreadable_config_and_keeps_the_rows() => AvaloniaSession.RunOnUiAsync(async () => {
         var vm = Make(await Seed());
         await vm.RefreshAsync();
