@@ -362,7 +362,13 @@ The profile's cross-process refresh lock becomes the lock for every write to
 - `SaveAsync(profile, tokens, guard?)` and `DeleteAsync(profile, guard)` take
   the lock, evaluate the optional guard under it against a pure config read
   (`ConfigMutator.TryLoadPure`, never the migrating loader), and write only when
-  it passes. A null guard writes unconditionally, as today.
+  it passes. A null guard writes unconditionally, as today. A read that fails
+  is not a passed guard: `TryLoadPure` hands back a fresh default config with
+  its false, and deciding on that would migrate a credential to `default`,
+  delete one because `default` has a file, or approve a deletion despite a
+  surviving alias. The guarded save then saves nothing and `CredentialSaved`
+  is false; the guarded delete retains the token and removal reports
+  `RemovedTokenRetained` with "config unreadable" as detail.
 - `SaveLockedAsync` is the lock-held primitive the refresh path calls, since it
   already holds the lock; the public methods wrap it. Nothing takes the lock
   twice.
@@ -379,7 +385,8 @@ The profile's cross-process refresh lock becomes the lock for every write to
   legacy file, which is redundant or superseded; when no legacy file exists it
   is a no-op. It throws when the move or delete fails. Every writer of
   `active_profile` calls it for the outgoing active name, read immediately
-  before its own mutation, and refuses the selection change when it throws:
+  before its own mutation by `TryLoadPure`, and refuses the selection change
+  when that read fails or the migration throws, before any service change:
   `kcap use` on its global arm, with or without `--global`; the GitHub and
   WorkOS discovery commits, before the commit boundary's config mutation; and
   the `--activate` transaction. Two writers racing each migrate the name they
@@ -466,29 +473,39 @@ bootstrap fails and the intruder survives rollback. The repair is at attach.
 
 ### Attach identity check
 
-`DaemonInfoDto` gains `Profile`, the name the daemon resolved at boot, an
-appended nullable field an older daemon leaves absent. When the lifecycle
-controller's attach reaches `Connected`, it compares the snapshot's `Name`,
-`ServerUrl` and, when present, `Profile` to the graph's bound resolution: its
-daemon name, its canonical server and its profile name. The expected identity
-is that resolution, never a re-read of `active_profile`, so an external
-selection change reports nothing here and cannot move the daemon out from
-under the app. On a mismatch it surfaces attention — "Daemon <name> is running
-for <what differs>, not <expected>" — and:
+`DaemonInfoDto` gains `Profile`, an appended nullable field carrying
+`Profiles.Resolution.ProfileName` as the daemon resolved it at boot: null from
+an older daemon, and null from a current daemon pinned by a URL override,
+where the resolver selects no profile. When the lifecycle controller's attach
+reaches `Connected`, it compares the snapshot's `Name`, `ServerUrl` and, when
+present, `Profile` to the graph's bound resolution: its daemon name, its
+canonical server and its profile name. The expected identity is that
+resolution, never a re-read of `active_profile`, so an external selection
+change reports nothing here and cannot move the daemon out from under the
+app. On a mismatch it surfaces attention — "Daemon <name> is running for
+<what differs>, not <expected>" — and:
 
 - when the resolution carries a valid profile name, offers a **Replace** repair
   that runs the ordinary `Replace` for it, gated on idle;
 - under a `KCAP_URL` or `--server-url` launch, where the resolution has no
-  profile name and the factory refuses a request, reports only, with the
-  guidance to relaunch without the override or run
-  `kcap daemon service install --replace --verify --profile <name>`;
+  profile name and the factory refuses a request, reports only. The guidance
+  is to relaunch without the override, or to run
+  `kcap daemon service install --replace --verify --name <name> --profile <profile>`
+  in a shell where `KCAP_URL` is unset: the service id comes from the
+  invocation's own context, so the name must be explicit, and the unit
+  captures the invoking environment, so an inherited override would be baked
+  into the replacement and outrank the profile again;
 - with auto actions closed after an abandoned wizard, reports only.
 
-Wizard-first mode has no daemon graph and no check. An older daemon that
-reports no `Profile` is compared on name and server only, and a survivor of
-the runtime race that shares both with the target is then not detected; the
-manual path is `kcap daemon stop --name <name>`, after which the startup
-matrix installs the target's unit. The same check is what turns a
+Wizard-first mode has no daemon graph and no check. A daemon that reports no
+`Profile` is compared on name and server only, and a survivor of the runtime
+race that shares both with the target is then not detected. The manual path
+depends on what survived: a detached daemon with no unit is stopped with
+`kcap daemon stop --name <name>` and the app restarted, because the controller
+claims its startup arm on the first attach outcome only and a later stop does
+not run the matrix again; a survivor with a unit is replaced with the command
+above, since `kcap daemon stop` refuses a loaded service and a retained plist
+sends the matrix to a start, not an install. The same check is what turns a
 `kcap use --global` made while a daemon runs from a silent mismatch into a
 reported one.
 
@@ -531,9 +548,12 @@ admission refusal, a queued `Replace` for the previous profile could take over
 the target's freshly installed unit, because `Replace` does not run the start
 gate's identity check.
 
-The rename's longer process timeout applies to every `Activate` request, not
-only to one with a retire id: the preparation step can wait the token lock's
-full 30 seconds before the forward phase begins.
+An `Activate` request gets its own process timeout: the rename's plus the
+token lock's 30-second wait. The transaction's own phases already sum to the
+rename timeout less its margin (target-lock wait, leftover recovery,
+retired-lock wait, retirement, installation, rollback), and the preparation
+step waits before any of them, so the rename timeout alone would let the app
+kill a legitimately progressing cross-id transaction during its rollback.
 
 ### CLI
 
@@ -566,7 +586,8 @@ unchanged, so a rename keeps its semantics.
 - **Preparation**, after viability and before leftover-marker recovery, still
   with nothing touched: `MigrateLegacyAsync` for the active name from a pure
   read, on the token lock's own 30-second wait, outside the forward budget. A
-  throw stops the transaction with `activation_migration_failed`. Running it
+  read that fails stops the transaction with `activation_config_unreadable`
+  and a throw with `activation_migration_failed`. Running it
   here rather than beside the config write keeps a refresh that holds the
   outgoing profile's lock from consuming the forward budget after the old
   daemon is already stopped; the migration is harmless if the transaction
@@ -634,8 +655,11 @@ closes it.
   `MigrateLegacyAsync` moves the file when the per-profile file is absent,
   deletes it when a valid or a corrupt per-profile file exists, is a no-op
   without a legacy file, and throws on a failed move or delete; after any of
-  these, selecting an uncredentialed B reads no credential; the guarded save
-  skips when the profile is absent or names another server; the refresh path
+  these, selecting an uncredentialed B reads no credential; a config made
+  unreadable before the owner read refuses the selection with nothing moved;
+  the guarded save skips when the profile is absent or names another server,
+  and when the config is unreadable; the guarded delete retains the token on
+  an unreadable config and removal reports it; the refresh path
   saves under the lock it already holds; no config write occurs under the
   token lock; logout against a refresh holding its lock ends with no file,
   for a per-profile and for a legacy-only credential, and logout sweeps temps
@@ -671,8 +695,10 @@ closes it.
   target removed, repointed or renamed between viability and activation, with
   nothing written for the new unit; the legacy credential migrated in
   preparation, before recovery and retire, a migration delayed by a refresh
-  holding the lock not shortening the forward budget, and a migration that
-  throws stopping with `activation_migration_failed` and nothing touched;
+  holding the lock not shortening the forward budget, a migration that throws
+  stopping with `activation_migration_failed`, and a config unreadable at
+  preparation stopping with `activation_config_unreadable`, nothing touched
+  in either;
   `active_profile` unchanged after
   viability, contention and retire refusals, written only after both labels
   are confirmed stopped, and still written after a readiness rollback, a
@@ -682,7 +708,9 @@ closes it.
 - `KcapCliTests`: exact argv for a same-id request (`--activate`, no retire
   flags) and a cross-id request (all three); the factory refuses
   `retireProfile` without `retireServiceId`; `cli_unsupported` when a flag is
-  missing from help at dispatch.
+  missing from help at dispatch; an `Activate` request's timeout outlives a
+  transaction that waits the full token lock, recovers a leftover marker,
+  retires and then rolls back.
 - `DaemonMutationLaneTests`: the restart latch is set by every dispatched
   `Activate` request, including a post-bootstrap `Refused`, not by the
   synthetic `cli_unsupported` nor by a plain rename; once set, a queued
@@ -696,10 +724,12 @@ closes it.
   old unit retired, it reinstalls the previous profile's; an attached daemon
   whose `ServerUrl`, `Name` or reported `Profile` differs from the bound
   resolution's surfaces attention with the Replace repair, refused while
-  agents are active; an older daemon reporting no `Profile` that matches on
-  server and name is accepted; under a `KCAP_URL` launch and with auto actions
-  closed the mismatch is reported without a repair; an external
-  `active_profile` change alone reports nothing.
+  agents are active; a daemon reporting no `Profile` that matches on server
+  and name is accepted; under a `KCAP_URL` launch and with auto actions closed
+  the mismatch is reported without a repair, and the URL-launch guidance names
+  the daemon and says to unset the override; an external `active_profile`
+  change alone reports nothing; the manual sequence for a detached survivor
+  (stop, restart the app) ends with the target's unit installed.
 - `DaemonMutationLaneTests` (evidence): an `Activate` request whose daemon
   reports another profile is not `Succeeded`; one reporting none is judged on
   server and name.
