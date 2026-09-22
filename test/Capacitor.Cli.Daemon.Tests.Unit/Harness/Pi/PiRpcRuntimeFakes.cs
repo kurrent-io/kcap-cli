@@ -39,6 +39,12 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
     /// gone" shape.</summary>
     public bool FailWrites { get; set; }
 
+    /// <summary>When set, a written line is recorded as usual but the write completes via this
+    /// delegate instead of <see cref="Task.CompletedTask"/> — lets a test park (a
+    /// <see cref="TaskCompletionSource"/> that never completes) or fault one specific command, such
+    /// as the reap's <c>abort</c>, without affecting every other write.</summary>
+    public Func<string, Task>? WriteOverride { get; set; }
+
     public int  Pid            { get; }              = 4242;
     public bool HasExited      { get; private set; }
     public int? ExitCode       { get; private set; }
@@ -83,7 +89,7 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 
         OnWrite?.Invoke(json);
 
-        return Task.CompletedTask;
+        return WriteOverride?.Invoke(json) ?? Task.CompletedTask;
     }
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
@@ -176,6 +182,12 @@ internal static class PiRpcRuntimeFakes {
     public const string AgentStart   = """{"type":"agent_start"}""";
     public const string AgentSettled = """{"type":"agent_settled"}""";
 
+    /// <summary>A blocking (or display-only) <c>extension_ui_request</c> frame — see
+    /// <c>PiRpc.ToEnvelopes</c>'s class doc for which <paramref name="method"/> values block Pi on
+    /// stdin.</summary>
+    public static string DialogRequest(string method) =>
+        $$"""{"type":"extension_ui_request","id":"ui-1","method":"{{method}}","title":"t"}""";
+
     /// <summary>Builds a runtime over a fresh <see cref="FakePiRpcProcess"/>. The caller owns
     /// disposing the runtime (which disposes the process).</summary>
     public static (PiRpcHostedAgentRuntime Runtime, FakePiRpcProcess Process) NewRuntime(
@@ -185,7 +197,9 @@ internal static class PiRpcRuntimeFakes {
             TimeSpan?  readyDeadline  = null,
             TimeSpan?  stopGrace      = null,
             Action?    onDisposed     = null,
-            TranscriptJournal? journal = null) {
+            TranscriptJournal? journal = null,
+            PiReviewerGuards?  reviewerGuards = null,
+            TimeProvider?      time    = null) {
         var process = new FakePiRpcProcess {
             AutoStateResponse = answerGetState ? stateResponse ?? GetStateResponse() : null,
         };
@@ -196,11 +210,12 @@ internal static class PiRpcRuntimeFakes {
             agentId:        "agent-1",
             requestedModel: requestedModel,
             cwd:            "/w",
-            time:           TimeProvider.System,
+            time:           time ?? TimeProvider.System,
             readyDeadline:  readyDeadline,
             stopGrace:      stopGrace,
             onDisposed:     onDisposed,
-            journal:        journal);
+            journal:        journal,
+            reviewerGuards: reviewerGuards);
 
         return (runtime, process);
     }
