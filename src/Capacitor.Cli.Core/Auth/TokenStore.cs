@@ -329,6 +329,26 @@ public sealed class TokenStore(
         SweepLeakedTemps();
     }
 
+    /// Settles the legacy <c>tokens.json</c> under <paramref name="owner"/>'s lock: moved into the
+    /// owner's own file when that is absent, deleted when the owner already has one (valid or
+    /// corrupt, the legacy copy is superseded either way), untouched when there is none. Throws on
+    /// a failed move or delete, so a caller about to change the active profile can refuse instead
+    /// of leaving the file for the next profile to claim.
+    public async Task MigrateLegacyAsync(string owner, CancellationToken ct = default) {
+        if (!File.Exists(LegacyTokenPath)) return;
+        using var lockStream = await AcquireProfileLockAsync(owner, ct);
+        if (!File.Exists(LegacyTokenPath)) return;
+
+        var target = ProfileTokenPath(owner);
+        if (File.Exists(target)) {
+            File.Delete(LegacyTokenPath);
+            return;
+        }
+
+        File.Move(LegacyTokenPath, target);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
     /// <summary>
     /// Resolves a token for a specific target server. This is the ONLY way a bearer token should
     /// reach an outgoing request: a token bound to a different server is withheld here, before any
