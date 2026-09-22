@@ -6,6 +6,34 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The cloud terminal mirror has its own lane per agent
+
+An agent's PTY is drained by one loop that feeds every surface. When that loop awaited a shared
+cloud queue, a slow server — or another agent's output filling the queue — froze `kcap agent
+attach` and the desktop app along with the web mirror. Each registered agent now has a
+`CloudTerminalSink`: the read loop hands it chunks without waiting, and its own pump sends them.
+
+The mirror is a cursor-addressed byte stream, so a dropped chunk garbles everything after it, and
+the hub protocol has no resynchronisation message. The sink repairs the mirror in-band instead: a
+terminal reset (`ESC c`) followed by the daemon's 2 MB output ring, on the same ordered lane as
+live output. That is what a local client gets by reattaching, with the same limits — the ring can
+begin mid-sequence, and anything painted before its horizon and never repainted is gone. The
+backlog budget equals the ring's size because past it a replay is cheaper than the backlog.
+
+A replay runs to completion even if the backlog overflows again behind it; abandoning it would
+let an agent that outruns the transport reset the mirror forever without ever painting it. Only a
+send that keeps failing, or a connection change, abandons a replay.
+
+Every re-registration asks for a resync. A chunk written just before a connection dies can be lost
+with no error, and the server drops output from a connection that has not re-registered the agent,
+so the pump waits for full readiness and then replays. The earlier reconnect replay garbled the
+terminal because it had no reset ahead of it and raced the live sends; this one has neither flaw.
+
+The sink stops before an agent finalizes, not after: the server deletes an agent's terminal buffer
+when it unregisters, so output sent later is discarded. Ordered delivery still rests on the server
+handling one connection's messages in arrival order, which holds by the shape of its hub method
+rather than by any guarantee — the daemon's per-agent sends are exactly as serial as before.
+
 ## A flows tool call ends before the shortest harness timeout
 
 A start holds its tool call open while the first round runs, and the reply it ends on — the round
