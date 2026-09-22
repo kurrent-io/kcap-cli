@@ -54,10 +54,16 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         var sent = Normalize(Text);
         var seen = Normalize(text);
         if (AttachmentIds.Count == 0) return SamePrompt(sent, seen);
-        return seen.Length > sent.Length
-            && seen.StartsWith(sent, StringComparison.Ordinal)
-            && seen.AsSpan(sent.Length).TrimStart().StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
+        // The receipt drops a space after the bang, and the attachment trailer follows that body.
+        if (BangBody(sent) is { } sentBody && BangBody(seen) is { } seenBody)
+            return HasAttachmentTail(sentBody, seenBody);
+        return HasAttachmentTail(sent, seen);
     }
+
+    static bool HasAttachmentTail(string sent, string seen) =>
+        seen.Length > sent.Length
+        && seen.StartsWith(sent, StringComparison.Ordinal)
+        && seen.AsSpan(sent.Length).TrimStart().StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
 
     static string Normalize(string text) => text.Replace("\r\n", "\n").Trim();
 
