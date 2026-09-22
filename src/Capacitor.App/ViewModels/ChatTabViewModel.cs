@@ -879,8 +879,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// A pending request whose tool already has a result was answered where the daemon cannot see
     /// (the vendor's own terminal prompt), so this tab is the one party that can retire it.
     /// AskUserQuestion's hook carries no tool-use id, so that card matches the latest ask with
-    /// the same question text, and only once that ask's result is at or after the card. Sent
-    /// once per request; a failed send reopens it and retries on a bounded backoff.
+    /// the same question text, and only once that ask's result is at or after the card. A card
+    /// whose requested time did not parse is left: that stamp is not an ordering. Sent once per
+    /// request; a failed send reopens it and retries on a bounded backoff.
     void WithdrawSettled() {
         if (_lifetimeToken.IsCancellationRequested) return;
         foreach (var request in _requests.Values) {
@@ -891,7 +892,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     bool ShouldWithdraw(PendingPermissionRequest request) {
         if (request.ToolUseId is { } id && _settledTools.Contains(id)) return true;
-        if (!request.IsQuestion) return false;
+        if (!request.IsQuestion || request.RequestedAt == DateTimeOffset.MinValue) return false;
         AskedQuestion? latest = null;
         foreach (var ask in _questionAsks)
             if (request.OverlapsQuestion(ask.Fingerprints)) latest = ask;

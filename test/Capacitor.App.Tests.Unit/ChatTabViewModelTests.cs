@@ -872,6 +872,23 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// An unparsed requested_at is the minimum timestamp, which is older than every settled ask.
+    /// That is not evidence the card predates the result.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_whose_time_did_not_parse_is_not_retired_by_a_settled_ask() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("q.jsonl", [QuestionCallLine, QuestionResultLine]);
+            await h.PushAsync(Dto(path));
+
+            h.Permissions.Add(PermissionEntries.Question("q-bad", toolInputJson: MatchingQuestion, requestedAt: "not-a-timestamp"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the untimed question");
+            await Assert.That(h.Permissions.Withdrawn).IsEmpty();
+            await h.TeardownAsync();
+        });
+    }
+
     /// A withdraw the daemon could not be reached for is not final: it retries on its own after a
     /// backoff, with no other event needed, and a withdraw in flight is never sent twice.
     [Test]
