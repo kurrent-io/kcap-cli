@@ -37,7 +37,7 @@ public sealed class LoginCommand(
         // OnboardingFacade.LoginAsync's adoptServer doc.
         var result = await facade.LoginAsync(baseUrl!, forceDevice, profile, CancellationToken.None, adoptServer: false);
 
-        return result is AuthResult.Committed ? 0 : 1;
+        return result is AuthResult.Committed { CredentialSaved: true } ? 0 : 1;
     }
 
     static async Task<int> HandleDiscoverAsync(

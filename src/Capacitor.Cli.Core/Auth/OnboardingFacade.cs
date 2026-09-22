@@ -15,7 +15,8 @@ sealed record CommitRequest(
     Func<ProfileConfig, ProfileConfig>? ConfigMutation,
     Func<Action, Task<string?>>?        PublishTokens,
     // False for a login that must not claim the profile for this server (see LoginTarget.Foreign).
-    bool                                WriteStamp = true);
+    bool                                WriteStamp = true,
+    CommitPrecondition?                 Precondition = null);
 
 /// <summary>The ordered commit boundary: the before-commit hook is the last cancellable await, after which every publication is uncancellable.</summary>
 static class CommitBoundary {
@@ -40,13 +41,28 @@ static class CommitBoundary {
         }
 
         // A token-only arm has no config commit to make the boundary durable, so what landed is tracked rather than assumed.
-        var configPublished = request.ConfigMutation is not null || request.WriteStamp;
+        var configPublished = request.ConfigMutation is not null || request.WriteStamp || request.Precondition is not null;
 
         if (configPublished) {
             try {
-                // Profile write and stamp are deliberately ONE mutation: no window where a profile exists unstamped.
-                await ConfigMutator.MutateAsync(root,
-                    config => Stamp(request.ConfigMutation?.Invoke(config) ?? config, request), CancellationToken.None);
+                ProfileConfig Mutation(ProfileConfig config) {
+                    request.Precondition?.Check(config, request.ActiveProfile);
+                    // Profile write and stamp are ONE mutation: no window where a profile exists unstamped.
+                    return Stamp(request.ConfigMutation?.Invoke(config) ?? config, request);
+                }
+
+                // A precondition is decided on what the file says, so an unreadable file must abort
+                // rather than be read as a fresh default and then published over.
+                if (request.Precondition is null) await ConfigMutator.MutateAsync(root, Mutation, CancellationToken.None);
+                else await ConfigMutator.MutateStrictAsync(root, Mutation, CancellationToken.None);
+            } catch (CommitPreconditionFailedException ex) {
+                progress.Error($"Error: {ex.Message}");
+
+                return new AuthResult.Failed(ex.Message);
+            } catch (ConfigUnreadableException) {
+                progress.Error("Error: sign-in could not be saved: the configuration file could not be read.");
+
+                return new AuthResult.Failed("config unreadable");
             } catch (Exception ex) {
                 // The config commit is the boundary's first durable step: if it threw, nothing was published.
                 progress.Error($"Error: sign-in could not be saved: {ex.Message}");
@@ -73,7 +89,8 @@ static class CommitBoundary {
         }
 
         return new AuthResult.Committed(
-            request.ActiveProfile, request.CanonicalServer, request.Provider, username, request.Identities);
+            request.ActiveProfile, request.CanonicalServer, request.Provider, username, request.Identities,
+            CredentialSaved: request.PublishTokens is null || tokenSaved);
     }
 
     static ProfileConfig Stamp(ProfileConfig config, CommitRequest request) {
@@ -110,13 +127,24 @@ static class CommitBoundary {
 /// written only when the profile already names it or the caller opted to adopt it; adopting also
 /// writes <c>server_url</c>. A foreign profile with no adoption gets neither.
 /// </summary>
-sealed record LoginTarget(string Profile, string CanonicalServer, string ServerUrl, bool PointsAtServer, bool AdoptServer) {
+sealed record LoginTarget(
+    string Profile, string CanonicalServer, string ServerUrl, bool PointsAtServer, bool AdoptServer,
+    bool ExistedAtRead = true, CommitPrecondition? Precondition = null) {
     internal bool Adopting  => !PointsAtServer && AdoptServer;
     internal bool Foreign   => !PointsAtServer && !AdoptServer;
     internal bool WriteStamp => !Foreign;
 
     internal Func<ProfileConfig, ProfileConfig>? ConfigMutation =>
         Adopting ? config => CommitBoundary.PointProfileAtServer(config, Profile, ServerUrl) : null;
+
+    /// Evaluated under the profile's token lock: the profile must still exist, and with a
+    /// precondition still name the server. A foreign login for a profile that never existed has
+    /// nothing that could have been removed, so it saves unguarded.
+    internal Func<ProfileConfig, bool>? SaveGuard =>
+        Foreign && !ExistedAtRead
+            ? null
+            : config => config.Profiles.TryGetValue(Profile, out var existing)
+                     && (Precondition is null || ServerIdentity.SameServer(existing.ServerUrl, ServerUrl));
 }
 
 /// <summary>
@@ -172,16 +200,22 @@ public sealed class OnboardingFacade(
     /// When the profile doesn't already name this server: true writes its <c>server_url</c> and the
     /// provider stamp, false leaves config untouched (a <c>None</c> server then has nothing to sign in with).
     /// </param>
+    /// <param name="precondition">
+    /// What must still hold about the profile when config is written: a profile removed or repointed
+    /// while the browser was open is refused rather than committed over.
+    /// </param>
     public Task<AuthResult> LoginAsync(
-            string serverUrl, bool forceDevice, string profile, CancellationToken ct, bool adoptServer = false) =>
-        GuardAsync(() => LoginCoreAsync(serverUrl, forceDevice, profile, adoptServer, ct), ct);
+            string serverUrl, bool forceDevice, string profile, CancellationToken ct, bool adoptServer = false,
+            CommitPrecondition? precondition = null) =>
+        GuardAsync(() => LoginCoreAsync(serverUrl, forceDevice, profile, adoptServer, precondition, ct), ct);
 
     /// <param name="provider"><see cref="AuthProvider.GitHubApp"/> or <see cref="AuthProvider.WorkOS"/>.</param>
     public Task<AuthResult> DiscoverAsync(string provider, bool forceDevice, CancellationToken ct) =>
         GuardAsync(() => DiscoverCoreAsync(provider, forceDevice, ct), ct);
 
     async Task<AuthResult> LoginCoreAsync(
-            string serverUrl, bool forceDevice, string profile, bool adoptServer, CancellationToken ct) {
+            string serverUrl, bool forceDevice, string profile, bool adoptServer, CommitPrecondition? precondition,
+            CancellationToken ct) {
         using var http = httpFactory.CreateClient(CapacitorClients.Anonymous);
 
         var config = await OAuthLoginFlow.FetchAuthConfigAsync(http, serverUrl, ct, progress);
@@ -196,7 +230,9 @@ public sealed class OnboardingFacade(
         var target     = new LoginTarget(
             profile, canonical, serverUrl,
             PointsAtServer: ServerIdentity.SameServer(configured?.ServerUrl, serverUrl),
-            AdoptServer: adoptServer);
+            AdoptServer: adoptServer,
+            ExistedAtRead: configured is not null,
+            Precondition: precondition);
 
         return config.Provider switch {
             AuthProvider.None      => await LoginNoneAsync(target, ct),
@@ -217,7 +253,8 @@ public sealed class OnboardingFacade(
         var request = new CommitRequest(
             [new AuthIdentity(target.Profile, target.CanonicalServer)], AuthProvider.None, target.Profile, target.CanonicalServer,
             ConfigMutation: target.ConfigMutation,
-            PublishTokens: null);
+            PublishTokens: null,
+            Precondition: target.Precondition);
 
         var result = await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
 
@@ -265,16 +302,20 @@ public sealed class OnboardingFacade(
             [new AuthIdentity(target.Profile, target.CanonicalServer)], provider, target.Profile, target.CanonicalServer,
             ConfigMutation: target.ConfigMutation,
             PublishTokens: async saved => {
-                await store.SaveAsync(target.Profile, tokens, CancellationToken.None);
-                saved();
+                var outcome = await store.SaveGuardedAsync(target.Profile, tokens, target.SaveGuard, CancellationToken.None);
+                if (outcome == GuardedWriteOutcome.Written) saved();
+                else progress.Error(outcome == GuardedWriteOutcome.ConfigUnreadable
+                    ? $"Error: the configuration file could not be read; the sign-in for '{target.Profile}' was not saved."
+                    : $"Error: profile '{target.Profile}' was removed or repointed during sign-in; nothing saved.");
 
                 return username;
             },
-            WriteStamp: target.WriteStamp);
+            WriteStamp: target.WriteStamp,
+            Precondition: target.Precondition);
 
         var result = await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
 
-        if (result is AuthResult.Committed) progress.Notice($"Logged in as {username}");
+        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {username}");
 
         return result;
     }
@@ -473,8 +514,10 @@ public sealed class OnboardingFacade(
                     continue;
                 }
 
-                await store.SaveAsync(tenant.ProfileName, exchanged.Value.Tokens, CancellationToken.None);
-                saved();
+                var outcome = await store.SaveGuardedAsync(
+                    tenant.ProfileName, exchanged.Value.Tokens, cfg => cfg.Profiles.ContainsKey(tenant.ProfileName), CancellationToken.None);
+                if (outcome == GuardedWriteOutcome.Written) saved();
+                else WarnExchangeFailed(tenant.ProfileName);
 
                 if (tenant.ProfileName == picked.ProfileName) pickedUsername = exchanged.Value.Username;
             } catch (Exception) {

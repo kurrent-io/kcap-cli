@@ -225,15 +225,17 @@ public static class WorkOSDiscovery {
             [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
             ConfigMutation: config => TenantDiscovery.MergeProfiles(config, ready.Tenants, picked),
             PublishTokens: async saved => {
-                await store.SaveAsync(picked.ProfileName, tokens, CancellationToken.None);
-                saved();
+                var outcome = await store.SaveGuardedAsync(
+                    picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
+                if (outcome == GuardedWriteOutcome.Written) saved();
+                else progress.Error($"Error: profile '{picked.ProfileName}' was removed during sign-in; nothing saved.");
 
                 return ready.Username;
             });
 
         var result = await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
 
-        if (result is AuthResult.Committed) progress.Notice($"Logged in as {ready.Username} → {picked.Label}");
+        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {ready.Username} → {picked.Label}");
 
         return result;
     }

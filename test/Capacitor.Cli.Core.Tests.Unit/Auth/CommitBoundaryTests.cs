@@ -408,4 +408,33 @@ public class CommitBoundaryTests {
         await Assert.That(ConfigMutator.LoadPure(ConfigPath).Profiles["eventuous"].AuthProvider!.Provider)
             .IsEqualTo(AuthProvider.WorkOS);
     }
+
+    [Test]
+    public async Task A_login_paused_before_its_token_save_does_not_revive_a_removed_profile() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            Profiles = new Dictionary<string, Profile> { ["acme"] = new() { ServerUrl = "https://acme.kcap.ai" } }
+        });
+        var store  = NewTokenStore(Config.Root);
+        var tokens = new StoredTokens {
+            AccessToken = "at", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), GitHubUsername = "alice",
+            Provider = AuthProvider.GitHubApp
+        };
+
+        var request = new CommitRequest(
+            [new AuthIdentity("acme", "https://acme.kcap.ai:443")], AuthProvider.GitHubApp, "acme", "https://acme.kcap.ai:443",
+            ConfigMutation: null,
+            PublishTokens: async saved => {
+                // Another process removes the profile between the config commit and this save.
+                await ConfigMutator.MutateAsync(Config.Root, c => c with { Profiles = new Dictionary<string, Profile>() });
+                var outcome = await store.SaveGuardedAsync("acme", tokens, cfg => cfg.Profiles.ContainsKey("acme"), CancellationToken.None);
+                if (outcome == GuardedWriteOutcome.Written) saved();
+                return "alice";
+            });
+
+        var result = await CommitBoundary.CommitAsync(Config.Root, request, null, new RecordingAuthProgress(), CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsFalse();
+        await Assert.That(TokenFileExists("acme")).IsFalse();
+    }
 }
