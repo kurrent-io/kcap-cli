@@ -13,9 +13,8 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// spec §3 step 7: every row of the lifecycle slice's state matrix → the exact mutation verb (or
-/// an explicit no-mutation) and the affordance offered, plus the decision-7 claim application
-/// rules. The lane is a recording delegate (results are waiter-state-only), the claims store is
+/// Every state of the lifecycle slice's matrix → the exact mutation verb (or an explicit
+/// no-mutation) and the affordance offered, plus the consent-flip claim application rules. The lane is a recording delegate (results are waiter-state-only), the claims store is
 /// REAL on temp paths (so TryConsume's own two-lock compare runs), and the surface records every
 /// dialog — the single-presentation rule is asserted by the surface staying untouched on every
 /// waiter outcome. Every "no claim application" assertion checks GetCalls, not just PutV2Calls:

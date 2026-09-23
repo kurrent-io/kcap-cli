@@ -23,6 +23,9 @@ public sealed class MarkdownImage : Panel {
     readonly Image _picture;
     readonly ImageSize? _size;
     bool _pressed;
+    // Found once per attach: a visual's ancestors cannot change without detaching it first.
+    Control? _pane;
+    Visual? _host;
 
     public MarkdownImage(string url, string label, ImageSize? size, string? target, bool inline) {
         Url = url;
@@ -63,12 +66,16 @@ public sealed class MarkdownImage : Panel {
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
         base.OnAttachedToVisualTree(e);
+        _pane = (Control?)this.FindAncestorOfType<MarkdownView>() ?? this.FindAncestorOfType<MarkdownViewer>();
+        _host = this.FindAncestorOfType<TextBlock>() ?? this.GetVisualParent() as Visual ?? this;
         LayoutUpdated += OnLayoutUpdated;
         _ = LoadAsync();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
         LayoutUpdated -= OnLayoutUpdated;
+        _pane = null;
+        _host = null;
         base.OnDetachedFromVisualTree(e);
     }
 
@@ -86,9 +93,7 @@ public sealed class MarkdownImage : Panel {
     /// is dropped so Uniform can shrink with aspect; a height-only tag (badges) keeps its height.
     void OnLayoutUpdated(object? sender, EventArgs e) {
         if (!_picture.IsVisible) return;
-        var pane = (Control?)this.FindAncestorOfType<MarkdownView>() ?? this.FindAncestorOfType<MarkdownViewer>();
-        if (pane is null || pane.Bounds.Width <= 0) return;
-        var host = this.FindAncestorOfType<TextBlock>() ?? this.GetVisualParent() as Visual ?? this;
+        if (_pane is not { } pane || _host is not { } host || pane.Bounds.Width <= 0) return;
         if (host.TranslatePoint(new Point(0, 0), pane) is not { } origin) return;
         var available = pane.Bounds.Width - origin.X - 2;
         if (available <= 0) return;

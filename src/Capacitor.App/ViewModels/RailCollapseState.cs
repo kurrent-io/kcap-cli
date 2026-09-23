@@ -4,9 +4,8 @@ namespace Capacitor.App.ViewModels;
 
 /// Collapse choices for worktree rows, held OUTSIDE the group VMs: DynamicData drops and
 /// re-forms a group whenever it empties or the cache resets, so state on the VM itself would
-/// silently reset (spec §3). Everything starts expanded — the rail only carries current
-/// sessions, so a fresh row is worth seeing (owner revision of the canvas's collapsed-main
-/// default); collapsing is an explicit choice that then sticks. UI-thread only.
+/// silently reset. Everything starts expanded — the rail only carries current sessions, so a
+/// fresh row is worth seeing; collapsing is an explicit choice that then sticks. UI-thread only.
 public sealed class RailCollapseState {
     readonly Dictionary<string, bool> _explicit = new(StringComparer.Ordinal);
     readonly Subject<string> _changes = new();

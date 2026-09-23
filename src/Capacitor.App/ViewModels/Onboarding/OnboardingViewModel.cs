@@ -14,7 +14,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public IReadOnlyList<IWizardStep> Steps { get; }
 
     /// Wizard-first mode builds no tray and no main window, so the outcome consumer's Status/
-    /// Attention lines are rendered here (spec decision 2). Null in tests that don't need them.
+    /// Attention lines are rendered here. Null in tests that don't need them.
     public WizardLifecycleSurface? Surface { get; }
 
     int _index;

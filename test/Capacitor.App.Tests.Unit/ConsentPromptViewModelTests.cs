@@ -10,13 +10,13 @@ using static Capacitor.App.Tests.Unit.ConsentEntries;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The full prompt matrix (spec §6/§10). Everything runs on the headless session's REAL dispatcher
+/// The full prompt matrix. Everything runs on the headless session's REAL dispatcher
 /// scheduler — that is what production's ObserveOn(RxSchedulers.MainThreadScheduler) actually runs
 /// under, and the resolve continuation's ordering against the cache eviction only exists there.
 /// Time is a FakeTimeProvider and the heartbeat a FakeTicker: no test sleeps, and the 2-second
 /// terminal hold is counted in ticks.
 public class ConsentPromptViewModelTests {
-    // ---- 1: queue order + position indicator ----
+    // ---- queue order + position indicator ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -40,7 +40,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(soloVisible).IsFalse(); // "1 of 1" is noise
     }
 
-    // ---- 2: the pin ----
+    // ---- the pin ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -73,7 +73,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(afterHold).IsEqualTo("older2"); // the advance releases the pin to the head
     }
 
-    // ---- 3: content projection ----
+    // ---- content projection ----
 
     [Test]
     [Arguments("agent", "Agent")]
@@ -113,7 +113,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(vendor).IsEqualTo("codex");
     }
 
-    // ---- 4: countdown, and expiry as a non-verdict ----
+    // ---- countdown, and expiry as a non-verdict ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -133,7 +133,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(initial).IsEqualTo("Expires in 30s");
         await Assert.That(ticked).IsEqualTo("Expires in 20s");
         await Assert.That(expired).IsEqualTo("Response time elapsed — unanswered requests are denied by the daemon");
-        await Assert.That(enabledWhileExpired).IsTrue(); // expiry is never a verdict (spec §6)
+        await Assert.That(enabledWhileExpired).IsTrue(); // expiry is never a verdict
         await Assert.That(phase).IsEqualTo(ConsentPromptPhase.Expired);
     }
 
@@ -178,7 +178,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(buttonsVisible).IsFalse();
     }
 
-    // ---- 5: the three buttons ----
+    // ---- the three buttons ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -209,7 +209,7 @@ public class ConsentPromptViewModelTests {
             [("p1", true, false), ("p2", true, true), ("p3", false, false)], CollectionOrdering.Matching);
     }
 
-    // ---- 6: the save-rule button predicate ----
+    // ---- the save-rule button predicate ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -224,7 +224,7 @@ public class ConsentPromptViewModelTests {
             return (Visible(null), Visible(""), Visible("github:1"));
         });
 
-        // A display name is not an identity: only Requester can key a rule (spec §6).
+        // A display name is not an identity: only Requester can key a rule.
         await Assert.That(nullRequester).IsFalse();
         await Assert.That(emptyRequester).IsFalse();
         await Assert.That(named).IsTrue();
@@ -279,7 +279,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(notified).IsEmpty(); // the disclosure is the window's, not a toast
     }
 
-    // ---- 9: applied + rule warnings ----
+    // ---- applied + rule warnings ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -380,7 +380,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(closedAfterHold).IsEqualTo(1);
     }
 
-    // ---- 10: transport failure ----
+    // ---- transport failure ----
 
     /// The outcome's rule value on this path describes a rule that was never sent, so it must NOT
     /// be rendered: an Unknown here would otherwise produce the down-level-daemon copy.
@@ -405,7 +405,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(queued).IsEqualTo(1);
     }
 
-    // ---- 11: expiry never preempts an in-flight resolve ----
+    // ---- expiry never preempts an in-flight resolve ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -436,7 +436,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(afterAck).IsEqualTo("a2"); // the ack governed, not the clock
     }
 
-    // ---- 12: the expired-state prune advance ----
+    // ---- the expired-state prune advance ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -527,7 +527,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(closedAfterTwoBeats).IsEqualTo(1);
     }
 
-    // ---- 13: no double-submit ----
+    // ---- no double-submit ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -556,7 +556,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(resolveCalls).IsEqualTo(1);
     }
 
-    // ---- 14: cancellation ----
+    // ---- cancellation ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -621,7 +621,7 @@ sealed class PromptHarness : IDisposable {
         Pump();
     }
 
-    /// The §5 Subscribed boundary: the cache is emptied and the daemon's replay re-adds. Pumped
+    /// The Subscribed boundary: the cache is emptied and the daemon's replay re-adds. Pumped
     /// separately from the replay, because that IS the production shape — the clear and each
     /// replayed entry are independently posted changesets.
     public void Clear() {

@@ -3,7 +3,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Binding ruling 1 (Task 10): a caller that cannot bind a canonical server must yield an
+/// A caller that cannot bind a canonical server must yield an
 /// honest Refused("no_server_configured") WITHOUT constructing a MutationRequest — this is the one
 /// shared guard every mutation-request boundary (DaemonLifecycleController, DaemonClientService's
 /// injected start delegate) routes through.

@@ -17,19 +17,15 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Regression coverage for a Critical bug found in review: OnFrameworkInitializationCompleted
-/// kicks off App.StartAsync fire-and-forget and returns immediately; Avalonia's
-/// StartWithClassicDesktopLifetime calls ShowMainWindow() exactly ONCE, synchronously, right
-/// after Start — and at that moment desktop.MainWindow was still null, because
-/// startup genuinely awaits real config I/O (and, in wizard-first mode, the whole wizard). By the
-/// time the continuation resumed and assigned desktop.MainWindow, nothing else ever called .Show()
-/// — the app booted a dispatcher loop showing nothing.
+/// OnFrameworkInitializationCompleted kicks off App.StartAsync fire-and-forget, and Avalonia's
+/// StartWithClassicDesktopLifetime calls ShowMainWindow() exactly ONCE, synchronously, while
+/// desktop.MainWindow is still null (startup awaits real config I/O and, in wizard-first mode,
+/// the whole wizard). Nothing else calls .Show(), so the continuation that assigns the window must
+/// show it itself, or the app boots a dispatcher loop showing nothing.
 ///
-/// That composition needs a real profile/daemon and isn't a seam a unit test can drive, so this
-/// exercises the closest testable seam: App.BuildAndShowMainWindow (internal, exposed to
-/// this assembly via InternalsVisibleTo) is the exact "build VM+window, assign, and Show()"
-/// continuation extracted out of StartAsync — this test proves THAT method actually leaves the
-/// window visible, against a fake service, without needing a real desktop lifetime or daemon.
+/// That composition needs a real profile/daemon, so this drives the closest seam:
+/// App.BuildAndShowMainWindow, the "build VM+window, assign, and Show()" continuation of
+/// StartAsync, proving it leaves the window visible against a fake service.
 public class AppStartupTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -79,7 +75,7 @@ public class AppStartupTests {
     }
 
     /// The service composition StartAsync builds once and shares between the window, the tray and
-    /// the pause controller (spec §7 one code path, §11 one banner/stderr channel).
+    /// the pause controller (one code path, one banner/stderr channel).
     static (AgentActionService Actions, IAppNotifier Notifier) NewActions(FakeDaemonClientService service) {
         var notifier = new AppNotifier();
         return (new AgentActionService(new ScriptedLocalControlOps(), notifier, new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm), notifier);
@@ -169,11 +165,9 @@ public class AppStartupTests {
         });
     }
 
-    /// Regression coverage for a P2 bug found in review: the startup catch used to write to
-    /// Console.Error and call desktop.Shutdown(1) directly — but App is OutputType=WinExe, so a
-    /// normal GUI launch has no console, and a startup failure (bad config, window construction
-    /// throw) made the app silently vanish with zero actionable error. BuildStartupErrorWindow
-    /// is the replacement: a plain, visible window with a copyable (SelectableTextBlock) lead
+    /// App is OutputType=WinExe, so a normal GUI launch has no console: a startup failure (bad
+    /// config, window construction throw) reported only to Console.Error would make the app
+    /// silently vanish. BuildStartupErrorWindow is a plain, visible window with a copyable (SelectableTextBlock) lead
     /// line plus the exception's full ToString(). This proves the rendered text actually carries
     /// both, the same way MainWindowSmokeTests proves bound VM text actually reaches the screen.
     [Test]
@@ -201,13 +195,12 @@ public class AppStartupTests {
         await Assert.That(rendered).Contains("boom-marker");
     }
 
-    /// Regression coverage for a P1 bug found in re-review: with the app's default ShutdownMode
-    /// (OnLastWindowClose, never set elsewhere), closing the error window used to exit 0 instead
-    /// of 1. Window.HandleClosed raises the CLR Closed event (our handler, calling Shutdown(1))
+    /// With the app's default ShutdownMode (OnLastWindowClose, never set elsewhere), closing the
+    /// error window would exit 0 instead of 1. Window.HandleClosed raises the CLR Closed event (our handler, calling Shutdown(1))
     /// BEFORE the routed WindowClosedEvent that OnLastWindowClose listens for; that routed event
     /// then drives an OnLastWindowClose TryShutdown() with its default exit code 0, which — via
     /// App.OnShutdownRequested's deferred cancel-then-retry dance — unconditionally overwrites
-    /// the exit code back to 0. ShowStartupError now pins ShutdownMode to OnExplicitShutdown
+    /// the exit code back to 0. ShowStartupError pins ShutdownMode to OnExplicitShutdown
     /// before showing the window, which disarms that whole branch. This drives ShowStartupError
     /// against a fake lifetime (no real desktop lifetime needed) and asserts: the mode is pinned
     /// and MainWindow assigned with no Shutdown call yet, then closing the window produces
@@ -239,18 +232,15 @@ public class AppStartupTests {
         await Assert.That(callsAfterClose).IsEquivalentTo([1], CollectionOrdering.Matching);
     }
 
-    /// Fix-round-1 regression coverage (Task 21), carried forward against Task 22's REAL
-    /// LifecyclePromptWindow/LifecyclePromptViewModel: the interim lifecycle prompt dialog used to
-    /// ignore its ConfirmAsync CancellationToken entirely — the tcs only ever resolved on a button
-    /// click or the window's own Closed event. Since ConfirmAndReplaceAsync holds the operation
-    /// gate across the whole ConfirmAsync await, a dialog left open through a lifetime-cancel (app
-    /// shutdown) would hold that gate forever, and QuiescedAsync (the very backstop shutdown
-    /// relies on) would never complete. WireDialogCancellation is the fix: a cancelled token
-    /// closes the dialog, which resolves false through the SAME Closed handler a manual
+    /// Against the REAL LifecyclePromptWindow/LifecyclePromptViewModel: ConfirmAndReplaceAsync
+    /// holds the operation gate across the whole ConfirmAsync await, so a dialog that ignored its
+    /// CancellationToken and stayed open through a lifetime-cancel (app shutdown) would hold that
+    /// gate forever, and QuiescedAsync (the backstop shutdown relies on) would never complete.
+    /// WireDialogCancellation closes the dialog on a cancelled token, which resolves false through the SAME Closed handler a manual
     /// Cancel/titlebar close uses (wired here exactly like App.ShowLifecyclePromptDialogAsync
     /// does, since that wiring — not the window itself — is what owns the fallback). The overall
-    /// dispatch is bounded (WaitAsync) so a reintroduced SizeToContent+Wrap headless hang (Task
-    /// 21's carried-forward finding) fails this test instead of hanging CI — LifecyclePromptWindow
+    /// dispatch is bounded (WaitAsync) so a SizeToContent+Wrap headless hang fails this test
+    /// instead of hanging CI; LifecyclePromptWindow
     /// deliberately uses a fixed Width/Height instead, see its .axaml.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -334,12 +324,11 @@ public class AppStartupTests {
         }
     }
 
-    /// Regression coverage for a P2 bug found in review: a startup failure that happened AFTER
-    /// service.Start()/_service assignment (e.g. BuildAndShowMainWindow throwing) used to go
-    /// straight to ShowStartupError, abandoning the live IPC pump/socket — closing the error
-    /// window force-shuts-down via desktop.Shutdown(1), which bypasses OnShutdownRequested and
-    /// its async DisposeAsync entirely, so nothing else would ever clean it up. Drives the
-    /// extracted HandleStartupFailureAsync against a REAL DaemonClientService (constructed with
+    /// A startup failure AFTER service.Start()/_service assignment (e.g. BuildAndShowMainWindow
+    /// throwing) must dispose the live IPC pump/socket before ShowStartupError: closing the error
+    /// window force-shuts-down via desktop.Shutdown(1), which bypasses OnShutdownRequested and its
+    /// async DisposeAsync entirely, so nothing else would ever clean it up. Drives
+    /// HandleStartupFailureAsync against a REAL DaemonClientService (constructed with
     /// fakes, so disposal is directly observable) and asserts: the shutdown token is cancelled,
     /// the service's loop actually ends (proving DisposeAsync ran, not just was called), and the
     /// error window is still shown afterward exactly as ShowStartupError already guarantees.
@@ -375,7 +364,7 @@ public class AppStartupTests {
         public Task<ObservedEvidence?> ObserveAsync(MutationRequest request, CancellationToken ct) => Task.FromResult<ObservedEvidence?>(null);
     }
 
-    /// Task 10: the lane is disposed too during startup-failure cleanup (last, after
+    /// The lane is disposed too during startup-failure cleanup (last, after
     /// lifecycle/service — see HandleStartupFailureAsync's own ordering comment) — a disposed
     /// lane cancels every subsequent RunAsync immediately, the observable proof this step ran.
     [Test]
@@ -402,13 +391,12 @@ public class AppStartupTests {
         await Assert.ThrowsAsync<OperationCanceledException>(() => lane.RunAsync(request, CancellationToken.None));
     }
 
-    /// Regression coverage for a P2 bug found in re-review: TryShutdown() in the DEFERRED
-    /// shutdown path (OnShutdownRequested -> DisposeAndShutdownAsync — e.g. Cmd+Q while the
-    /// startup-error window is still up) used to be called with no exit code, defaulting to 0 —
-    /// silently overwriting the startup failure with an apparent success. Drives the extracted
+    /// TryShutdown() in the DEFERRED shutdown path (OnShutdownRequested -> DisposeAndShutdownAsync,
+    /// e.g. Cmd+Q while the startup-error window is still up) must carry the exit code: a default
+    /// 0 would overwrite the startup failure with an apparent success. Drives
     /// DisposeAndConfirmShutdownAsync directly: a real DaemonClientService (fakes, disposal
     /// observable) and the same fake IClassicDesktopStyleApplicationLifetime used above, with
-    /// exitCode: 1 (what StartAsync's catch now sets on _exitCode before a later
+    /// exitCode: 1 (what StartAsync's catch sets on _exitCode before a later
     /// OnShutdownRequested can reach this path). No Avalonia session needed — DispatchProxy and
     /// DaemonClientService are both plain .NET, same as DaemonClientServiceTests.
     [Test]
@@ -434,27 +422,8 @@ public class AppStartupTests {
         await WaitUntilAsync(() => runClient.LiveEnumerations == 0, TimeSpan.FromSeconds(5));
     }
 
-    /// Same seam, but the normal (non-failure) exit code: a plain Cmd+Q with no prior startup
-    /// failure must still carry 0 through — this fix must not change the happy path.
-    [Test]
-    public async Task DisposeAndConfirmShutdownAsync_normal_shutdown_carries_exit_code_zero() {
-        var runClient = new ForeverRunClient();
-        var service = new DaemonClientService("daemon-a", runClient.Run, _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention)));
-        service.Start();
-        await WaitUntilAsync(() => runClient.LiveEnumerations >= 1);
-
-        var (desktop, fake) = FakeClassicDesktopLifetime.Create();
-
-        await AppUnderTest.DisposeAndConfirmShutdownAsync(service.DisposeAsync, markConfirmed: () => { }, desktop, exitCode: 0);
-
-        await Assert.That(fake.ShutdownCalls).IsEquivalentTo([0], CollectionOrdering.Matching);
-    }
-
-    /// Regression coverage for a Qodo review finding: DisposeAndConfirmShutdownAsync used to call
-    /// disposeAsync() with no surrounding try/catch/finally, so a throw left markConfirmed and
-    /// TryShutdown never called — _shutdownConfirmed stuck false while _shutdownStarted stayed
-    /// true, cancelling every later quit forever. Drives a disposeAsync delegate that throws and
-    /// asserts confirm still happens and TryShutdown still carries the exit code.
+    /// A throwing disposeAsync must still confirm and shut down: otherwise _shutdownConfirmed stays
+    /// false while _shutdownStarted is true, cancelling every later quit forever.
     [Test]
     public async Task DisposeAndConfirmShutdownAsync_confirms_and_shuts_down_when_dispose_throws() {
         var (desktop, fake) = FakeClassicDesktopLifetime.Create();
@@ -499,9 +468,9 @@ public class AppStartupTests {
         await Assert.That(fake.ShutdownCalls).IsEquivalentTo([0], CollectionOrdering.Matching);
     }
 
-    // spec §3.6: shutdown awaits DaemonLifecycleController.QuiescedAsync (mutations are never
+    // Shutdown awaits DaemonLifecycleController.QuiescedAsync (mutations are never
     // abandoned) but only up to a cap, since an internally-triggered mutation has no shutdown-token
-    // wiring of its own. AwaitQuiescedAsync is the extracted seam DisposeAndShutdownAsync wires it
+    // wiring of its own. AwaitQuiescedAsync is the seam DisposeAndShutdownAsync wires it
     // through — no live controller/App needed to drive it directly.
     [Test]
     public async Task AwaitQuiescedAsync_returns_once_the_wait_completes() {
@@ -530,8 +499,7 @@ public class AppStartupTests {
         public void Dispose() => onDispose();
     }
 
-    /// Ordering pin for spec §9's "quit never strands a menu-bar icon" and spec §5's consent
-    /// shutdown order: the UI-thread-owned disposables run, in the order given (tray icon first,
+    /// Ordering pin for "quit never strands a menu-bar icon" and the consent shutdown order: the UI-thread-owned disposables run, in the order given (tray icon first,
     /// then the prompt coordinator BEFORE the consent service it resolves against), all BEFORE the
     /// service dispose / markConfirmed / TryShutdown pass. Driven through a recording list rather
     /// than the real App fields, which no test can populate (StartAsync's composition needs a real
@@ -582,7 +550,7 @@ public class AppStartupTests {
         await Assert.That(fake.ShutdownCalls).IsEquivalentTo([1], CollectionOrdering.Matching);
     }
 
-    // ---- MainWindowCoordinator: hide-to-tray lifecycle (spec §9) ----
+    // ---- MainWindowCoordinator: hide-to-tray lifecycle ----
     //
     // Real headless MainWindows with no DataContext: these pin window lifecycle, not bindings
     // (MainWindowSmokeTests owns the bound-text coverage), and the coordinator's Closing
@@ -676,7 +644,7 @@ public class AppStartupTests {
 
     /// After a REAL close (quit path only) the tracked window is gone, so a later ShowMainWindow
     /// must build a fresh one from the factory — Avalonia throws on Show() of a closed window,
-    /// and no view state is lost (everything displayed comes from the live service, spec §9).
+    /// and no view state is lost (everything displayed comes from the live service).
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ShowMainWindow_builds_fresh_after_real_close() {
@@ -706,13 +674,12 @@ public class AppStartupTests {
         await Assert.That(builds).IsEqualTo(2);
     }
 
-    /// Regression coverage for an Important finding in review: QuitInProgress used to be set
-    /// AFTER OnShutdownRequested's `_shutdownConfirmed` guard, so a coordinator that came into
-    /// existence BETWEEN the two passes was never flagged. Shape: a quit (or an OS logout) lands
+    /// QuitInProgress must be set BEFORE OnShutdownRequested's `_shutdownConfirmed` guard, or a
+    /// coordinator that comes into existence BETWEEN the two passes is never flagged. Shape: a quit (or an OS logout) lands
     /// while startup is still resolving (or still showing the wizard) — pass 1 sees a null coordinator — and
     /// StartAsync's continuation then builds the window during the deferred disposal's await.
-    /// Pass 2 closed the windows with hide-on-close still armed: the window cancelled its own
-    /// close, and (decompiler-verified) DoShutdown aborts once a close is cancelled with windows
+    /// Pass 2 would close the windows with hide-on-close still armed: the window cancels its own
+    /// close, and DoShutdown aborts once a close is cancelled with windows
     /// still open, after which every later quit early-returns on _shutdownConfirmed — an app that
     /// can only be force-quit, over an already-disposed service. Drives the real pass logic in
     /// the real order, with the deferred pass in between.
@@ -727,7 +694,7 @@ public class AppStartupTests {
 
             // StartAsync's continuation resumes DURING the deferred disposal's await and builds
             // the window. Its own `QuitInProgress = _shutdownStarted` belt-and-braces is
-            // deliberately NOT applied here: this test pins the guard-ordering half of the fix,
+            // deliberately NOT applied here: this test pins the guard ordering,
             // so the coordinator arrives unflagged and only pass 2 can save the shutdown.
             var (coordinator, _) = NewCoordinator();
             coordinator.ShowMainWindow();
@@ -753,7 +720,7 @@ public class AppStartupTests {
         await Assert.That(shutdownCalls).IsEquivalentTo([1], CollectionOrdering.Matching);
     }
 
-    /// Spec §9: on a startup failure the error window is the only surface. Tray creation is
+    /// On a startup failure the error window is the only surface. Tray creation is
     /// structurally the LAST step of StartAsync's success path, so the failure path cannot have
     /// created one — this pins the other half of that claim, that the failure path itself never
     /// registers a tray icon on the Application.

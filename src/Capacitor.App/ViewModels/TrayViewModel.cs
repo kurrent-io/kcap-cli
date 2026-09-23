@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -11,17 +12,17 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// Projects IDaemonClientService.Status/Snapshots + IPauseController.State +
-/// AgentActionService.StopsInFlight + IConsentService.PendingCount into the tray's menu model
-/// (spec §4, §5, §7, §8). Constructor-scoped, not WhenActivated: the tray icon exists before any
+/// AgentActionService.StopsInFlight + IConsentService.PendingCount into the tray's menu model.
+/// Constructor-scoped, not WhenActivated: the tray icon exists before any
 /// window is shown, so MenuModel must be live from construction, not gated on activation.
 public sealed class TrayViewModel : ReactiveObject, IDisposable {
     const string IncompatibleReason = "daemon_incompatible";
     const string UnreachableReason  = "daemon_unreachable";
     const string ConsentCapability  = "consent/1";
 
-    // Neutral wording (spec §5), duplicated from MainWindowViewModel's SkewMessage: §4.2's
-    // incompatibility classification is a broad heuristic — an unexpected frame can equally mean
-    // the APP is the older side — so the UI must not prescribe an upgrade direction.
+    // Neutral wording: the incompatibility classification is a broad heuristic — an unexpected
+    // frame can equally mean the APP is the older side — so the UI must not prescribe an upgrade
+    // direction.
     const string SkewMessage = "app and daemon are incompatible — make sure both are up to date";
 
     internal const string RestartPendingSuffix = "update pending";
@@ -32,8 +33,8 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<TrayMenuModel> _menuModel;
     public TrayMenuModel MenuModel => _menuModel.Value;
 
-    // Parameter is the desired checked value, frozen by the adapter at menu-rebuild time (spec
-    // §6) — the click handler never reads NativeMenuItem.IsChecked. Fire-and-forget by design:
+    // Parameter is the desired checked value, frozen by the adapter at menu-rebuild time — the
+    // click handler never reads NativeMenuItem.IsChecked. Fire-and-forget by design:
     // PauseController itself serializes (single-flight + one queued slot), so the command need
     // not track in-flight state.
     public ReactiveCommand<bool, Unit> TogglePauseCommand { get; }
@@ -48,21 +49,21 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<string, Unit> StopAgentCommand { get; }
     public ReactiveCommand<string, Unit> OpenInWebCommand  { get; }
 
-    // Injected delegates (spec §5, §9): the tray adapter wires these to real menu items, but the
-    // VM owns the commands so tests can assert delegation without a live window/desktop lifetime.
-    // No-op defaults so this VM stays constructible before Task 7 supplies the real callbacks.
+    // Injected delegates: the tray adapter wires these to real menu items, but the VM owns the
+    // commands so tests can assert delegation without a live window/desktop lifetime. No-op
+    // defaults serve a caller without the real callbacks.
     public ReactiveCommand<Unit, Unit> OpenMainWindowCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
     public ReactiveCommand<Unit, Unit> QuitCommand { get; }
 
-    // The tray menu's "Review pending launches…" target (spec §8); the coordinator itself
+    // The tray menu's "Review pending launches…" target; the coordinator itself
     // filters/marshals the raise, so this command is a plain delegate call, same shape as
     // OpenMainWindowCommand/QuitCommand above.
     public ReactiveCommand<Unit, Unit> ReviewPendingCommand { get; }
 
-    // The tray menu's "Install command-line tool…" target (spec §5) — CreateFromTask, not
-    // Create, since ShimOfferCoordinator.RunManualInstallAsync is async; a no-op default keeps
-    // this VM constructible for every test that predates the shim coordinator.
+    // The tray menu's "Install command-line tool…" target — CreateFromTask, not Create, since
+    // ShimOfferCoordinator.RunManualInstallAsync is async; a no-op default serves a caller
+    // without one.
     public ReactiveCommand<Unit, Unit> InstallShimCommand { get; }
 
     // The tray's single update item (check while idle, restart once a package is ready); the
@@ -70,20 +71,19 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<Unit, Unit> UpdateActionCommand { get; }
 
     /// <param name="lifecycleAttention">
-    /// spec §6: ILifecycleSurface.Attention repair-affordance text (e.g. a
-    /// restore-verification failure). Null (most existing tests, and any caller without a live
-    /// lifecycle controller) means this stream never upgrades the tray state — see Build.
+    /// ILifecycleSurface.Attention repair-affordance text (e.g. a restore-verification failure).
+    /// Null (a caller without a live lifecycle controller) means this stream never upgrades the tray state — see Build.
     /// </param>
     /// <param name="shimOfferable">
-    /// spec §5: ShimOfferCoordinator.Offerable — true while the "Install command-line tool…"
-    /// item should show. Null (most existing tests) means the item never shows.
+    /// ShimOfferCoordinator.Offerable — true while the "Install command-line tool…" item should
+    /// show. Null (a caller without one) means the item never shows.
     /// </param>
     /// <param name="remote">
     /// The server lane's live-agent summary (an IAgentDirectory, via SummaryFrom below). Null
-    /// (every pre-existing test) keeps ProjectAggregate's verdict identical to Project's.
+    /// (a caller without one) keeps ProjectAggregate's verdict identical to Project's.
     /// </param>
     /// <param name="restartPending">
-    /// DaemonRestartPendingWatcher.Pending. Null (most tests) means the header never carries the
+    /// DaemonRestartPendingWatcher.Pending. Null (a caller without one) means the header never carries the
     /// suffix.
     /// </param>
     public TrayViewModel(
@@ -137,15 +137,11 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             (status, snap, pauseState, inFlight, pending, lifecycleMsg, summary, remoteFeed) =>
                 Build(service.DaemonName, status, snap, pauseState, inFlight, pending, lifecycleMsg, summary, remoteFeed));
 
-        // A second, narrower CombineLatest rather than folding `shim` into the six-source one
-        // above: it keeps Build's signature untouched (Build already reads awkwardly with six
-        // positional args) and ShimInstallVisible is orthogonal to everything Build computes —
-        // it never influences TrayState/Header/Agents/Pause. Same replay-1-shaped reasoning as
-        // the sources above applies to `shim`.
+        // Kept out of Build: it never affects TrayState/Header/Agents/Pause.
         var withShim = projected.CombineLatest(shim, (model, visible) => model with { ShimInstallVisible = visible });
 
-        // Same shape as the shim item: a narrow CombineLatest so Build stays untouched. Null (most
-        // tests) is Observable.Return(hidden), which seeds and completes like the sources above.
+        // Same shape as the shim item. Null is Observable.Return(hidden), which seeds and
+        // completes like the sources above.
         var update = updateMenu ?? Observable.Return(new UpdateMenuItem(false, ""));
         var withUpdate = withShim.CombineLatest(update, (model, item) => model with { UpdateItemLabel = item.Visible ? item.Label : null });
 
@@ -248,33 +244,33 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             BuildEntries(status, snap, stopsInFlight, remote), BuildPause(status, pauseState), pendingConsent);
     }
 
-    /// Pure ten-row mapping (spec §4), precedence top-down.
+    /// Pure mapping, precedence top-down.
     internal static (TrayState State, int Count) Project(AttachStatus status, DaemonStatusDto? snap) {
         if (status.State == AttachState.Unreachable) {
-            // Row 1: daemon_unreachable → Stopped. Rows 2 and 10 (daemon_incompatible and any
-            // other reason) collapse to Attention — the header distinguishes them (HeaderText).
+            // daemon_unreachable → Stopped. daemon_incompatible and any other reason collapse to
+            // Attention — the header distinguishes them (HeaderText).
             return status.Reason == UnreachableReason ? (TrayState.Stopped, 0) : (TrayState.Attention, 0);
         }
 
-        if (status.State == AttachState.Connecting) return (TrayState.Connecting, 0); // row 3
+        if (status.State == AttachState.Connecting) return (TrayState.Connecting, 0);
 
         // Connected. Defensive only (cannot happen per the client pin): no snapshot yet.
         if (snap is null) return (TrayState.Connecting, 0);
 
         var connection = snap.Daemon.Connection;
-        if (connection == "connecting") return (TrayState.Connecting, 0);              // row 4
-        if (connection is "reconnecting" or "disconnected") return (TrayState.Attention, 0); // row 5
+        if (connection == "connecting") return (TrayState.Connecting, 0);
+        if (connection is "reconnecting" or "disconnected") return (TrayState.Attention, 0);
 
         if (connection == "connected") {
             var active = snap.Daemon.ActiveAgents;
             return active switch {
-                < 0 => (TrayState.Attention, 0),        // row 6 — malformed count
-                0   => (TrayState.Idle, 0),              // row 7
-                _   => (TrayState.Running, active),      // row 8
+                < 0 => (TrayState.Attention, 0),        // malformed count
+                0   => (TrayState.Idle, 0),
+                _   => (TrayState.Running, active),
             };
         }
 
-        return (TrayState.Attention, 0); // row 9 — unrecognized connection value
+        return (TrayState.Attention, 0); // unrecognized connection value
     }
 
     /// Layers the server lane's live count onto Project's local verdict: a local Stopped or Idle
@@ -302,7 +298,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     /// attention.
     internal static IObservable<RemoteTraySummary> SummaryFrom(
             IAgentDirectory directory, IObservable<IReadOnlySet<string>>? sessionsWithAttention = null) {
-        var attention = sessionsWithAttention ?? Observable.Return((IReadOnlySet<string>)new HashSet<string>());
+        var attention = sessionsWithAttention ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
         var remoteRows = directory.Rows.Connect()
             .Filter(r => r.Origin == AgentOrigin.Remote && r.Status is "Starting" or "Running")
             .QueryWhenChanged(q => (IReadOnlyList<AgentRow>)q.Items.ToList())
@@ -354,9 +350,8 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return string.Join(", ", parts);
     }
 
-    // Rows 6 and 9 (connected, malformed count / unrecognized connection) and row 10 (unreachable,
-    // unrecognized reason) share the neutral fallback; rows 5's two connection values get their
-    // own copy.
+    // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
+    // share the neutral fallback; reconnecting and disconnected get their own copy.
     static string AttentionBody(AttachStatus status, DaemonStatusDto? snap) {
         if (status.State == AttachState.Connected && snap is not null) {
             return snap.Daemon.Connection switch {

@@ -40,7 +40,7 @@ public sealed class PermissionService : IPermissionService {
     readonly PermissionResponder _respond;
     readonly IDisposable _statusSub;
     readonly IDisposable? _agentsSub;
-    IReadOnlyDictionary<string, string> _sessionAgents = new Dictionary<string, string>();
+    IReadOnlyDictionary<string, string> _sessionAgents = FrozenDictionary<string, string>.Empty;
     CancellationTokenSource? _loopCts;
     long _liveSequence;
     long _laneEpoch;

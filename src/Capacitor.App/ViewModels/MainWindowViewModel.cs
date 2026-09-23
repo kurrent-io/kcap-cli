@@ -26,10 +26,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     const string IncompatibleReason = "daemon_incompatible";
     const string UnreachableReason  = "daemon_unreachable";
 
-    // Neutral wording: incompatibility classification is a broad heuristic — an unexpected frame
-    // can equally mean the APP is the older side — so the UI must not prescribe an upgrade direction.
-    // User-facing copy lives on HomeViewModel (launcher banner); Reason mirrors it for tests/tray.
-
     /// User-facing copy when the daemon isn't attached. Never the wire token (daemon_unreachable).
     internal static string UnreachableMessage => HomeViewModel.DaemonDownNotice;
 
@@ -140,7 +136,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// The Home surface's launcher and cards — constructed at the composition root over the SAME
     /// IDaemonClientService instance this window uses, never a second daemon connection. Null
-    /// only for a caller that doesn't supply one (most existing tests predate Home); HomeView
+    /// only for a caller that doesn't supply one; HomeView
     /// tolerates a null DataContext, same as any other unbound view.
     public HomeViewModel? Home { get; }
 
@@ -161,8 +157,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         private set => this.RaiseAndSetIfChanged(ref _currentWorkspace, value);
     }
 
-    // Sessions is the app's home for now: the right pane's empty state IS the launcher, and the
-    // Home surface stays in the tree but hidden (nothing navigates to it) until it earns its keep.
+    // Sessions is the default view; Home stays in the tree, hidden.
     ShellView _currentView = ShellView.Sessions;
     public ShellView CurrentView {
         get => _currentView;
@@ -178,8 +173,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> ShowHomeCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowSessionsCommand { get; }
 
-    /// The Sessions rail (repo → worktree → session over daemon.Agents) — null for any caller
-    /// that predates it, same nullable-seam shape as Home/workspaceFactory above.
+    /// The Sessions rail (repo → worktree → session over daemon.Agents) — null for a caller
+    /// without one, same nullable-seam shape as Home/workspaceFactory above.
     public SessionRailViewModel? Rail { get; }
 
     /// The active profile's name — the tenant slug (profiles are named after it at sign-in).
@@ -255,7 +250,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// </param>
     /// <param name="navigation">
     /// The composition root's app-lifetime NavigationGate. Null builds a private one, so
-    /// a caller with no navigation of its own (most existing tests) still gets a working VM — but
+    /// a caller with no navigation of its own still gets a working VM — but
     /// only a SHARED gate makes the shutdown latch reach a window built after shutdown began.
     /// </param>
     /// <param name="trackWorkspaceTeardown">
@@ -267,11 +262,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// <param name="workspaceFactory">
     /// Builds the workspace for an agent id (the production one wires the daemon socket's attach
     /// client and the xterm surface). Null means this window cannot navigate to a workspace at all
-    /// — every existing caller that predates workspaces stays on the Home surface.
+    /// — such a caller stays on the Home surface.
     /// </param>
     /// <param name="rail">
-    /// The Sessions rail. Null means this window has no rail to keep in sync — every existing
-    /// caller that predates it keeps working the way it always has.
+    /// The Sessions rail. Null means this window has no rail to keep in sync.
     /// </param>
     /// <param name="laneStatus">
     /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic
@@ -334,12 +328,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var offersSignIn    = requestSignIn is not null;
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
-        // "not currently executing" (confirmed against the installed ReactiveUI 23.2.28 API
-        // docs) — no separate in-flight flag is needed to satisfy "Start also disabled while a
+        // "not currently executing" — no separate in-flight flag is needed to satisfy "Start also disabled while a
         // start is in flight".
         //
-        // ReactiveCommand does NOT reschedule the SUPPLIED canExecute onto outputScheduler
-        // (decompile-verified: only IsExecuting/ThrownExceptions ride outputScheduler) — without
+        // ReactiveCommand does NOT reschedule the SUPPLIED canExecute onto outputScheduler (only
+        // IsExecuting/ThrownExceptions ride it) — without
         // an explicit ObserveOn here, a Status event arriving on a background thread (the
         // service's pump thread) would carry CanExecuteChanged, and therefore a bound Button's
         // IsEnabled write, onto that same background thread, tripping Avalonia's dispatcher

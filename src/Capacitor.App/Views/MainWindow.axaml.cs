@@ -13,7 +13,7 @@ namespace Capacitor.App.Views;
 // (AvaloniaActivationForViewFetcher) — no manual Activator.Activate() call is needed; Show()
 // activates the VM's WhenActivated projections, Close() deactivates them.
 public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
-    /// Assigned by MainWindowCoordinator on every window it builds (spec §9): returns true when
+    /// Assigned by MainWindowCoordinator on every window it builds: returns true when
     /// the close must be intercepted — the coordinator hides the window and the close below is
     /// cancelled. Left null on a plainly-constructed window (tests), where a close is a real
     /// close.
@@ -28,12 +28,9 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     bool _activityOpen;
     WorkspaceViewModel? _foregroundWorkspace;
 
-    /// Assigned by App.BuildAndShowMainWindow (spec §11) — the SAME IAppNotifier instance
+    /// Assigned by App.BuildAndShowMainWindow — the SAME IAppNotifier instance
     /// AgentActionService pushes into, so the toast overlay and stderr mirroring are always in
-    /// sync. Replaces the inline Banner/BannerLifetime this window used to bind: AppNotifier
-    /// itself and its stderr mirroring are unchanged, only the presentation moved from a
-    /// layout-shifting Border to a WindowNotificationManager overlay. Left null on a
-    /// plainly-constructed window (tests that don't exercise toasts) — the setter tolerates that.
+    /// sync. Left null on a plainly-constructed window (tests that don't exercise toasts).
     public IAppNotifier? Notifier {
         get => _notifier;
         set {
@@ -81,9 +78,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     }
 
     // A toast fired before Loaded, or while the window is hidden (Hide() suspends rendering
-    // entirely), is invisible to the user — stderr (AppNotifier's own mirroring, unchanged) is
-    // the only channel that survives either case. Accepted limitation, unchanged from the inline
-    // banner it replaces (spec §11).
+    // entirely), is invisible to the user — stderr (AppNotifier's own mirroring) is the only
+    // channel that survives either case.
     void ShowToast(string message) =>
         _notifications?.Show(new Notification("Kurrent Capacitor", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
 
@@ -91,11 +87,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void OnChromePointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e) =>
         WindowChrome.BeginDrag(this, e);
 
-    // IsVisible is decompile-verified to be exactly what Show()/Hide() toggle (see
-    // App.ShowConfirmForceStopDialogAsync's owner check) — hide-to-tray never fires Closed/Opened
-    // (MainWindowCoordinator's own doc comment: it "never detaches this window from the visual
-    // tree"), so this property is the one signal that actually tracks on-screen state across a
-    // hide/reopen cycle.
+    // IsVisible is what Show()/Hide() toggle, and hide-to-tray never fires Closed/Opened, so this
+    // property is the one signal that tracks on-screen state across a hide/reopen cycle.
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
         base.OnPropertyChanged(change);
         // DataContextProperty too — defensive: production always assigns DataContext before the

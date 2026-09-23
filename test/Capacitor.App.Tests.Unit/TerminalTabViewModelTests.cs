@@ -175,12 +175,11 @@ public class TerminalTabViewModelTests {
         });
     }
 
-    /// I1 (final review, reworked): a post-attach resend fired from inside OnAttachedAsync is
-    /// structurally defeated -- Core's own post-attach repaint nudge (AgentAttachClient.
-    /// RunCoreAsync, right after a read-write Attached) writes at whatever size RunAsync started
-    /// with and follows immediately after any same-callback resend on the wire; the daemon applies
-    /// resizes in stream order with last-write-wins, so the resend never survives. The fix instead
-    /// starts the run itself at the surface's real size (TryStartAttemptAsync reads CurrentSize
+    /// A post-attach resend fired from inside OnAttachedAsync is structurally defeated: Core's own
+    /// post-attach repaint nudge (AgentAttachClient.RunCoreAsync, right after a read-write
+    /// Attached) writes at whatever size RunAsync started with and follows any same-callback
+    /// resend on the wire; the daemon applies resizes in stream order with last-write-wins, so the
+    /// resend never survives. So the run itself starts at the surface's real size (TryStartAttemptAsync reads CurrentSize
     /// right after the UI swap dispatch, before calling RunAsync) -- committed before any Attach
     /// reply, so it holds regardless of whether the attach turns out read-write or read-only.
     [Test]
@@ -317,7 +316,7 @@ public class TerminalTabViewModelTests {
             await vm.ReattachCommand.Execute(); // retires attempt 1: cancels + await-disposes client1
 
             // TrySetException, not SetException: DisposeAsync's own Result.TrySetResult(Detached)
-            // (I4's fake-fidelity fix) may already have claimed Result as part of that retire --
+            // may already have claimed Result as part of that retire --
             // this call's outcome doesn't matter either way, only that attempt 1 settles silently.
             client1.Result.TrySetException(new OperationCanceledException());
             await run1; // attempt 1's own run settles silently
@@ -471,8 +470,7 @@ public class TerminalTabViewModelTests {
             time.Advance(TimeSpan.FromSeconds(1));
             await WaitUntilAsync(() => client.DisposeCalls == 1, what: "DisposeAsync called at the 1s detach bound");
 
-            // A safety margin, not strictly required any more: DisposeAsync's own
-            // Result.TrySetResult(Detached) (I4) settles the run step through ordinary Task
+            // A safety margin: DisposeAsync's own Result.TrySetResult(Detached) settles the run step through ordinary Task
             // scheduling once DisposeCalls confirms it ran, but this covers a slow CI box too.
             time.Advance(TimeSpan.FromSeconds(2));
             await teardown;
@@ -510,7 +508,7 @@ public class TerminalTabViewModelTests {
         });
     }
 
-    // ---- review fixes: C1/I1-I6 ----
+    // ---- teardown and reattach races ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -523,9 +521,8 @@ public class TerminalTabViewModelTests {
             var before = factory.Created.Count;
             await vm.ReattachCommand.Execute();
 
-            // Disposal wins permanently: a post-teardown Reattach must build nothing -- the
-            // straggler client C1 reproduced (nothing would ever dispose it; TeardownAsync is
-            // idempotent) never gets created at all.
+            // Disposal wins permanently: a post-teardown Reattach must build nothing, since
+            // nothing would ever dispose that straggler client (TeardownAsync is idempotent).
             await Assert.That(factory.Created.Count).IsEqualTo(before);
         });
     }
@@ -537,9 +534,9 @@ public class TerminalTabViewModelTests {
             var (_, factory, _, vm, client1) = await BuildConnectingAsync();
 
             // Gate client1's DisposeAsync open so Reattach's retire step is still suspended
-            // (straddling the swap) when TeardownAsync lands -- the class of race C1 reproduced:
-            // a resumed cts.Token read/Register throwing ObjectDisposedException, and a second
-            // live client nothing could ever dispose.
+            // (straddling the swap) when TeardownAsync lands. The hazard: a resumed cts.Token
+            // read/Register throwing ObjectDisposedException, and a second live client nothing
+            // could ever dispose.
             client1.DisposeGate = new TaskCompletionSource();
 
             var reattach = Task.Run(() => vm.ReattachCommand.Execute().ToTask());

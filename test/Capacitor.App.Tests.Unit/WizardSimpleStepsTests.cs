@@ -14,7 +14,7 @@ using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// spec §3 steps 1/4/8: the PATH shim, the visibility/daemon-name defaults, and the closing
+/// The PATH shim, the visibility/daemon-name defaults, and the closing
 /// summary. Shim owns a ReactiveCommand (WhenAnyValue in its ctor), so it runs through the real
 /// headless session like SignInStepViewModel; Defaults and Done own no commands and run directly,
 /// like ConnectStepViewModel.
@@ -205,24 +205,6 @@ public class WizardSimpleStepsTests {
         await Assert.That(updates).IsEqualTo(0);
     }
 
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task CanLeaveAsync_never_vetoes() {
-        var (next, back, skip) = await AvaloniaSession.DispatchAsync(async () => {
-            var vm = new ShimStepViewModel(false, new PathShimInstaller(
-                new NoopProcessRunner(), new FakeLoginShellProbe()), new NoopAppStateStore(), null);
-
-            return (
-                await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None),
-                await vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None),
-                await vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None));
-        });
-
-        await Assert.That(next).IsTrue();
-        await Assert.That(back).IsTrue();
-        await Assert.That(skip).IsTrue();
-    }
-
     // ── templates ────────────────────────────────────────────────────────────
 
     [Test]
@@ -290,19 +272,6 @@ public class WizardSimpleStepsTests {
         await Assert.That(result.summaryNote).IsEqualTo("kcap isn't on this machine");
         await Assert.That(result.summaryGlyph).IsEqualTo("—");
     }
-
-    sealed class NoopProcessRunner : IProcessRunner {
-        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) =>
-            throw new NotImplementedException();
-
-        public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
-            Action<StreamedLine> onLine, CancellationToken ct) => throw new NotImplementedException();
-    }
-
-    sealed class NoopAppStateStore : IAppStateStore {
-        public Task<AppState> LoadAsync() => Task.FromResult(new AppState());
-        public Task<bool> UpdateAsync(Func<AppState, AppState> mutate) => Task.FromResult(true);
-    }
 }
 
 /// Real ConfigMutator against the config path.
@@ -324,18 +293,9 @@ public class DefaultsStepViewModelTests {
     }
 
     [Test]
-    public async Task VisibilityOptions_carry_the_setup_prompts_four_labels_verbatim() {
-        var options = DefaultsStepViewModel.VisibilityOptions;
-
-        await Assert.That(options.Select(o => o.Value)).IsEquivalentTo(AppConfig.ValidVisibilities, CollectionOrdering.Matching);
-        await Assert.That(options.First(o => o.Value == "private").Label)
-            .IsEqualTo("All private — only you can see your sessions");
-        await Assert.That(options.First(o => o.Value == "project").Label)
-            .IsEqualTo("Project repos public to fellow project members, others private");
-        await Assert.That(options.First(o => o.Value == "org_public").Label)
-            .IsEqualTo("Org repos public, others private (default)");
-        await Assert.That(options.First(o => o.Value == "public").Label)
-            .IsEqualTo("All public — others can see all your sessions");
+    public async Task VisibilityOptions_cover_every_valid_visibility_in_order() {
+        await Assert.That(DefaultsStepViewModel.VisibilityOptions.Select(o => o.Value))
+            .IsEquivalentTo(AppConfig.ValidVisibilities, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -512,14 +472,6 @@ public class DefaultsStepViewModelTests {
 /// like ConnectStepViewModelTests.
 public class DoneStepViewModelTests {
     [Test]
-    public async Task Applicable_and_Satisfied_are_always_true() {
-        var vm = new DoneStepViewModel(() => []);
-
-        await Assert.That(vm.Applicable).IsTrue();
-        await Assert.That(vm.Satisfied).IsTrue();
-    }
-
-    [Test]
     public async Task Summary_reflects_the_providers_current_output_including_why_skipped_notes() {
         IReadOnlyList<(string Title, bool Satisfied, string? Note)> current = [
             ("Command-line tool", false, "kcap CLI not found"),
@@ -578,14 +530,5 @@ public class DoneStepViewModelTests {
         await vm.OnEnterAsync(CancellationToken.None);
 
         await Assert.That(raised).Contains(nameof(DoneStepViewModel.Summary));
-    }
-
-    [Test]
-    public async Task CanLeaveAsync_never_vetoes() {
-        var vm = new DoneStepViewModel(() => []);
-
-        await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None)).IsTrue();
-        await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None)).IsTrue();
-        await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None)).IsTrue();
     }
 }

@@ -75,8 +75,6 @@ internal sealed class TerminalChatInput : ChatInput {
         SendTextResult result;
         try {
             result = await _ops.SendTextWithAttachmentsAsync(_agentId, text, attachmentIds, ct);
-        } catch (OperationCanceledException) {
-            return Settle(ChatSendOutcome.Unconfirmed, LocalFrameChatInput.Unconfirmed);
         } catch (Exception) {
             return Settle(ChatSendOutcome.Unconfirmed, LocalFrameChatInput.Unconfirmed);
         }

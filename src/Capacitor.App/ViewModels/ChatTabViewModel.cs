@@ -133,7 +133,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     public PendingCardsViewModel Cards { get; }
     public ReadOnlyObservableCollection<PendingCardViewModel> PendingCards => Cards.PendingCards;
-    public IObservable<string?> Root => _rootSubject;
 
     readonly ObservableAsPropertyHelper<bool> _hasPendingCards;
     public bool HasPendingCards => _hasPendingCards.Value;

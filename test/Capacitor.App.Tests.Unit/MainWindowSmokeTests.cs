@@ -105,17 +105,15 @@ public class MainWindowSmokeTests {
         await Assert.That(rendered).Contains("1.2.3");
     }
 
-    /// Regression coverage for a Critical bug found in review: canStart/canRetry were built
-    /// straight off service.Status with no ObserveOn, and ReactiveCommand does NOT reschedule a
-    /// SUPPLIED canExecute onto its outputScheduler (only IsExecuting/ThrownExceptions ride it) —
-    /// so a Status event arriving on a background thread carried CanExecuteChanged, and therefore
-    /// a bound Button's IsEnabled write, onto that same background thread, tripping Avalonia's
-    /// dispatcher thread-affinity check.
+    /// ReactiveCommand does NOT reschedule a SUPPLIED canExecute onto its outputScheduler (only
+    /// IsExecuting/ThrownExceptions ride it), so canStart/canRetry built off service.Status without
+    /// an ObserveOn would carry a background-thread Status event's CanExecuteChanged, and a bound
+    /// Button's IsEnabled write, onto that thread, tripping Avalonia's thread-affinity check.
     ///
     /// Deliberately NOT wrapped in AvaloniaSession.WithImmediateRxScheduler: that swaps
     /// RxSchedulers.MainThreadScheduler for ImmediateScheduler.Instance, which would deliver the
     /// background-thread OnNext synchronously on the CALLING (background) thread regardless of
-    /// whether an ObserveOn is present — it could never catch this bug either way. This test
+    /// whether an ObserveOn is present, so it could never catch a missing one. This test
     /// needs the REAL Avalonia-dispatcher scheduler that UseReactiveUI() installs for the whole
     /// headless session, so a background-thread publish actually has to cross a real dispatcher
     /// boundary to reach the Button.
@@ -155,22 +153,18 @@ public class MainWindowSmokeTests {
         await Assert.That(startEnabledAfter).IsTrue();
     }
 
-    /// Regression coverage for a Critical bug found in review: RunStartAsync did not catch
-    /// OperationCanceledException, but DaemonClientService.StartDaemonAsync deliberately
-    /// rethrows it when the caller-supplied ct fires mid-wait (App's `_shutdown` token — spec
-    /// §5, "ct abandons the WAIT, not the started daemon"). App.OnShutdownRequested cancels
-    /// that very token on Cmd+Q while a start may still be in flight. Nothing subscribes to
-    /// StartDaemonCommand.ThrownExceptions, so ReactiveCommand's own default handler
-    /// (decompile-verified: ReactiveUI.RxState.DefaultExceptionHandler) reschedules an
-    /// UnhandledErrorException onto RxSchedulers.MainThreadScheduler — the still-alive
-    /// dispatcher — crashing the app.
+    /// DaemonClientService.StartDaemonAsync deliberately rethrows OperationCanceledException when
+    /// the caller-supplied ct fires mid-wait (App's `_shutdown` token: ct abandons the WAIT, not the
+    /// started daemon), and App.OnShutdownRequested cancels that token on Cmd+Q while a start may
+    /// be in flight. Nothing subscribes to StartDaemonCommand.ThrownExceptions, so an uncaught OCE
+    /// in RunStartAsync would reach ReactiveUI.RxState.DefaultExceptionHandler, which reschedules
+    /// an UnhandledErrorException onto the still-alive dispatcher and crashes the app.
     ///
     /// Deliberately NOT wrapped in WithImmediateRxScheduler, for the same reason as the sibling
     /// test above: only a REAL dispatcher round-trip (via Dispatcher.UIThread.RunJobs(), which
-    /// decompile-verified drains Avalonia's dispatcher queue including jobs enqueued mid-drain,
-    /// and re-throws an unhandled job exception out of the call since nothing subscribes to
-    /// Dispatcher.UIThread.UnhandledException) actually reproduces — and proves the fix for — a
-    /// scheduler-rescheduled exception.
+    /// drains Avalonia's dispatcher queue including jobs enqueued mid-drain, and re-throws an
+    /// unhandled job exception out of the call since nothing subscribes to
+    /// Dispatcher.UIThread.UnhandledException) reproduces a scheduler-rescheduled exception.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Quit_during_start_does_not_crash() {
@@ -266,7 +260,7 @@ public class MainWindowSmokeTests {
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 
-    // ---- Toast overlay (spec §11: WindowNotificationManager replaces the inline banner) ----
+    // ---- Toast overlay (WindowNotificationManager) ----
     //
     // Proves the real production wiring end to end: MainWindow.Notifier assigned exactly as
     // App.BuildAndShowMainWindow does, a WindowNotificationManager actually constructible and
@@ -297,7 +291,7 @@ public class MainWindowSmokeTests {
         await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 
-    // ---- Activity gate (spec §4) ----
+    // ---- Activity gate ----
     //
     // Proves the real production wiring end to end — the Activity flyout's open state, the
     // launcher pane being on screen (Sessions surface with NO workspace open), and the window's
@@ -459,7 +453,7 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// The surface swap itself (spec §3) — the XAML side of what WorkspaceNavigationTests pins on
+    /// The surface swap itself: the XAML side of what WorkspaceNavigationTests pins on
     /// the ViewModel. WorkspaceView is materialized from a template rather than always present, so
     /// this also proves the terminal control is CONSTRUCTED only once a workspace exists; closing
     /// it lands on the Sessions surface's placeholder, never back on Home.
@@ -560,7 +554,7 @@ public class MainWindowSmokeTests {
     static Button RailRow(MainWindow window, string text) => window.GetVisualDescendants().OfType<Button>()
         .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
 
-    /// The rail's own click path (spec §3): a session row rendered by SessionRailView carries the
+    /// The rail's own click path: a session row rendered by SessionRailView carries the
     /// VM's OpenCommand, and executing it opens that agent's workspace on the Sessions surface.
     ///
     /// Also pins the selection highlight as RENDERED state, not just as a bound class. A row's
@@ -757,7 +751,7 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// The tabless boot (spec §3, revised): the window opens on the Sessions surface — rail plus
+    /// The tabless boot: the window opens on the Sessions surface — rail plus
     /// the launcher pane — with no TabControl anywhere in its visual tree; the rail's New session
     /// row is the deselect-to-launcher affordance.
     [Test]

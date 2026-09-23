@@ -29,7 +29,7 @@ public class ConsentServiceTests {
         new(requestId, requester, "agent", "/repo", "claude", requestedAt ?? T0.ToString("O"), timeoutSeconds,
             "Alice", promptId);
 
-    // ---- 1: subscription gate ----
+    // ---- subscription gate ----
 
     [Test]
     public async Task Subscribes_only_with_consent2_capability() {
@@ -51,7 +51,7 @@ public class ConsentServiceTests {
         await Assert.That(h.Stream.Attempts).IsEqualTo(1);
     }
 
-    // ---- 2: clear boundary ----
+    // ---- clear boundary ----
 
     [Test]
     public async Task Clear_happens_at_subscribed_not_before_dial() {
@@ -70,7 +70,7 @@ public class ConsentServiceTests {
         await WaitUntilAsync(() => h.View.Count == 0, what: "cache cleared at the Subscribed boundary");
     }
 
-    // ---- 3: upsert + added signal ----
+    // ---- upsert + added signal ----
 
     [Test]
     public async Task Replay_upserts_by_request_id_and_entryadded_fires_once_per_identity() {
@@ -132,7 +132,7 @@ public class ConsentServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(3); // the replay still restored the tray count
     }
 
-    // ---- 4: tombstones ----
+    // ---- tombstones ----
 
     [Test]
     public async Task Tombstoned_prompt_id_is_dropped_and_survives_resubscribe() {
@@ -166,7 +166,7 @@ public class ConsentServiceTests {
         await Assert.That(h.Added).IsEqualTo(2); // a never-concluded identity: prompted on its own terms
     }
 
-    // ---- 5: identity-guarded eviction ----
+    // ---- identity-guarded eviction ----
 
     [Test]
     public async Task Conclusive_ack_evicts_by_identity_including_a_replayed_fresh_instance() {
@@ -195,7 +195,7 @@ public class ConsentServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(0);
     }
 
-    // ---- 6: ABA defense ----
+    // ---- ABA defense ----
 
     [Test]
     public async Task Successor_with_same_request_id_survives_predecessors_ack() {
@@ -219,7 +219,7 @@ public class ConsentServiceTests {
         await Assert.That(h.View.Lookup("a1").Value.PromptId).IsEqualTo(successor.PromptId);
     }
 
-    // ---- 7: ack -> outcome mapping ----
+    // ---- ack -> outcome mapping ----
 
     [Test]
     [Arguments(true, null, null, false, ConsentResolveKind.Applied, ConsentRuleOutcome.NotRequested)]
@@ -245,7 +245,7 @@ public class ConsentServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(0); // every ack is conclusive: remove + tombstone
     }
 
-    // ---- 8: save_rule guard ----
+    // ---- save_rule guard ----
 
     [Test]
     public async Task Save_rule_guard_null_and_empty_requester() {
@@ -276,7 +276,7 @@ public class ConsentServiceTests {
         await Assert.That(third.RuleOutcome).IsEqualTo(ConsentRuleOutcome.Saved);
     }
 
-    // ---- 9: identity echo ----
+    // ---- identity echo ----
 
     [Test]
     public async Task Resolve_sends_the_targets_exact_prompt_id() {
@@ -293,7 +293,7 @@ public class ConsentServiceTests {
         await Assert.That(sent.Decision).IsEqualTo("deny");
     }
 
-    // ---- 10: transport failure ----
+    // ---- transport failure ----
 
     [Test]
     public async Task Transport_failure_keeps_the_entry_and_refreshes_prune_after() {
@@ -332,7 +332,7 @@ public class ConsentServiceTests {
         await Assert.That(retry.Kind).IsEqualTo(ConsentResolveKind.Applied); // lane freed
     }
 
-    // ---- 11: cancellation ----
+    // ---- cancellation ----
 
     [Test]
     public async Task Cancellation_propagates_and_keeps_the_entry() {
@@ -383,7 +383,7 @@ public class ConsentServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(1);
     }
 
-    // ---- 12: prune ----
+    // ---- prune ----
 
     [Test]
     public async Task Prune_removes_past_prune_after_but_skips_the_inflight_target() {
@@ -439,7 +439,7 @@ public class ConsentServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(1);      // the daemon may still hold live prompts
     }
 
-    // ---- 15: deadline hint ----
+    // ---- deadline hint ----
 
     [Test]
     public async Task Deadline_hint_falls_back_on_unparseable_requested_at() {

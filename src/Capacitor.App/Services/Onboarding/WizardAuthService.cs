@@ -91,7 +91,7 @@ public sealed class WizardAuthService(
         }
     }
 
-    /// Completes when no attempt is live — the close path's await after Cancel (decision 2).
+    /// Completes when no attempt is live — the close path's await after Cancel.
     public async Task QuiescedAsync() {
         while (true) {
             Task<AuthResult> live;
