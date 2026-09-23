@@ -276,19 +276,24 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     const string RepoShapeMessage =
         "`repo` must be \"<owner>/<name>\" or a 16-hex repo hash. This tool is repo-scoped, so \"all\" is not accepted.";
 
-    internal static string BuildRepoSessionsUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
+    static string ResolveRepoHash(JsonObject? args, string? cwdRepoHash) {
         var explicitRepo = ReadString(args, "repo", RepoShapeMessage);
         if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
 
-        string repoHash;
-
         if (explicitRepo is null) {
-            repoHash = cwdRepoHash ?? throw new ArgumentException(
+            return cwdRepoHash ?? throw new ArgumentException(
                 "Cannot resolve the current repository owner/name from git metadata (e.g. a missing or " +
                 "unparseable 'origin' remote). Pass repo: \"<owner>/<name>\" or a 16-hex repo hash.");
-        } else if (!RepoHashHelper.TryParseRepoRef(explicitRepo, out repoHash)) {
-            throw new ArgumentException(RepoShapeMessage);
         }
+
+        if (!RepoHashHelper.TryParseRepoRef(explicitRepo, out var repoHash))
+            throw new ArgumentException(RepoShapeMessage);
+
+        return repoHash;
+    }
+
+    internal static string BuildRepoSessionsUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
+        var repoHash = ResolveRepoHash(args, cwdRepoHash);
 
         var state = ReadString(args, "state", "`state` must be a string: active, ended or all.") ?? "active";
 
@@ -314,18 +319,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         "This server does not list a repository's plans yet. Read one session's plans with get_declared_plans instead.";
 
     internal static string BuildRepoPlansUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
-        var explicitRepo = ReadString(args, "repo", RepoShapeMessage);
-        if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
-
-        string repoHash;
-
-        if (explicitRepo is null) {
-            repoHash = cwdRepoHash ?? throw new ArgumentException(
-                "Cannot resolve the current repository owner/name from git metadata (e.g. a missing or " +
-                "unparseable 'origin' remote). Pass repo: \"<owner>/<name>\" or a 16-hex repo hash.");
-        } else if (!RepoHashHelper.TryParseRepoRef(explicitRepo, out repoHash)) {
-            throw new ArgumentException(RepoShapeMessage);
-        }
+        var repoHash = ResolveRepoHash(args, cwdRepoHash);
 
         var state = ReadString(args, "state", "`state` must be a string: open or all.") ?? "open";
 
