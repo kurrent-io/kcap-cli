@@ -21,7 +21,10 @@ review context via MCP tools.
 ## Invariants
 
 Deliberate choices a change can silently undo — each looks like a bug until you know why.
-`docs/CHANGES.md` carries the reasoning per feature; `docs/superpowers/specs/` holds the designs.
+`docs/superpowers/specs/` holds the designs. There is no changelog file: the reasoning behind a
+change lives in its PR description and the recorded sessions that produced it — trace it with the
+kcap-review and kcap-sessions MCP tools (`search_context`, `search_sessions`), and do not add a
+running notes file that every PR edits.
 
 - **A vendor either contains borrowed review or does not offer it.** Cursor and Copilot read a
   daemon-owned snapshot, Codex its own tool clamp; Claude declares no containment, so a borrowed
