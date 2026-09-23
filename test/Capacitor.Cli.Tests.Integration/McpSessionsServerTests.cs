@@ -212,9 +212,16 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(names.Contains("list_turns")).IsTrue();
             await Assert.That(names.Contains("list_repo_sessions")).IsTrue();
 
-            // Hard gate: search_sessions carries the comparative routing cue.
+            // Hard gates: the routing cue, the query shape that can actually hit, and the two
+            // facts about list_repo_sessions that otherwise read as a broken filter.
             var searchDesc = tools.First(t => t?["name"]?.GetValue<string>() == "search_sessions")!["description"]!.GetValue<string>();
             await Assert.That(searchDesc).Contains("before grepping the code or git log");
+            await Assert.That(searchDesc).Contains("one to three keywords or identifiers");
+            await Assert.That(searchDesc).Contains("hit_kind");
+
+            var listDesc = tools.First(t => t?["name"]?.GetValue<string>() == "list_repo_sessions")!["description"]!.GetValue<string>();
+            await Assert.That(listDesc).Contains("defaults to active");
+            await Assert.That(listDesc).Contains("no time filter");
         } finally {
             await ShutdownAsync(proc);
         }
