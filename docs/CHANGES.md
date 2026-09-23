@@ -18,7 +18,11 @@ driver acting on another task's review. With none open the newest settled flow i
 that failed while the driver was away reports as failed instead of "no flow". The lookup sends the
 session id the server resolved once for the start, so the two forms can never diverge; an explicit
 `session_id` is canonicalized as every other kcap MCP server does it. A server without the route
-answers 404, which the tool words as "pass the id", not as a missing flow.
+answers 404, which the tool words as "pass the id", not as a missing flow. The session exists on
+Claude Code and Codex only: the JSON harnesses export nothing per process into the MCP child, their
+starts carry no session, and a bare call there answers the no-session error, so the guidance names
+the two harnesses rather than promising every driver a way back — a local run ledger is the way to
+cover the rest.
 
 The Codex registration carries `tool_timeout_sec = 600`. The CLI already ends every flow call under
 300 s, so the entry is not what stops Codex aborting today; it is what stops a per-client budget, or

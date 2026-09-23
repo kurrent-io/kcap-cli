@@ -1262,7 +1262,15 @@ class McpFlowsServer(
         var sessionId = McpSessionId.ResolveWithin(arguments, requestingSessionId);
         var url       = $"{apiRoot}/api/flows?requesting_session_id={Uri.EscapeDataString(sessionId)}&state=all";
         using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
-        using var resp   = await client.GetAsync(url, getCts.Token);
+        HttpResponseMessage sent;
+        try {
+            sent = await client.GetAsync(url, getCts.Token);
+        } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
+            // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
+            var how = ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}";
+            return new(null, $"Error: the flow lookup (GET /api/flows) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+        }
+        using var resp = sent;
         var body = await resp.Content.ReadAsStringAsync();
 
         if (resp.StatusCode == HttpStatusCode.Unauthorized)
@@ -1272,9 +1280,9 @@ class McpFlowsServer(
         if (!resp.IsSuccessStatusCode)
             return new(null, FormatFlowStartError((int)resp.StatusCode, body, wasDynamicStart: false));
 
-        List<SessionFlow> flows;
-        try { flows = ParseSessionFlows(body); }
-        catch (JsonException) { return new(null, $"Error: unreadable flow list from GET /api/flows. {PassTheFlowRunId}"); }
+        List<SessionFlow>? flows;
+        try { flows = ParseSessionFlows(body); } catch (JsonException) { flows = null; }
+        if (flows is null) return new(null, $"Error: unreadable flow list from GET /api/flows. {PassTheFlowRunId}");
 
         var open = flows.Where(f => f.Status is not ("closed" or "failed")).ToList();
         if (open.Count > 1) return new(null, DescribeOpenFlows(sessionId, open));
@@ -1285,9 +1293,11 @@ class McpFlowsServer(
             : new(chosen.FlowRunId, null);
     }
 
-    static List<SessionFlow> ParseSessionFlows(string body) {
+    /// <summary>Null for a body that is not the route's shape — an object with a <c>flows</c> array —
+    /// so a proxy page or another route's JSON reads as unreadable, never as an empty history.</summary>
+    static List<SessionFlow>? ParseSessionFlows(string body) {
+        if (JsonNode.Parse(body) is not JsonObject root || root["flows"] is not JsonArray rows) return null;
         var flows = new List<SessionFlow>();
-        if (JsonNode.Parse(body)?["flows"] is not JsonArray rows) return flows;
         foreach (var row in rows.OfType<JsonObject>()) {
             var flowRunId = TryGetString(row, "flow_run_id");
             if (string.IsNullOrWhiteSpace(flowRunId)) continue;
@@ -2193,7 +2203,7 @@ class McpFlowsServer(
     /// <summary>Carried by every tool that holds the call open while a round runs. A harness that
     /// aborts the call words the error itself, so this is the only guidance the driver has read.</summary>
     static string HarnessTimeoutGuidance(string statusTool) =>
-        $"This call blocks for minutes while the round runs. If your harness aborts it with a tool timeout, the flow is still running server-side: do not start it again and do not investigate — call {statusTool} with wait: true (flow_run_id may be omitted; it resolves this session's open flow). ";
+        $"This call blocks for minutes while the round runs. If your harness aborts it with a tool timeout, the flow is still running server-side: do not start it again and do not investigate — call {statusTool} with wait: true (on Claude Code and Codex flow_run_id may be omitted and resolves this session's open flow; other harnesses give this server no session identity, so pass the id there). ";
 
     internal static McpTool[] BuildToolsList() => [
         new(
@@ -2245,7 +2255,7 @@ class McpFlowsServer(
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow. Optional: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow. Optional on Claude Code and Codex, the harnesses whose session this server can identify: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
                     ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
@@ -2316,7 +2326,7 @@ class McpFlowsServer(
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow. Optional: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow. Optional on Claude Code and Codex, the harnesses whose session this server can identify: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
                     ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },

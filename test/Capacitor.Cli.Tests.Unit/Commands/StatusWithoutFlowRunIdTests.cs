@@ -54,6 +54,54 @@ public class StatusWithoutFlowRunIdTests {
 
     static int Gets(WireMockServer server, string path) => server.LogEntries.Count(e => e.RequestMessage.Path == path);
 
+    static readonly TimeSpan PerGetTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>A server that never answers: virtual time passes the lookup's own timeout, whose
+    /// source the clock then fires, and the request honours that cancellation.</summary>
+    sealed class NeverAnsweringHandler(VirtualFlowRetryClock clock) : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            clock.Advance(PerGetTimeout + TimeSpan.FromSeconds(1));
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("the lookup's timeout source did not fire");
+        }
+    }
+
+    sealed class RefusingHandler : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException("Connection refused");
+    }
+
+    [Test]
+    public async Task A_lookup_that_times_out_is_an_actionable_error() {
+        var clock = new VirtualFlowRetryClock();
+        using var client = new HttpClient(new NeverAnsweringHandler(clock));
+
+        var response = await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCallRequest("get_review_flow_status", new JsonObject()),
+            client, "http://flows.test", cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, clock: clock, requestingSessionId: SessionId);
+
+        var (text, isError) = Unwrap(response);
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("flow lookup");
+        await Assert.That(text).Contains("timed out");
+        await Assert.That(text).Contains("Pass the flow_run_id");
+    }
+
+    [Test]
+    public async Task A_lookup_the_server_refuses_is_an_actionable_error() {
+        using var client = new HttpClient(new RefusingHandler());
+
+        var response = await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCallRequest("get_flow_status", new JsonObject()),
+            client, "http://flows.test", cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, requestingSessionId: SessionId);
+
+        var (text, isError) = Unwrap(response);
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("flow lookup");
+        await Assert.That(text).Contains("Connection refused");
+        await Assert.That(text).Contains("Pass the flow_run_id");
+    }
+
     [Test]
     public async Task Omitted_flow_run_id_reads_the_sessions_only_open_flow() {
         using var server = WireMockServer.Start();
@@ -206,6 +254,25 @@ public class StatusWithoutFlowRunIdTests {
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains($"no flow was started by session {SessionId}");
         await Assert.That(text).Contains("Pass the flow_run_id");
+    }
+
+    [Test]
+    [Arguments("{}")]
+    [Arguments("[]")]
+    [Arguments("""{"flows":"none"}""")]
+    public async Task A_list_without_a_flows_array_is_unreadable_not_empty(string body) {
+        using var server = WireMockServer.Start();
+        GivenSessionFlows(server, SessionId, body);
+        using var client = new HttpClient();
+
+        var response = await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCallRequest("get_review_flow_status", new JsonObject()),
+            client, server.Url!, cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, requestingSessionId: SessionId);
+
+        var (text, isError) = Unwrap(response);
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("unreadable flow list");
+        await Assert.That(text).DoesNotContain("no flow was started");
     }
 
     [Test]

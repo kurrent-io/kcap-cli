@@ -412,14 +412,14 @@ public class CodexConfigTomlTests {
             await Assert.That(((TomlTable)servers[name]).ContainsKey("tool_timeout_sec")).IsFalse();
     }
 
-    /// <summary>A flows entry kcap wrote before it carried a timeout, with the ledger claim taken
-    /// over that shape. The claim is a verbatim fixture: regenerated from the current writer it would
-    /// carry the timeout already, and the test would prove nothing.</summary>
+    /// <summary>An owned flows entry without the timeout, with the ledger claim taken over that
+    /// shape — what a ledger on disk can still hold. The claim is a verbatim fixture: one produced by
+    /// the writer under test would carry the timeout already, and the test would prove nothing.</summary>
     [Test]
     public async Task RegisterKcapMcpServers_adds_the_tool_timeout_to_an_owned_flows_entry_written_without_it() {
         using var tmp = new TempDir();
         var path = tmp.GetResolvedPath("config.toml");
-        File.WriteAllText(path, """
+        tmp.CreateFile("config.toml", """
             [mcp_servers.kcap-flows]
             command = "/opt/a/kcap"
             args = ["mcp", "flows"]
@@ -427,7 +427,7 @@ public class CodexConfigTomlTests {
             command = "/usr/local/bin/other"
             args = ["serve"]
             """);
-        File.WriteAllText(Path.Combine(Path.GetDirectoryName(path)!, "mcp-ownership-v1.json"), """
+        tmp.CreateFile("mcp-ownership-v1.json", """
             {"version":1,"entries":{"kcap-flows":{"fingerprint":"a27d21a1f7efe97e2307d85b6bb3ecec45fd17a4edf2ce226aa0e1f2af740121","normalized_table":{"args":[{"type":"string","value":"mcp"},{"type":"string","value":"flows"}],"command":{"type":"string","value":"/opt/a/kcap"}}}}}
             """);
 
