@@ -1634,12 +1634,9 @@ public static partial class DaemonRunner {
     const int DrainGraceMs = 1_500;
 
     static string? ProbeCliVersionOnce(string cliPath, int timeoutMs) {
-        // Wall-clock: the probe and its retry gap are synchronous, so a provider would bound neither.
-#pragma warning disable RS0030
-        using var deadline = new CancellationTokenSource(timeoutMs);
-#pragma warning restore RS0030
+        Process? process = null;
         try {
-            using var process = Process.Start(new ProcessStartInfo {
+            process = Process.Start(new ProcessStartInfo {
                 FileName = cliPath,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -1649,33 +1646,26 @@ public static partial class DaemonRunner {
             if (process is null) return null;
 
             // Drain both pipes WHILE the child runs. A --version that writes more than the OS pipe
-            // buffer — some vendor CLIs emit a banner or an "update available" notice — blocks on
-            // write until the parent reads, so reading only after WaitForExit deadlocks: the child
-            // parks on a full pipe, the wait never returns, and the probe hangs until the timeout
-            // kills it. The drains swallow to their buffer, so an abandoned probe leaves no
-            // unobserved task exception.
-            var stdout = DrainToEndAsync(process.StandardOutput, deadline.Token);
-            var stderr = DrainToEndAsync(process.StandardError, deadline.Token);
+            // buffer blocks on write until the parent reads, so reading only after WaitForExit
+            // deadlocks.
+            using var stop = new CancellationTokenSource();
+            var stdout = ProcessPipeDrain.Start(process.StandardOutput, ProbeOutputCap, stop.Token);
+            var stderr = ProcessPipeDrain.Start(process.StandardError, ProbeOutputCap, stop.Token);
 
             var exited = process.WaitForExit(timeoutMs);
 
             // The drains have read everything buffered; give them a short window to see EOF. They will
             // not if the child never exited (still writing) or if a descendant that inherited the pipe
-            // is holding it open past the child's exit — the shape that used to block this probe, and
-            // the Task.Run running it, forever.
-            if (!Task.WaitAll([stdout, stderr], DrainGraceMs)) {
-                // Force the tree down (effective while the child is still alive — the timeout path),
-                // then close our own read ends. Closing them is what unblocks a drain a reparented
-                // descendant is holding open: the pending read throws and the drain returns the bytes
-                // it had already buffered, so a version printed before the block is recovered rather
-                // than discarded. A descendant that outlived a cleanly-exited child cannot be reaped
-                // from its parent's pid once it has reparented — closing the pipe detaches it, and its
-                // next write fails rather than wedging us.
-                deadline.Cancel();
+            // is holding it open past the child's exit.
+            var drained = false;
+            try { drained = Task.WaitAll([stdout, stderr], DrainGraceMs); }
+            catch { /* a faulted drain is a miss, same as a timeout */ }
+            if (!drained) {
                 try { ProcessTree.Kill(process); } catch { }
-                try { process.StandardOutput.Dispose(); } catch { }
-                try { process.StandardError.Dispose(); }  catch { }
-                Task.WaitAll([stdout, stderr], DrainGraceMs);
+                // Ask the drains to return what they already read. Closing the readers here deadlocks:
+                // a blocked read holds the reader lock that dispose needs.
+                stop.Cancel();
+                try { Task.WaitAll([stdout, stderr], DrainGraceMs); } catch { }
             }
 
             var output = ResultOrEmpty(stdout).Trim();
@@ -1684,7 +1674,11 @@ public static partial class DaemonRunner {
             // A child we had to kill for overrunning the budget with no usable output is a miss, not a
             // version; but if it printed one before a descendant wedged the pipe, keep it.
             return !exited && output.Length == 0 ? null : ParseProbedVersion(output);
-        } catch { return null; }
+        } catch {
+            return null;
+        } finally {
+            try { process?.Dispose(); } catch { }
+        }
     }
 
     /// <summary>A finished drain's text, or "" for one still running — never a blocking wait on a
@@ -1697,23 +1691,6 @@ public static partial class DaemonRunner {
     /// on a full pipe, but nothing more is retained — a noisy or runaway CLI cannot grow this buffer
     /// for the whole probe budget.
     const int ProbeOutputCap = 8 * 1024;
-
-    static async Task<string> DrainToEndAsync(System.IO.StreamReader reader, CancellationToken ct) {
-        var kept = new System.Text.StringBuilder();
-        try {
-            var buffer = new char[4096];
-            int read;
-            while ((read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
-                var room = ProbeOutputCap - kept.Length;
-                if (room > 0) kept.Append(buffer, 0, Math.Min(read, room));
-            }
-        } catch {
-            // Cancelled at the deadline, or the stream was torn down — return whatever was read before
-            // the block. A version printed ahead of a descendant that then held the pipe open is
-            // recovered rather than lost, and the drain always completes rather than parking a task.
-        }
-        return kept.ToString();
-    }
 
     /// <summary>
     /// Extracts the version token from a vendor CLI's <c>--version</c> output. Pure (no process

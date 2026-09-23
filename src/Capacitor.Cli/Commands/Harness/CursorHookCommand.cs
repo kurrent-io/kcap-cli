@@ -50,31 +50,13 @@ public sealed class CursorHookCommand(
 
     /// <summary>
     /// Production entry point. Delegates straight to <see cref="HandleInternal"/> with
-    /// production factories — see that method's doc for how the single hard-cap deadline
-    /// (review finding 1) covers client/auth setup through dispatch.
+    /// production factories. The single hard-cap deadline covers client/auth setup through dispatch.
     /// </summary>
     public Task<int> Handle(TextReader stdin) => HandleInternal(stdin);
 
     /// <summary>
-    /// Test seam for a bare hard-cap race over an arbitrary <see cref="Task{TResult}"/>. Kept
-    /// as a generic, independently-tested utility (mirrors <c>ClaudeHookCommand.WithHardCap</c>,
-    /// itself unused in that class's production path) — NOT used by <see cref="Handle"/>/
-    /// <see cref="HandleInternal"/>, which own their own single deadline race end-to-end (see
-    /// review finding 1: wrapping <em>another</em>, independent cap around an
-    /// already-self-capping inner phase created two competing timers aimed at the same
-    /// deadline, and the outer one — started earlier, before client/auth setup — could win
-    /// without knowing whether a {} was owed, while the abandoned inner still held the sole
-    /// stdout handle and could write late).
-    /// </summary>
-    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget, TimeProvider time) {
-        var winner = await Task.WhenAny(inner, Task.Delay(budget, time));
-        if (winner != inner) return 0;
-        return await inner;
-    }
-
-    /// <summary>
     /// The single hard-cap deadline for the ENTIRE dispatch — client/auth setup through the
-    /// bounded async stdin read, recording-critical work, and memory (review finding 1).
+    /// bounded async stdin read, recording-critical work, and memory.
     /// There is exactly one race here: client/auth creation is bounded by its own
     /// <see cref="Task.WhenAny(Task, Task)"/> against what this hook's budget has left (some
     /// <c>TokenStore</c> paths don't honour a <see cref="CancellationToken"/> and would

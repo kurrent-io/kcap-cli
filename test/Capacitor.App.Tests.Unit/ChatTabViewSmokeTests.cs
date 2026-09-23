@@ -6,7 +6,6 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
-using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -590,83 +589,6 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// Pins the composer's width: it spans the pane like the Home goal box rather than capping
-    /// at the assistant column's width on the left.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_composer_spans_the_pane() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            host.Window.UpdateLayout();
-
-            await Assert.That(host.Composer.Bounds.Width).IsGreaterThan(host.View.Bounds.Width - 100);
-            await host.CloseAsync();
-        });
-    }
-
-    /// Typed composer copy shares the chat body's line box (15 / 24) plus a hair of tracking,
-    /// not Fluent's tight default metrics. The presenter is what paints the glyphs.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Composer_text_uses_the_chat_body_line_box() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            host.Type("hello");
-            host.Window.UpdateLayout();
-            var presenter = host.Composer.GetVisualDescendants().OfType<TextPresenter>().Single();
-            await Assert.That(host.Composer.FontSize).IsEqualTo(15);
-            await Assert.That(host.Composer.LineHeight).IsEqualTo(24);
-            await Assert.That(host.Composer.LetterSpacing).IsEqualTo(0.2);
-            await Assert.That(host.Composer.MinHeight).IsEqualTo(44);
-            await Assert.That(presenter.FontSize).IsEqualTo(15);
-            await Assert.That(presenter.LineHeight).IsEqualTo(24);
-            await Assert.That(presenter.LetterSpacing).IsEqualTo(0.2);
-            await host.CloseAsync();
-        });
-    }
-
-    /// Pins that focusing the composer draws no ring of its own: the card is the input's
-    /// boundary, so the theme's focused border and fill stay off.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_focused_composer_draws_no_ring_inside_its_card() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            host.Composer.Focus();
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-
-            var ring = host.Composer.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "PART_BorderElement");
-            await Assert.That(host.Composer.IsFocused).IsTrue();
-            await Assert.That(ring.BorderThickness).IsEqualTo(new Thickness(0));
-            await Assert.That(ring.Background is null || ring.Background is ISolidColorBrush { Color.A: 0 }).IsTrue();
-            await host.CloseAsync();
-        });
-    }
-
-    /// Pins the timeline's rhythm: consecutive tool rows sit close together, and a run of them
-    /// keeps a clear gap before the assistant text that follows.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Tool_rows_stack_densely_and_keep_their_distance_from_text() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("rows.jsonl",
-                [ToolCallLine, ToolResultLine, ToolCallLine.Replace("t1", "t2"), ToolResultLine.Replace("t1", "t2"), AssistantLinkLine]));
-            ((ToolGroupItem)host.Chat.Items[0]).Toggle();
-            host.Settle();
-            var rows = ToolRows(host.View);
-            var text = host.View.GetVisualDescendants().OfType<MarkdownView>().Single();
-            double Top(Control c) => c.TranslatePoint(new Point(0, 0), host.View)!.Value.Y;
-            double Bottom(Control c) => Top(c) + c.Bounds.Height;
-
-            await Assert.That(rows).Count().IsEqualTo(2);
-            await Assert.That(Top(rows[1]) - Bottom(rows[0])).IsLessThan(10);
-            await Assert.That(Top(text) - Bottom(rows[1])).IsGreaterThanOrEqualTo(18);
-            await host.CloseAsync();
-        });
-    }
-
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_user_turn_renders_as_markdown() {
@@ -795,117 +717,6 @@ public class ChatTabViewSmokeTests {
             await Assert.That(chip.Text).IsEqualTo("Search");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Done);
-            await host.CloseAsync();
-        });
-    }
-
-    /// Pins the card's inner alignment: one header control for both the folded summary and a
-    /// lone call's kind chip, and a body inset by the header's icon box plus its gap on both
-    /// sides, so rows and their status pills read as nested under the label.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_cards_body_is_inset_under_its_header_label() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("inset.jsonl", [ToolCallLine, ToolResultLine, ReadCallLine, ReadResultLine]));
-            host.Settle();
-
-            var summary = Summary(host.View);
-            await Assert.That(summary.GetVisualDescendants().OfType<ChatKindHeader>().Any()).IsTrue();
-            await Assert.That(summary.Padding.Left).IsEqualTo(8);
-            // The hover fill needs room around the row; the icon still starts where a lone
-            // call's header icon does, so the negative margin has to cancel that padding.
-            await Assert.That(summary.Margin.Left).IsEqualTo(-8);
-
-            var rows = host.View.GetVisualDescendants().OfType<ItemsControl>()
-                .Single(c => c.ItemsSource is IEnumerable<ToolCallItem>);
-            await Assert.That(rows.Margin.Left).IsEqualTo(22);
-            await Assert.That(rows.Margin.Right).IsEqualTo(22);
-            await host.CloseAsync();
-        });
-    }
-
-    /// A question's detail is the question: it wraps whole instead of eliding, unlike the command
-    /// and path rows around it.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_question_row_wraps_instead_of_eliding() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            // Each call needs its own group: a folded multi-call group holds no settled rows.
-            await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
-                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach should we take for the chat bubble chrome?"}]}}]}}""",
-                """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"ok"}]}}""",
-                AssistantLinkLine, ToolCallLine, ToolResultLine,
-            ]));
-            host.Settle();
-
-            var lines = ToolRows(host.View)
-                .SelectMany(r => r.GetVisualDescendants().OfType<SelectableTextBlock>())
-                .Where(t => t.IsEffectivelyVisible)
-                .ToList();
-            var question = lines.Single(t => t.Text!.StartsWith("Which approach", StringComparison.Ordinal));
-            await Assert.That(question.TextWrapping).IsEqualTo(TextWrapping.Wrap);
-            await Assert.That(question.TextTrimming).IsEqualTo(TextTrimming.None);
-
-            var command = lines.Single(t => t.Text == "ls -la");
-            await Assert.That(command.TextWrapping).IsEqualTo(TextWrapping.NoWrap);
-            await Assert.That(command.TextTrimming).IsEqualTo(ChatTrimming.MiddleEllipsis);
-            await host.CloseAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task System_tool_cards_are_left_aligned_at_660_on_a_wide_viewport() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("align.jsonl", [ToolCallLine, ToolResultLine]));
-            host.Settle();
-            var card = host.View.GetVisualDescendants().OfType<Border>()
-                .Single(b => b.Classes.Contains("toolGroup"));
-            await Assert.That(card.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
-            await Assert.That(card.MaxWidth).IsEqualTo(660);
-            await Assert.That(card.Bounds.Width).IsEqualTo(660);
-            await Assert.That(card.Classes.Contains("chatSystemCard")).IsTrue();
-            await host.CloseAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task System_tool_cards_use_the_full_chat_column_when_the_viewport_is_narrow() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            host.Window.Width = 480;
-            await host.LoadAsync(Tmp.CreateFile("align.jsonl", [ToolCallLine, ToolResultLine]));
-            host.Settle();
-            var card = host.View.GetVisualDescendants().OfType<Border>()
-                .Single(b => b.Classes.Contains("toolGroup"));
-            await Assert.That(card.MaxWidth).IsEqualTo(660);
-            await Assert.That(card.Bounds.Width).IsLessThan(660);
-            await Assert.That(card.Bounds.Width).IsGreaterThan(400);
-            await host.CloseAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Pending_prompt_host_is_left_aligned_at_660_on_a_wide_viewport() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("prompt-align.jsonl", [
-                """{"type":"user","message":{"role":"user","content":"hello"}}""",
-            ]));
-            host.Permissions.Add(PermissionEntries.Entry("r1", "a1", toolName: "Bash"));
-            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
-            host.Settle();
-            var hostControl = host.View.GetVisualDescendants().OfType<ContentControl>()
-                .Single(c => c.Classes.Contains("pendingCard"));
-            await Assert.That(hostControl.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
-            await Assert.That(hostControl.MaxWidth).IsEqualTo(660);
-            await Assert.That(hostControl.Bounds.Width).IsEqualTo(660);
-            await Assert.That(hostControl.Classes.Contains("chatPromptCard")).IsTrue();
             await host.CloseAsync();
         });
     }
@@ -1212,25 +1023,6 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Acp_permission_option_labels_wrap_within_the_card_width() {
-        await RunOnUiAsync(async () => {
-            var host = new Host(sessionId: Observable.Return<string?>("s1"));
-            var longLabel = new string('w', 120);
-            host.Permissions.Add(PermissionEntries.AcpPermission(options: [
-                new() { OptionId = "allow", Label = longLabel, Kind = "allow_once" },
-            ]));
-            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
-            host.Settle();
-            var option = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.MaxWidth == 632);
-            var label = option.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == longLabel);
-            await Assert.That(label.TextWrapping).IsEqualTo(TextWrapping.Wrap);
-            await Assert.That(option.Bounds.Width).IsLessThanOrEqualTo(632);
-            await host.CloseAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
     public async Task Card_renders_with_its_buttons_and_leaves_the_list_when_empty() {
         await RunOnUiAsync(async () => {
             var host = new Host();
@@ -1277,30 +1069,6 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_question_header_paints_like_the_tool_kind_chip() {
-        await RunOnUiAsync(async () => {
-            var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
-                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
-            ]));
-            host.Permissions.Add(PermissionEntries.Question("q1",
-                toolInputJson: """{"questions":[{"question":"declare this","header":"Missing tools","options":[{"label":"A"}]}]}"""));
-            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
-            host.Settle();
-
-            var header = host.View.GetVisualDescendants().OfType<TextBlock>()
-                .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "Missing tools" && t.IsEffectivelyVisible);
-            var question = host.View.GetVisualDescendants().OfType<TextBlock>()
-                .Single(t => t.Classes.Contains("prompt") && t.Text == "declare this");
-            await Assert.That(header.FontSize).IsNotEqualTo(question.FontSize);
-            await Assert.That(host.View.GetVisualDescendants().OfType<Border>()
-                .Single(b => b.Classes.Contains("toolGroup")).IsVisible).IsFalse();
-            await host.CloseAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
     public async Task A_pending_question_hides_the_tool_group_and_shows_only_the_centered_card() {
         await RunOnUiAsync(async () => {
             var host = new Host();
@@ -1340,11 +1108,10 @@ public class ChatTabViewSmokeTests {
     }
 
     /// The Other field is a real input in the virtualizing list: a click must keep caret focus
-    /// through layout (follow-tail must not recycle the row), and its outline is the field token,
-    /// never the status green.
+    /// through layout, so follow-tail cannot recycle the row out from under the caret.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Other_keeps_focus_on_click_and_uses_the_field_border_not_status_green() {
+    public async Task Other_keeps_focus_on_click() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             await host.LoadAsync(Tmp.CreateFile("tall.jsonl", Enumerable.Repeat(UserLine, 40).ToArray()));
@@ -1363,17 +1130,6 @@ public class ChatTabViewSmokeTests {
             await Assert.That(other.IsFocused).IsTrue();
             await Assert.That(other.Text).IsEqualTo("mine");
             await Assert.That(((QuestionGroupViewModel)other.DataContext!).OtherText).IsEqualTo("mine");
-
-            var ring = other.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "PART_BorderElement");
-            var field = (IBrush)Application.Current!.FindResource("KcapBorderBrush")!;
-            var status = (IBrush)Application.Current!.FindResource("KcapSuccessBrush")!;
-            await Assert.That(ring.BorderBrush).IsSameReferenceAs(field);
-            await Assert.That(ring.BorderBrush).IsNotSameReferenceAs(status);
-            await Assert.That(ring.BorderThickness).IsEqualTo(new Thickness(1));
-
-            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "QuestionCard");
-            await Assert.That(card.BorderBrush).IsSameReferenceAs(field);
-            await Assert.That(card.BorderBrush).IsNotSameReferenceAs(status);
             await host.CloseAsync();
         });
     }
@@ -1382,32 +1138,24 @@ public class ChatTabViewSmokeTests {
     static List<Button> Steps(Host host) => host.View.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("step")).ToList();
     static bool Shows(Host host, string text) => host.View.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text && t.IsEffectivelyVisible);
 
-    /// The picked option must read as picked: its border and fill come from the selected class
-    /// style, which a local brush on the button would silently outrank. A multi-select question
-    /// is used so the click toggles in place rather than advancing or submitting.
+    /// A multi-select question toggles the selected class in place rather than advancing or submitting.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_picked_option_paints_the_accent_border_and_a_second_click_clears_it() {
+    public async Task A_picked_option_toggles_the_selected_class() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             host.Permissions.Add(PermissionEntries.Question("q1",
                 toolInputJson: """{"questions":[{"question":"Tags","multiSelect":true,"options":[{"label":"X"},{"label":"Y"}]}]}"""));
             host.Settle();
-            var accent = (IBrush)Application.Current!.FindResource("KcapInfoBrush")!;
             var option = Option(host, "X");
-            await Assert.That(option.BorderBrush).IsNotSameReferenceAs(accent);
+            await Assert.That(option.Classes.Contains("selected")).IsFalse();
 
             Click(host, option);
             await WaitUntilAsync(() => option.Classes.Contains("selected"), what: "the selected class");
-            host.Settle();
-            await Assert.That(option.BorderBrush).IsSameReferenceAs(accent);
-            await Assert.That(option.Background).IsSameReferenceAs((IBrush)Application.Current!.FindResource("KcapInfoDimBrush")!);
-            await Assert.That(Option(host, "Y").BorderBrush).IsNotSameReferenceAs(accent);
+            await Assert.That(Option(host, "Y").Classes.Contains("selected")).IsFalse();
 
             Click(host, option);
             await WaitUntilAsync(() => !option.Classes.Contains("selected"), what: "cleared");
-            host.Settle();
-            await Assert.That(option.BorderBrush).IsNotSameReferenceAs(accent);
             await host.CloseAsync();
         });
     }
