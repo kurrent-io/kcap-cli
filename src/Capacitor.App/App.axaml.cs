@@ -864,6 +864,7 @@ public partial class App : Application {
             new ShellUrlOpener(),
             _time,
             WizardComposition.NewOperation,
+            refreshAppState,
             new CommitPrecondition.ExpectServer(serverUrl));
         var window = new SignInWindow { DataContext = graph.SignIn };
 
