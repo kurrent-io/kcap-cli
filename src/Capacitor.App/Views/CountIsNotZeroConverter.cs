@@ -3,7 +3,6 @@ using Avalonia.Data.Converters;
 
 namespace Capacitor.App.Views;
 
-/// Visible only while there is content: progress logs and similar.
 public sealed class CountIsNotZeroConverter : IValueConverter {
     public static readonly CountIsNotZeroConverter Instance = new();
 
