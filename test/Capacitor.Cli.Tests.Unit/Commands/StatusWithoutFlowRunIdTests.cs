@@ -296,8 +296,11 @@ public class StatusWithoutFlowRunIdTests {
 
     const string Workspace = "/repo/a";
 
-    void GivenRecordedRuns(params string[] newestLast) {
-        var time   = new FakeTimeProvider(DateTimeOffset.UtcNow);
+    /// <summary>Recorded an hour ago, past the grace a just-started run gets for a 404.</summary>
+    void GivenRecordedRuns(params string[] newestLast) => GivenRecordedRunsAt(DateTimeOffset.UtcNow.AddHours(-1), newestLast);
+
+    void GivenRecordedRunsAt(DateTimeOffset firstAt, params string[] newestLast) {
+        var time   = new FakeTimeProvider(firstAt);
         var ledger = new FlowRunLedger(Config.Root, time);
         foreach (var flowRunId in newestLast) {
             ledger.Record(flowRunId, Workspace);
@@ -319,7 +322,8 @@ public class StatusWithoutFlowRunIdTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("no session id");
-        await Assert.That(text).Contains(Workspace);
+        await Assert.That(text).Contains("this workspace");
+        await Assert.That(text).DoesNotContain(Workspace);
         await Assert.That(text).Contains("Pass the flow_run_id");
         await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
@@ -369,7 +373,7 @@ public class StatusWithoutFlowRunIdTests {
         var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject(), repoRoot: "/repo/b"));
 
         await Assert.That(isError).IsTrue();
-        await Assert.That(text).Contains("/repo/b");
+        await Assert.That(text).Contains("no flow started from this workspace");
         await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
 
@@ -384,7 +388,8 @@ public class StatusWithoutFlowRunIdTests {
         var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
 
         await Assert.That(isError).IsTrue();
-        await Assert.That(text).Contains($"workspace {Workspace} has 2 open flows");
+        await Assert.That(text).Contains("this workspace has 2 open flows");
+        await Assert.That(text).DoesNotContain(Workspace);
         await Assert.That(text).Contains("flow-1");
         await Assert.That(text).Contains("flow-2");
     }
@@ -405,6 +410,39 @@ public class StatusWithoutFlowRunIdTests {
     }
 
     [Test]
+    public async Task An_older_open_run_behind_many_newer_settled_ones_is_still_found() {
+        using var server = WireMockServer.Start();
+        var settled = Enumerable.Range(1, 8).Select(i => $"flow-settled-{i}").ToArray();
+        GivenRecordedRuns(["flow-open", ..settled]);
+        GivenFlow(server, "flow-open", "waiting");
+        foreach (var flowRunId in settled) GivenFlow(server, flowRunId, "closed");
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("flow_run_id: flow-open");
+    }
+
+    [Test]
+    public async Task A_just_recorded_run_the_server_cannot_read_yet_is_a_retry_not_a_skip() {
+        using var server = WireMockServer.Start();
+        GivenRecordedRunsAt(DateTimeOffset.UtcNow.AddHours(-1), "flow-older");
+        GivenRecordedRunsAt(DateTimeOffset.UtcNow, "flow-just-started");
+        GivenFlow(server, "flow-older", "waiting");
+        server.Given(Request.Create().WithPath("/api/flows/flow-just-started").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(404));
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("flow-just-started");
+        await Assert.That(text).Contains("retry");
+        await Assert.That(text).DoesNotContain("flow-older");
+    }
+
+    [Test]
     public async Task A_start_without_a_session_records_its_run_for_the_workspace() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
@@ -416,7 +454,7 @@ public class StatusWithoutFlowRunIdTests {
             JsonNode.Parse("1")!, ToolCallRequest("start_review_flow", StartArguments()),
             client, server.Url!, cwd: "/tmp/cwd", repoRoot: Workspace, repoInfo: null, requestingSessionId: null);
 
-        await Assert.That(new FlowRunLedger(Config.Root, TimeProvider.System).Recent(Workspace, 5))
+        await Assert.That(new FlowRunLedger(Config.Root, TimeProvider.System).Retained(Workspace).Select(e => e.FlowRunId))
             .IsEquivalentTo(["flow-started"]);
     }
 
@@ -432,7 +470,7 @@ public class StatusWithoutFlowRunIdTests {
             JsonNode.Parse("1")!, ToolCallRequest("start_review_flow", StartArguments()),
             client, server.Url!, cwd: "/tmp/cwd", repoRoot: Workspace, repoInfo: null, requestingSessionId: SessionId);
 
-        await Assert.That(new FlowRunLedger(Config.Root, TimeProvider.System).Recent(Workspace, 5)).IsEmpty();
+        await Assert.That(new FlowRunLedger(Config.Root, TimeProvider.System).Retained(Workspace)).IsEmpty();
     }
 
     static JsonObject StartArguments() => new() {

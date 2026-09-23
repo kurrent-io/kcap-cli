@@ -12,8 +12,10 @@ The status tools find a flow without its id by the calling session, and Cursor, 
 Kiro, OpenCode and Antigravity export no session into the long-lived MCP child, so a driver there
 had no way back to a run whose start the harness aborted. The flows server now records each run it
 starts without a session in `flow-runs-v1.json` under the config root, keyed on the repository root
-(or working directory), and a bare status call without a session reads that workspace's newest
-entries and confirms each with `GET /api/flows/{id}`. The record is written before the start's poll
+(or working directory), and a bare status call without a session confirms every entry that
+workspace retains with `GET /api/flows/{id}` — all of them, because a fixed probe count would let
+newer settled runs hide an open one. A 404 on a run recorded within the start poll's not-found grace
+answers "retry" rather than skipping it, since the server may not have caught up with the start. The record is written before the start's poll
 lane begins, which is what makes it survive an abort: the server ignores MCP cancellations, so the
 lane holds the id after the harness has given up on the call. Session-bearing harnesses record
 nothing and keep the server-side lookup. Several chats in one workspace share the ledger; the same

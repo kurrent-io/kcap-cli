@@ -1290,8 +1290,6 @@ class McpFlowsServer(
         return ChooseFlow(flows, $"session {sessionId}", $"Error: no flow was started by session {sessionId}. {PassTheFlowRunId}");
     }
 
-    const int RunLedgerCandidates = 5;
-
     static string RunLedgerWorkspace(string cwd, string? repoRoot) => repoRoot ?? cwd;
 
     /// <summary>Recorded before the start's poll lane, so a start the harness aborts is still found.
@@ -1308,15 +1306,17 @@ class McpFlowsServer(
             await Console.Error.WriteLineAsync($"kcap mcp flows: could not record flow {flowRunId} in {FlowRunLedger.FileName}; a status call without its flow_run_id will not find it");
     }
 
-    /// <summary>Confirms each recorded run against the server, newest first; a run the server no
-    /// longer knows is skipped rather than read.</summary>
+    /// <summary>Confirms every retained run against the server, newest first, so an open run behind
+    /// newer settled ones is still found. A run the server no longer knows is skipped — unless it
+    /// was recorded within <see cref="NotFoundGrace"/>, when the 404 may only mean the server has
+    /// not caught up with the start. The workspace path is never shown to the model.</summary>
     async Task<FlowRunIdResolution> ResolveFromRunLedgerAsync(HttpClient client, string apiRoot, string workspace, FlowRetryClock clock) {
-        var recorded = new FlowRunLedger(config, time).Recent(workspace, RunLedgerCandidates);
+        var recorded = new FlowRunLedger(config, time).Retained(workspace);
         if (recorded.Count == 0)
-            return new(null, $"Error: this harness gives kcap no session id, and no flow started from {workspace} is recorded on this machine. {PassTheFlowRunId}");
+            return new(null, $"Error: this harness gives kcap no session id, and no flow started from this workspace is recorded on this machine. {PassTheFlowRunId}");
 
         var flows = new List<SessionFlow>();
-        foreach (var flowRunId in recorded) {
+        foreach (var (flowRunId, _, startedAt) in recorded) {
             var route = $"/api/flows/{Uri.EscapeDataString(flowRunId)}";
             var (sent, failure) = await GetForLookupAsync(client, apiRoot + route, route, clock);
             if (sent is null) return new(null, failure);
@@ -1325,7 +1325,11 @@ class McpFlowsServer(
 
             if (resp.StatusCode == HttpStatusCode.Unauthorized)
                 return new(null, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time));
-            if (resp.StatusCode == HttpStatusCode.NotFound) continue;
+            if (resp.StatusCode == HttpStatusCode.NotFound) {
+                if (time.GetUtcNow() - startedAt < NotFoundGrace)
+                    return new(null, $"Error: flow {flowRunId} was started moments ago and the server cannot read it yet — retry the call.");
+                continue;
+            }
             if (!resp.IsSuccessStatusCode)
                 return new(null, FormatFlowStartError((int)resp.StatusCode, body, wasDynamicStart: false));
 
@@ -1335,7 +1339,7 @@ class McpFlowsServer(
             flows.Add(flow);
         }
 
-        return ChooseFlow(flows, $"workspace {workspace}", $"Error: no flow recorded for {workspace} is known to this server. {PassTheFlowRunId}");
+        return ChooseFlow(flows, "this workspace", $"Error: no flow recorded for this workspace is known to this server. {PassTheFlowRunId}");
     }
 
     /// <summary>A null response comes with the actionable error text in its place.</summary>

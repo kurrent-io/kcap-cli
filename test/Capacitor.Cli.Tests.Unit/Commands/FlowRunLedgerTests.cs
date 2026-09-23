@@ -7,12 +7,17 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class FlowRunLedgerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 10, 0, 0, TimeSpan.Zero));
+    static readonly DateTimeOffset Start = new(2026, 9, 23, 10, 0, 0, TimeSpan.Zero);
+
+    readonly FakeTimeProvider _time = new(Start);
 
     FlowRunLedger Ledger() => new(Config.Root, _time);
 
+    static List<string> Ids(FlowRunLedger ledger, string workspace) =>
+        ledger.Retained(workspace).Select(e => e.FlowRunId).ToList();
+
     [Test]
-    public async Task Recent_lists_this_workspaces_runs_newest_first() {
+    public async Task Retained_lists_this_workspaces_runs_newest_first() {
         var ledger = Ledger();
         ledger.Record("run-1", "/repo/a");
         _time.Advance(TimeSpan.FromMinutes(1));
@@ -20,18 +25,15 @@ public class FlowRunLedgerTests {
         _time.Advance(TimeSpan.FromMinutes(1));
         ledger.Record("run-3", "/repo/a");
 
-        await Assert.That(Ledger().Recent("/repo/a", 5)).IsEquivalentTo(["run-3", "run-1"], CollectionOrdering.Matching);
+        await Assert.That(Ids(Ledger(), "/repo/a")).IsEquivalentTo(["run-3", "run-1"], CollectionOrdering.Matching);
     }
 
     [Test]
-    public async Task Recent_honours_the_limit() {
+    public async Task Retained_carries_when_each_run_was_recorded() {
         var ledger = Ledger();
-        for (var i = 0; i < 4; i++) {
-            ledger.Record($"run-{i}", "/repo/a");
-            _time.Advance(TimeSpan.FromSeconds(1));
-        }
+        ledger.Record("run-1", "/repo/a");
 
-        await Assert.That(ledger.Recent("/repo/a", 2)).IsEquivalentTo(["run-3", "run-2"], CollectionOrdering.Matching);
+        await Assert.That(ledger.Retained("/repo/a").Single().StartedAt).IsEqualTo(Start);
     }
 
     [Test]
@@ -43,7 +45,7 @@ public class FlowRunLedgerTests {
         _time.Advance(TimeSpan.FromSeconds(1));
         ledger.Record("run-1", "/repo/a");
 
-        await Assert.That(ledger.Recent("/repo/a", 5)).IsEquivalentTo(["run-1", "run-2"], CollectionOrdering.Matching);
+        await Assert.That(Ids(ledger, "/repo/a")).IsEquivalentTo(["run-1", "run-2"], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -53,7 +55,7 @@ public class FlowRunLedgerTests {
         _time.Advance(FlowRunLedger.Retention + TimeSpan.FromMinutes(1));
         ledger.Record("new", "/repo/a");
 
-        await Assert.That(ledger.Recent("/repo/a", 5)).IsEquivalentTo(["new"], CollectionOrdering.Matching);
+        await Assert.That(Ids(ledger, "/repo/a")).IsEquivalentTo(["new"], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -64,7 +66,7 @@ public class FlowRunLedgerTests {
             _time.Advance(TimeSpan.FromSeconds(1));
         }
 
-        var all = ledger.Recent("/repo/a", int.MaxValue);
+        var all = Ids(ledger, "/repo/a");
         await Assert.That(all.Count).IsEqualTo(FlowRunLedger.MaxEntries);
         await Assert.That(all[0]).IsEqualTo($"run-{FlowRunLedger.MaxEntries + 2}");
         await Assert.That(all).DoesNotContain("run-2");
@@ -75,9 +77,9 @@ public class FlowRunLedgerTests {
         File.WriteAllText(Config.Root.Path(FlowRunLedger.FileName), "{not json");
         var ledger = Ledger();
 
-        await Assert.That(ledger.Recent("/repo/a", 5)).IsEmpty();
+        await Assert.That(Ids(ledger, "/repo/a")).IsEmpty();
 
         ledger.Record("run-1", "/repo/a");
-        await Assert.That(ledger.Recent("/repo/a", 5)).IsEquivalentTo(["run-1"], CollectionOrdering.Matching);
+        await Assert.That(Ids(ledger, "/repo/a")).IsEquivalentTo(["run-1"], CollectionOrdering.Matching);
     }
 }

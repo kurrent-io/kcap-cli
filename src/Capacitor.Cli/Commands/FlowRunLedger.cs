@@ -45,13 +45,9 @@ public sealed class FlowRunLedger(ConfigRoot config, TimeProvider time) {
         }
     }
 
-    /// <summary>This workspace's runs, newest first.</summary>
-    public IReadOnlyList<string> Recent(string workspace, int limit) =>
-        Load(time.GetUtcNow())
-            .Where(e => e.Workspace == workspace)
-            .Take(limit)
-            .Select(e => e.FlowRunId)
-            .ToList();
+    /// <summary>Every run this workspace still retains, newest first.</summary>
+    public IReadOnlyList<Entry> Retained(string workspace) =>
+        Load(time.GetUtcNow()).Where(e => e.Workspace == workspace).ToList();
 
     List<Entry> Load(DateTimeOffset now) {
         try {
@@ -77,5 +73,5 @@ public sealed class FlowRunLedger(ConfigRoot config, TimeProvider time) {
     static string? Text(JsonObject row, string key) =>
         row[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
-    readonly record struct Entry(string FlowRunId, string Workspace, DateTimeOffset StartedAt);
+    public readonly record struct Entry(string FlowRunId, string Workspace, DateTimeOffset StartedAt);
 }
