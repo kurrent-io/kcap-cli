@@ -309,6 +309,25 @@ public class PermissionServiceTests {
     }
 
     [Test]
+    public async Task Withdraw_of_a_server_lane_card_drops_it_locally_without_a_daemon_round_trip() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var entry = ServerQuestion();
+        h.Service.UpsertServer(entry);
+        await WaitUntilAsync(() => h.View.Count == 1, what: "server question cached");
+
+        var outcome = await h.Service.WithdrawAsync(entry, CancellationToken.None);
+        await Assert.That(outcome.Kind).IsEqualTo(PermissionResolveKind.Applied);
+        await Assert.That(outcome.Error).IsNull();
+        await Assert.That(h.Ops.PermissionResolveCalls).IsEqualTo(0);
+        await Assert.That(h.Responses).IsEmpty();
+        await WaitUntilAsync(() => h.View.Count == 0, what: "server question dropped");
+
+        h.Service.UpsertServer(ServerQuestion());
+        await Assert.That(h.View.Lookup(entry.Key).HasValue).IsFalse();
+    }
+
+    [Test]
     public async Task Answer_rejects_an_unclassified_target_and_a_bad_answer_set_without_sending() {
         using var h = new Harness();
         await h.StartAsync();
