@@ -65,12 +65,11 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
 
         this.WhenActivated(disposables => {
-            ViewModel?.WhenAnyValue(x => x.IsSessionsView, x => x.CurrentWorkspace)
-                .Subscribe(state => {
+            ViewModel?.WhenAnyValue(x => x.CurrentWorkspace)
+                .Subscribe(workspace => {
                     // A popup can't meaningfully survive the pane swapping under it — opening a
-                    // workspace (or leaving the Sessions surface) closes the feed; its Closed
-                    // handler then turns the gate off.
-                    if (!state.Item1 || state.Item2 is not null) ActivityButton.Flyout?.Hide();
+                    // workspace closes the feed; its Closed handler then turns the gate off.
+                    if (workspace is not null) ActivityButton.Flyout?.Hide();
                     UpdateActivityVisibility();
                 })
                 .DisposeWith(disposables);
@@ -99,14 +98,14 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     }
 
     // Activity polls only while it is actually on screen: window visible AND the launcher pane
-    // showing (Sessions surface, no workspace open) AND the flyout open. PR context follows the
+    // showing (no workspace open) AND the flyout open. PR context follows the
     // window being on screen — visible and not minimized — never keyboard focus: a reader left
     // beside another app's window stays readable and keeps its access lease renewed.
     void UpdateActivityVisibility() {
         if (DataContext is MainWindowViewModel vm) {
-            vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.IsSessionsView && vm.CurrentWorkspace is null);
+            vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.CurrentWorkspace is null);
             // Only a local workspace owns a PR reader; a remote host has none to foreground.
-            var workspace = vm.IsSessionsView ? vm.CurrentWorkspace as WorkspaceViewModel : null;
+            var workspace = vm.CurrentWorkspace as WorkspaceViewModel;
             if (_foregroundWorkspace != workspace) _foregroundWorkspace?.PullRequests?.SetForeground(false);
             _foregroundWorkspace = workspace;
             workspace?.PullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);

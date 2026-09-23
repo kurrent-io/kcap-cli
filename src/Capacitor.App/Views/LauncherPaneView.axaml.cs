@@ -13,8 +13,8 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel),
-/// same contract as HomeView — this view never builds its own ViewModel.
+/// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel);
+/// this view never builds its own ViewModel.
 public partial class LauncherPaneView : UserControl {
     AttachmentDropPaste? _attachments;
 

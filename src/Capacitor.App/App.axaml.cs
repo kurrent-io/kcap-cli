@@ -1191,7 +1191,6 @@ public partial class App : Application {
         var home = new HomeViewModel(
             service, appState,
             launch, new RepoPathStore(config, time).GetSortedPathsAsync, time, shutdownToken,
-            openSession: agentId => vm?.OpenSession(agentId),
             navigationGeneration: () => vm?.NavigationGeneration ?? 0,
             openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation),
             requestSignIn: requestSignIn,
@@ -1199,8 +1198,8 @@ public partial class App : Application {
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
             modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
             launchFailed: agentId => vm?.CloseFailedLaunch(agentId));
-        // Same knot as home above, over the SAME `service` instance — its own openSession
-        // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
+        // Same knot as home above, over the SAME `service` instance — its callbacks close over
+        // `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
         // clicked: an unproven twin pair keeps a row on each lane under the same id, and the VM's
         // own lookup would open the local one for both.
