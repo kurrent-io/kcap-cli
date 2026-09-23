@@ -10,6 +10,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
@@ -367,6 +368,8 @@ class McpFlowsServer(
                             isError: true);
                     }
 
+                    await RecordStartedRunAsync(retryBody, requestingSessionId, cwd, repoRoot);
+
                     var (retryPayload, retryIsError) = await ResolveRoundResultAsync(client, apiRoot, retryBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt);
 
                     return BuildToolResult(id, $"{PreferenceAppliedPrefix(preference)}\n{retryPayload}", retryIsError);
@@ -374,6 +377,9 @@ class McpFlowsServer(
 
                 if (!postResponse.IsSuccessStatusCode)
                     return BuildToolResult(id, FormatFlowStartError((int)postResponse.StatusCode, postBody, wasDynamicStart), isError: true);
+
+                if (toolName is "start_review_flow" or "start_flow")
+                    await RecordStartedRunAsync(postBody, requestingSessionId, cwd, repoRoot);
 
                 var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt);
                 return BuildToolResult(id, payload, isError);
@@ -383,7 +389,7 @@ class McpFlowsServer(
             // false never reaches this branch — that untouched single-GET path IS the backwards-compat
             // contract for every existing caller.
             if (toolName is "get_review_flow_status" or "get_flow_status") {
-                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, clock);
+                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, cwd, repoRoot, clock);
                 if (resolution.Error is { } unresolved) return BuildToolResult(id, unresolved, isError: true);
                 arguments = WithFlowRunId(arguments, resolution.FlowRunId!);
             }
@@ -1248,28 +1254,25 @@ class McpFlowsServer(
     const string PassTheFlowRunId = "Pass the flow_run_id returned by start_review_flow or start_flow.";
 
     /// <summary>The run a status call reads. Without a flow_run_id it is the newest open flow the
-    /// calling session started — or, when none is open, the session's newest flow of any state, so a
-    /// run that failed or closed while the driver was away is still readable. Several open flows are
-    /// listed for the driver to choose from, never guessed between.</summary>
+    /// calling session started — or, when none is open, the newest flow of any state, so a run that
+    /// failed or closed while the driver was away is still readable. A harness that gives this server
+    /// no session is answered from the runs this machine recorded for the workspace instead. Several
+    /// open flows are listed for the driver to choose from, never guessed between.</summary>
     async Task<FlowRunIdResolution> ResolveStatusFlowRunIdAsync(
-            HttpClient client, string apiRoot, JsonObject? arguments, string? requestingSessionId, FlowRetryClock clock) {
+            HttpClient client, string apiRoot, JsonObject? arguments, string? requestingSessionId,
+            string cwd, string? repoRoot, FlowRetryClock clock) {
         if (arguments?["flow_run_id"] is { } node) {
             if (node is not JsonValue value || !value.TryGetValue<string>(out var given))
                 throw new ArgumentException("Invalid argument: flow_run_id must be a string");
             if (!string.IsNullOrWhiteSpace(given)) return new(given, null);
         }
 
-        var sessionId = McpSessionId.ResolveWithin(arguments, requestingSessionId);
-        var url       = $"{apiRoot}/api/flows?requesting_session_id={Uri.EscapeDataString(sessionId)}&state=all";
-        using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
-        HttpResponseMessage sent;
-        try {
-            sent = await client.GetAsync(url, getCts.Token);
-        } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
-            // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
-            var how = ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}";
-            return new(null, $"Error: the flow lookup (GET /api/flows) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
-        }
+        if (McpSessionId.TryResolveWithin(arguments, requestingSessionId) is not { } sessionId)
+            return await ResolveFromRunLedgerAsync(client, apiRoot, RunLedgerWorkspace(cwd, repoRoot), clock);
+
+        var url = $"{apiRoot}/api/flows?requesting_session_id={Uri.EscapeDataString(sessionId)}&state=all";
+        var (sent, failure) = await GetForLookupAsync(client, url, "/api/flows", clock);
+        if (sent is null) return new(null, failure);
         using var resp = sent;
         var body = await resp.Content.ReadAsStringAsync();
 
@@ -1284,13 +1287,76 @@ class McpFlowsServer(
         try { flows = ParseSessionFlows(body); } catch (JsonException) { flows = null; }
         if (flows is null) return new(null, $"Error: unreadable flow list from GET /api/flows. {PassTheFlowRunId}");
 
+        return ChooseFlow(flows, $"session {sessionId}", $"Error: no flow was started by session {sessionId}. {PassTheFlowRunId}");
+    }
+
+    const int RunLedgerCandidates = 5;
+
+    static string RunLedgerWorkspace(string cwd, string? repoRoot) => repoRoot ?? cwd;
+
+    /// <summary>Recorded before the start's poll lane, so a start the harness aborts is still found.
+    /// A session-bearing harness is looked up by session instead and records nothing.</summary>
+    async Task RecordStartedRunAsync(string postBody, string? requestingSessionId, string cwd, string? repoRoot) {
+        if (WorkContextIds.CanonicalSessionId(requestingSessionId) is not null) return;
+
+        string? flowRunId;
+        try { flowRunId = JsonNode.Parse(postBody) is JsonObject root ? TryGetString(root, "flow_run_id") : null; }
+        catch (JsonException) { return; }
+        if (string.IsNullOrWhiteSpace(flowRunId)) return;
+
+        if (!new FlowRunLedger(config, time).Record(flowRunId, RunLedgerWorkspace(cwd, repoRoot)))
+            await Console.Error.WriteLineAsync($"kcap mcp flows: could not record flow {flowRunId} in {FlowRunLedger.FileName}; a status call without its flow_run_id will not find it");
+    }
+
+    /// <summary>Confirms each recorded run against the server, newest first; a run the server no
+    /// longer knows is skipped rather than read.</summary>
+    async Task<FlowRunIdResolution> ResolveFromRunLedgerAsync(HttpClient client, string apiRoot, string workspace, FlowRetryClock clock) {
+        var recorded = new FlowRunLedger(config, time).Recent(workspace, RunLedgerCandidates);
+        if (recorded.Count == 0)
+            return new(null, $"Error: this harness gives kcap no session id, and no flow started from {workspace} is recorded on this machine. {PassTheFlowRunId}");
+
+        var flows = new List<SessionFlow>();
+        foreach (var flowRunId in recorded) {
+            var route = $"/api/flows/{Uri.EscapeDataString(flowRunId)}";
+            var (sent, failure) = await GetForLookupAsync(client, apiRoot + route, route, clock);
+            if (sent is null) return new(null, failure);
+            using var resp = sent;
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (resp.StatusCode == HttpStatusCode.Unauthorized)
+                return new(null, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time));
+            if (resp.StatusCode == HttpStatusCode.NotFound) continue;
+            if (!resp.IsSuccessStatusCode)
+                return new(null, FormatFlowStartError((int)resp.StatusCode, body, wasDynamicStart: false));
+
+            SessionFlow? flow;
+            try { flow = JsonNode.Parse(body) is JsonObject row ? ParseFlowRow(row) : null; } catch (JsonException) { flow = null; }
+            if (flow is null) return new(null, $"Error: unreadable flow from GET {route}. {PassTheFlowRunId}");
+            flows.Add(flow);
+        }
+
+        return ChooseFlow(flows, $"workspace {workspace}", $"Error: no flow recorded for {workspace} is known to this server. {PassTheFlowRunId}");
+    }
+
+    /// <summary>A null response comes with the actionable error text in its place.</summary>
+    static async Task<(HttpResponseMessage? Response, string Failure)> GetForLookupAsync(
+            HttpClient client, string url, string route, FlowRetryClock clock) {
+        using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
+        try {
+            return (await client.GetAsync(url, getCts.Token), "");
+        } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
+            // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
+            var how = ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}";
+            return (null, $"Error: the flow lookup (GET {route}) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+        }
+    }
+
+    static FlowRunIdResolution ChooseFlow(List<SessionFlow> flows, string owner, string noneError) {
         var open = flows.Where(f => f.Status is not ("closed" or "failed")).ToList();
-        if (open.Count > 1) return new(null, DescribeOpenFlows(sessionId, open));
+        if (open.Count > 1) return new(null, DescribeOpenFlows(owner, open));
 
         var chosen = open.Count == 1 ? open[0] : flows.FirstOrDefault();
-        return chosen is null
-            ? new(null, $"Error: no flow was started by session {sessionId}. {PassTheFlowRunId}")
-            : new(chosen.FlowRunId, null);
+        return chosen is null ? new(null, noneError) : new(chosen.FlowRunId, null);
     }
 
     /// <summary>Null for a body that is not the route's shape — an object with a <c>flows</c> array —
@@ -1298,24 +1364,27 @@ class McpFlowsServer(
     static List<SessionFlow>? ParseSessionFlows(string body) {
         if (JsonNode.Parse(body) is not JsonObject root || root["flows"] is not JsonArray rows) return null;
         var flows = new List<SessionFlow>();
-        foreach (var row in rows.OfType<JsonObject>()) {
-            var flowRunId = TryGetString(row, "flow_run_id");
-            if (string.IsNullOrWhiteSpace(flowRunId)) continue;
-            flows.Add(new(
-                flowRunId,
-                TryGetString(row, "status") ?? "",
-                TryGetString(row, "definition_id"),
-                TryGetString(row, "target_title"),
-                row["round_number"] is JsonValue round && round.TryGetValue<int>(out var roundNumber) ? roundNumber : null,
-                TryGetString(row, "round_status"),
-                TryGetString(row, "started_at")));
-        }
+        foreach (var row in rows.OfType<JsonObject>())
+            if (ParseFlowRow(row) is { } flow) flows.Add(flow);
         return flows;
     }
 
-    static string DescribeOpenFlows(string sessionId, IReadOnlyList<SessionFlow> open) {
+    static SessionFlow? ParseFlowRow(JsonObject row) {
+        var flowRunId = TryGetString(row, "flow_run_id");
+        if (string.IsNullOrWhiteSpace(flowRunId)) return null;
+        return new(
+            flowRunId,
+            TryGetString(row, "status") ?? "",
+            TryGetString(row, "definition_id"),
+            TryGetString(row, "target_title"),
+            row["round_number"] is JsonValue round && round.TryGetValue<int>(out var roundNumber) ? roundNumber : null,
+            TryGetString(row, "round_status"),
+            TryGetString(row, "started_at"));
+    }
+
+    static string DescribeOpenFlows(string owner, IReadOnlyList<SessionFlow> open) {
         var sb = new StringBuilder();
-        sb.Append("Error: session ").Append(sessionId).Append(" has ").Append(open.Count).Append(" open flows. Pass flow_run_id for the one you mean:");
+        sb.Append("Error: ").Append(owner).Append(" has ").Append(open.Count).Append(" open flows. Pass flow_run_id for the one you mean:");
         foreach (var flow in open) {
             sb.AppendLine().Append("  ").Append(flow.FlowRunId);
             if (flow.DefinitionId is { } definitionId) sb.Append("  ").Append(definitionId);
@@ -2203,7 +2272,7 @@ class McpFlowsServer(
     /// <summary>Carried by every tool that holds the call open while a round runs. A harness that
     /// aborts the call words the error itself, so this is the only guidance the driver has read.</summary>
     static string HarnessTimeoutGuidance(string statusTool) =>
-        $"This call blocks for minutes while the round runs. If your harness aborts it with a tool timeout, the flow is still running server-side: do not start it again and do not investigate — call {statusTool} with wait: true (on Claude Code and Codex flow_run_id may be omitted and resolves this session's open flow; other harnesses give this server no session identity, so pass the id there). ";
+        $"This call blocks for minutes while the round runs. If your harness aborts it with a tool timeout, the flow is still running server-side: do not start it again and do not investigate — call {statusTool} with wait: true (flow_run_id may be omitted: it resolves the open flow this session started, or on a harness without a session identity the open flow started from this workspace). ";
 
     internal static McpTool[] BuildToolsList() => [
         new(
@@ -2257,7 +2326,7 @@ class McpFlowsServer(
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow. Optional on Claude Code and Codex, the harnesses whose session this server can identify: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow. Optional: when omitted, the newest open flow this session started is read (on a harness that gives this server no session, the newest one started from this workspace on this machine) — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
                     ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
@@ -2332,7 +2401,7 @@ class McpFlowsServer(
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow. Optional on Claude Code and Codex, the harnesses whose session this server can identify: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow. Optional: when omitted, the newest open flow this session started is read (on a harness that gives this server no session, the newest one started from this workspace on this machine) — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
                     ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },

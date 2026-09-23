@@ -6,6 +6,19 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A driver without a session finds its flow from a local run ledger
+
+The status tools find a flow without its id by the calling session, and Cursor, Copilot, Gemini,
+Kiro, OpenCode and Antigravity export no session into the long-lived MCP child, so a driver there
+had no way back to a run whose start the harness aborted. The flows server now records each run it
+starts without a session in `flow-runs-v1.json` under the config root, keyed on the repository root
+(or working directory), and a bare status call without a session reads that workspace's newest
+entries and confirms each with `GET /api/flows/{id}`. The record is written before the start's poll
+lane begins, which is what makes it survive an abort: the server ignores MCP cancellations, so the
+lane holds the id after the harness has given up on the call. Session-bearing harnesses record
+nothing and keep the server-side lookup. Several chats in one workspace share the ledger; the same
+"several open flows are listed" rule applies, so the worst case is a choice, never a wrong run.
+
 ## The ledger servers are pre-approved, and every tool advertises annotations
 
 Codex decides whether an MCP call needs approval from the tool's annotations, and with its automatic

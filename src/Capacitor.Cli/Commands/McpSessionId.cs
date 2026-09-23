@@ -21,9 +21,12 @@ static class McpSessionId {
     /// <summary>For a server that resolved its harness session once at startup and hands it down:
     /// an explicit argument still wins, and the environment is never consulted here.</summary>
     internal static string ResolveWithin(JsonObject? args, string? ambientSessionId) =>
-        Explicit(args)
-        ?? WorkContextIds.CanonicalSessionId(ambientSessionId)
-        ?? throw new ArgumentException(NoSessionIdMessage);
+        TryResolveWithin(args, ambientSessionId) ?? throw new ArgumentException(NoSessionIdMessage);
+
+    /// <summary><see cref="ResolveWithin"/> for a caller with a fallback: null when neither source
+    /// names a session.</summary>
+    internal static string? TryResolveWithin(JsonObject? args, string? ambientSessionId) =>
+        Explicit(args) ?? WorkContextIds.CanonicalSessionId(ambientSessionId);
 
     static string? Explicit(JsonObject? args) {
         if (args?["session_id"] is not { } node) return null;
