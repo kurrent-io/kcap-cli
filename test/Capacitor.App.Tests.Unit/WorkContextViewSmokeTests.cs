@@ -452,6 +452,30 @@ public class WorkContextViewSmokeTests {
         });
     }
 
+    /// The marks are nudged above the counts' own box, so any clipping ancestor inside the header
+    /// that the nudge crosses shaves the top off every ring.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task No_ancestor_inside_the_subagents_header_clips_a_collapsed_count_mark() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            host.Subagents.Apply(new ChatProjectionResult([], [], [
+                new SubagentSignal.Started("c1", "Explore", "", host.Time.GetUtcNow().AddSeconds(-18)),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var header = host.Find<Button>("SubagentsToggle");
+            var mark = host.Find<ItemsControl>("SubagentsSummary").GetVisualDescendants().OfType<Ellipse>().First(e => e.IsEffectivelyVisible);
+            var top = mark.TranslatePoint(default, host.Window)!.Value.Y;
+            var clipped = mark.GetVisualAncestors().OfType<Control>().TakeWhile(a => a != header)
+                .Where(a => a.ClipToBounds && top < a.TranslatePoint(default, host.Window)!.Value.Y)
+                .Select(a => a.Name ?? a.GetType().Name).ToList();
+            await Assert.That(clipped).IsEmpty();
+        });
+    }
+
     /// The name trims to the pane and the state line sits beneath it, so a long name can push
     /// neither off the pane.
     [Test]

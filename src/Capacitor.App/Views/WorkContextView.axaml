@@ -665,8 +665,9 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="SubagentsHeaderText" Text="{Binding SubagentsHeader}" Classes="sectionMeta"
                                            IsVisible="{Binding SubagentsExpanded}" />
+                                <!-- ItemsControl clips by default, and the marks' nudge lifts them past its top. -->
                                 <ItemsControl x:Name="SubagentsSummary" ItemsSource="{Binding SubagentCounts}" VerticalAlignment="Center"
-                                              IsVisible="{Binding !SubagentsExpanded}">
+                                              ClipToBounds="False" IsVisible="{Binding !SubagentsExpanded}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
                                             <StackPanel Orientation="Horizontal" Spacing="10" />
