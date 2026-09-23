@@ -436,6 +436,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
     void Apply(AuthResult result) {
         switch (result) {
+            case AuthResult.Committed { CredentialSaved: false }:
+                SetStatus("Signed in, but the credential could not be saved.", isError: true,
+                    _lastReport ?? "Sign in again from the profile's row in Settings.");
+
+                break;
             case AuthResult.Committed committed:
                 Satisfied = true;
                 SetStatus(CommittedStatus(committed), isError: false, _committedDetail);

@@ -121,19 +121,32 @@ public sealed class TokenStore(
         return tokens;
     }
 
-    public async Task SaveAsync(string profile, StoredTokens tokens, CancellationToken ct = default) {
+    /// The file a profile's credential lives in, for messages that name it.
+    public string TokenPath(string profile) => ProfileTokenPath(profile);
+
+    public Task SaveAsync(string profile, StoredTokens tokens, CancellationToken ct = default) =>
+        SaveGuardedAsync(profile, tokens, guard: null, ct);
+
+    /// Saves under the profile's cross-process lock when <paramref name="guard"/> holds against the
+    /// config as it is at that moment; a null guard always writes.
+    public async Task<GuardedWriteOutcome> SaveGuardedAsync(
+            string profile, StoredTokens tokens, Func<ProfileConfig, bool>? guard, CancellationToken ct = default) {
+        using var lockStream = await AcquireProfileLockAsync(profile, ct);
+        var outcome = Evaluate(guard);
+        if (outcome == GuardedWriteOutcome.Written) await SaveLockedAsync(profile, tokens, ct);
+        return outcome;
+    }
+
+    // The write itself, for a caller that already holds the profile's lock.
+    async Task SaveLockedAsync(string profile, StoredTokens tokens, CancellationToken ct) {
         Directory.CreateDirectory(TokenDir);
         var path     = ProfileTokenPath(profile);
-        // Unique per write so concurrent writers (hooks/watcher/daemon/MCP/login share this
-        // store) never write the same temp file and splice each other's bytes. The atomic
+        // Unique per write so concurrent writers never splice each other's bytes; the atomic
         // File.Move then publishes one complete document, last-writer-wins.
         var tempPath = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
 
-        // Create the temp owner-only from the very first byte. A chmod *after* writing would
-        // leave a window where the token secret exists group/world-readable under the process
-        // umask (and a crash in that window leaks a readable temp). UnixCreateMode applies the
-        // mode at creation; it is ignored on Windows, so set it only on Unix. The rename then
-        // carries 0600 onto the final file.
+        // Owner-only from the first byte: a chmod after writing would leave a window where the
+        // secret is group/world-readable under the process umask.
         var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) {
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
@@ -147,8 +160,6 @@ public sealed class TokenStore(
             }
             await ReplaceWithRetryAsync(tempPath, path, time, ct);
         } finally {
-            // Success renames the temp away; only a failed write/move leaves it. Unlike the
-            // old shared name, a leaked unique temp never gets reused, so clean it up.
             if (File.Exists(tempPath)) {
                 try { File.Delete(tempPath); } catch { /* best-effort */ }
             }
@@ -158,11 +169,41 @@ public sealed class TokenStore(
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
 
-        // Migration: remove the pre-upgrade single-file token if it still exists
-        if (File.Exists(LegacyTokenPath)) {
+        // Only the owner's save retires the legacy file: another profile's save leaving it is what
+        // keeps the active profile's only credential alive.
+        if (File.Exists(LegacyTokenPath) && IsLegacyOwner(profile)) {
             try { File.Delete(LegacyTokenPath); } catch { /* best-effort */ }
         }
     }
+
+    // A guard reads config without the migrating loader; a read that fails is not a pass.
+    GuardedWriteOutcome Evaluate(Func<ProfileConfig, bool>? guard) {
+        if (guard is null) return GuardedWriteOutcome.Written;
+        if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg)) return GuardedWriteOutcome.ConfigUnreadable;
+        return guard(cfg) ? GuardedWriteOutcome.Written : GuardedWriteOutcome.GuardRefused;
+    }
+
+    // One lock file per profile, exclusive while open. Null once the holder has kept it past LockWait.
+    async Task<FileStream?> TryAcquireProfileLockAsync(string profile, CancellationToken ct) {
+        ValidateProfileName(profile);
+        Directory.CreateDirectory(TokenDir);
+        var lockPath = Path.Combine(TokenDir, $"{profile}.lock");
+        var deadline = time.GetUtcNow() + LockWait;
+
+        while (true) {
+            ct.ThrowIfCancellationRequested();
+            try {
+                return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            } catch (IOException) {
+                if (time.GetUtcNow() >= deadline) return null;
+                await Task.Delay(LockPollGap, time, ct);
+            }
+        }
+    }
+
+    async Task<FileStream> AcquireProfileLockAsync(string profile, CancellationToken ct) =>
+        await TryAcquireProfileLockAsync(profile, ct)
+        ?? throw new TimeoutException($"The token file for profile '{profile}' is locked by another process.");
 
     // Atomically publish the completed temp over the target. On POSIX rename() is atomic and
     // tolerant of a concurrent writer holding the target open, so this succeeds first try. On
@@ -194,26 +235,43 @@ public sealed class TokenStore(
         }
     }
 
-    public void Delete(string profile) {
+    /// Deletes the profile's credential under its lock when <paramref name="guard"/> holds against
+    /// the config as it is at that moment; a null guard always deletes. A lock that cannot be taken
+    /// or a delete that fails throws, so a caller can report the file it could not remove.
+    public async Task<GuardedWriteOutcome> DeleteGuardedAsync(
+            string profile, Func<ProfileConfig, bool>? guard, CancellationToken ct = default) {
+        using var lockStream = await AcquireProfileLockAsync(profile, ct);
+        var outcome = Evaluate(guard);
+        if (outcome == GuardedWriteOutcome.Written) DeleteLocked(profile);
+        return outcome;
+    }
+
+    void DeleteLocked(string profile) {
         var path = ProfileTokenPath(profile);
         if (File.Exists(path)) File.Delete(path);
         SweepLeakedTemps(profile);
     }
 
-    // Best-effort removal of temp files leaked by a crash between write and move
-    // ({profile}.json.{pid}.{guid}.tmp) — these carry token secrets. Pass a profile to
-    // scope to that profile's temps, or null to sweep all (logout). Matched by filename
-    // prefix (not a glob) so a profile name containing a wildcard char can't widen it.
-    void SweepLeakedTemps(string? profile = null) {
+    // Best-effort removal of the profile's temp files leaked by a crash between write and move
+    // ({profile}.json.{pid}.{guid}.tmp) — these carry token secrets. Only under the profile's
+    // lock: a live writer's temp is unlinked otherwise, and its publish fails. Matched on the
+    // parsed owner, exactly: a prefix match would take the temps of `acme.json.other` for `acme`.
+    void SweepLeakedTemps(string profile) {
         if (!Directory.Exists(TokenDir)) return;
-        var prefix = profile is null ? null : $"{profile}.json.";
         try {
             foreach (var tmp in Directory.EnumerateFiles(TokenDir, "*.tmp")) {
-                if (prefix is null || Path.GetFileName(tmp).StartsWith(prefix, StringComparison.Ordinal)) {
+                if (TempOwner(Path.GetFileName(tmp)) == profile) {
                     try { File.Delete(tmp); } catch { /* best-effort */ }
                 }
             }
         } catch { /* best-effort */ }
+    }
+
+    // The profile a leaked temp belongs to, or null for a file that is not one of ours.
+    static string? TempOwner(string fileName) {
+        if (!fileName.EndsWith(".tmp", StringComparison.Ordinal)) return null;
+        var at = fileName.LastIndexOf(".json.", StringComparison.Ordinal);
+        return at > 0 ? fileName[..at] : null;
     }
 
     // ── Legacy (profile-resolving) overloads ────────────────────────────────
@@ -234,7 +292,7 @@ public sealed class TokenStore(
 
         if (state == TokenFileState.Loaded) return tokens;
 
-        if (state == TokenFileState.Missing && await IsLegacyOwnerAsync(profile, ct)) {
+        if (state == TokenFileState.Missing && IsLegacyOwner(profile)) {
             var (_, legacy) = await ReadTokenFileAsync(LegacyTokenPath);
             return legacy;
         }
@@ -243,33 +301,82 @@ public sealed class TokenStore(
     }
 
     // The legacy credential's owner is the on-disk active profile, with an absent/empty value
-    // normalizing to "default". Note this is deliberately NOT "profile == active || profile ==
-    // default": with active profile Y configured, a resolution that lands on "default" must not
-    // pick up Y's legacy credential.
-    async Task<bool> IsLegacyOwnerAsync(string profile, CancellationToken ct) {
-        var cfg    = await AppConfig.LoadProfileConfig(config, ct);
-        var active = cfg.ActiveName;
+    // normalizing to "default". Deliberately NOT "profile == active || profile == default": with
+    // active profile Y, a resolution landing on "default" must not pick up Y's legacy credential.
+    // A pure read: the migrating loader could take the config lock under the token lock. An
+    // unreadable config names no owner — it must not authorize deleting another profile's credential.
+    bool IsLegacyOwner(string profile) =>
+        ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg)
+        && string.Equals(profile, cfg.ActiveName, StringComparison.Ordinal);
 
-        return string.Equals(profile, active, StringComparison.Ordinal);
-    }
-
-    public Task DeleteAsync() {
-        if (File.Exists(LegacyTokenPath)) {
-            try { File.Delete(LegacyTokenPath); } catch { /* best-effort */ }
-        }
-
+    /// Logout. Each credential goes under its own lock, so a refresh holding one finishes and its
+    /// result is deleted rather than recreated after the fact. The active profile's file and the
+    /// legacy file go under one hold of the active lock: a legacy-only refresh slipping between two
+    /// holds would recreate the profile file after its delete.
+    public async Task DeleteAsync(CancellationToken ct = default) {
+        ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg);
+        var names = new HashSet<string>(cfg.Profiles.Keys, StringComparer.Ordinal);
         if (Directory.Exists(TokenDir)) {
             try {
-                foreach (var file in Directory.EnumerateFiles(TokenDir, "*.json")) {
-                    try { File.Delete(file); } catch { /* best-effort */ }
+                // A leaked temp names its owner too, so it is swept under that owner's lock.
+                foreach (var file in Directory.EnumerateFiles(TokenDir)) {
+                    var fileName = Path.GetFileName(file);
+                    if (fileName.EndsWith(".json", StringComparison.Ordinal)) names.Add(Path.GetFileNameWithoutExtension(fileName));
+                    else if (TempOwner(fileName) is { } owner) names.Add(owner);
                 }
-            } catch { /* best-effort */ }
+            } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort: config's names still get deleted */ }
+        }
+        names.Remove(cfg.ActiveName);
+
+        foreach (var name in names) {
+            try { await DeleteGuardedAsync(name, guard: null, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort, per file */ }
         }
 
-        // Also remove any leaked temps (they carry token secrets) so logout leaves nothing behind.
-        SweepLeakedTemps();
+        try {
+            using var lockStream = await AcquireProfileLockAsync(cfg.ActiveName, ct);
+            DeleteLocked(cfg.ActiveName);
+            if (File.Exists(LegacyTokenPath)) File.Delete(LegacyTokenPath);
+        } catch (ArgumentException) {
+            // A name the layout rejects can hold no lock and own no file, so nothing races this delete.
+            try { if (File.Exists(LegacyTokenPath)) File.Delete(LegacyTokenPath); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort */ }
+        } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort */ }
+    }
 
-        return Task.CompletedTask;
+    /// Whether <paramref name="other"/> reads the file <paramref name="profile"/>'s credential is
+    /// in: the same name, or a case-alias where the filesystem folds case. Two spellings the
+    /// directory lists separately are two files, whatever <see cref="File.Exists(string)"/> says.
+    public bool SharesTokenFile(string profile, string other) {
+        if (string.Equals(profile, other, StringComparison.Ordinal)) return true;
+        if (!string.Equals(profile, other, StringComparison.OrdinalIgnoreCase)) return false;
+
+        var path      = ProfileTokenPath(profile);
+        var otherPath = ProfileTokenPath(other);
+        if (!File.Exists(path) || !File.Exists(otherPath)) return false;
+
+        var listed = Directory.EnumerateFiles(TokenDir).Select(f => Path.GetFileName(f)).ToHashSet(StringComparer.Ordinal);
+        return !(listed.Contains(Path.GetFileName(path)) && listed.Contains(Path.GetFileName(otherPath)));
+    }
+
+    /// Settles the legacy <c>tokens.json</c> under <paramref name="owner"/>'s lock: moved into the
+    /// owner's own file when that is absent, deleted when the owner already has one (valid or
+    /// corrupt, the legacy copy is superseded either way), untouched when there is none. Throws on
+    /// a failed move or delete, so a caller about to change the active profile can refuse instead
+    /// of leaving the file for the next profile to claim.
+    public async Task MigrateLegacyAsync(string owner, CancellationToken ct = default) {
+        if (!File.Exists(LegacyTokenPath)) return;
+        using var lockStream = await AcquireProfileLockAsync(owner, ct);
+        if (!File.Exists(LegacyTokenPath)) return;
+
+        var target = ProfileTokenPath(owner);
+        if (File.Exists(target)) {
+            File.Delete(LegacyTokenPath);
+            return;
+        }
+
+        File.Move(LegacyTokenPath, target);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     /// <summary>
@@ -545,41 +652,38 @@ public sealed class TokenStore(
         // the re-read, so it can't race a peer's refresh or double-spend a rotated token.
         needsRefresh ??= t => t.IsExpiredAt(time.GetUtcNow());
 
-        // Validate before building the lock path — a profile name with path separators
-        // must not let the lock file escape TokenDir (matches ProfileTokenPath's guard).
-        ValidateProfileName(profile);
-        Directory.CreateDirectory(TokenDir);
-        var lockPath = Path.Combine(TokenDir, $"{profile}.lock");
+        var lockStream = await TryAcquireProfileLockAsync(profile, cancellationToken);
 
-        FileStream? lockStream = null;
-        var         deadline   = time.GetUtcNow() + LockWait;
+        if (lockStream is null) {
+            var latest = await LoadAsync(profile);
 
-        while (lockStream is null) {
-            cancellationToken.ThrowIfCancellationRequested();
-            try {
-                lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            } catch (IOException) {
-                if (time.GetUtcNow() >= deadline) {
-                    var latest = await LoadAsync(profile);
-
-                    // A peer refreshed while we waited → return their fresh token.
-                    if (latest is not null && !needsRefresh(latest)) {
-                        return latest;
-                    }
-
-                    // Gave up still-due: a peer holds the lock (likely mid-refresh). Signal
-                    // contention so the proactive caller doesn't report this as a refresh failure.
-                    onLockContended?.Invoke();
-
-                    return null;
-                }
-
-                await Task.Delay(LockPollGap, time, cancellationToken);
+            // A peer refreshed while we waited → return their fresh token.
+            if (latest is not null && !needsRefresh(latest)) {
+                return latest;
             }
+
+            // Gave up still-due: a peer holds the lock (likely mid-refresh). Signal contention so
+            // the proactive caller doesn't report this as a refresh failure.
+            onLockContended?.Invoke();
+
+            return null;
         }
 
         try {
-            var latest = await LoadAsync(profile) ?? current;
+            // Re-read under the lock. A file deleted since the pre-lock read is a sign-out, not a
+            // credential to bring back from the copy in hand; a file the pre-lock read parsed but
+            // is corrupt now is refreshed from that copy.
+            var (state, onDisk) = await ReadTokenFileAsync(ProfileTokenPath(profile));
+            StoredTokens latest;
+            if (state == TokenFileState.Loaded) {
+                latest = onDisk!;
+            } else if (state == TokenFileState.Missing) {
+                var legacy = IsLegacyOwner(profile) ? (await ReadTokenFileAsync(LegacyTokenPath)).Tokens : null;
+                if (legacy is null) return null;
+                latest = legacy;
+            } else {
+                latest = current;
+            }
 
             // A peer refreshed while we waited for the lock (the persisted token changed) and its
             // result is still valid → don't refresh again, even if the fresh token is still inside
@@ -601,7 +705,7 @@ public sealed class TokenStore(
             // would let a switch mid-refresh write this profile's rotated token into another
             // profile's file, without that profile's lock.
             if (refreshed is not null) {
-                await SaveAsync(profile, refreshed, cancellationToken);
+                await SaveLockedAsync(profile, refreshed, cancellationToken);
             }
 
             return refreshed;
