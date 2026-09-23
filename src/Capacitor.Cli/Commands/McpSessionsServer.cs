@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -168,11 +169,14 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return await HandleSearchSessionsAsync(id, arguments, client, baseUrl, cwdRepoHash);
         }
 
+        if (toolName == "get_session_summary") {
+            return await HandleSessionSummaryAsync(id, arguments, client, baseUrl);
+        }
+
         var singlePlan = false;
 
         try {
             using var httpResponse = toolName switch {
-                "get_session_summary"    => await client.GetAsync(BuildSummaryUrl(baseUrl, arguments)),
                 "get_session_transcript" => await client.GetAsync(BuildTranscriptUrl(baseUrl, arguments)),
                 "get_turn"               => await client.GetAsync(BuildTurnDetailUrl(baseUrl, arguments)),
                 "list_turns"             => await client.GetAsync(BuildTurnsUrl(baseUrl, arguments)),
@@ -197,10 +201,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            // get_session_summary: project /recap entries into { summary_text, plan }.
             // get_declared_plans by plan_id: wrap the single-plan body so the tool always answers an array.
             var payload = toolName switch {
-                "get_session_summary"                => ProjectRecapToSummary(body),
                 "get_declared_plans" when singlePlan => $"[{body}]",
                 _                                    => body
             };
@@ -270,6 +272,49 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        }
+    }
+
+    /// <summary>The recap and the session's declared plans, fetched together. The plans lookup is
+    /// best-effort: its failure or timeout returns the summary without them.</summary>
+    async Task<string> HandleSessionSummaryAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl) {
+        try {
+            var recapUrl  = BuildSummaryUrl(baseUrl, arguments);
+            var sessionId = arguments!["session_id"]!.GetValue<string>();
+
+            // The stdio loop is serial, so a stalled lookup would block every later request.
+            using var plansCts  = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
+            var       plansTask = FetchDeclaredPlansAsync(client, $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/plans", plansCts.Token);
+
+            using var recap = await client.GetAsync(recapUrl);
+            var       body  = await recap.Content.ReadAsStringAsync();
+            var       plans = await plansTask;
+
+            if (recap.StatusCode == HttpStatusCode.Unauthorized) {
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+            }
+
+            if (!recap.IsSuccessStatusCode) {
+                return BuildToolResult(id, $"Error: HTTP {(int)recap.StatusCode} — {body}", isError: true);
+            }
+
+            return BuildToolResult(id, ProjectRecapToSummary(body, plans));
+        } catch (ArgumentException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (HttpRequestException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        }
+    }
+
+    static async Task<string?> FetchDeclaredPlansAsync(HttpClient client, string url, CancellationToken ct) {
+        try {
+            using var response = await client.GetAsync(url, ct);
+
+            return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync(ct) : null;
+        } catch (Exception ex) {
+            await Console.Error.WriteLineAsync($"kcap mcp sessions: declared plans lookup failed ({ex.GetType().Name}: {ex.Message}); returning the summary without them.");
+
+            return null;
         }
     }
 
@@ -670,10 +715,10 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     }
 
     /// <summary>
-    /// Projects a /recap response (RecapEntry[]) into { summary_text, plan } for agent consumption.
+    /// Projects a /recap response (RecapEntry[]) into { summary_text, plan, declared_plans? } for agent consumption.
     /// "Latest of type wins" — walks entries in order and keeps the last value for each type.
     /// </summary>
-    internal static string ProjectRecapToSummary(string body) {
+    internal static string ProjectRecapToSummary(string body, string? plansBody = null) {
         string? summaryText = null;
         string? plan        = null;
 
@@ -710,9 +755,60 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             AppendJsonString(sb, plan);
         }
 
+        if (ProjectDeclaredPlans(plansBody) is { } declaredPlans) {
+            sb.Append(",\"declared_plans\":");
+            sb.Append(declaredPlans);
+        }
+
         sb.Append('}');
 
         return sb.ToString();
+    }
+
+    /// <summary>The declared-plans pointer as JSON text, or null when there is nothing to show.
+    /// A server that does not send <c>finished</c> gets it derived; total_known is part of that,
+    /// because a plan with no declared task list also reads 0 of 0.</summary>
+    internal static string? ProjectDeclaredPlans(string? plansBody) {
+        if (plansBody is null) return null;
+
+        try {
+            if (JsonNode.Parse(plansBody) is not JsonArray plans) return null;
+
+            var sb    = new StringBuilder("[");
+            var count = 0;
+
+            foreach (var plan in plans) {
+                if (plan?["plan_id"] is not JsonValue idValue || !idValue.TryGetValue(out string? planId) || planId is null) continue;
+
+                var progress   = plan["progress"];
+                var completed  = IntOrZero(progress?["completed"]);
+                var total      = IntOrZero(progress?["total"]);
+                var totalKnown = IsTrue(progress?["total_known"]);
+                var isComplete = IsTrue(plan["is_complete"]);
+                var finished   = progress?["finished"] is JsonValue sent && sent.TryGetValue(out bool fromServer)
+                    ? fromServer
+                    : totalKnown && completed == total && isComplete;
+
+                if (count++ > 0) sb.Append(',');
+
+                sb.Append("{\"plan_id\":");
+                AppendJsonString(sb, planId);
+                sb.Append(",\"completed\":").Append(completed.ToString(CultureInfo.InvariantCulture));
+                sb.Append(",\"total\":").Append(total.ToString(CultureInfo.InvariantCulture));
+                sb.Append(",\"total_known\":").Append(totalKnown ? "true" : "false");
+                sb.Append(",\"finished\":").Append(finished ? "true" : "false");
+                sb.Append(",\"is_complete\":").Append(isComplete ? "true" : "false");
+                sb.Append(",\"is_current\":").Append(IsTrue(plan["is_current"]) ? "true" : "false");
+                sb.Append('}');
+            }
+
+            return count == 0 ? null : sb.Append(']').ToString();
+        } catch {
+            return null;
+        }
+
+        static int  IntOrZero(JsonNode? node) => node is JsonValue v && v.TryGetValue(out int i) ? i : 0;
+        static bool IsTrue(JsonNode? node)    => node is JsonValue v && v.TryGetValue(out bool b) && b;
     }
 
     static void AppendJsonString(StringBuilder sb, string value) {
@@ -809,7 +905,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_summary",
-            "Get a concise summary of a past session: the 'what was done' narrative (summary_text) and the plan (if any). Use this to orient yourself before drilling into the full transcript.",
+            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Use this to orient yourself before drilling into the full transcript.",
             new(
                 "object",
                 new() { ["session_id"] = new("string", "Session ID returned by search_sessions") },

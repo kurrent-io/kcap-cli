@@ -601,4 +601,70 @@ public class McpSessionsServerTests {
         await Assert.That(byName["get_declared_plans"].Description).Contains("is_complete");
         await Assert.That(byName["list_repo_plans"].Description).Contains("finished");
     }
+
+    const string Recap = """[{"type":"whats_done","content":"did X"}]""";
+
+    static JsonArray? DeclaredPlans(string? plansBody) =>
+        JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary(Recap, plansBody))!["declared_plans"]?.AsArray();
+
+    [Test]
+    public async Task ProjectRecapToSummary_carries_a_pointer_for_each_declared_plan() {
+        const string plans = """
+            [
+              {"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true,"tasks":[{"title":"ignored"}]},
+              {"plan_id":"p-2","progress":{"completed":3,"total":3,"total_known":true,"finished":true},"is_complete":true,"is_current":false}
+            ]
+            """;
+
+        var pointers = DeclaredPlans(plans)!;
+
+        await Assert.That(pointers.Count).IsEqualTo(2);
+        await Assert.That(pointers[0]!.ToJsonString())
+            .IsEqualTo("""{"plan_id":"p-1","completed":2,"total":7,"total_known":true,"finished":false,"is_complete":true,"is_current":true}""");
+        await Assert.That(pointers[1]!["finished"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("[]")]
+    [Arguments("not json")]
+    [Arguments("""{"error":"nope"}""")]
+    public async Task ProjectRecapToSummary_omits_declared_plans_when_there_is_nothing_to_show(string? plansBody) {
+        var projected = JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary(Recap, plansBody))!.AsObject();
+
+        await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+    }
+
+    /// <summary>A server that predates the field omits it. Both zero-task shapes read 0 of 0 and
+    /// differ only in total_known, so completed == total alone would call a plan with no task list
+    /// finished.</summary>
+    [Test]
+    [Arguments("""{"completed":0,"total":0,"total_known":false}""", true,  false)]
+    [Arguments("""{"completed":0,"total":0,"total_known":true}""",  true,  true)]
+    [Arguments("""{"completed":3,"total":3,"total_known":true}""",  false, false)]
+    [Arguments("""{"completed":3,"total":3,"total_known":true}""",  true,  true)]
+    [Arguments("""{"completed":2,"total":3,"total_known":true}""",  true,  false)]
+    public async Task ProjectDeclaredPlans_derives_finished_when_the_server_did_not_send_it(string progress, bool isComplete, bool expected) {
+        var plans = $$"""[{"plan_id":"p-1","progress":{{progress}},"is_complete":{{(isComplete ? "true" : "false")}},"is_current":false}]""";
+
+        await Assert.That(DeclaredPlans(plans)![0]!["finished"]!.GetValue<bool>()).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ProjectDeclaredPlans_trusts_a_finished_the_server_sent() {
+        const string plans = """[{"plan_id":"p-1","progress":{"completed":3,"total":3,"total_known":true,"finished":false},"is_complete":true,"is_current":false}]""";
+
+        await Assert.That(DeclaredPlans(plans)![0]!["finished"]!.GetValue<bool>()).IsFalse();
+    }
+
+    [Test]
+    public async Task ProjectDeclaredPlans_skips_an_entry_with_no_plan_id() {
+        const string plans = """[{"progress":{"completed":0,"total":1,"total_known":true}},{"plan_id":"p-2","progress":{"completed":0,"total":1,"total_known":true},"is_complete":true,"is_current":false}]""";
+
+        var pointers = DeclaredPlans(plans)!;
+
+        await Assert.That(pointers.Count).IsEqualTo(1);
+        await Assert.That(pointers[0]!["plan_id"]!.GetValue<string>()).IsEqualTo("p-2");
+    }
 }

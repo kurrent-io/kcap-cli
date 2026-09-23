@@ -320,6 +320,49 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(projected).IsNotNull();
             await Assert.That(projected!["summary_text"]?.GetValue<string>()).IsEqualTo("did X");
             await Assert.That(projected["plan"]?.GetValue<string>()).IsEqualTo("do Y");
+            await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_session_summary_carries_declared_plans_when_the_session_has_any() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"type":"whats_done","content":"did X"}]"""));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """[{"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true}]"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response  = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var projected = JsonNode.Parse(response["result"]!["content"]![0]!["text"]!.GetValue<string>())!.AsObject();
+
+            await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+            await Assert.That(projected["declared_plans"]![0]!["plan_id"]!.GetValue<string>()).IsEqualTo("p-1");
+            await Assert.That(projected["declared_plans"]![0]!["completed"]!.GetValue<int>()).IsEqualTo(2);
+            await Assert.That(projected["declared_plans"]![0]!["finished"]!.GetValue<bool>()).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_session_summary_survives_a_failing_plans_lookup() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"type":"whats_done","content":"did X"}]"""));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("boom"));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response  = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var projected = JsonNode.Parse(response["result"]!["content"]![0]!["text"]!.GetValue<string>())!.AsObject();
+
+            await Assert.That(response["result"]?["isError"]).IsNull();
+            await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+            await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
         } finally {
             await ShutdownAsync(proc);
         }
