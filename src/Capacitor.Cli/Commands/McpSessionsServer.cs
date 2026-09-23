@@ -168,6 +168,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return await HandleSearchSessionsAsync(id, arguments, client, baseUrl, cwdRepoHash);
         }
 
+        var singlePlan = false;
+
         try {
             using var httpResponse = toolName switch {
                 "get_session_summary"    => await client.GetAsync(BuildSummaryUrl(baseUrl, arguments)),
@@ -175,6 +177,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 "get_turn"               => await client.GetAsync(BuildTurnDetailUrl(baseUrl, arguments)),
                 "list_turns"             => await client.GetAsync(BuildTurnsUrl(baseUrl, arguments)),
                 "list_repo_sessions"     => await client.GetAsync(BuildRepoSessionsUrl(baseUrl, arguments, cwdRepoHash)),
+                "list_repo_plans"        => await client.GetAsync(BuildRepoPlansUrl(baseUrl, arguments, cwdRepoHash)),
+                "get_declared_plans"     => await client.GetAsync(BuildDeclaredPlansUrl(baseUrl, arguments, out singlePlan)),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -184,12 +188,22 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
+            // That route answers 200 for a repository it has never seen, so a 404 is a server without it.
+            if (toolName == "list_repo_plans" && httpResponse.StatusCode == HttpStatusCode.NotFound) {
+                return BuildToolResult(id, RepoPlansUnsupportedMessage, isError: true);
+            }
+
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            // Client-side projection for get_session_summary: project /recap entries into { summary_text, plan }.
-            var payload = toolName == "get_session_summary" ? ProjectRecapToSummary(body) : body;
+            // get_session_summary: project /recap entries into { summary_text, plan }.
+            // get_declared_plans by plan_id: wrap the single-plan body so the tool always answers an array.
+            var payload = toolName switch {
+                "get_session_summary"                => ProjectRecapToSummary(body),
+                "get_declared_plans" when singlePlan => $"[{body}]",
+                _                                    => body
+            };
 
             return BuildToolResult(id, payload);
         } catch (ArgumentException ex) {
@@ -294,6 +308,59 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         if (TryReadInt(args, "offset", out var offset)) qs.Add($"offset={offset}");
 
         return $"{baseUrl}/api/repositories/{repoHash}/sessions?" + string.Join("&", qs);
+    }
+
+    internal const string RepoPlansUnsupportedMessage =
+        "This server does not list a repository's plans yet. Read one session's plans with get_declared_plans instead.";
+
+    internal static string BuildRepoPlansUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
+        var explicitRepo = ReadString(args, "repo", RepoShapeMessage);
+        if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
+
+        string repoHash;
+
+        if (explicitRepo is null) {
+            repoHash = cwdRepoHash ?? throw new ArgumentException(
+                "Cannot resolve the current repository owner/name from git metadata (e.g. a missing or " +
+                "unparseable 'origin' remote). Pass repo: \"<owner>/<name>\" or a 16-hex repo hash.");
+        } else if (!RepoHashHelper.TryParseRepoRef(explicitRepo, out repoHash)) {
+            throw new ArgumentException(RepoShapeMessage);
+        }
+
+        var state = ReadString(args, "state", "`state` must be a string: open or all.") ?? "open";
+
+        if (state is not ("open" or "all"))
+            throw new ArgumentException("`state` must be open or all.");
+
+        var qs = new List<string> { $"state={state}" };
+
+        if (ReadString(args, "owner", "`owner` must be a string.") is { Length: > 0 } owner)
+            qs.Add($"owner={Uri.EscapeDataString(owner)}");
+
+        if (TryReadInt(args, "limit", out var limit)) qs.Add($"limit={limit}");
+
+        return $"{baseUrl}/api/repositories/{repoHash}/plans?" + string.Join("&", qs);
+    }
+
+    internal static string BuildDeclaredPlansUrl(string baseUrl, JsonObject? args, out bool singlePlan) {
+        const string oneOf = "Pass exactly one of plan_id and session_id.";
+
+        var planId    = ReadString(args, "plan_id",    "`plan_id` must be a string.");
+        var sessionId = ReadString(args, "session_id", "`session_id` must be a string.");
+
+        if (string.IsNullOrWhiteSpace(planId))    planId    = null;
+        if (string.IsNullOrWhiteSpace(sessionId)) sessionId = null;
+
+        if ((planId is null) == (sessionId is null)) throw new ArgumentException(oneOf);
+
+        singlePlan = planId is not null;
+
+        if (planId is null) return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId!)}/plans";
+
+        if (planId is "current" or "." or "..")
+            throw new ArgumentException("`plan_id` must be a plan id. To read the plans of a session, pass session_id instead.");
+
+        return $"{baseUrl}/api/plans/{Uri.EscapeDataString(planId)}";
     }
 
     // A non-string JSON value must surface as a validation error, not as the generic internal
@@ -713,6 +780,34 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     ["touching_path"] = new("string",  "Optional: substring matched against the stored write-attempt paths as the tool received them."),
                     ["limit"]         = new("integer", "Default 20, max 100."),
                     ["offset"]        = new("integer", "Default 0, max 500.")
+                },
+                []
+            ),
+            McpToolAnnotations.Read
+        ),
+        new(
+            "list_repo_plans",
+            "List the declared plans on a repository that you are allowed to see, most recently touched first. Reach for this to find unfinished work: a plan a session left behind when it ended. Each row carries plan_id, documents (kind, path, content_hash, commit_sha — no bodies), progress {completed, total, total_known, finished}, next_task (the first task neither completed nor skipped, or null), sessions, work_item_id, last_touched_at, is_complete and withheld_contributions; read the full task list with get_declared_plans(plan_id). progress.finished is whether the work is done. is_complete is NOT that: it only says nothing was withheld from your view, and a half-done plan usually has is_complete true. A non-zero withheld_contributions means other people's tasks exist that you cannot see, so never call such a plan complete. On sessions, status and stale describe the session as a whole — stale means no activity for over an hour — and only last_touched_at is about this plan: a session stays attached after moving to other work, so an active session is not proof anyone is executing the plan.",
+            new(
+                "object",
+                new() {
+                    ["repo"]  = new("string",  "Optional: \"<owner>/<name>\" or a 16-hex repo hash. Defaults to the current repo (resolved from cwd at server startup). \"all\" is not accepted; the tool is repo-scoped."),
+                    ["state"] = new("string",  "Optional: open (default — at least one task you can see is neither completed nor skipped) or all, which also returns finished plans and plans that declared documents but no tasks."),
+                    ["owner"] = new("string",  "Optional: \"me\" or a canonical user id, matched against the owners of the plan's sessions. Absent means everyone visible."),
+                    ["limit"] = new("integer", "Default 10, max 20.")
+                },
+                []
+            ),
+            McpToolAnnotations.Read
+        ),
+        new(
+            "get_declared_plans",
+            "Read declared plans in full: documents, the ordered tasks with status, note and source, the contributing sessions, and progress. Pass exactly one of plan_id (one plan — the drill-down from list_repo_plans or from get_session_summary's declared_plans) or session_id (the plans that session and its continuation chain touched, the 20 most recently touched; use plan_id for one in particular). The result is always a JSON array. progress.finished is whether the work is done; is_complete only says nothing was withheld from your view. If progress has no finished field the server predates it: treat the plan as finished only when total_known is true AND completed equals total AND is_complete is true — never on completed equals total alone, since a plan with no declared task list also reads 0 of 0. A task with status_partial true had its status set by a session you cannot see; the status is real, its note is withheld.",
+            new(
+                "object",
+                new() {
+                    ["plan_id"]    = new("string", "A plan id, from list_repo_plans or declared_plans. Not \"current\"."),
+                    ["session_id"] = new("string", "A session id, to read every plan its chain touched.")
                 },
                 []
             ),

@@ -518,4 +518,87 @@ public class McpSessionsServerTests {
             throw tie.InnerException;
         }
     }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_no_args_uses_cwd_hash_and_defaults_state_to_open() {
+        var url = McpSessionsServer.BuildRepoPlansUrl("http://srv", args: null, cwdRepoHash: CwdHash);
+
+        await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/plans?state=open");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_carries_state_owner_and_limit() {
+        var args = new JsonObject { ["state"] = "all", ["owner"] = "github:1 2", ["limit"] = 5 };
+
+        var url = McpSessionsServer.BuildRepoPlansUrl("http://srv", args, CwdHash);
+
+        await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/plans?state=all&owner=github%3A1%202&limit=5");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_rejects_an_unknown_state() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoPlansUrl("http://srv", new JsonObject { ["state"] = "done" }, CwdHash))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("open or all");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_no_repo_and_no_cwd_hash_fails_closed_without_offering_all() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoPlansUrl("http://srv", args: null, cwdRepoHash: null))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("<owner>/<name>");
+        await Assert.That(ex.Message).DoesNotContain("\"all\"");
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_by_plan_id_reads_one_plan() {
+        var url = McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = "p 1" }, out var single);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/plans/p%201");
+        await Assert.That(single).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_by_session_id_reads_the_sessions_plans() {
+        var url = McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["session_id"] = "s1" }, out var single);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/s1/plans");
+        await Assert.That(single).IsFalse();
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_needs_exactly_one_of_plan_id_and_session_id() {
+        var neither = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject(), out _))
+            .Throws<ArgumentException>();
+        var both = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = "p1", ["session_id"] = "s1" }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(neither!.Message).Contains("exactly one");
+        await Assert.That(both!.Message).Contains("exactly one");
+    }
+
+    /// <summary>"current" names a session's pointer and needs a session the route would not get;
+    /// a dot segment would walk the URL path.</summary>
+    [Test]
+    [Arguments("current")]
+    [Arguments(".")]
+    [Arguments("..")]
+    public async Task BuildDeclaredPlansUrl_rejects_a_plan_id_that_is_not_an_id(string planId) {
+        var ex = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = planId }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("session_id");
+    }
+
+    [Test]
+    public async Task Tools_list_exposes_the_two_plan_tools_with_no_required_arguments() {
+        var byName = McpSessionsServer.BuildToolsList().ToDictionary(t => t.Name);
+
+        await Assert.That(byName["list_repo_plans"].InputSchema.Required.Length).IsEqualTo(0);
+        await Assert.That(byName["get_declared_plans"].InputSchema.Required.Length).IsEqualTo(0);
+        await Assert.That(byName["get_declared_plans"].Description).Contains("is_complete");
+        await Assert.That(byName["list_repo_plans"].Description).Contains("finished");
+    }
 }
