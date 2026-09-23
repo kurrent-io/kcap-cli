@@ -76,7 +76,8 @@ Returns AI-generated summaries from the most recent ended sessions in the curren
 2. **`## Summary`** — an AI-generated narrative covering:
    - **Context** — why the work was done
    - **Key decisions** — trade-offs and design choices that matter for future work
-   - **Unfinished/Risks** — anything deferred or left incomplete
+   - **Unfinished** — work that remains, one action per bullet
+   - **Risks** — anything flagged as risky or uncertain (older summaries combine these two as **Unfinished/Risks**)
 3. **`## Turns`** — an outline with one line per turn:
    - If the turn has a prose summary, that summary (1-3 sentences).
    - Otherwise, a truncated user-prompt excerpt plus tool/file metadata (tool names, file count).
