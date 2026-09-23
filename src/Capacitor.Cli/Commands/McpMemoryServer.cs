@@ -393,7 +393,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["project"]          = new("string", "Project slug — the PLACE axis: homes the memory at that project so it surfaces across the project's repos (wins over the cwd repo; no membership needed). Distinct from 'audience_project' above"),
                 ["global"]           = new("boolean", "true = org-wide, not tied to the current repo (required if not run from a git checkout and no project is given; default: scoped to cwd repo)"),
                 ["machine_specific"] = new("boolean", "true = only relevant on this machine (user audience only)")
-            }, ["audience", "slug", "description", "content", "kind"]), McpToolAnnotations.Create),
+            }, ["audience", "slug", "description", "content", "kind"]), McpToolAnnotations.Additive),
         new("update_memory",
             "Update an existing memory's description/content/kind (any subset).",
             new("object", new() {
@@ -410,7 +410,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["team"]             = new("string", "Target team when audience is 'team'"),
                 ["audience_project"] = new("string", "Target project slug when audience is 'project' — the PEOPLE axis (its members become editors; you must be a member). Distinct from 'project' below"),
                 ["project"]          = new("string", "Target project slug — the PLACE axis: moves the memory's home context to that project (takes precedence over audience)")
-            }, ["id"]), McpToolAnnotations.Upsert),
+            }, ["id"]), McpToolAnnotations.Destructive),
         new("archive_memory",
             "Archive (soft-delete) a memory.",
             new("object", new() { ["id"] = new("string", "Memory id") }, ["id"]), McpToolAnnotations.Destructive)

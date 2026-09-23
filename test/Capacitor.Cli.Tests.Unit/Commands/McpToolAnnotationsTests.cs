@@ -54,10 +54,19 @@ public class McpToolAnnotationsTests {
         await Assert.That(declare.IdempotentHint).IsTrue();
         await Assert.That(declare.OpenWorldHint).IsFalse();
 
-        // Replacing the task list drops entries not in it, so it is not additive.
-        await Assert.That(Tool("kcap-plans", "set_plan_tasks").Annotations.DestructiveHint).IsTrue();
+        // Replacing the task list drops entries not in it and mints ids for entries carrying none.
+        var setTasks = Tool("kcap-plans", "set_plan_tasks").Annotations;
+        await Assert.That(setTasks.DestructiveHint).IsTrue();
+        await Assert.That(setTasks.IdempotentHint).IsFalse();
         await Assert.That(Tool("kcap-workitems", "detach_work_item").Annotations.DestructiveHint).IsTrue();
         await Assert.That(Tool("kcap-memory", "save_memory").Annotations.ReadOnlyHint).IsFalse();
+        // Changing who may see a memory overwrites its access scope.
+        await Assert.That(Tool("kcap-memory", "rescope_memory").Annotations.DestructiveHint).IsTrue();
+        // The server keys a declaration on its normalized text, so re-declaring lands on the same end.
+        await Assert.That(Tool("kcap-workitems", "declare_loose_end").Annotations.IdempotentHint).IsTrue();
+        // A status read acknowledges the pending messages it rendered, so it is not a pure read.
+        await Assert.That(Tool("kcap-flows", "get_flow_status").Annotations.ReadOnlyHint).IsFalse();
+        await Assert.That(Tool("kcap-flows", "get_review_flow_status").Annotations.ReadOnlyHint).IsFalse();
         // A hosted agent acts on its own once launched.
         await Assert.That(Tool("kcap-flows", "start_review_flow").Annotations.OpenWorldHint).IsTrue();
     }

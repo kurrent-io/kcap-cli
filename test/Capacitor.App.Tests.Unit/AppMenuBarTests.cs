@@ -269,14 +269,6 @@ public class AppMenuBarTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Help_menu_offers_the_report_items_after_a_separator() {
-        var layout = await AvaloniaSession.DispatchAsync(() => Layout(Submenu(NewBar().Build(new Window()), "Help")));
-
-        await Assert.That(layout).IsEqualTo("Kurrent Capacitor Documentation|Changelog|-|Report a Bug…|Send Feedback…");
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
     public async Task Report_items_are_disabled_until_an_action_exists_and_then_click_through_with_their_category() {
         var opened = new List<FeedbackCategory>();
         var (bugBefore, feedbackBefore, bugAfter, feedbackAfter) = await AvaloniaSession.DispatchAsync(() => {

@@ -103,11 +103,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _ = RestartAsync();
     }
 
-    /// Same parked semantics as the 401-negotiate path in RunAsync (SignedOut, loop stopped) but
-    /// triggered from outside it — RemoteAgentsService's onUnauthorized, when its own HTTP fetch
-    /// hits a 401 the hub connection itself never saw. RestartAsync (wired to sign-in completion)
-    /// is what revives it.
-    public void ParkSignedOut() => ParkSignedOutCore(ifGeneration: null, detail: null);
+    /// Unconditional park, same semantics as the 401-negotiate path. RestartAsync revives it.
+    internal void ParkSignedOut() => ParkSignedOutCore(ifGeneration: null, detail: null);
 
     /// Parks only while `ifEpoch` is still the lane's current generation — the generation of the
     /// Connected status the caller's own decision was made under. RemoteAgentsService releases its
@@ -252,7 +249,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token);
         if (_hubLogging is { } logging) builder.ConfigureLogging(logging);
         var hub = (_reconnectDelays is { } delays ? builder.WithAutomaticReconnect(delays) : builder.WithAutomaticReconnect())
-            .AddJsonProtocol(o => o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower)
+            .AddJsonProtocol(o => LaunchHubJson.Configure(o.PayloadSerializerOptions))
             .Build();
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));
         hub.On(HubBroadcasts.DaemonsChanged, () => _daemonsChanged.OnNext(Unit.Default));

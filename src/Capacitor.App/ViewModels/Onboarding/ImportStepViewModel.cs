@@ -118,11 +118,8 @@ public sealed class ImportStepViewModel : ReactiveObject, IWizardStep {
         get => _busy;
         private set {
             this.RaiseAndSetIfChanged(ref _busy, value);
-            this.RaisePropertyChanged(nameof(Idle));
         }
     }
-
-    public bool Idle => !Busy;
 
     public bool Satisfied {
         get => _satisfied;
@@ -157,7 +154,7 @@ public sealed class ImportStepViewModel : ReactiveObject, IWizardStep {
         foreach (var row in Vendors) row.IsSelected = row.DetectedIn(detected);
     }
 
-    /// A running import is always killed, not abandoned: §7's Cancel/close contract applies to
+    /// A running import is always killed, not abandoned: the wizard's Cancel/close contract applies to
     /// leaving the step too, so no import survives the wizard moving on.
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
         await CancelActiveRunAsync().ConfigureAwait(false);
@@ -165,7 +162,7 @@ public sealed class ImportStepViewModel : ReactiveObject, IWizardStep {
         return true;
     }
 
-    /// The other half of §7's Cancel/close contract: closing the wizard window never navigates away
+    /// The other half of the Cancel/close contract: closing the wizard window never navigates away
     /// from a step, so it cannot go through <see cref="CanLeaveAsync"/> — the app's close/shutdown
     /// paths call this directly instead. No-op when idle; never throws.
     public async Task CancelActiveRunAsync() {

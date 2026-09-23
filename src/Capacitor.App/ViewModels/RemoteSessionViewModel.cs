@@ -37,8 +37,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public string AgentId { get; }
     public ChatTabViewModel Chat { get; }
-    public PendingCardsViewModel Cards => Chat.Cards;
-    public IObservable<SessionAccessState> AccessStates => _accessStates.AsObservable();
     public ReactiveCommand<Unit, Unit> OpenInWebCommand { get; }
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }

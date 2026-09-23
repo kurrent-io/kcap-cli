@@ -15,7 +15,7 @@ public sealed class PullRequestToneBrushConverter : IValueConverter {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         Application.Current?.FindResource(value is PullRequestTone tone ? KeyFor(tone) : "KcapFaintBrush") as IBrush;
 
-    public static string KeyFor(PullRequestTone tone) => tone switch {
+    static string KeyFor(PullRequestTone tone) => tone switch {
         PullRequestTone.Ready => "KcapMutedBrush",
         PullRequestTone.Draft => "KcapMutedBrush",
         PullRequestTone.ChecksRunning => "KcapMutedBrush",

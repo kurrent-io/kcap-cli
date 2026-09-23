@@ -573,7 +573,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
                     new("object", "A task: {title, task_id?, status?: pending|in_progress|completed|skipped, note?}.")),
                 ["plan_id"]    = new("string", "Plan to write to. Defaults to the session's current plan."),
                 ["session_id"] = new("string", "Session making the declaration. Defaults to the session this server runs in when omitted.")
-            }, ["tasks"]), McpToolAnnotations.Destructive),
+            }, ["tasks"]), McpToolAnnotations.Replace),
         new(PlanToolNames.UpdateTask,
             "Record one task's status transition — call it every time a task starts, finishes or is skipped. Name "
           + "the task by task_id (from set_plan_tasks or get_plan) or by its 1-based ordinal. Without plan_id the "

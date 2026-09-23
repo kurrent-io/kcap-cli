@@ -11,11 +11,15 @@ record McpToolAnnotations(bool? ReadOnlyHint = null, bool? DestructiveHint = nul
     /// <summary>Adds or restates a fact in the user's Capacitor workspace; repeating the call changes nothing more.</summary>
     public static readonly McpToolAnnotations Upsert = new(ReadOnlyHint: false, DestructiveHint: false, IdempotentHint: true, OpenWorldHint: false);
 
-    /// <summary>Creates a new record on each call; nothing that exists is touched.</summary>
-    public static readonly McpToolAnnotations Create = new(ReadOnlyHint: false, DestructiveHint: false, IdempotentHint: false, OpenWorldHint: false);
+    /// <summary>Adds a record, or consumes something on the way (a status read that acknowledges the
+    /// messages it rendered); nothing that exists is overwritten, but a repeat is not free.</summary>
+    public static readonly McpToolAnnotations Additive = new(ReadOnlyHint: false, DestructiveHint: false, IdempotentHint: false, OpenWorldHint: false);
 
-    /// <summary>Removes, replaces or overwrites something that exists; repeating the call changes nothing more.</summary>
+    /// <summary>Removes or overwrites something that exists; repeating the call changes nothing more.</summary>
     public static readonly McpToolAnnotations Destructive = new(ReadOnlyHint: false, DestructiveHint: true, IdempotentHint: true, OpenWorldHint: false);
+
+    /// <summary>Replaces a whole list, minting identities for entries that carry none, so a repeat is not a no-op.</summary>
+    public static readonly McpToolAnnotations Replace = new(ReadOnlyHint: false, DestructiveHint: true, IdempotentHint: false, OpenWorldHint: false);
 
     /// <summary>Starts or messages a separate hosted agent that then acts on its own.</summary>
     public static readonly McpToolAnnotations Launch = new(ReadOnlyHint: false, DestructiveHint: false, IdempotentHint: false, OpenWorldHint: true);

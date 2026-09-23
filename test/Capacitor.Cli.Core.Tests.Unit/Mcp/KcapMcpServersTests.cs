@@ -65,4 +65,11 @@ public class KcapMcpServersTests {
             "kcap-review", "kcap-sessions", "kcap-analytics", "kcap-memory", "kcap-workitems", "kcap-plans"
         });
     }
+
+    [Test]
+    public async Task Flows_is_the_only_server_whose_tool_calls_block_for_minutes() {
+        var timed = KcapMcpServers.All.Where(s => s.ToolTimeout is not null).ToArray();
+        await Assert.That(timed.Select(s => s.Name).ToArray()).IsEquivalentTo(new[] { "kcap-flows" });
+        await Assert.That(timed[0].ToolTimeout).IsEqualTo(TimeSpan.FromMinutes(10));
+    }
 }

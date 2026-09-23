@@ -12,7 +12,7 @@ namespace Capacitor.App.ViewModels;
 /// One session row of the rail. Recreated per row revision (DynamicData Transform), so every
 /// static field is computed once from the ctor row; IsSelected and NeedsYou stay live because
 /// selection and pending-set membership each change without a row revision. Age is a
-/// point-in-time snapshot (SessionCardViewModel precedent).
+/// point-in-time snapshot.
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Id { get; }
     /// Null when the row has no title, in which case the chips line stands alone as the row.

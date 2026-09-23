@@ -80,7 +80,7 @@ public class BootRefusalAttributionTests {
         await Assert.That(File.Exists(Daemons.Store.BootRefusalPath(DaemonName))).IsTrue();
     }
 
-    // ---- P2-4: identity-validation rejection arms, each retaining the marker ----
+    // ---- identity-validation rejection arms, each retaining the marker ----
 
     [Test]
     public async Task Wrong_schema_is_never_attributed() {

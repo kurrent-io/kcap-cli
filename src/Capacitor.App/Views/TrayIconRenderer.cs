@@ -7,7 +7,7 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// Draws one 32x32 WindowIcon per (TrayState, capped Running count) — spec §4. The base is
+/// Draws one 32x32 WindowIcon per (TrayState, capped Running count). The base is
 /// ProductIcon.Bitmap (the product mark, Assets/kcap-icon.png) drawn scaled to fill the canvas;
 /// state is a small overlay in the bottom-right corner, not a swapped glyph — Running draws
 /// CountBadge(count) over a filled dark-green circle (legible against the burgundy mark), every
@@ -18,7 +18,7 @@ namespace Capacitor.App.Views;
 /// RxSchedulers.MainThreadScheduler), so the cache dictionary needs no locking.
 public static class TrayIconRenderer {
     const int IconSize = 32;
-    const int OverlayDiameter = 12; // spec §4: "~12px" bottom-right state overlay
+    const int OverlayDiameter = 12; // bottom-right state overlay
     const double OverlayMargin = 1;
     const int MaxDigitCount = 9; // above this, CountBadge collapses to "9+"
     const int CountCap = 10;     // cache-key clamp: every count >= this renders the same "9+" badge
@@ -80,7 +80,6 @@ public static class TrayIconRenderer {
         TrayState.Stopped    => StatusColors.Unavailable,
         TrayState.Connecting => StatusColors.InProgress,
         TrayState.Idle       => StatusColors.Connected,
-        TrayState.Attention  => StatusColors.Disrupted,
         _                    => StatusColors.Disrupted,
     };
 }

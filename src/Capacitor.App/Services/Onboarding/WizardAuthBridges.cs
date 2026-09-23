@@ -324,10 +324,10 @@ public static class WizardSignInOperation {
         async (intent, ct) => intent switch {
             ConnectIntent.Paste paste => await facade.LoginAsync(
                 ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true),
-            ConnectIntent.Discover discover => await facade.DiscoverAsync(discover.Provider, forceDevice: false, ct),
             // Creation runs inside WorkOS discovery, after the org-less sign-in finds no tenant.
-            ConnectIntent.Create => await facade.DiscoverAsync(AuthProvider.WorkOS, forceDevice: false, ct),
-            _                    => new AuthResult.Failed("No connection was chosen.")
+            ConnectIntent.Discover or ConnectIntent.Create =>
+                await facade.DiscoverAsync(AuthProvider.WorkOS, forceDevice: false, ct),
+            _ => new AuthResult.Failed("No connection was chosen.")
         };
 
     /// <summary>

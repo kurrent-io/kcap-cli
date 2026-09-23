@@ -80,6 +80,11 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **The PTY read loop never awaits a consumer.** Local sinks and the cloud sink take chunks through
+  a non-blocking `TryEnqueue` under `SinksLock`, and each drains on its own pump. A consumer that
+  falls behind is cut off and replayed from the ring — a local client by reattaching, the cloud
+  mirror by an in-band terminal reset — never allowed to back-pressure the PTY, which would freeze
+  every other surface of that agent.
 - **Desktop-app green / orange / yellow are status only.** `KcapSuccess*` is shipped, settled,
   passing; `KcapWarning*` is blocked, stale, needs-you. Identity must not share them: a work-item
   key, vendor chip, "this session" mark, or title in success green reads as done, and a Claude chip

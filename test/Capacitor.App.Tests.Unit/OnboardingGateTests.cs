@@ -7,8 +7,7 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.App.Tests.Unit;
 
 /// <summary>
-/// The decision-1 gate matrix (design doc §2 decision 1 / §4's <c>OnboardingGate</c> bullet),
-/// pinned against <see cref="TokenStore"/>'s REAL refresh/binding rules rather than a
+/// The onboarding gate matrix, pinned against <see cref="TokenStore"/>'s REAL refresh/binding rules rather than a
 /// reimplementation of them — each test below cites the TokenStore rule it mirrors.
 /// </summary>
 public class OnboardingGateTests {
@@ -73,8 +72,8 @@ public class OnboardingGateTests {
 
         await AssertIncomplete(result, GateReason.InvalidServerUrl);
 
-        // Decision 2: the gate and App.ValidProfileName must share one validator — before this
-        // task, App.ValidProfileName accepted any absolute URI (including file://).
+        // The gate and App.ValidProfileName must share one validator, so neither accepts a
+        // file:// URI the other refuses.
         await Assert.That(OnboardingGate.ValidServerUrl(fileUrl)).IsFalse();
         var resolved = new ResolvedProfile(fileUrl, ProfileName, profile, null);
         await Assert.That(App.ValidProfileName(resolved)).IsNull();
@@ -182,9 +181,9 @@ public class OnboardingGateTests {
         await Assert.That(Directory.Exists(TokensDir)).IsFalse();
     }
 
-    // Blocker (final review): the stamp WRITER emits AuthProvider.None ("None", capitalized)
-    // verbatim, not a lowercased literal — an ordinal-exact "none" compare would silently never
-    // satisfy the gate for a real stamp. This is the actual production shape the fix targets.
+    // The stamp WRITER emits AuthProvider.None ("None", capitalized) verbatim, not a lowercased
+    // literal: an ordinal-exact "none" compare would silently never satisfy the gate for a real
+    // stamp.
     [Test]
     public async Task None_constant_stamp_matching_current_server_is_Complete_without_any_token_file() {
         var profile = new Profile { ServerUrl = ServerUrl, AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl) };
@@ -242,11 +241,11 @@ public class OnboardingGateTests {
         await Assert.That(result).IsTypeOf<GateResult.Complete>();
     }
 
-    // ── EvaluateResolvedAsync: the shared-resolution seam (Codex P1) ────────
+    // ── EvaluateResolvedAsync: the shared-resolution seam ────────
 
     // App.StartAsync resolves ONCE (EvaluateAsync's own resolve, which the daemon graph is then
     // built from) and hands that SAME identity to EvaluateResolvedAsync — proving it never
-    // re-resolves is what rules out the race the P1 finding described: a concurrent active-profile
+    // re-resolves is what rules out the race: a concurrent active-profile
     // change between two independent resolves evaluating the gate against a different profile than
     // the one the daemon graph built.
     [Test]

@@ -119,7 +119,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
     }
 
     // Gated (OnTick): re-reads only when the stat key changed since the previous check — the key
-    // still advances even if the read that follows throws, same as before this moved off-thread.
+    // still advances even if the read that follows throws.
     // PrimeAndRead (OnTabVisibleChanged true) always reads and always primes the baseline.
     // ReadOnly (RequestRefresh) never touches the stat key at all.
     (string? key, ConsentLogReadResult? result) ComputeOffUiThread(RefreshMode mode, string? previousKey) {

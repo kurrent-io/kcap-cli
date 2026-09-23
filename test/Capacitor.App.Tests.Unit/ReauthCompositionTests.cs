@@ -43,6 +43,8 @@ public class ReauthCompositionTests {
 
             await Assert.That(seen).IsEqualTo(new ConnectIntent.Paste(ServerUrl));
             await Assert.That(graph.SignIn.Satisfied).IsTrue();
+            // The dialog's own promise: it refreshes the app and closes, which the wizard does not.
+            await Assert.That(graph.SignIn.StatusDetail).IsEqualTo("You're signed in. Refreshing…");
         });
     }
 

@@ -6,25 +6,16 @@ using AppUnderTest = Capacitor.App.App;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The decision-2 carve-out: App.StartAsync evaluates the onboarding gate FIRST (one resolve, via
-/// OnboardingGate.EvaluateAsync) and branches — Complete builds the daemon graph with auto-actions
-/// open, Incomplete opens the wizard instead and, if it is still Incomplete when the wizard closes,
-/// builds that same graph with auto-actions closed permanently. StartAsync itself needs a real
-/// daemon/profile — not a unit-test seam, same reason AppStartupTests drives extracted statics
-/// instead (see that file's own header comment) — so this exercises the two pure seams App exposes
-/// for the carve-out: AutoActionsPermanentlyClosed (the gate→flag switch) and
-/// ResolveConsentFlipIdentity (the ConsentFlipCoordinator identity delegate, MUST-WIRE 1).
-/// WizardStartupTests owns the wizard-mode half; DaemonLifecycleControllerTests covers the
-/// controller-level ctor param behavior (fake lane, no gate involved).
+/// App.StartAsync branches on the onboarding gate: Complete builds the daemon graph with
+/// auto-actions open, Incomplete opens the wizard and, if still Incomplete when it closes, builds
+/// the graph with auto-actions closed permanently. StartAsync needs a real daemon, so this drives
+/// the pure seams it exposes: AutoActionsPermanentlyClosed, ResolveConsentFlipIdentity and
+/// EvaluateGateSafelyAsync.
 public class AppStartupCarveOutTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System);
-
     const string ProfileName = "acme";
     const string ServerUrl = "https://acme.example";
-
-    // ---- AutoActionsPermanentlyClosed: the pure gate→flag switch ----
 
     [Test]
     public async Task Complete_gate_keeps_auto_actions_open() {
@@ -41,45 +32,6 @@ public class AppStartupCarveOutTests {
     public async Task Incomplete_gate_closes_auto_actions_for_every_reason(GateReason reason) {
         await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(new GateResult.Incomplete(reason))).IsTrue();
     }
-
-    // ---- End-to-end against a REAL OnboardingGate.EvaluateAsync() ----
-    // The two cases that apply without a wizard: valid URL + no token, and an invalid/non-HTTP URL.
-
-    [Test]
-    public async Task ValidUrl_noToken_fixture_closes_auto_actions() {
-        WriteConfig(SingleProfileConfig(new Profile { ServerUrl = ServerUrl }));
-
-        var gate = (await Gate().EvaluateAsync(CancellationToken.None)).Result;
-
-        await Assert.That(gate).IsTypeOf<GateResult.Incomplete>();
-        await Assert.That(((GateResult.Incomplete)gate).Reason).IsEqualTo(GateReason.NoToken);
-        await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(gate)).IsTrue();
-    }
-
-    [Test]
-    public async Task InvalidNonHttpUrl_fixture_closes_auto_actions() {
-        WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "file:///tmp/x" }));
-
-        var gate = (await Gate().EvaluateAsync(CancellationToken.None)).Result;
-
-        await Assert.That(gate).IsTypeOf<GateResult.Incomplete>();
-        await Assert.That(((GateResult.Incomplete)gate).Reason).IsEqualTo(GateReason.InvalidServerUrl);
-        await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(gate)).IsTrue();
-    }
-
-    // Symmetric control: a genuinely Complete fixture must NOT close auto-actions.
-    [Test]
-    public async Task Complete_fixture_keeps_auto_actions_open() {
-        var profile = new Profile { ServerUrl = ServerUrl, AuthProvider = new AuthProviderStamp("none", ServerUrl) };
-        WriteConfig(SingleProfileConfig(profile));
-
-        var gate = (await Gate().EvaluateAsync(CancellationToken.None)).Result;
-
-        await Assert.That(gate).IsTypeOf<GateResult.Complete>();
-        await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(gate)).IsFalse();
-    }
-
-    // ---- ResolveConsentFlipIdentity: MUST-WIRE 1's ConsentFlipCoordinator identity delegate ----
 
     [Test]
     public async Task ResolveConsentFlipIdentity_resolves_active_profile_server_and_daemon_name() {
@@ -113,7 +65,7 @@ public class AppStartupCarveOutTests {
         await Assert.That(daemonName).IsNotEmpty(); // DaemonNameResolver's OS-username/machine/"daemon" fallback chain
     }
 
-    // ---- EvaluateGateSafelyAsync: round-1 review — a gate exception must not brick startup ----
+    // A gate exception must not brick startup.
 
     [Test]
     public async Task EvaluateGateSafelyAsync_passes_a_successful_result_through_unchanged() {

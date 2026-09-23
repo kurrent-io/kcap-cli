@@ -382,6 +382,12 @@ class McpFlowsServer(
             // `wait: true` blocks via bounded repeated GETs instead of the single GET below. Absent or
             // false never reaches this branch — that untouched single-GET path IS the backwards-compat
             // contract for every existing caller.
+            if (toolName is "get_review_flow_status" or "get_flow_status") {
+                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, clock);
+                if (resolution.Error is { } unresolved) return BuildToolResult(id, unresolved, isError: true);
+                arguments = WithFlowRunId(arguments, resolution.FlowRunId!);
+            }
+
             if (toolName is "get_review_flow_status" or "get_flow_status" && ParseWaitArg(arguments)) {
                 var waitFlowRunId = arguments?["flow_run_id"]?.GetValue<string>()
                     ?? throw new ArgumentException("Missing required argument: flow_run_id");
@@ -1233,6 +1239,97 @@ class McpFlowsServer(
             ?? throw new ArgumentException("Missing required argument: flow_run_id");
 
         return $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
+    }
+
+    record FlowRunIdResolution(string? FlowRunId, string? Error);
+
+    record SessionFlow(string FlowRunId, string Status, string? DefinitionId, string? TargetTitle, int? RoundNumber, string? RoundStatus, string? StartedAt);
+
+    const string PassTheFlowRunId = "Pass the flow_run_id returned by start_review_flow or start_flow.";
+
+    /// <summary>The run a status call reads. Without a flow_run_id it is the newest open flow the
+    /// calling session started — or, when none is open, the session's newest flow of any state, so a
+    /// run that failed or closed while the driver was away is still readable. Several open flows are
+    /// listed for the driver to choose from, never guessed between.</summary>
+    async Task<FlowRunIdResolution> ResolveStatusFlowRunIdAsync(
+            HttpClient client, string apiRoot, JsonObject? arguments, string? requestingSessionId, FlowRetryClock clock) {
+        if (arguments?["flow_run_id"] is { } node) {
+            if (node is not JsonValue value || !value.TryGetValue<string>(out var given))
+                throw new ArgumentException("Invalid argument: flow_run_id must be a string");
+            if (!string.IsNullOrWhiteSpace(given)) return new(given, null);
+        }
+
+        var sessionId = McpSessionId.ResolveWithin(arguments, requestingSessionId);
+        var url       = $"{apiRoot}/api/flows?requesting_session_id={Uri.EscapeDataString(sessionId)}&state=all";
+        using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
+        HttpResponseMessage sent;
+        try {
+            sent = await client.GetAsync(url, getCts.Token);
+        } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
+            // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
+            var how = ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}";
+            return new(null, $"Error: the flow lookup (GET /api/flows) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+        }
+        using var resp = sent;
+        var body = await resp.Content.ReadAsStringAsync();
+
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            return new(null, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time));
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+            return new(null, $"Error: this server cannot look up flows by session (GET /api/flows returned 404). {PassTheFlowRunId}");
+        if (!resp.IsSuccessStatusCode)
+            return new(null, FormatFlowStartError((int)resp.StatusCode, body, wasDynamicStart: false));
+
+        List<SessionFlow>? flows;
+        try { flows = ParseSessionFlows(body); } catch (JsonException) { flows = null; }
+        if (flows is null) return new(null, $"Error: unreadable flow list from GET /api/flows. {PassTheFlowRunId}");
+
+        var open = flows.Where(f => f.Status is not ("closed" or "failed")).ToList();
+        if (open.Count > 1) return new(null, DescribeOpenFlows(sessionId, open));
+
+        var chosen = open.Count == 1 ? open[0] : flows.FirstOrDefault();
+        return chosen is null
+            ? new(null, $"Error: no flow was started by session {sessionId}. {PassTheFlowRunId}")
+            : new(chosen.FlowRunId, null);
+    }
+
+    /// <summary>Null for a body that is not the route's shape — an object with a <c>flows</c> array —
+    /// so a proxy page or another route's JSON reads as unreadable, never as an empty history.</summary>
+    static List<SessionFlow>? ParseSessionFlows(string body) {
+        if (JsonNode.Parse(body) is not JsonObject root || root["flows"] is not JsonArray rows) return null;
+        var flows = new List<SessionFlow>();
+        foreach (var row in rows.OfType<JsonObject>()) {
+            var flowRunId = TryGetString(row, "flow_run_id");
+            if (string.IsNullOrWhiteSpace(flowRunId)) continue;
+            flows.Add(new(
+                flowRunId,
+                TryGetString(row, "status") ?? "",
+                TryGetString(row, "definition_id"),
+                TryGetString(row, "target_title"),
+                row["round_number"] is JsonValue round && round.TryGetValue<int>(out var roundNumber) ? roundNumber : null,
+                TryGetString(row, "round_status"),
+                TryGetString(row, "started_at")));
+        }
+        return flows;
+    }
+
+    static string DescribeOpenFlows(string sessionId, IReadOnlyList<SessionFlow> open) {
+        var sb = new StringBuilder();
+        sb.Append("Error: session ").Append(sessionId).Append(" has ").Append(open.Count).Append(" open flows. Pass flow_run_id for the one you mean:");
+        foreach (var flow in open) {
+            sb.AppendLine().Append("  ").Append(flow.FlowRunId);
+            if (flow.DefinitionId is { } definitionId) sb.Append("  ").Append(definitionId);
+            if (flow.TargetTitle is { } title)         sb.Append("  \"").Append(title).Append('"');
+            if (flow.RoundNumber is { } roundNumber)   sb.Append("  round ").Append(roundNumber).Append(' ').Append(flow.RoundStatus);
+            if (flow.StartedAt is { } startedAt)       sb.Append("  started ").Append(startedAt);
+        }
+        return sb.ToString();
+    }
+
+    static JsonObject WithFlowRunId(JsonObject? arguments, string flowRunId) {
+        var withId = arguments?.DeepClone().AsObject() ?? new JsonObject();
+        withId["flow_run_id"] = flowRunId;
+        return withId;
     }
 
     static readonly TimeSpan PollInterval   = TimeSpan.FromSeconds(3);
@@ -2103,6 +2200,11 @@ class McpFlowsServer(
         return envelope.ToJsonString();
     }
 
+    /// <summary>Carried by every tool that holds the call open while a round runs. A harness that
+    /// aborts the call words the error itself, so this is the only guidance the driver has read.</summary>
+    static string HarnessTimeoutGuidance(string statusTool) =>
+        $"This call blocks for minutes while the round runs. If your harness aborts it with a tool timeout, the flow is still running server-side: do not start it again and do not investigate — call {statusTool} with wait: true (on Claude Code and Codex flow_run_id may be omitted and resolves this session's open flow; other harnesses give this server no session identity, so pass the id there). ";
+
     internal static McpTool[] BuildToolsList() => [
         new(
             "start_review_flow",
@@ -2111,6 +2213,7 @@ class McpFlowsServer(
             "Only call this when the user explicitly asked for a review *flow* / to submit for review; for an ordinary 'review my PR' or 'code review' request, review directly and do NOT call this tool. " +
             "Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later. " +
+            HarnessTimeoutGuidance("get_review_flow_status") +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
@@ -2132,6 +2235,7 @@ class McpFlowsServer(
         new(
             "submit_review_round",
             "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            HarnessTimeoutGuidance("get_review_flow_status") +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
@@ -2153,12 +2257,13 @@ class McpFlowsServer(
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow."),
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow. Optional on Claude Code and Codex, the harnesses whose session this server can identify: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
-                ["flow_run_id"]
+                []
             ),
-            McpToolAnnotations.Read
+            McpToolAnnotations.Additive
         ),
         new(
             "close_review_flow",
@@ -2179,6 +2284,7 @@ class McpFlowsServer(
             "Start a new agent flow from the server's flow-definition catalog (definition_id) or from an inline YAML definition (definition_yaml — dynamic flows). This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
+            HarnessTimeoutGuidance("get_flow_status") +
             "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
@@ -2202,6 +2308,7 @@ class McpFlowsServer(
         new(
             "send_to_participant",
             "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            HarnessTimeoutGuidance("get_flow_status") +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
@@ -2225,12 +2332,13 @@ class McpFlowsServer(
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow."),
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow. Optional on Claude Code and Codex, the harnesses whose session this server can identify: when omitted, the newest open flow this session started is read — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
-                ["flow_run_id"]
+                []
             ),
-            McpToolAnnotations.Read
+            McpToolAnnotations.Additive
         ),
         new(
             "close_flow",

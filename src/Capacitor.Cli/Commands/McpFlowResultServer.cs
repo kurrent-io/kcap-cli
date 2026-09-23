@@ -406,7 +406,7 @@ sealed class McpFlowResultServer(
                 },
                 Required: ["round_token", "kind"]
             ),
-            Annotations: McpToolAnnotations.Create
+            Annotations: McpToolAnnotations.Additive
         ),
         new(
             Name: "send_flow_message",
@@ -418,7 +418,7 @@ sealed class McpFlowResultServer(
                 },
                 Required: ["text"]
             ),
-            Annotations: McpToolAnnotations.Create
+            Annotations: McpToolAnnotations.Additive
         )
     ];
 }

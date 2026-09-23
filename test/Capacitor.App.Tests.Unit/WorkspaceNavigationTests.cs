@@ -16,7 +16,7 @@ namespace Capacitor.App.Tests.Unit;
 /// Navigation between the tabbed shell and a session workspace: the surface swap, the two entry
 /// points (card click and launch auto-open), every exit path (Back, open-another, intercepted
 /// close-to-hide, shutdown), and the generation/latch guards that keep a late launch success from
-/// attaching an invisible terminal (spec §3, "Workspace ownership" / "Entry-point guards").
+/// attaching an invisible terminal.
 ///
 /// Opening a workspace builds a REAL WorkspaceViewModel (over the fake daemon and the scripted
 /// attach factory), whose TerminalTabViewModel reaches Dispatcher.UIThread.InvokeAsync on every
@@ -112,7 +112,6 @@ public class WorkspaceNavigationTests {
         nav.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         return new(nav.Daemon, new AppStateStore(statePath), launch, () => Task.FromResult(Array.Empty<string>()),
             TimeProvider.System,
-            openSession: id => nav.Vm.OpenSession(id),
             navigationGeneration: () => nav.Vm.NavigationGeneration,
             openSessionIfCurrent: nav.Vm.OpenSessionIfCurrent,
             launchFailures: failures, launchFailed: nav.Vm.CloseFailedLaunch);
@@ -254,7 +253,7 @@ public class WorkspaceNavigationTests {
     /// Drives MainWindowCoordinator.OnWindowClosing itself — the ACTUAL intercepted-close path,
     /// wired the way the composition root wires it — rather than calling CloseWorkspace directly:
     /// the window stays alive on a hide, so nothing but this wiring stops an invisible terminal
-    /// from staying attached and clamping the PTY for every other viewer (spec §3).
+    /// from staying attached and clamping the PTY for every other viewer.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Intercepted_close_to_hide_tears_down_and_resets_navigation() {
@@ -291,7 +290,7 @@ public class WorkspaceNavigationTests {
         });
     }
 
-    /// The OTHER close (spec §3, real close): nothing intercepts it, the coordinator DISCARDS the
+    /// The OTHER close (the real close): nothing intercepts it, the coordinator DISCARDS the
     /// window, and the next ShowMainWindow builds a fresh one — so the discarded VM's workspace
     /// teardown has to start as part of this close, or the attach outlives the window that owned it.
     [Test]
@@ -453,7 +452,7 @@ public class WorkspaceNavigationTests {
         });
     }
 
-    /// Id shapes vary across the stack (found in manual QA, twice): the server hub has returned
+    /// Id shapes vary across the stack: the server hub has returned
     /// DASHED Guids, and a production daemon keys its status cache on SHORT 8-hex ids. Guids in
     /// any format normalize to "N"; every other non-blank id passes through VERBATIM so it can
     /// match whatever the daemon actually sent.
@@ -477,22 +476,6 @@ public class WorkspaceNavigationTests {
 
             await Assert.That(home.StartError).IsNull();
             await Assert.That(nav.Opened).IsEquivalentTo(new[] { expected });
-        });
-    }
-
-    /// The card click's own entry point (HomeView routes a click to this), distinct from the launch
-    /// auto-open above: no generation is involved, the click IS the current navigation.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_session_card_click_opens_that_sessions_workspace() {
-        await RunOnUiAsync(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
-            var nav = NewNav();
-            using var home = NewHome(nav, new FixedLaunchClient(), path);
-
-            home.OpenSessionRequested(Id2);
-
-            await Assert.That(nav.Vm.CurrentWorkspace!.AgentId).IsEqualTo(Id2);
         });
     }
 }

@@ -32,7 +32,7 @@
     </ItemGroup>
     <ItemGroup>
         <!-- .axaml files are auto-included as AvaloniaXaml by Avalonia's build props; plain
-             assets (the product-mark bitmap, spec §4) need an explicit AvaloniaResource entry
+             assets (the product-mark bitmap) need an explicit AvaloniaResource entry
              to ship inside the assembly's avares:// resource set. -->
         <AvaloniaResource Include="Assets\kcap-icon.png" />
     </ItemGroup>

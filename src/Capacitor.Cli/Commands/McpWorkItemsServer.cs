@@ -392,7 +392,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["work_item_id"] = new("string", "Attach directly to this work item id."),
                 ["new_title"]    = new("string", "Create a brand-new work item with this title and attach to it."),
                 ["session_id"]   = new("string", "Session id to attach. Defaults to the session this server runs in when omitted.")
-            }, []), McpToolAnnotations.Create),
+            }, []), McpToolAnnotations.Additive),
         new("get_session_work_items",
             "List the work items the current session is attached to.",
             new("object", new() {
@@ -406,7 +406,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["text"]       = new("string", "The unfinished work, as one plain-text sentence; the server accepts 12-500 characters after normalizing whitespace and case."),
                 ["session_id"] = new("string", "Session id to declare against. Defaults to the session this server runs in when omitted.")
-            }, ["text"]), McpToolAnnotations.Create),
+            }, ["text"]), McpToolAnnotations.Upsert),
 
         // The declared work-breakdown / relation surface. NOTE: no tool
         // here accepts `source` or `declared_by`. The server resolves both from the authenticated

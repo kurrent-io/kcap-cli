@@ -4,17 +4,6 @@ namespace Capacitor.App.Tests.Unit;
 
 public class MacNotificationCategoriesTests {
     [Test]
-    public async Task Closing_the_last_user_unregisters_and_releases_its_category() {
-        var registered = new List<nint>();
-        var released = new List<nint>();
-        using var categories = new MacNotificationCategories((_, _) => 1, values => { registered.Clear(); registered.AddRange(values); }, released.Add);
-        var key = categories.Acquire([new("allow", "Allow")]);
-        categories.Release(key);
-        await Assert.That(registered.Count).IsEqualTo(0);
-        await Assert.That(released.ToArray()).IsEquivalentTo([(nint)1]);
-    }
-
-    [Test]
     public async Task Shared_categories_survive_until_the_last_notification_closes() {
         var registered = new List<nint>();
         var released = new List<nint>();

@@ -523,7 +523,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                   + "('owner' (default, only you see answers), 'aggregate' (viewers see tallies, no names or text) or "
                   + "'named' (viewers see who said what)), min_responses_to_reveal, and closes_at. Without it, answers "
                   + "are an opaque blob only you can read.")
-            }, ["title"]), McpToolAnnotations.Create),
+            }, ["title"]), McpToolAnnotations.Additive),
 
         new("list_my_artefacts",
             "List the artefacts you can see, newest change first — id, title, audience, latest version and URL.",

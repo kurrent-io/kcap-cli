@@ -19,7 +19,7 @@ public class HomeViewModelTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     /// The daemon mints agent ids as Guid("N") — 32 hex digits — and a Started outcome carrying
-    /// anything else is the "launched but unopenable" case (spec §3), so every launch fixture here
+    /// anything else is the "launched but unopenable" case, so every launch fixture here
     /// uses real-shaped ids.
     const string LaunchedId = "0123456789abcdef0123456789abcdef";
     const string SecondLaunchedId = "fedcba9876543210fedcba9876543210";
@@ -460,7 +460,7 @@ public class HomeViewModelTests {
     }
 
     /// A reviewer launched into a requester's worktree reports that worktree as its RepoPath —
-    /// the menu must offer the repository, never the agent's checkout (GH #655).
+    /// the menu must offer the repository, never the agent's checkout.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_agents_worktree_path_is_listed_as_its_repository() {

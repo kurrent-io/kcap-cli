@@ -22,6 +22,64 @@ annotations for what it does, so a harness deciding from them runs reads unpromp
 write as additive or destructive rather than at the spec's worst case. The plans description names
 where the content goes, because the reviewer reads the description and never the server instructions.
 
+## A driver finds its flow without the id, and owns the harness timeout it can
+
+`start_review_flow` hands the driver its `flow_run_id` only in the reply that ends the call. A
+harness that aborts the call first — Codex at its 300 s default, or any harness a user configured
+shorter — leaves the driver with a running flow and no handle on it, and context compaction loses
+the same handle later. So the two status tools take the id as optional: without one they list the
+calling session's flows (`GET /api/flows?requesting_session_id=…&state=all`) and read the newest
+open one. Several open flows are listed rather than guessed between, since a wrong guess has the
+driver acting on another task's review. With none open the newest settled flow is read, so a run
+that failed while the driver was away reports as failed instead of "no flow". The lookup sends the
+session id the server resolved once for the start, so the two forms can never diverge; an explicit
+`session_id` is canonicalized as every other kcap MCP server does it. A server without the route
+answers 404, which the tool words as "pass the id", not as a missing flow. The session exists on
+Claude Code and Codex only: the JSON harnesses export nothing per process into the MCP child, their
+starts carry no session, and a bare call there answers the no-session error, so the guidance names
+the two harnesses rather than promising every driver a way back — a local run ledger is the way to
+cover the rest.
+
+The Codex registration carries `tool_timeout_sec = 600`. The CLI already ends every flow call under
+300 s, so the entry is not what stops Codex aborting today; it is what stops a per-client budget, or
+a user-shortened Codex default, from bringing the abort back silently. It goes through the ordinary
+heal lane: an entry kcap wrote is rewritten to the new shape on the next setup or refresh, and an
+entry the user edited — a timeout of their own included, as the ownership fingerprint covers
+integer values — is left as it is. The static plugin descriptor is untouched: whether Codex reads
+the key from plugin JSON is unverified, and an unknown key there could cost the whole plugin.
+
+The descriptions of the four blocking tools and both flow skills say the rest before it happens: the
+call blocks for minutes, a harness abort means the flow is still running, and the recovery is the
+status tool with `wait: true` — not a second start, and not an investigation, which is where a
+driver spent its turn when it had only the harness's own error text to go on.
+## The cloud terminal mirror has its own lane per agent
+
+An agent's PTY is drained by one loop that feeds every surface. When that loop awaited a shared
+cloud queue, a slow server — or another agent's output filling the queue — froze `kcap agent
+attach` and the desktop app along with the web mirror. Each registered agent now has a
+`CloudTerminalSink`: the read loop hands it chunks without waiting, and its own pump sends them.
+
+The mirror is a cursor-addressed byte stream, so a dropped chunk garbles everything after it, and
+the hub protocol has no resynchronisation message. The sink repairs the mirror in-band instead: a
+terminal reset (`ESC c`) followed by the daemon's 2 MB output ring, on the same ordered lane as
+live output. That is what a local client gets by reattaching, with the same limits — the ring can
+begin mid-sequence, and anything painted before its horizon and never repainted is gone. The
+backlog budget equals the ring's size because past it a replay is cheaper than the backlog.
+
+A replay runs to completion even if the backlog overflows again behind it; abandoning it would
+let an agent that outruns the transport reset the mirror forever without ever painting it. Only a
+send that keeps failing, or a connection change, abandons a replay.
+
+Every re-registration asks for a resync. A chunk written just before a connection dies can be lost
+with no error, and the server drops output from a connection that has not re-registered the agent,
+so the pump waits for full readiness and then replays. The earlier reconnect replay garbled the
+terminal because it had no reset ahead of it and raced the live sends; this one has neither flaw.
+
+The sink stops before an agent finalizes, not after: the server deletes an agent's terminal buffer
+when it unregisters, so output sent later is discarded. Ordered delivery still rests on the server
+handling one connection's messages in arrival order, which holds by the shape of its hub method
+rather than by any guarantee — the daemon's per-agent sends are exactly as serial as before.
+
 ## A flows tool call ends before the shortest harness timeout
 
 A start holds its tool call open while the first round runs, and the reply it ends on — the round
@@ -1674,6 +1732,13 @@ daemon graph, no tray) and hands the outcome channel to the normal graph's consu
 `OutcomeChannel.TransferConsumer` once the sign-in lane cancels/quiesces, closing auto-actions
 permanently past the quiesce cap (decision 2/§6a). The §7 streaming `IProcessRunner` backs the
 Import step's live, bounded-tail log pane.
+
+The wizard's workspace discovery is single sign-on only, matching the CLI's default: a server on
+GitHub App auth is reached by name or URL, where its own `/auth/config` picks the flow.
+`SignInStepViewModel` is hosted twice, and what follows a commit is the host's: the step raises
+`Completed` and takes its success detail from whoever composed it, so the wizard moves on after
+`SuccessHold` while the re-auth dialog refreshes and closes. `Completed` waits for a consent
+quarantine notice to be acknowledged, and `TryAdvanceFrom` refuses once the user has left the step.
 
 ## Session workspace terminal
 

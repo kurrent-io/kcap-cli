@@ -5,8 +5,10 @@ namespace Capacitor.Cli.Core.Mcp;
 /// harness has a per-server trust knob (see <see cref="McpConfigShape.Trust"/>): every tool either
 /// reads, or writes only to the user's own Capacitor workspace, the destination the session hooks
 /// already post to unprompted. kcap-flows launches a paid hosted agent and kcap-artefacts can widen
-/// who may open a page, so both keep prompting.</summary>
-public sealed record KcapMcpServer(string Name, string[] Args, bool NeedsProjectCwd, string? Description, bool AutoApprove = false);
+/// who may open a page, so both keep prompting. <paramref name="ToolTimeout"/> is how long one of
+/// the server's tool calls may block; a harness with a per-server tool timeout has it written into
+/// the registration, so the harness never aborts a call the server itself bounds.</summary>
+public sealed record KcapMcpServer(string Name, string[] Args, bool NeedsProjectCwd, string? Description, bool AutoApprove = false, TimeSpan? ToolTimeout = null);
 
 /// <summary>The single source of truth for the kcap MCP servers. Every writer
 /// (Codex TOML, the JSON harnesses, the bundled `.mcp.json`) derives from this.</summary>
@@ -24,8 +26,11 @@ public static class KcapMcpServers {
             "PR review context tools — query implementation session transcripts.", AutoApprove: true),
         new("kcap-sessions", ["mcp", "sessions"], NeedsProjectCwd: true,
             "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided). Repo-aware; reach for it before git log or grep for history questions.", AutoApprove: true),
+        // A start or round call holds the tool call open while the reviewer works, bounded by the
+        // flows server at under 5 minutes; the registration's timeout sits well above that bound.
         new("kcap-flows",    ["mcp", "flows"],    NeedsProjectCwd: true,
-            "Structured AI agent flows — launches a SEPARATE hosted participant agent; requires login + a running daemon."),
+            "Structured AI agent flows — launches a SEPARATE hosted participant agent; requires login + a running daemon.",
+            ToolTimeout: TimeSpan.FromMinutes(10)),
         new("kcap-memory",   ["mcp", "memory"],   NeedsProjectCwd: true,
             "Team memory — search, read, and save durable learnings.", AutoApprove: true),
         new("kcap-workitems", ["mcp", "workitems"], NeedsProjectCwd: true,

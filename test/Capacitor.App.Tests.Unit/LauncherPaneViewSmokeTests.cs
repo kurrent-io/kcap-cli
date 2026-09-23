@@ -1,5 +1,3 @@
-using System.Collections;
-using System.Collections.Specialized;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Avalonia;
@@ -7,23 +5,20 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
-using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
-using Capacitor.Cli.Core.LocalIpc;
-using DynamicData;
 using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Headless rendering acceptance for the Home tab. HomeView is a UserControl,
+/// Headless rendering acceptance for the launcher pane. LauncherPaneView is a UserControl,
 /// not a Window (unlike MainWindow) — each test hosts it inside a plain Window purely to give
 /// headless something to Show(); session setup and control lookup otherwise copy
 /// MainWindowSmokeTests exactly (see that file's own header comment).
-public class HomeViewSmokeTests {
+public class LauncherPaneViewSmokeTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     /// Real-shaped agent ids (Guid("N"), 32 hex digits): a Started outcome carrying anything else
@@ -41,7 +36,7 @@ public class HomeViewSmokeTests {
         }
     }
 
-    static (HomeView View, HomeViewModel Vm, FakeDaemonClientService Service, RecordingLaunchClient Launch, TempDir Tmp) Build() {
+    static (HomeViewModel Vm, FakeDaemonClientService Service, RecordingLaunchClient Launch, TempDir Tmp) Build() {
         var tmp = TempDir.WithPathTo("app-state.json", out var path);
         var service = new FakeDaemonClientService();
         // Connected steady state: StartCommand's canExecute gates on daemon + server both up.
@@ -49,23 +44,18 @@ public class HomeViewSmokeTests {
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         var launch = new RecordingLaunchClient();
         var vm = new HomeViewModel(service, new AppStateStore(path), launch, () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
-        return (new HomeView { DataContext = vm }, vm, service, launch, tmp);
+        return (vm, service, launch, tmp);
     }
 
     static T? Find<T>(Window window, string name) where T : Control =>
         window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
-
-    // ItemsControl.ItemsSource is an IEnumerable?; Sessions (ReadOnlyObservableCollection<T>) is
-    // also an ICollection, so this reads the bound source's count directly — no dependency on a
-    // realized visual tree / layout pass.
-    static int ItemCount(ItemsControl items) => items.ItemsSource is ICollection c ? c.Count : -1;
 
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Headline_keeps_a_fixed_question_and_a_repo_subtitle() {
         var (question, subtitleBefore, subtitleVisibleBefore, subtitleAfter, subtitleVisibleAfter) =
             await AvaloniaSession.DispatchAsync(async () => {
-                var (_, vm, _, _, tmp) = Build();
+                var (vm, _, _, tmp) = Build();
                 using var _tmp = tmp;
                 var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
                 window.Show();
@@ -102,7 +92,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Goal_box_uses_the_embedded_composer_line_box() {
         var (size, line, tracking) = await AvaloniaSession.DispatchAsync(() => {
-            var (_, vm, _, _, tmp) = Build();
+            var (vm, _, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
             window.Show();
@@ -126,7 +116,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task The_notice_and_sign_in_button_follow_the_server_connection() {
         var (noticeBefore, signInBefore, noticeAfter, noticeText, signInAfter, busyAfter) = await AvaloniaSession.DispatchAsync(() => {
-            var (_, vm, service, _, tmp) = Build();
+            var (vm, service, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
             window.Show();
@@ -199,7 +189,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Connection_banner_overlays_without_shifting_the_composer() {
         var (yBefore, yAfter, bannerVisible, bannerAbove) = await AvaloniaSession.DispatchAsync(() => {
-            var (_, vm, service, _, tmp) = Build();
+            var (vm, service, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
             window.Show();
@@ -232,7 +222,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task PermissionChip_shows_for_claude_and_hides_for_other_vendors() {
         var (forClaude, forCodex) = await AvaloniaSession.DispatchAsync(async () => {
-            var (_, vm, _, _, tmp) = Build();
+            var (vm, _, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
             window.Show();
@@ -260,7 +250,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task StartButton_carries_an_accessible_name() {
         var name = await AvaloniaSession.DispatchAsync(() => {
-            var (_, vm, _, _, tmp) = Build();
+            var (vm, _, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
             window.Show();
@@ -284,7 +274,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task StartButton_tooltip_explains_disabled_without_repository() {
         var (tipBefore, tipAfter, showOnDisabled) = await AvaloniaSession.DispatchAsync(async () => {
-            var (_, vm, _, _, tmp) = Build();
+            var (vm, _, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
             window.Show();
@@ -313,7 +303,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task StartButton_is_enabled_only_once_a_repository_is_selected() {
         var (enabledBefore, enabledAfter) = await AvaloniaSession.DispatchAsync(async () => {
-            var (_, vm, _, _, tmp) = Build();
+            var (vm, _, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
             window.Show();
@@ -342,7 +332,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Enter_in_the_goal_box_starts_when_Start_can_run() {
         var (goalAfter, startCount) = await AvaloniaSession.DispatchAsync(async () => {
-            var (_, vm, _, launch, tmp) = Build();
+            var (vm, _, launch, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
             window.Show();
@@ -383,7 +373,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Enter_without_a_repository_does_not_start() {
         var (goalAfter, startCount) = await AvaloniaSession.DispatchAsync(() => {
-            var (_, vm, _, launch, tmp) = Build();
+            var (vm, _, launch, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
             window.Show();
@@ -417,7 +407,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Shift_Enter_in_the_goal_box_inserts_a_newline_and_does_not_start() {
         var (goalText, acceptsReturn, startCount) = await AvaloniaSession.DispatchAsync(async () => {
-            var (_, vm, _, launch, tmp) = Build();
+            var (vm, _, launch, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
             window.Show();
@@ -455,7 +445,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task StartErrorText_visibility_follows_StartError() {
         var (visibleBefore, visibleAfterFailure, errorMessage, visibleAfterSuccess) = await AvaloniaSession.DispatchAsync(async () => {
-            var (_, vm, _, launch, tmp) = Build();
+            var (vm, _, launch, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
             window.Show();
@@ -488,128 +478,13 @@ public class HomeViewSmokeTests {
         await Assert.That(visibleAfterSuccess).IsFalse();
     }
 
-    /// Regression guard for HomeViewModel's ObserveOn before SortAndBind. In production the
-    /// Agents cache is mutated on the daemon client's own pump thread and SortAndBind writes
-    /// straight into the collection SessionCards is bound to, so the assertion that matters is
-    /// WHICH THREAD the bound collection is mutated on. "Does not throw" does not work here:
-    /// measured with the ObserveOn deleted, the off-thread push raises nothing and the container
-    /// still realizes — a bare Dispatcher.VerifyAccess and a control property set from the same
-    /// background thread DO throw, so the harness enforces affinity; this path simply defers its
-    /// UI work. Thread identity is what distinguishes marshalled from unmarshalled. Deliberately
-    /// NOT wrapped in WithImmediateRxScheduler — that pins the scheduler to Immediate, which turns
-    /// the ObserveOn under test into a no-op.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task An_agent_arriving_off_the_UI_thread_reaches_the_grid_on_the_UI_thread() {
-        var (mutatedOnUiThread, realizedCount, failure) = await AvaloniaSession.DispatchAsync(async () => {
-            var (view, vm, service, _, tmp) = Build();
-            using var _tmp = tmp;
-            var window = new Window { Content = view };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var sessionCards = Find<ItemsControl>(window, "SessionCards")!;
-            // ReadOnlyObservableCollection exposes CollectionChanged only through the interface.
-            bool? onUiThread = null;
-            ((INotifyCollectionChanged)vm.Sessions).CollectionChanged += (_, _) => onUiThread ??= Dispatcher.UIThread.CheckAccess();
-
-            // Captured rather than propagated, so a thread-affinity throw arrives as a named
-            // assertion failure instead of a bare rethrow out of the dispatch.
-            Exception? thrown = null;
-            try {
-                await Task.Run(() => service.Agents.AddOrUpdate(new AgentStatusDto(
-                    "a", "agent", "claude", "/repos/kcap-cli", "Running", null, null, null, DateTime.UtcNow, null, null)));
-            } catch (Exception ex) {
-                thrown = ex;
-            }
-
-            Dispatcher.UIThread.RunJobs();
-            var count = ItemCount(sessionCards);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            vm.Dispose();
-            return (onUiThread, count, thrown?.ToString());
-        });
-
-        await Assert.That(failure).IsNull();
-        await Assert.That(mutatedOnUiThread).IsTrue();
-        await Assert.That(realizedCount).IsEqualTo(1);
-    }
-
-    /// The card is a Button whose Click carries its own id to the window. Needs a realized visual —
-    /// the handler lives in the item template.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Clicking_a_session_card_asks_to_open_that_session() {
-        var requested = await AvaloniaSession.DispatchAsync(() => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
-            var service = new FakeDaemonClientService();
-            var opened = new List<string>();
-            var vm = new HomeViewModel(
-                service, new AppStateStore(path), new RecordingLaunchClient(),
-                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, openSession: opened.Add);
-            var window = new Window { Content = new HomeView { DataContext = vm } };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            service.Agents.AddOrUpdate(new AgentStatusDto(
-                SecondLaunchedId, "agent", "claude", "/repos/kcap-cli", "Running", null, null, null, DateTime.UtcNow, null, null));
-            Dispatcher.UIThread.RunJobs();
-
-            var card = window.GetVisualDescendants().OfType<Button>().First(b => b.Classes.Contains("sessionCard"));
-            card.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            vm.Dispose();
-            return opened.ToList();
-        });
-
-        await Assert.That(requested).IsEquivalentTo([SecondLaunchedId]);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task SessionCards_item_count_tracks_the_agent_cache() {
-        var (countEmpty, countAfterOne, countAfterTwo) = await AvaloniaSession.DispatchAsync(() => {
-            var (view, vm, service, _, tmp) = Build();
-            using var _tmp = tmp;
-            var window = new Window { Content = view };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var sessionCards = Find<ItemsControl>(window, "SessionCards")!;
-            var empty = ItemCount(sessionCards);
-
-            service.Agents.AddOrUpdate(new AgentStatusDto(
-                "a", "agent", "claude", "/repos/kcap-cli", "Running", null, null, null, DateTime.UtcNow, null, null));
-            Dispatcher.UIThread.RunJobs();
-            var afterOne = ItemCount(sessionCards);
-
-            service.Agents.AddOrUpdate(new AgentStatusDto(
-                "b", "agent", "codex", "/repos/other", "Running", null, null, null, DateTime.UtcNow, null, null));
-            Dispatcher.UIThread.RunJobs();
-            var afterTwo = ItemCount(sessionCards);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            vm.Dispose();
-            return (empty, afterOne, afterTwo);
-        });
-
-        await Assert.That(countEmpty).IsEqualTo(0);
-        await Assert.That(countAfterOne).IsEqualTo(1);
-        await Assert.That(countAfterTwo).IsEqualTo(2);
-    }
-
     /// Pins that the goal box draws no ring of its own on focus: the card is its boundary, so
     /// the theme's focused border and fill stay off.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_focused_goal_box_draws_no_ring_inside_its_card() {
         var (thickness, transparent) = await AvaloniaSession.DispatchAsync(() => {
-            var (_, vm, _, _, tmp) = Build();
+            var (vm, _, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 800, Height = 600 };
             window.Show();
@@ -754,7 +629,7 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task AttachButton_is_disabled_with_the_hint_when_attaching_is_not_available() {
         await AvaloniaSession.RunOnUiAsync(async () => {
-            var (_, vm, _, _, tmp) = Build();
+            var (vm, _, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
             window.Show();

@@ -4,8 +4,8 @@ using System.Reactive.Subjects;
 namespace Capacitor.App.Services;
 
 /// The app's server-side clients as one set with one cleanup. Ownership is here: the holder takes
-/// the two clients and owns the subject itself, with the cleanup task memoized, so the
-/// startup-failure and shutdown paths can both reach it, sequentially or overlapping, and nothing
+/// the launch client and the read sources and owns the subject itself, with the cleanup task
+/// memoized, so the startup-failure and shutdown paths can both reach it, sequentially or overlapping, and nothing
 /// is disposed twice. The sequence itself is the static below, which is deliberately not idempotent.
 public sealed class ServerClients : IAsyncDisposable {
     readonly Subject<Unit> _signIn = new();
