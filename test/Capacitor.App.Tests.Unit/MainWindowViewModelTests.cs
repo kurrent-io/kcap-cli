@@ -85,6 +85,17 @@ public class MainWindowViewModelTests {
 
     /// A real WorkspaceViewModel over the fake service and scripted attach/surface fakes — same
     /// pieces WorkspaceNavigationTests.NewNav wires, just without its Nav bookkeeping.
+    /// A window wired to a launcher pane: the Start/Reconnect buttons live on the pane, so their
+    /// visibility is read where LauncherPaneView binds it.
+    static (MainWindowViewModel Vm, HomeViewModel Home, TempDir Tmp) WithLauncher(FakeDaemonClientService service) {
+        var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var home = new HomeViewModel(
+            service, new AppStateStore(path), new UnusedLaunchClient(),
+            () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, home: home);
+        return (vm, home, tmp);
+    }
+
     static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, string agentId) {
         var (actions, _) = NewActions(service);
         var attach = new FakeTerminalAttachClientFactory();
@@ -105,9 +116,7 @@ public class MainWindowViewModelTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
             await Assert.That(vm.DaemonName).IsEqualTo("daemon-a");
-            await Assert.That(vm.DaemonVersion).IsEqualTo("1.2.3");
             await Assert.That(vm.ServerUrl).IsEqualTo("http://localhost:9999");
-            await Assert.That(vm.ConnectionText).IsEqualTo("connected"); // raw wire value, unchanged
             await Assert.That(vm.ConnectionDisplay).IsEqualTo("Connected"); // new presentation projection
         });
     }
@@ -313,7 +322,6 @@ public class MainWindowViewModelTests {
 
             service.SnapshotsSubject.OnNext(Snap(version: "1.2.3+abc"));
             await Assert.That(vm.VersionDisplay).IsEqualTo("1.2.3");
-            await Assert.That(vm.DaemonVersion).IsEqualTo("1.2.3+abc");
         });
     }
 
@@ -325,32 +333,36 @@ public class MainWindowViewModelTests {
     public async Task Start_and_reconnect_visibility_are_mutually_exclusive() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null));
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsFalse();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsFalse();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            await Assert.That(vm.StartVisible).IsTrue();
-            await Assert.That(vm.RetryVisible).IsFalse();
+            await Assert.That(home.DaemonStartVisible).IsTrue();
+            await Assert.That(home.DaemonRetryVisible).IsFalse();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null));
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task StartVisible_stays_true_while_a_start_is_in_flight_unlike_CanExecute() {
+    public async Task The_start_button_stays_visible_while_a_start_is_in_flight_unlike_CanExecute() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
 
@@ -365,7 +377,7 @@ public class MainWindowViewModelTests {
 
             var execute = vm.StartDaemonCommand.Execute().ToTask();
             await Assert.That(startCanExecute).IsFalse(); // command disabled while in flight...
-            await Assert.That(vm.StartVisible).IsTrue();  // ...but the button itself stays visible
+            await Assert.That(home.DaemonStartVisible).IsTrue();  // ...but the button itself stays visible
 
             gate.SetResult();
             await execute;
@@ -443,7 +455,9 @@ public class MainWindowViewModelTests {
     public async Task Incompatible_renders_neutral_skew_message() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
             using var activation = vm.Activator.Activate();
 
             var startCanExecute = false;
@@ -457,8 +471,8 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.Reason!).Contains("App and daemon are incompatible");
             await Assert.That(vm.Reason!).Contains("Reconnect");
             await Assert.That(vm.Reason!).DoesNotContain("daemon_incompatible");
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
             await Assert.That(startCanExecute).IsFalse();
             await Assert.That(retryCanExecute).IsTrue();
         });
@@ -473,7 +487,7 @@ public class MainWindowViewModelTests {
             using var activation = vm.Activator.Activate();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            await Assert.That(vm.Reason).IsEqualTo(MainWindowViewModel.UnreachableMessage);
+            await Assert.That(vm.Reason).IsEqualTo(HomeViewModel.DaemonDownNotice);
             await Assert.That(vm.Reason!).DoesNotContain("daemon_unreachable");
 
             service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
@@ -528,13 +542,15 @@ public class MainWindowViewModelTests {
     public async Task Reconnect_sets_reconnecting_then_settles_if_still_unreachable() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
             using var activation = vm.Activator.Activate();
 
             // Reconnect is offered while connecting or skewed — not while Start owns the down case.
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null));
             await Assert.That(vm.StartMessage).IsNull();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
 
             var execute = vm.RetryCommand.Execute().ToTask();
             await Assert.That(vm.StartMessage).IsEqualTo(MainWindowViewModel.ReconnectingMessage);

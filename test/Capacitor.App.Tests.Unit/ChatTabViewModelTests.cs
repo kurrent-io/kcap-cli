@@ -172,7 +172,6 @@ public class ChatTabViewModelTests {
             await h.PushAsync(Dto(path));
             var call = Group(h.Chat, 0).Calls.Single();
             await Assert.That(call.Outcome).IsEqualTo(ToolOutcome.Done);
-            await Assert.That(call.OutcomeGlyph).IsEqualTo("✓");
 
             File.AppendAllText(path, ToolCallLine + "\n" + ToolErrorLine + "\n" + ToolErrorLine.Replace("t1", "unknown") + "\n");
             await h.TickAsync();
@@ -769,7 +768,6 @@ public class ChatTabViewModelTests {
             var bash = Group(h.Chat, 0).Calls[0];
             var read = Group(h.Chat, 0).Calls[1];
             await WaitUntilAsync(() => bash.IsAwaitingPermission, what: "the card-first mark");
-            await Assert.That(bash.OutcomeGlyph).IsEqualTo("?");
             await Assert.That(read.IsAwaitingPermission).IsFalse();
 
             h.Permissions.Remove("r1");
@@ -1719,7 +1717,6 @@ public class ChatTabViewModelTests {
             await Assert.That(own.IsUnconfirmed).IsFalse();
             var foreign = chat.QueuedMessages.Single(q => q.IsForeign);
             await Assert.That(foreign.Text).IsEqualTo("and this");
-            await Assert.That(foreign.Sender).IsEqualTo("u2");
             await Assert.That(chat.QueueSummary).IsEqualTo("2 messages queued");
 
             queue.OnNext([Item("do it", mine, sender: "u1")]);

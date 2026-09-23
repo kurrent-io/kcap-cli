@@ -77,7 +77,7 @@ public class RemoteSessionViewModelTests {
             card.AgentId = "a1";
             h.Permissions.Add(card);
 
-            await WaitUntilAsync(() => vm.Cards.HasPendingCards, what: "the card");
+            await WaitUntilAsync(() => vm.Chat.Cards.HasPendingCards, what: "the card");
             await Assert.That(vm.RepoLabelText).Contains("work-mac");
             await vm.TeardownAsync();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "released on teardown");

@@ -15,14 +15,10 @@ namespace Capacitor.App.ViewModels;
 /// Projects IDaemonClientService.Status/Snapshots into display text and drives Start/Reconnect.
 /// Display projections are activation-scoped (WhenActivated). StartDaemonCommand/RetryCommand and
 /// their canExecute pipelines are built in the constructor so they exist pre-activation.
-/// StartVisible/RetryVisible track the same predicates (one primary action: Start when down;
-/// Reconnect when connecting or skewed). The service outlives this VM and owns its subjects.
+/// The service outlives this VM and owns its subjects.
 public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel {
     const string IncompatibleReason = "daemon_incompatible";
     const string UnreachableReason  = "daemon_unreachable";
-
-    /// User-facing copy when the daemon isn't attached. Never the wire token (daemon_unreachable).
-    internal static string UnreachableMessage => HomeViewModel.DaemonDownNotice;
 
     /// Shown the moment Start daemon is pressed, before the lifecycle/CLI work returns, so a
     /// click is never silent even when the start action itself has nothing further to say.
@@ -55,21 +51,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _daemonName;
     public string DaemonName => _daemonName?.Value ?? "";
 
-    ObservableAsPropertyHelper<string>? _daemonVersion;
-    public string DaemonVersion => _daemonVersion?.Value ?? "";
-
     // Compact rail label: the daemon semver alone — build metadata stays off the line.
     ObservableAsPropertyHelper<string>? _versionDisplay;
     public string VersionDisplay => _versionDisplay?.Value ?? "";
 
     ObservableAsPropertyHelper<string>? _serverUrl;
     public string ServerUrl => _serverUrl?.Value ?? "";
-
-    // The daemon's OWN upstream connection to the Capacitor server (DaemonInfoDto.Connection):
-    // connected|connecting|reconnecting|disconnected. Distinct from State/Reason below, which
-    // are this app's local attach status to the daemon.
-    ObservableAsPropertyHelper<string>? _connectionText;
-    public string ConnectionText => _connectionText?.Value ?? "";
 
     // Single-word presentation of the OVERALL connection situation (local attach State first,
     // falling back to the daemon's own upstream Connection only once State is Connected — see
@@ -200,14 +187,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> StartDaemonCommand { get; }
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
 
-    // Visibility tracks "action is meaningful", not CanExecute — CanExecute also ANDs "not
-    // executing", which would hide the button mid-attempt instead of only disabling it.
-    readonly ObservableAsPropertyHelper<bool> _startVisible;
-    public bool StartVisible => _startVisible.Value;
-
-    readonly ObservableAsPropertyHelper<bool> _retryVisible;
-    public bool RetryVisible => _retryVisible.Value;
-
     readonly TimeProvider _time;
 
     /// <param name="shutdownToken">
@@ -330,16 +309,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             () => InvokeStartAsync(start, shutdownToken), canStart);
         RetryCommand = ReactiveCommand.CreateFromTask(InvokeRetryAsync, canRetry);
 
-        // Independent subscriptions to the SAME canStart/canRetry state predicates the commands
-        // above were built from (service.Status is hot/multicast, so a second subscriber replays
-        // the current value same as the first) — visibility that never disagrees with why a button
-        // is enabled, without inheriting CanExecute's "not currently executing" hide-while-running
-        // behavior. Ctor-scoped for the same reason as the commands themselves.
-        _startVisible = canStart.ToProperty(this, x => x.StartVisible, initialValue: false);
-        _retryVisible = canRetry.ToProperty(this, x => x.RetryVisible, initialValue: false);
-
-        // Launcher banner owns the chrome; share the same Start/Reconnect commands and start-message
-        // lane so the pane never drifts from what MainWindow already drives.
+        // The launcher banner owns the Start/Reconnect buttons. It takes the same commands and the
+        // raw canStart/canRetry predicates, not CanExecute: CanExecute also ANDs "not executing",
+        // which would hide a button mid-attempt instead of only disabling it. service.Status is
+        // hot/multicast, so this second subscriber replays the current value like the first.
         home?.AttachDaemonRecovery(
             StartDaemonCommand, RetryCommand, canStart, canRetry, _startMessageChanges);
 
@@ -351,20 +324,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.DaemonName, "")
                 .DisposeWith(disposables);
 
-            _daemonVersion = snapshots.Select(s => s.Daemon.Version)
-                .ToProperty(this, x => x.DaemonVersion, "")
-                .DisposeWith(disposables);
-
             _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))
                 .ToProperty(this, x => x.VersionDisplay, "")
                 .DisposeWith(disposables);
 
             _serverUrl = snapshots.Select(s => s.Daemon.ServerUrl)
                 .ToProperty(this, x => x.ServerUrl, "")
-                .DisposeWith(disposables);
-
-            _connectionText = snapshots.Select(s => s.Daemon.Connection)
-                .ToProperty(this, x => x.ConnectionText, "")
                 .DisposeWith(disposables);
 
             // Seeded with "" so this fires even before the FIRST snapshot ever arrives (a daemon

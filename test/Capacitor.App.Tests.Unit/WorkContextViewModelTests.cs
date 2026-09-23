@@ -879,7 +879,7 @@ public class WorkContextViewModelTests {
             h.Source.Enqueue(ReadyWith(Row("w1", "t"), withIssue), ReadyWith(Row("w1", "t"), untitled), ReadyWith(Row("w1", "t"), Item()));
             await h.PushAsync(Dto());
 
-            await Assert.That(h.Vm.HasIssue).IsTrue();
+            await Assert.That(h.Vm.Issue).IsNotNull();
             await Assert.That(h.Vm.HasMultipleIssues).IsTrue();
             await Assert.That(h.Vm.Issues.Select(i => i.Key)).IsEquivalentTo(new[] { "#777", "#778" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.SeparateIssue!.Key).IsEqualTo("#777");
@@ -896,7 +896,7 @@ public class WorkContextViewModelTests {
 
             await h.TickAsync();
             await Assert.That(h.Vm.Issue).IsNull();
-            await Assert.That(h.Vm.HasIssue).IsFalse();
+            await Assert.That(h.Vm.Issue).IsNull();
             await h.Vm.TeardownAsync();
         });
     }
@@ -1446,7 +1446,7 @@ public class WorkContextViewModelTests {
                 var blocked = Topology() with { BlockedBy = [new WorkItemRefDto { WorkItemId = "b1", Title = "Blocker" }] };
                 h.Source.Enqueue(ReadyWith(Row("w1", "WK-1 — t"), item, blocked, summary), WorkContextRead.Of(kind));
                 await h.PushAsync(Dto());
-                await Assert.That(h.Vm.HasIssue).IsTrue();
+                await Assert.That(h.Vm.Issue).IsNotNull();
                 await h.TickAsync();
 
                 await Assert.That(h.Vm.Key).IsNull();

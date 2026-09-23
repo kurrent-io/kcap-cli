@@ -83,7 +83,7 @@ public class RemoteSessionViewSmokeTests {
                 DateTimeOffset.UtcNow);
             card.AgentId = "a1";
             host.Permissions.Add(card);
-            await host.SettleUntilAsync(() => host.Vm.Cards.HasPendingCards, "the card");
+            await host.SettleUntilAsync(() => host.Vm.Chat.Cards.HasPendingCards, "the card");
 
             await Assert.That(chat.GetVisualDescendants().OfType<Border>().Any(b => b.Name == "AcpQuestionCard")).IsTrue();
             var options = chat.GetVisualDescendants().OfType<Button>()

@@ -59,7 +59,6 @@ public class ToolGroupItemTests {
             await Assert.That(group.ShowsKindChip).IsTrue();
             await Assert.That(group.KindChip).IsEqualTo("Command");
             await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
-            await Assert.That(group.LoneCall).IsSameReferenceAs(call);
             await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { call });
         });
     }
@@ -157,21 +156,18 @@ public class ToolGroupItemTests {
     }
 
     [Test]
-    public async Task A_call_glyph_shows_the_question_mark_only_while_running_and_awaiting() {
+    public async Task A_call_awaiting_permission_is_neither_running_nor_settled() {
         var call = Call("Bash", ToolCategory.Command);
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("");
         await Assert.That(call.IsRunning).IsTrue();
         await Assert.That(call.HasDetail).IsFalse();
         call.IsAwaitingPermission = true;
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("?");
         await Assert.That(call.IsSettled).IsFalse();
         await Assert.That(call.IsRunning).IsFalse();
         call.Outcome = ToolOutcome.Done;
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("✓");
         await Assert.That(call.IsSettled).IsTrue();
         await Assert.That(call.IsRunning).IsFalse();
         call.IsAwaitingPermission = false;
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("✓");
+        await Assert.That(call.IsSettled).IsTrue();
     }
 
     [Test]
