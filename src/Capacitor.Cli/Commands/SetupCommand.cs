@@ -1627,7 +1627,7 @@ sealed class SetupCommand(
         var result = await facades.Create(provisioner: null)
             .LoginAsync(serverUrl, forceDevice, activeProfile, CancellationToken.None, adoptServer: true);
 
-        if (result is not AuthResult.Committed) {
+        if (result is not AuthResult.Committed { CredentialSaved: true }) {
             await Console.Error.WriteLineAsync("  Login failed.");
 
             return 1;
@@ -2103,6 +2103,10 @@ sealed class SetupCommand(
         }
 
         switch (result) {
+            case AuthResult.Committed { CredentialSaved: false }:
+                AnsiConsole.MarkupLine("  [red]✗[/] Sign-in could not be saved.");
+
+                return null;
             case AuthResult.Committed committed: {
                 var cfg    = await AppConfig.LoadProfileConfig(config);
                 var active = cfg.Profiles.GetValueOrDefault(cfg.ActiveProfile);

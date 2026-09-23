@@ -408,4 +408,56 @@ public class CommitBoundaryTests {
         await Assert.That(ConfigMutator.LoadPure(ConfigPath).Profiles["eventuous"].AuthProvider!.Provider)
             .IsEqualTo(AuthProvider.WorkOS);
     }
+
+    [Test]
+    public async Task A_login_paused_before_its_token_save_does_not_revive_a_removed_profile() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            Profiles = new Dictionary<string, Profile> { ["acme"] = new() { ServerUrl = "https://acme.kcap.ai" } }
+        });
+        var store  = NewTokenStore(Config.Root);
+        var tokens = new StoredTokens {
+            AccessToken = "at", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), GitHubUsername = "alice",
+            Provider = AuthProvider.GitHubApp
+        };
+
+        var request = new CommitRequest(
+            [new AuthIdentity("acme", "https://acme.kcap.ai:443")], AuthProvider.GitHubApp, "acme", "https://acme.kcap.ai:443",
+            ConfigMutation: null,
+            PublishTokens: async saved => {
+                // Another process removes the profile between the config commit and this save.
+                await ConfigMutator.MutateAsync(Config.Root, c => c with { Profiles = new Dictionary<string, Profile>() });
+                var outcome = await store.SaveGuardedAsync("acme", tokens, cfg => cfg.Profiles.ContainsKey("acme"), CancellationToken.None);
+                if (outcome == GuardedWriteOutcome.Written) saved();
+                return "alice";
+            });
+
+        var result = await CommitBoundary.CommitAsync(Config.Root, request, null, new RecordingAuthProgress(), CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsFalse();
+        await Assert.That(TokenFileExists("acme")).IsFalse();
+    }
+
+    [Test]
+    public async Task GitHub_discovery_leaves_the_outgoing_profiles_legacy_credential_in_its_own_file() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "old",
+            Profiles = new Dictionary<string, Profile> { ["old"] = new() { ServerUrl = "https://old.example" } }
+        });
+        var legacyPath = Config.PathTo("tokens.json");
+        await File.WriteAllTextAsync(legacyPath, System.Text.Json.JsonSerializer.Serialize(
+            new StoredTokens { AccessToken = "legacy", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), GitHubUsername = "old-user", Provider = AuthProvider.GitHubApp },
+            CapacitorJsonContext.Default.StoredTokens));
+        using var handler = GitHubDiscoveryScript();
+        var facade = NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst());
+
+        var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(ReadConfig().ActiveProfile).IsEqualTo("acme");
+        await Assert.That(File.Exists(legacyPath)).IsFalse();
+        await Assert.That((await NewTokenStore(Config.Root).LoadAsync("old"))!.GitHubUsername).IsEqualTo("old-user");
+    }
+
+    ProfileConfig ReadConfig() => ConfigMutator.LoadPure(ConfigPath);
 }

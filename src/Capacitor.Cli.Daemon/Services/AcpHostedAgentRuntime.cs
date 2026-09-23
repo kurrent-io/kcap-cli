@@ -377,6 +377,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// 2, round 3). Never touched by production code.</summary>
     internal Task RuntimeTerminalForTest => _runtimeTerminal.Task;
 
+    /// <summary>Text buffered in the open chunk run, so a test can see a chunk the journal has not
+    /// flushed yet.</summary>
+    internal string? OpenRunTextForTest {
+        get { lock (_aggregationLock) return _openRunText?.ToString(); }
+    }
+
     /// <summary>Test-only: the turn-worker task, so a test can assert DisposeAsync always SIGNALS the
     /// worker to exit (channels completed / token cancelled) even when the early cancellation phase
     /// faults — otherwise it parks forever while teardown disposes its resources (Bug 1). Never touched

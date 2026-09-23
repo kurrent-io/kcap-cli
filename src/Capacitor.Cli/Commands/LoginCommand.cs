@@ -37,7 +37,7 @@ public sealed class LoginCommand(
         // OnboardingFacade.LoginAsync's adoptServer doc.
         var result = await facade.LoginAsync(baseUrl!, forceDevice, profile, CancellationToken.None, adoptServer: false);
 
-        return result is AuthResult.Committed ? 0 : 1;
+        return result is AuthResult.Committed { CredentialSaved: true } ? 0 : 1;
     }
 
     static async Task<int> HandleDiscoverAsync(
@@ -56,6 +56,9 @@ public sealed class LoginCommand(
     /// </summary>
     internal static int MapDiscoverResult(AuthResult result, IAuthProgress progress) {
         switch (result) {
+            // The façade already reported the lost credential; exit 0 would let a script read it as signed in.
+            case AuthResult.Committed { CredentialSaved: false }:
+                return 1;
             case AuthResult.Committed committed:
                 if (committed.Provider != AuthProvider.WorkOS) {
                     progress.Notice($"Logged in. Active profile: {committed.ActiveProfile}.");

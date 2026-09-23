@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -9,7 +10,8 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// A status call without a <c>flow_run_id</c> resolves the flow from the calling session: the driver
+/// A status call without a <c>flow_run_id</c> resolves the flow from the calling session, or on a
+/// harness with no session from the runs this machine recorded for the workspace: the driver
 /// that never received the id (its harness aborted the start) or lost it (context compaction) has
 /// no other way back to a run that is still working for it.
 /// </summary>
@@ -292,20 +294,192 @@ public class StatusWithoutFlowRunIdTests {
         await Assert.That(text).Contains("Pass the flow_run_id");
     }
 
+    const string Workspace = "/repo/a";
+
+    /// <summary>Recorded an hour ago, past the grace a just-started run gets for a 404.</summary>
+    void GivenRecordedRuns(params string[] newestLast) => GivenRecordedRunsAt(DateTimeOffset.UtcNow.AddHours(-1), newestLast);
+
+    void GivenRecordedRunsAt(DateTimeOffset firstAt, params string[] newestLast) {
+        var time   = new FakeTimeProvider(firstAt);
+        var ledger = new FlowRunLedger(Config.Root, time);
+        foreach (var flowRunId in newestLast) {
+            ledger.Record(flowRunId, Workspace);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+    }
+
+    Task<string> SessionlessStatusAsync(WireMockServer server, HttpClient client, JsonObject arguments, string? repoRoot = Workspace, FlowRetryClock? clock = null) =>
+        Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCallRequest("get_review_flow_status", arguments),
+            client, server.Url!, cwd: "/tmp/cwd", repoRoot: repoRoot, repoInfo: null, clock: clock, requestingSessionId: null);
+
     [Test]
-    public async Task No_session_id_anywhere_is_a_clean_error_before_any_request() {
+    public async Task No_session_and_no_recorded_run_is_a_clean_error_before_any_request() {
         using var server = WireMockServer.Start();
         using var client = new HttpClient();
 
-        var response = await Server().HandleToolCallAsync(
-            JsonNode.Parse("1")!, ToolCallRequest("get_review_flow_status", new JsonObject()),
-            client, server.Url!, cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, requestingSessionId: null);
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
 
-        var (text, isError) = Unwrap(response);
         await Assert.That(isError).IsTrue();
-        await Assert.That(text).Contains("pass session_id explicitly");
+        await Assert.That(text).Contains("no session id");
+        await Assert.That(text).Contains("this workspace");
+        await Assert.That(text).DoesNotContain(Workspace);
+        await Assert.That(text).Contains("Pass the flow_run_id");
         await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task Without_a_session_the_workspaces_recorded_open_run_is_read() {
+        using var server = WireMockServer.Start();
+        GivenRecordedRuns("flow-old", "flow-new");
+        GivenFlow(server, "flow-old", "closed");
+        GivenFlow(server, "flow-new", "waiting");
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("flow_run_id: flow-new");
+        await Assert.That(text).Contains("fix line 42");
+        await Assert.That(Gets(server, "/api/flows")).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Without_a_session_wait_polls_the_recorded_run() {
+        using var server = WireMockServer.Start();
+        GivenRecordedRuns("flow-1");
+        server.Given(Request.Create().WithPath("/api/flows/flow-1").UsingGet())
+              .InScenario("ledger-wait").WillSetStateTo("second")
+              .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                  .WithBody("""{"flow_run_id":"flow-1","status":"running","definition_id":"code-review","target_title":"t","round_count":1,"round_number":1,"round_status":"running"}"""));
+        server.Given(Request.Create().WithPath("/api/flows/flow-1").UsingGet())
+              .InScenario("ledger-wait").WhenStateIs("second")
+              .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                  .WithBody("""{"flow_run_id":"flow-1","status":"waiting","definition_id":"code-review","target_title":"t","round_count":1,"round_number":1,"round_status":"findings","last_result_kind":"findings","last_result_text":"fix line 42"}"""));
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject { ["wait"] = true }, clock: new VirtualFlowRetryClock()));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("fix line 42");
+    }
+
+    [Test]
+    public async Task Another_workspaces_runs_are_not_candidates() {
+        using var server = WireMockServer.Start();
+        GivenRecordedRuns("flow-1");
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject(), repoRoot: "/repo/b"));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("no flow started from this workspace");
+        await Assert.That(server.LogEntries.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Without_a_session_several_open_recorded_runs_are_listed() {
+        using var server = WireMockServer.Start();
+        GivenRecordedRuns("flow-1", "flow-2");
+        GivenFlow(server, "flow-1", "running");
+        GivenFlow(server, "flow-2", "waiting");
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("this workspace has 2 open flows");
+        await Assert.That(text).DoesNotContain(Workspace);
+        await Assert.That(text).Contains("flow-1");
+        await Assert.That(text).Contains("flow-2");
+    }
+
+    [Test]
+    public async Task A_recorded_run_the_server_no_longer_knows_is_skipped() {
+        using var server = WireMockServer.Start();
+        GivenRecordedRuns("flow-1", "flow-gone");
+        server.Given(Request.Create().WithPath("/api/flows/flow-gone").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(404));
+        GivenFlow(server, "flow-1", "closed");
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("flow_run_id: flow-1");
+    }
+
+    [Test]
+    public async Task An_older_open_run_behind_many_newer_settled_ones_is_still_found() {
+        using var server = WireMockServer.Start();
+        var settled = Enumerable.Range(1, 8).Select(i => $"flow-settled-{i}").ToArray();
+        GivenRecordedRuns(["flow-open", ..settled]);
+        GivenFlow(server, "flow-open", "waiting");
+        foreach (var flowRunId in settled) GivenFlow(server, flowRunId, "closed");
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("flow_run_id: flow-open");
+    }
+
+    [Test]
+    public async Task A_just_recorded_run_the_server_cannot_read_yet_is_a_retry_not_a_skip() {
+        using var server = WireMockServer.Start();
+        GivenRecordedRunsAt(DateTimeOffset.UtcNow.AddHours(-1), "flow-older");
+        GivenRecordedRunsAt(DateTimeOffset.UtcNow, "flow-just-started");
+        GivenFlow(server, "flow-older", "waiting");
+        server.Given(Request.Create().WithPath("/api/flows/flow-just-started").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(404));
+        using var client = new HttpClient();
+
+        var (text, isError) = Unwrap(await SessionlessStatusAsync(server, client, new JsonObject()));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("flow-just-started");
+        await Assert.That(text).Contains("retry");
+        await Assert.That(text).DoesNotContain("flow-older");
+    }
+
+    [Test]
+    public async Task A_start_without_a_session_records_its_run_for_the_workspace() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                  """{"flow_run_id":"flow-started","status":"running","round_id":null,"round_number":null}"""));
+        using var client = new HttpClient();
+
+        await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCallRequest("start_review_flow", StartArguments()),
+            client, server.Url!, cwd: "/tmp/cwd", repoRoot: Workspace, repoInfo: null, requestingSessionId: null);
+
+        await Assert.That(new FlowRunLedger(Config.Root, TimeProvider.System).Retained(Workspace).Select(e => e.FlowRunId))
+            .IsEquivalentTo(["flow-started"]);
+    }
+
+    [Test]
+    public async Task A_start_with_a_session_records_nothing() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                  """{"flow_run_id":"flow-started","status":"running","round_id":null,"round_number":null}"""));
+        using var client = new HttpClient();
+
+        await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCallRequest("start_review_flow", StartArguments()),
+            client, server.Url!, cwd: "/tmp/cwd", repoRoot: Workspace, repoInfo: null, requestingSessionId: SessionId);
+
+        await Assert.That(new FlowRunLedger(Config.Root, TimeProvider.System).Retained(Workspace)).IsEmpty();
+    }
+
+    static JsonObject StartArguments() => new() {
+        ["kind"]         = "code-review",
+        ["target_kind"]  = "pr",
+        ["target_ref"]   = "123",
+        ["target_title"] = "some PR",
+        ["context"]      = "some context"
+    };
 
     [Test]
     public async Task A_non_string_flow_run_id_is_a_clean_error_before_any_request() {

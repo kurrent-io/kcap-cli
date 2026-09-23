@@ -293,7 +293,8 @@ public class ServerConnectionServiceTests {
         gate.SetResult(null);
         await restart;
 
-        await Task.Delay(2000); // ample for a re-admitted loop to connect and publish over the park
+        // An admitted loop publishes Connecting before it dials, so this only covers the schedule.
+        await Task.Delay(300);
         var latest = await lane.Status.Take(1).ToTask();
         await Assert.That(latest.State).IsEqualTo(ServerLaneState.SignedOut);
     }
@@ -301,7 +302,7 @@ public class ServerConnectionServiceTests {
     [Test]
     public async Task ParkSignedOutDuringATransportLossRetryingSequenceStaysParked() {
         await using var host = await HubTestHost.StartAsync();
-        await using var lane = Lane(host);
+        await using var lane = Lane(host, [TimeSpan.FromMilliseconds(30), TimeSpan.FromMilliseconds(30)]);
         lane.Start();
         await Next(lane.Status, s => s.State == ServerLaneState.Connected);
 
@@ -311,9 +312,8 @@ public class ServerConnectionServiceTests {
         lane.ParkSignedOut();
         await Next(lane.Status, s => s.State == ServerLaneState.SignedOut);
 
-        // A further reconnect attempt from the SAME (now epoch-stale) loop, if the guard failed,
-        // would overwrite this — give the retry policy's next tick a chance to (wrongly) land.
-        await Task.Delay(4000);
+        // The next reconnect tick is 30ms. A stale loop that still publishes would have landed.
+        await Task.Delay(200);
         var latest = await lane.Status.Take(1).ToTask();
         await Assert.That(latest.State).IsEqualTo(ServerLaneState.SignedOut);
     }

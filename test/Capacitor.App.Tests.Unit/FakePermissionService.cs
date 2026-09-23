@@ -109,11 +109,12 @@ sealed class FakePermissionService : IPermissionService {
 
     public Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) {
         Withdrawn.Add(target.RequestId);
-        // The response route has no withdraw, so the real service refuses a server-lane target
-        // outright: no outcome is consumed and the entry stays.
-        return target.Lane == PermissionLane.Server
-            ? Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.TransportFailure, "withdraw_unsupported"))
-            : SettleAsync(target, "withdraw");
+        // The server lane has no daemon round trip, so it does not consume a scripted outcome.
+        if (target.Lane == PermissionLane.Server) {
+            Cache.Remove(target.Key);
+            return Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.Applied, null));
+        }
+        return SettleAsync(target, "withdraw");
     }
 
     async Task<PermissionResolveOutcome> SettleAsync(PendingPermissionRequest target, string what) {

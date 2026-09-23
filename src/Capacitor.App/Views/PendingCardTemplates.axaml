@@ -65,12 +65,12 @@
                     <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
                 </Style>
                 <Style Selector="Button.option.selected">
-                    <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
                 </Style>
                 <Style Selector="Button.option.selected /template/ ContentPresenter#PART_ContentPresenter">
-                    <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
                 </Style>
                 <Style Selector="Border.indicator">
                     <Setter Property="Width" Value="16" />
@@ -82,8 +82,8 @@
                     <Setter Property="Margin" Value="0,2,11,0" />
                 </Style>
                 <Style Selector="Button.option.selected Border.indicator">
-                    <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
-                    <Setter Property="Background" Value="{StaticResource KcapSuccessBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+                    <Setter Property="Background" Value="{StaticResource KcapInfoBrush}" />
                 </Style>
                 <Style Selector="Button.step">
                     <Setter Property="Background" Value="Transparent" />
@@ -99,13 +99,16 @@
                     <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
                 </Style>
                 <Style Selector="Button.step.current">
-                    <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
                     <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </Style>
-                <Style Selector="Button.step.current /template/ ContentPresenter#PART_ContentPresenter, Button.step:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-                    <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
+                <Style Selector="Button.step:pointerover:not(.current) /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+                </Style>
+                <Style Selector="Button.step.current /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
                 </Style>
                 <Style Selector="Button.reviewRow">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
@@ -244,8 +247,12 @@
                     <Setter Property="Cursor" Value="Hand" />
                 </Style>
                 <Style Selector="ToggleButton.acpOption:checked">
-                    <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+                </Style>
+                <Style Selector="ToggleButton.acpOption:checked /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
                 </Style>
             </Border.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">

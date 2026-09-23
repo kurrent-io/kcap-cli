@@ -6,7 +6,7 @@ Subcommands:
   add <name> --server-url <url> [--remote <pattern>]...
                             Add a new profile
   list                      Show all profiles
-  remove <name>             Remove a profile
+  remove <name>             Remove a profile and its saved sign-in (not the active or default profile)
   show [name]               Show profile details (defaults to active)
 
 Options for 'add':
