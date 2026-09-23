@@ -54,13 +54,6 @@
                     <StackPanel Spacing="8">
                         <RadioButton x:Name="DiscoverChoice" GroupName="Connect" Content="Find workspaces for my account"
                                      IsChecked="{Binding DiscoverSelected, Mode=TwoWay}" />
-                        <StackPanel Orientation="Horizontal" Spacing="16" Margin="28,0,0,4"
-                                    IsVisible="{Binding DiscoverSelected}">
-                            <RadioButton x:Name="GitHubProviderChoice" GroupName="Provider" Content="GitHub"
-                                         IsChecked="{Binding GitHubProvider, Mode=TwoWay}" />
-                            <RadioButton x:Name="WorkOSProviderChoice" GroupName="Provider" Content="Single sign-on"
-                                         IsChecked="{Binding WorkOSProvider, Mode=TwoWay}" />
-                        </StackPanel>
 
                         <RadioButton x:Name="PasteChoice" GroupName="Connect" Content="Enter a workspace name or URL"
                                      IsChecked="{Binding PasteSelected, Mode=TwoWay}" />

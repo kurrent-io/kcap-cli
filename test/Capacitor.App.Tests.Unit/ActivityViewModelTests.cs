@@ -103,23 +103,41 @@ public class ActivityViewModelTests {
 
         await Assert.That(first.Time).IsEqualTo(expectedTime);
         await Assert.That(first.TimeTip).IsEqualTo(expectedTip);
-        await Assert.That(first.Requester).IsEqualTo("Ada Lovelace");
-        await Assert.That(first.KindLabel).IsEqualTo("Review flow");
-        // A consent record carries the launch request's path verbatim, with no repository behind
-        // it on the wire, so the leaf is that path's own; RepoFull carries the rest.
-        await Assert.That(first.RepoLeaf).IsEqualTo("tender-honking-pebble");
-        await Assert.That(first.RepoFull).IsEqualTo("/repos/kcap-cli/.claude/worktrees/tender-honking-pebble");
-        await Assert.That(first.Vendor).IsEqualTo("codex");
-        await Assert.That(first.Outcome).IsEqualTo("allowed");
+        await Assert.That(first.Outcome).IsEqualTo("Allowed");
         await Assert.That(first.IsAllowed).IsTrue();
-        await Assert.That(first.SourceLabel).IsEqualTo("rule");
+        await Assert.That(first.PrimaryDetail).IsEqualTo("codex · Review flow");
+        await Assert.That(first.SecondaryLine).IsEqualTo("Ada Lovelace · tender-honking-pebble · rule");
+        await Assert.That(first.RequesterFull).IsEqualTo("Ada Lovelace");
+        await Assert.That(first.RepoFull).IsEqualTo("/repos/kcap-cli/.claude/worktrees/tender-honking-pebble");
+        await Assert.That(first.SecondaryTip).IsEqualTo("Ada Lovelace\n/repos/kcap-cli/.claude/worktrees/tender-honking-pebble");
 
-        await Assert.That(second.Time).IsEqualTo("not-a-timestamp"); // unparseable -> verbatim
-        await Assert.That(second.Requester).IsEqualTo("unknown"); // both requester and display absent
-        await Assert.That(second.KindLabel).IsEqualTo("Agent");
-        await Assert.That(second.Outcome).IsEqualTo("denied");
+        await Assert.That(second.Time).IsEqualTo("not-a-timestamp");
+        await Assert.That(second.Outcome).IsEqualTo("Denied");
         await Assert.That(second.IsAllowed).IsFalse();
-        await Assert.That(second.SourceLabel).IsEqualTo("timeout");
+        await Assert.That(second.PrimaryDetail).IsEqualTo("claude");
+        await Assert.That(second.SecondaryLine).IsEqualTo("unknown · kcap-cli · timeout");
+        await Assert.That(second.RequesterFull).IsEqualTo("unknown");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rows_keep_full_email_requester() {
+        var row = await AvaloniaSession.DispatchAsync(async () => {
+            var reader = new ScriptedReader();
+            reader.Set(new ConsentLogReadResult([
+                Rec(requesterDisplay: "very.long.local-part@company.com", kind: "agent",
+                    repoPath: "/repos/kcap-cli", vendor: "claude", outcome: "allowed", source: "prompt_user")
+            ], true));
+            var vm = new ActivityViewModel(reader.Read, new ScriptedStat().Get, new FakeTicker());
+            vm.OnTabVisibleChanged(true);
+            await vm.PendingRefreshForTesting!;
+            return vm.Rows[0];
+        });
+
+        await Assert.That(row.RequesterFull).IsEqualTo("very.long.local-part@company.com");
+        await Assert.That(row.SecondaryLine).IsEqualTo("very.long.local-part@company.com · kcap-cli");
+        await Assert.That(row.PrimaryDetail).IsEqualTo("claude");
+        await Assert.That(row.Outcome).IsEqualTo("Allowed");
     }
 
     [Test]
@@ -132,6 +150,28 @@ public class ActivityViewModelTests {
     [Arguments("something-weird", "something-weird")] // unrecognized renders verbatim
     public async Task Source_labels(string source, string expected) {
         await Assert.That(ActivityViewModel.SourceLabelOf(source)).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments("allowed", "Allowed")]
+    [Arguments("denied", "Denied")]
+    [Arguments("weird", "weird")]
+    public async Task Outcome_labels(string raw, string expected) {
+        await Assert.That(ActivityViewModel.OutcomeLabelOf(raw)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task PrimaryDetail_omits_agent_kind() {
+        await Assert.That(ActivityViewModel.PrimaryDetailOf("claude", "agent")).IsEqualTo("claude");
+        await Assert.That(ActivityViewModel.PrimaryDetailOf("codex", "review-flow")).IsEqualTo("codex · Review flow");
+    }
+
+    [Test]
+    public async Task SecondaryLine_omits_you_source() {
+        await Assert.That(ActivityViewModel.SecondaryLineOf("ada@x.com", "kcap-cli", "you"))
+            .IsEqualTo("ada@x.com · kcap-cli");
+        await Assert.That(ActivityViewModel.SecondaryLineOf("ada@x.com", "kcap-cli", "rule"))
+            .IsEqualTo("ada@x.com · kcap-cli · rule");
     }
 
     // ---- 2: Complete replaces, including to empty ----

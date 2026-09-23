@@ -100,8 +100,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     /// Head and tail of a long id, so a 32-hex session id stays one line in the 320px pane.
     public string SessionIdDisplay => MiddleTruncate(_sessionIdText);
     public bool CanCopySessionId => _sessionIdText.Length > 0 && _sessionIdText != "resolving…";
-    string _sessionSummaryLine = "—";
-    public string SessionSummaryLine { get => _sessionSummaryLine; private set => this.RaiseAndSetIfChanged(ref _sessionSummaryLine, value); }
 
     /// The session's subagents, shared with the chat tab; a session-local fact like the ones
     /// under SESSION, so it renders in every pane phase.
@@ -119,9 +117,22 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
+    static readonly SubagentState[] SubagentCountOrder =
+        [SubagentState.Running, SubagentState.Done, SubagentState.Failed, SubagentState.Stopped];
+
+    /// What the collapsed section shows: one entry per state something is in, so the numbers
+    /// add up to the list.
+    public IReadOnlyList<SubagentCount> SubagentCounts =>
+        [.. SubagentCountOrder.Select(state => new SubagentCount(state, _subagents.Count(state))).Where(c => c.Count > 0)];
+
+    /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
+    /// read never holds the work item back.
+    public PlanSectionViewModel Plan { get; }
+
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasSubagents));
         this.RaisePropertyChanged(nameof(SubagentsHeader));
+        this.RaisePropertyChanged(nameof(SubagentCounts));
     }
 
     internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {
@@ -190,6 +201,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
+    bool _hasAgent;
+    /// Until the daemon reports the agent, every session fact and the requester are placeholders.
+    public bool HasAgent { get => _hasAgent; private set => this.RaiseAndSetIfChanged(ref _hasAgent, value); }
+
     /// Tip on the header refresh control — bound with ShowOnDisabled so a greyed icon still explains itself.
     public string RefreshTip => HasSession
         ? IsReading ? "Refreshing…" : "Refresh"
@@ -206,8 +221,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
             SessionSubagents subagents, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
-            Action<string>? openWorkItem = null) {
+            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null) {
         _source = source;
+        Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
         _opener = opener;
         _time = time;
         _openWorkItem = openWorkItem;
@@ -224,6 +240,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         RefreshCommand = ReactiveCommand.Create(
             () => {
                 PullRequests?.Refresh();
+                Plan.Refresh();
                 if (_current is null) return;
                 if (_current.IsReading) _current.RefreshPending = true;
                 else StartRead(_current);
@@ -249,6 +266,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         if (_tornDown || dto is null) return;
         _dto = dto;
         UpdateFacts(dto);
+        HasAgent = true;
         if (dto.SessionId is { Length: > 0 } id && (_current is null || !string.Equals(_current.SessionId, id, StringComparison.Ordinal)))
             SwitchSession(id);
         this.RaisePropertyChanged(nameof(PhaseNote));
@@ -272,7 +290,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
-        SessionSummaryLine = $"{Harness} · {Transport}";
         if (_current is null) SessionIdText = dto.SessionId ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }
@@ -288,6 +305,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         IsStale = false;
         Phase = WorkContextPhase.Loading;
         StartRead(_current);
+        Plan.SwitchSession(id);
     }
 
     void StartRead(ReadLease lease) {
@@ -326,12 +344,15 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     }
 
     void OnTick() {
-        if (_tornDown || _current is not { IsReading: false } lease) return;
-        StartRead(lease);
+        if (_tornDown) return;
+        Plan.Refresh();
+        if (_current is { IsReading: false } lease) StartRead(lease);
     }
 
     void OnSignInCompleted() {
-        if (_tornDown || _current is not { } lease) return;
+        if (_tornDown) return;
+        Plan.Refresh();
+        if (_current is not { } lease) return;
         if (lease.IsReading) lease.RefreshPending = true;
         else StartRead(lease);
     }
@@ -377,5 +398,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 try { await pending; } catch (Exception) { }
             }
         foreach (var lease in leases) lease.Cts.Dispose();
+        await Plan.TeardownAsync();
     }
 }

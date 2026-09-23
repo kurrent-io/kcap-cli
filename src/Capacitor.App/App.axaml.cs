@@ -134,6 +134,8 @@ public partial class App : Application {
     PermissionService? _permissions;
     NotificationSettingsService? _notificationSettings;
     IDesktopNotificationSink? _notificationSink;
+    IDesktopNotificationAccess? _notificationAccess;
+    IDisposable? _notificationAccessPrompt;
     DesktopNotificationCoordinator? _desktopNotifications;
     NotificationSessionSubscriptions? _notificationSessions;
     // The server lane's half of the permission graph. Disposed as a group with _permissions: the
@@ -545,11 +547,12 @@ public partial class App : Application {
         // disposed at teardown.
         var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv);
         var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time);
+        var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
         var readers = new PullRequestReaderRegistry(pullRequests, [new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
-        var serverClients = new ServerClients(serverLane, workContext, pullRequests);
+        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans);
         _serverLane = serverLane;
 
         var machineId = new MachineId(_config).ReadPersisted();
@@ -652,7 +655,7 @@ public partial class App : Application {
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             },
-            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory);
+            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -700,7 +703,15 @@ public partial class App : Application {
         if (!_shutdownStarted) {
             var notificationSettings = new NotificationSettingsService(_config.Path("notifications.json"));
             _notificationSettings = notificationSettings;
-            _notificationSink = new NativeDesktopNotificationSink();
+            var notificationSink = new NativeDesktopNotificationSink();
+            _notificationSink = notificationSink;
+            _notificationAccess = notificationSink;
+            _notificationAccessPrompt = new DesktopNotificationAccessPrompt(
+                notificationSink, notificationSettings.Changes,
+                Window.IsActiveProperty.Changed.Where(change => change.NewValue.GetValueOrDefault())
+                    .Select(_ => System.Reactive.Unit.Default),
+                () => !_shutdownStarted && desktop.Windows.Any(window => window.IsActive),
+                ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler);
             _desktopNotifications = new DesktopNotificationCoordinator(
                 permissions, directory, notificationSettings.Changes, _notificationSink,
                 () => _shutdownStarted || desktop.Windows.Any(window => window.IsActive),
@@ -764,7 +775,8 @@ public partial class App : Application {
                 ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
-                notificationSettings: _notificationSettings, profiles: profilesVm);
+                notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
+                profiles: profilesVm);
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -873,13 +885,10 @@ public partial class App : Application {
         window.Show();
     }
 
-    /// How long a successful re-auth keeps the dialog open so the success line is not a flash.
-    internal static readonly TimeSpan SignInSuccessHold = TimeSpan.FromMilliseconds(1600);
-
     async Task CloseSignInAfterSuccessAsync(Window window, bool refreshAppState) {
         var refresh = refreshAppState ? RefreshAfterReauthAsync() : Task.CompletedTask;
         try {
-            await Task.WhenAll(refresh, Task.Delay(SignInSuccessHold, _time)).ConfigureAwait(true);
+            await Task.WhenAll(refresh, Task.Delay(SignInStepViewModel.SuccessHold, _time)).ConfigureAwait(true);
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: post-sign-in refresh failed: {ex.Message}");
         }
@@ -1251,7 +1260,8 @@ public partial class App : Application {
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
-            modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl);
+            modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
+            launchFailed: agentId => vm?.CloseFailedLaunch(agentId));
         // Same knot as home above, over the SAME `service` instance — its own openSession
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
@@ -1753,6 +1763,7 @@ public partial class App : Application {
     // teardown REGISTERED here, so the drain below can only ever seal a set that already contains
     // it. The gate is latched even with no window ever built — a window built later still sees it.
     void LatchNavigation() {
+        _notificationAccessPrompt?.Dispose();
         _desktopNotifications?.Dispose();
         (_coordinator?.Window?.DataContext as MainWindowViewModel)?.LatchShutdown();
         _navigation.Latch();

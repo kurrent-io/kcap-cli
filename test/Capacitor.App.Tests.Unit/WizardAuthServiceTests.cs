@@ -112,7 +112,7 @@ public class WizardAuthServiceTests {
         gate.SetResult(new AuthResult.Failed("nope"));
         await first.Result.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var second = service.Begin(new ConnectIntent.Discover(AuthProvider.WorkOS));
+        var second = service.Begin(new ConnectIntent.Discover());
 
         await Assert.That(await second.Result.WaitAsync(TimeSpan.FromSeconds(5))).IsTypeOf<AuthResult.Committed>();
         await Assert.That(service.Current).IsSameReferenceAs(second);

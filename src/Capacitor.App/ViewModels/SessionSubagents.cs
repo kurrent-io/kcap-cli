@@ -13,14 +13,16 @@ public sealed class SessionSubagents(TimeProvider time) {
     readonly Dictionary<string, SubagentRow> _byCall = new(StringComparer.Ordinal);
     /// The row an agent id currently belongs to; the latest Detached wins.
     readonly Dictionary<string, SubagentRow> _byAgent = new(StringComparer.Ordinal);
+    /// Rows per presented state, indexed by the state's value.
+    readonly int[] _counts = new int[Enum.GetValues<SubagentState>().Length];
     bool _sessionOver;
-    int _rowsRaised;
-    int _runningRaised;
 
     public IAvaloniaReadOnlyList<SubagentRow> Rows => _rows;
-    public int RunningCount { get; private set; }
+    public int RunningCount => Count(SubagentState.Running);
 
-    /// Raised after any call that changed RunningCount or the row count.
+    public int Count(SubagentState state) => _counts[(int)state];
+
+    /// Raised after any call that changed how many rows present any one state.
     public event Action? Changed;
 
     /// The lane's verdict that nothing more will arrive: a view over the rows, not a transition,
@@ -109,15 +111,13 @@ public sealed class SessionSubagents(TimeProvider time) {
 
     void Refresh() {
         var now = time.GetUtcNow();
-        var running = 0;
+        Span<int> counts = stackalloc int[_counts.Length];
         foreach (var row in _rows) {
             row.Present(_sessionOver, now);
-            if (row.State == SubagentState.Running) running++;
+            counts[(int)row.State]++;
         }
-        RunningCount = running;
-        if (running == _runningRaised && _rows.Count == _rowsRaised) return;
-        _runningRaised = running;
-        _rowsRaised = _rows.Count;
+        if (counts.SequenceEqual(_counts)) return;
+        counts.CopyTo(_counts);
         Changed?.Invoke();
     }
 }

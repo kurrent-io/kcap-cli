@@ -38,6 +38,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     /// directory's pending row until the first dto lands.
     public bool IsStarting => _isStarting.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _hasAgent;
+    /// The header's actions address an agent the daemon reports: before that Stop has nothing to
+    /// reach and the web page does not exist.
+    public bool HasAgent => _hasAgent.Value;
+
     readonly ObservableAsPropertyHelper<string> _startingText;
     public string StartingText => _startingText.Value;
 
@@ -48,7 +53,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     /// from has_terminal.
     public ChatTabViewModel? Chat {
         get => _chat;
-        private set => this.RaiseAndSetIfChanged(ref _chat, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _chat, value);
+            this.RaisePropertyChanged(nameof(ShowsChat));
+        }
     }
 
     /// The right pane. Fed by the same presence stream as the header, so the daemon cache has one
@@ -71,6 +79,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         private set {
             this.RaiseAndSetIfChanged(ref _activeTab, value);
             this.RaisePropertyChanged(nameof(IsChatActive));
+            this.RaisePropertyChanged(nameof(ShowsChat));
             this.RaisePropertyChanged(nameof(IsTerminalActive));
             this.RaisePropertyChanged(nameof(IsPullRequestActive));
             this.RaisePropertyChanged(nameof(ShowsTerminalBanners));
@@ -78,6 +87,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
     public bool IsChatActive => ActiveTab == WorkspaceTab.Chat;
+    /// A chat surface with no view model behind it fails every visibility binding open, drawing
+    /// its banners and composer as empty shells.
+    public bool ShowsChat => IsChatActive && Chat is not null;
     public bool IsTerminalActive => ActiveTab == WorkspaceTab.Terminal;
     public bool IsPullRequestActive => ActiveTab == WorkspaceTab.PullRequest;
     public bool ShowsTerminalBanners => !IsPullRequestActive && IsTerminalActive;
@@ -102,7 +114,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
-            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null) {
+            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
+            IPlanSource? plans = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
         _disposables.Add(_lease);
@@ -115,7 +128,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .RefCount();
 
         var subagents = new SessionSubagents(time);
-        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb);
+        var planActivity = new PlanActivity();
+        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
@@ -164,6 +178,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _repoLabelText = header.Select(h => h.Dto is not null ? CheckoutLabelFor(h.Dto) : h.Row is { } row ? RepoLabel.Leaf(row.RepoPath) : CheckoutLabelFor(null))
             .ToProperty(this, x => x.RepoLabelText, CheckoutLabelFor(null))
             .DisposeWith(_disposables);
+        _hasAgent = header.Select(h => h.Dto is not null)
+            .ToProperty(this, x => x.HasAgent, initialValue: false)
+            .DisposeWith(_disposables);
         _isStarting = header.Select(h => h.Row is not null)
             .ToProperty(this, x => x.IsStarting, initialValue: false)
             .DisposeWith(_disposables);
@@ -195,7 +212,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer, planActivity);
             })
             .DisposeWith(_disposables);
 

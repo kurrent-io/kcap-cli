@@ -1,11 +1,10 @@
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Intent only (spec §3 step 2): nothing here reaches the network or writes anything, so these
-/// run without the headless session — the step owns no commands and no Rx subscriptions.
+/// Intent only: nothing here reaches the network or writes anything, so these run without the
+/// headless session — the step owns no commands and no Rx subscriptions.
 public class ConnectStepViewModelTests {
     [Test]
     [Arguments("acme", "https://acme.kcap.ai")]
@@ -47,12 +46,11 @@ public class ConnectStepViewModelTests {
     }
 
     [Test]
-    [Arguments(AuthProvider.GitHubApp)]
-    [Arguments(AuthProvider.WorkOS)]
-    public async Task Discover_stages_the_chosen_provider(string provider) {
-        var vm = new ConnectStepViewModel { Choice = ConnectChoice.Discover, DiscoveryProvider = provider };
+    public async Task A_fresh_step_stages_discovery() {
+        var vm = new ConnectStepViewModel();
 
-        await Assert.That(vm.Intent).IsEqualTo(new ConnectIntent.Discover(provider));
+        await Assert.That(vm.Choice).IsEqualTo(ConnectChoice.Discover);
+        await Assert.That(vm.Intent).IsEqualTo(new ConnectIntent.Discover());
         await Assert.That(vm.Satisfied).IsTrue();
         await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None)).IsTrue();
     }

@@ -5,7 +5,7 @@ namespace Capacitor.App.Services.Onboarding;
 /// What the Connect step asked for; the composition root binds each case to one façade call.
 public abstract record ConnectIntent {
     public sealed record Paste(string ServerInput) : ConnectIntent;
-    public sealed record Discover(string Provider) : ConnectIntent;
+    public sealed record Discover : ConnectIntent;
     public sealed record Create : ConnectIntent;
 }
 

@@ -18,6 +18,175 @@ waited, and the legacy `tokens.json` is moved into its owner's slot before any w
 `active_profile` changes the selection. Mutations whose decision depends on what the file says go
 through a strict variant that refuses an unreadable config rather than publishing a default over it.
 
+## The cloud terminal mirror has its own lane per agent
+
+An agent's PTY is drained by one loop that feeds every surface. When that loop awaited a shared
+cloud queue, a slow server — or another agent's output filling the queue — froze `kcap agent
+attach` and the desktop app along with the web mirror. Each registered agent now has a
+`CloudTerminalSink`: the read loop hands it chunks without waiting, and its own pump sends them.
+
+The mirror is a cursor-addressed byte stream, so a dropped chunk garbles everything after it, and
+the hub protocol has no resynchronisation message. The sink repairs the mirror in-band instead: a
+terminal reset (`ESC c`) followed by the daemon's 2 MB output ring, on the same ordered lane as
+live output. That is what a local client gets by reattaching, with the same limits — the ring can
+begin mid-sequence, and anything painted before its horizon and never repainted is gone. The
+backlog budget equals the ring's size because past it a replay is cheaper than the backlog.
+
+A replay runs to completion even if the backlog overflows again behind it; abandoning it would
+let an agent that outruns the transport reset the mirror forever without ever painting it. Only a
+send that keeps failing, or a connection change, abandons a replay.
+
+Every re-registration asks for a resync. A chunk written just before a connection dies can be lost
+with no error, and the server drops output from a connection that has not re-registered the agent,
+so the pump waits for full readiness and then replays. The earlier reconnect replay garbled the
+terminal because it had no reset ahead of it and raced the live sends; this one has neither flaw.
+
+The sink stops before an agent finalizes, not after: the server deletes an agent's terminal buffer
+when it unregisters, so output sent later is discarded. Ordered delivery still rests on the server
+handling one connection's messages in arrival order, which holds by the shape of its hub method
+rather than by any guarantee — the daemon's per-agent sends are exactly as serial as before.
+
+## A flows tool call ends before the shortest harness timeout
+
+A start holds its tool call open while the first round runs, and the reply it ends on — the round
+result, or "Flow still running" — is the only place the driver is handed its `flow_run_id`. Codex
+aborts an MCP tool call at 300 s. The call was bounded at 9 minutes, so on Codex any round over five
+minutes ended in the harness's own timeout error instead: no id, no guidance, a reviewer still
+running, and a driver with no supported way back to it.
+
+The bounds are sized to 300 s for every harness rather than per client. `ToolCallBudget` is 4
+minutes: with a GET still in flight when it expires and the ack POST after it, the call ends around
+275 s. `PollCap`, which alone bounds a `wait: true` status call, is 3m30s. A model-bearing start is
+one POST outside the settlement lane — re-sending it would launch a second run — and had no deadline
+at all; it takes the 3-minute bound a first settlement attempt gets.
+
+`SettlementElapsedDeadline` stays at 3 minutes because it is not ours to move: it is the server's
+reconcile sweep interval, and the sweep is what proves a prior reviewer agent gone so a
+`participant_unreachable` retry can succeed. That leaves `SettlementAbsoluteDeadline` 30 s of room
+above it, so a daemon lane that keeps making progress now re-arms the window for 30 s, not five
+minutes, before the caller gets the retryable busy error. The cost falls on Claude Code too, which
+sat through the longer bounds without trouble; a long round there takes more status calls. A
+per-client budget would avoid that, at the price of a second set of bounds to keep honest.
+
+## The work-context pane shows the session's plan
+
+A PLAN section sits between the pull request and SUBAGENTS: the documents the session declared,
+then its tasks, marked the way subagent rows are — a hollow ring for pending, the warning ring and
+pulse for in progress, the green tick for completed, a dimmed ring and dash for skipped. Its header
+follows the subagents section's: words while the list is open ("2 of 6 done"), and folded, a count
+of settled and of open tasks beside the marks the rows use, so a folded pane still answers "how far
+along is it". One template keyed on the task state draws the mark in both places. Skipped counts as
+settled because the server's own progress figure counts it so. A status the app has never heard of
+reads as pending rather than dropping the row. Document rows are labels: the path is the declaring
+machine's, and handing a server-supplied path to the OS shell is not something a sidebar should do
+on a click.
+
+The read is `GET /api/sessions/{id}/plans`, not the plan-artifacts route the CLI's validation uses:
+it resolves the continuation chain, needs only overview access, and carries no document bodies, so
+it is cheap enough to repeat. The section shows the plan the session last wrote to and, when there
+is none, the most recently touched one in the chain — a continued session has no plan of its own
+until its first write, and would otherwise open on an empty pane beside a plan in full flight.
+
+The server pushes nothing when a plan changes, so nearness to real time comes from the transcript.
+The agent writes its plan through the `kcap-plans` MCP tools, and the chat tab is already reading
+that transcript twice a second: a settled plan write there re-reads the server at once. Two details
+keep that honest. The tools are matched by their own names, which `PlanToolNames` now shares with
+the MCP server, because Codex records an MCP tool bare while Claude prefixes the server — a match on
+the server name would have missed every Codex session. And the chat applies its projection line by
+line, so the tracker is handed the whole read: a replayed history of forty writes is one server
+read, not forty. A write is read a second time two seconds later, since the server answers from a
+projection that can trail the append the tool call just made. The pane's thirty-second tick covers
+every writer the transcript cannot see — another session in the chain, an edit made on the web —
+and is all that is left if a vendor ever spells the tool names another way.
+
+The section reads on its own lease, keyed by session id like the pane's, so a slow plan read never
+holds the work item back and a late answer for the previous session is dropped. An unreachable
+server keeps the last plan on screen; a refusal or a sign-out clears it. A re-read of the same task
+list updates the rows in place, because replacing them would rebuild their containers and restart
+the in-progress pulse on every poll.
+
+## Launcher “Launches” is the consent decision log, not session activity
+
+The chip formerly labeled Activity opened the local allow/deny log for daemon
+launches. The name and a seven-column table made that hard to read. The chip is
+**Launches**, the flyout title is **Launch approvals**, and each decision is a
+short feed row (outcome · vendor · kind; requester · repo · source; time). The file, poll, and
+Complete rules are unchanged.
+
+## The sidebar's subagents section starts folded to a count per state
+
+A session that spawns many subagents pushed the rest of the work-context pane off screen, so the
+section starts collapsed and its header carries one number per state beside the mark the rows use.
+A state nothing is in shows nothing, and stopped is counted on its own rather than folded into
+completed or failed: the numbers have to add up to the list, and a run the session ended is neither.
+
+The tracker raises `Changed` when any per-state count moves, not only the running count or the row
+count. A bare stop reads as done until a notification says the run failed, and that revision moves
+neither — the collapsed numbers would have stayed wrong until the next start or finish.
+
+The mark is one template keyed on the state, used by the rows and the counts alike, so the two
+cannot drift apart.
+
+## Notification access is requested in the foreground and its refusal is visible
+
+macOS settles an unanswered permission prompt as denied, and its prompt is a banner whose Allow
+control only appears on hover. Requested from the first notification — which by construction fires
+while the app is in the background — it reads as an ordinary banner, times out, and every later
+notification is refused with nothing in the app to say so. The request happens once, while an
+app window is active and at least one preference is on: on activation, or when a preference is
+switched on. The authorization read before it is asynchronous, so the foreground is checked again
+after it and a user who has left gets the request on the next activation instead. The request inside `Show` stays as
+the fallback for an app that never had an active window.
+
+Settings reads the authorization rather than remembering the request's outcome, because the user
+changes it in System Settings, outside the app; the window re-reads it on activation, which is what
+coming back from System Settings is. Platforms with no authorization to read report `Unknown` and
+show nothing. Authorization is keyed by bundle id, so a grant given to a development bundle says
+nothing about the shipped app.
+
+## The work-context pane keeps PR status inside section shells
+
+Pull-request lifecycle, checks, and review stay in the sidebar so the pane never
+holds only a title that opens the reader. Pull request and issue use the same eyebrow
+and left hairline as Session: the PR body shows lifecycle, checks, review, and a
+`kcapField` picker when more than one PR is linked; the PR eyebrow is always
+`PULL REQUESTS` with a count (the selected `#n` sits on the lifecycle row). Every
+link-class issue is listed (key as meta when one, count when several) and titles wrap. The PR title opens the reader on its own row; GitHub sits mid-right of
+lifecycle over repo once the overview (or legacy/unlisted settle) is ready, so the
+link does not appear beside a half-built status stack. Who's on it sits under the work item because it describes the item, not
+the session, and Session is last. Collapsed Session keeps labeled BRANCH / REPOSITORY /
+WORKTREE rows so values stay named; expand reveals harness, transport, and id. Merged is
+success green (settled), not location purple; Open and Draft stay muted so live work is
+not read as done. Checks stay a short verdict when
+all green, with a count only for fail or pending. Checks and reviews use filled discs for
+outcomes and hollow rings while pending or waiting on review — same grammar as subagents;
+git lifecycle marks (open / merged / draft) stay stroke glyphs.
+
+## An unplaced response settles a session's transcript questions
+
+For a Claude `AskUserQuestion` the server keeps two ids that never meet. The hook's request id is
+broadcast as `PermissionPending` and `PermissionResponded` but never written to the session stream;
+the transcript entry's uuid is written there as `InterruptIssued` and `InterruptResolved` but never
+broadcast. The transcript watcher polls once a second, so both stream events trail their pings.
+
+`SessionAttentionTracker` therefore cannot settle such a question by id, and cannot settle it by
+reading either: the read a response triggers lands after the question was recorded and before its
+resolution, which is written only once the agent's tool result is ingested. So a response naming an
+id the set does not hold settles the session's transcript questions — the ones held, and the ones
+the read it triggers still lists. Settled ids are kept for the tracker's lifetime, because the
+stream may never record the resolution and the next prompt's read would bring the question back.
+A lost connection withdraws the claim on the next read, and so does a later pending ping: either
+way the snapshot can list a question asked after the response, which says nothing about it. A
+failing read is what makes the second one matter, since its retries keep the claim armed for far
+longer than the debounce. The price is a question the set did not yet hold staying lit when a
+parallel prompt lands inside that window; lighting a mark too long is the cheaper error than never
+lighting one on a session only this tracker reports.
+
+The web UI has the same rule, clearing a session's question on any response ping. The cost is
+shared too: a parallel subagent's permission, answered before the tracker read it, clears an open
+question's mark early. A permission's id is the one its pings carry, so it keeps exact removal and
+needs no read.
+
 ## Desktop notifications follow pending requests and completed turns
 
 Notifications belong to the app lifetime so hiding the window does not stop permission and
@@ -213,6 +382,53 @@ nothing more will arrive, a real finish in the final drain still settles it, and
 comes back turns the presentation off again. A repeated notification for an earlier execution never
 ends a later launch of the same agent id: a known call id decides alone, and an agent-id-only finish
 dated before the row started belongs to an earlier execution.
+## Skills materialize into the repository they were approved for
+
+`kcap skills sync` wrote into the user-global harness trees, so every repository on a machine was
+offered every repository's skills, and two worktrees of one repository shared one set of files and
+one ledger. The destination is now the checkout or linked worktree the sync runs in. The planner,
+the drift rule and the conditional fetch were already right; what the move cost was identity, crash
+recovery, containment and the serialization of what stays shared.
+
+The ledger moved with the files, into the worktree's own git directory (`<git-dir>/kcap/skills/`).
+That makes it per worktree by construction — a linked worktree has a git directory of its own — and
+Git deletes it with the worktree, where a copy under the config root would outlive the checkout it
+described and go on claiming paths that no longer exist.
+
+Identity is the account a snapshot was fetched under, together with the server URL. The profile
+name is not identity: signing in again replaces the credentials inside one profile. When the
+recorded identity is not the current one, the previous catalogue is deleted *before* the
+replacement is requested, locally and in the global trees alike, and the ledger is saved owning
+nothing. A replacement fetch that then fails leaves nothing of the previous account loadable, which
+is the whole point of retiring it; requesting first and deleting on success would leave a revoked
+account's skills in place exactly when the credential that revoked them stopped working.
+
+Pruning walks the ledger, never a skills root, so a directory is deletable only while something
+owns it. Ownership is therefore recorded before the write and cleared only after the writes and
+prunes succeed, and a deletion still owed is recorded as a pair — the path, and the skills root that
+authorises deleting it. The root travels with the path because containment is defined against an
+anchor: after a move from one anchor to another the new anchor's root cannot authorise the old
+anchor's paths, and a ledger with one row per document could not hold a rename's old path and new
+path at once.
+
+Three locks — migration, then repository, then manifest — and no shared lock is held across a
+network request. The migration lock is one key for the whole machine rather than one per
+repository, because legacy global ownership crosses repositories: a project-homed skill puts the
+same global directory in two repositories' ledgers, and two keys would let each observe the other
+as the remaining owner, each skip the deletion, and each then delete its own ledger, leaving the
+directory with nothing able to prune it.
+
+The Git exclusion block is written before the first file rather than after the last, because it is
+idempotent and depends on nothing a fetch returns. Written afterwards, a run interrupted between
+the ledger's refresh stamp and the block left the directories visible to Git with the six-hour
+throttle suppressing the retry.
+
+Placement cannot enforce a vendor restriction. `.claude/skills` is read by Claude, Copilot, Cursor
+and OpenCode, so a Claude-only skill lands in one tree and four harnesses can read it; the ledger
+records the measured readers of the tree a document landed in, for a later consumer to surface. The
+restrictions this shape cannot deliver at all — every harness whose only tree is fetched without a
+vendor — are documented rather than observed, because the request excludes those documents
+server-side and the client never sees one.
 
 A notification that lands while the parent is mid-turn is not a user line at all: Claude Code writes
 it as a `queued_command` attachment in `commandMode: task-notification`, so the leaf projects that
@@ -1070,7 +1286,7 @@ id and falls back to the requested one when a read carried no item, so neither t
 projection.
 
 **Reference-class links are ignored on purpose.** The server passes `link_class = reference` rows
-through for other consumers; the issue card is the first `kind = issue` row of class `link`, and its
+through for other consumers; the issue section lists every `kind = issue` row of class `link`, and its
 URL crosses the same `LinkPolicy` boundary as the PR cards.
 
 **Contributors render as initials.** The app has no remote image loader, so `avatar_url` is carried
@@ -1483,6 +1699,13 @@ daemon graph, no tray) and hands the outcome channel to the normal graph's consu
 permanently past the quiesce cap (decision 2/§6a). The §7 streaming `IProcessRunner` backs the
 Import step's live, bounded-tail log pane.
 
+The wizard's workspace discovery is single sign-on only, matching the CLI's default: a server on
+GitHub App auth is reached by name or URL, where its own `/auth/config` picks the flow.
+`SignInStepViewModel` is hosted twice, and what follows a commit is the host's: the step raises
+`Completed` and takes its success detail from whoever composed it, so the wizard moves on after
+`SuccessHold` while the re-auth dialog refreshes and closes. `Completed` waits for a consent
+quarantine notice to be acknowledged, and `TryAdvanceFrom` refuses once the user has left the step.
+
 ## Session workspace terminal
 
 **AI-2195** (spec: `docs/superpowers/specs/2026-08-24-ai2195-session-workspace-terminal-design.md`)
@@ -1690,6 +1913,22 @@ inside `HandleCore`, which that arm never reaches, so a prompt already raised si
 asymmetry is deliberate — a standing prompt is the safe outcome for the seam whose job is to answer a
 question a human is already looking at, and moving it earlier would auto-answer prompts during the
 very outage that made the evaluation least trustworthy.
+
+**The two seams of one Claude call do not agree on carrying a call id.** A live session sends
+`tool_use_id` at `PreToolUse` and none at `PermissionRequest`, so the prompt an ask forces arrives
+with no id for an ask `PolicyDecisionJournal` filed under one. A `Consume` with no id is therefore
+also held by any id-filed **ask** with the same input hash, flagged ambiguous. Without that the
+forced prompt never finds its ask, and the only thing holding it for the human is a fresh evaluation
+that happens to agree — which a judge verdict need not. The reach is asks only: an id-filed allow
+or deny taken by hash would answer a later identical call's prompt unevaluated, and an event that
+does carry an id never takes an ask filed under a different one.
+
+**That hash-only match finds the ask and never spends it.** A hash cannot say which of several
+identical calls a prompt belongs to. Spending the ask would let a prompt the policy did not force —
+an identical overlapping call whose pre-decision evaluation came out differently — take the guard,
+and the prompt that *was* forced would then meet a fresh evaluation with nothing holding it. So the
+entry leaves only with its own call id or with the turn, and the price is extra prompts for that
+input until then. Making this lane consume-once again reopens the hole.
 
 ## Desktop shell: the checkout on the status wire
 

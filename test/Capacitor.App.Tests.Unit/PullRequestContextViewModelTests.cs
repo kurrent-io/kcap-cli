@@ -33,6 +33,32 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    public Task The_host_exit_waits_until_the_overview_or_a_legacy_settle() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var overview = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => overview.Task);
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.HasChoice && h.Source.Overviews == 1, what: "choice listed, overview pending");
+        await Assert.That(h.Vm.ShowsOpenSource).IsFalse();
+        overview.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
+        await WaitUntilAsync(() => h.Vm.CanDisplay, what: "overview admitted");
+        await Assert.That(h.Vm.ShowsOpenSource).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_legacy_list_shows_the_host_exit_without_an_overview() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Capability = PullRequestCapabilityKind.Legacy;
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.HasListed && h.Vm.IsLegacy, what: "legacy list applied");
+        await Assert.That(h.Vm.ShowsOpenSource).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
     public Task A_B_A_selection_cancels_the_old_request_and_rejects_its_late_result() => RunOnUiAsync(async () => {
         var h = new Harness();
         var old = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
@@ -123,9 +149,24 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    public Task The_title_opens_the_overview_tab_even_after_another_section() => RunOnUiAsync(async () => {
+        var opened = 0;
+        var h = new Harness(onOpen: () => opened++);
+        h.Push(); await h.Show();
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Vm.IsChecks, what: "checks section open");
+        await Assert.That(opened).IsEqualTo(1);
+        await h.Vm.OpenReaderCommand.Execute();
+        await Assert.That(h.Vm.IsOverview).IsTrue();
+        await Assert.That(h.Vm.SelectedTabIndex).IsEqualTo(0);
+        await Assert.That(opened).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Complete_current_checks_take_precedence_over_a_conflicting_advisory_rollup() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Source.TotalPages = 1; h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
-        await Assert.That(h.Vm.CheckSummary).Contains("GitHub summary");
+        await Assert.That(h.Vm.CheckSummary).Contains("All checks have passed");
         await h.Vm.ShowSectionCommand.Execute("checks");
         await WaitUntilAsync(() => h.Vm.Rows.Count == 1, what: "checks page");
         await Assert.That(h.Vm.CheckSummary).Contains("1 failed");
@@ -251,9 +292,9 @@ public class PullRequestContextViewModelTests {
         internal FakePullRequestSource Source { get; }
         internal RecordingOpener Opener { get; } = new();
         internal PullRequestContextViewModel Vm { get; }
-        internal Harness(Func<PullRequestRepository?>? primary = null) {
+        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null) {
             Source = new(Time);
-            Vm = new(Presence, Source, Time, Opener, () => { }, primaryRepo: primary);
+            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }

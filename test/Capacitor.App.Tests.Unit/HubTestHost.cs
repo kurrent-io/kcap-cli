@@ -46,7 +46,9 @@ public sealed class HubTestHost : IAsyncDisposable {
     public static List<(string AgentId, string Text)> UserInputs { get; } = [];
     public static List<(string AgentId, string Key)> SpecialKeys { get; } = [];
 
-    public static async Task<HubTestHost> StartAsync(bool requireAuth = false) {
+    /// <param name="admissionDelay">Holds back the server's registration of each connection, to widen
+    /// the gap <see cref="BroadcastAsync"/> waits out into one a test can rely on.</param>
+    public static async Task<HubTestHost> StartAsync(bool requireAuth = false, TimeSpan? admissionDelay = null) {
         DaemonsHandler = () => [];
         LaunchHandler = _ => "agent-1";
         _launchCalls = 0;
@@ -79,6 +81,10 @@ public sealed class HubTestHost : IAsyncDisposable {
         // waiting out the default 30s graceful-drain — a connected-then-closed test would
         // otherwise sit for tens of seconds before the client ever sees the drop.
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromMilliseconds(500));
+        builder.Services.AddSingleton<AdmittedConnections>();
+        if (admissionDelay is { } delay)
+            builder.Services.AddSingleton<HubLifetimeManager<SessionsHub>>(sp =>
+                new DelayedAdmission(delay, sp.GetRequiredService<ILogger<DefaultHubLifetimeManager<SessionsHub>>>()));
 
         var app = builder.Build();
         if (requireAuth)
@@ -97,9 +103,44 @@ public sealed class HubTestHost : IAsyncDisposable {
         return host;
     }
 
-    public Task BroadcastAsync(string method, params object?[] args) =>
-        _app!.Services.GetRequiredService<IHubContext<SessionsHub>>()
-            .Clients.All.SendCoreAsync(method, args);
+    /// <summary>Sends to every client the hub has admitted, waiting for the first. A client's
+    /// StartAsync completes on the handshake response, which the server writes BEFORE it registers
+    /// the connection with the lifetime manager, so a send in that gap skips the client silently and
+    /// no wait on the receiving side can recover it. The hub's OnConnectedAsync runs after the
+    /// registration, so an admitted connection is one <c>Clients.All</c> reaches.</summary>
+    public async Task BroadcastAsync(string method, params object?[] args) {
+        try {
+            await _app!.Services.GetRequiredService<AdmittedConnections>().Any.WaitAsync(TimeSpan.FromSeconds(10));
+        } catch (TimeoutException) {
+            throw new TimeoutException($"No client was admitted to the hub within 10s; '{method}' would have reached nobody.");
+        }
+
+        await _app.Services.GetRequiredService<IHubContext<SessionsHub>>().Clients.All.SendCoreAsync(method, args);
+    }
+
+    /// <summary>The connections the hub has admitted, for <see cref="BroadcastAsync"/> to wait on.
+    /// <see cref="Any"/> completes while at least one is admitted and is replaced when the last one
+    /// leaves, so a broadcast after a reconnect waits for the new connection, not the old.</summary>
+    public sealed class AdmittedConnections {
+        readonly Lock _lock = new();
+        int _count;
+        TaskCompletionSource _any = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Any { get { lock (_lock) return _any.Task; } }
+
+        public void Add() {
+            lock (_lock) {
+                _count++;
+                _any.TrySetResult();
+            }
+        }
+
+        public void Remove() {
+            lock (_lock) {
+                if (--_count == 0) _any = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+    }
 
     /// A stream event, the way the server's gateway delivers one.
     public Task PushStreamEventAsync(StreamEventEnvelope envelope) => BroadcastAsync(SignalRSubscriptionMethods.StreamEvent, envelope);
@@ -113,7 +154,25 @@ public sealed class HubTestHost : IAsyncDisposable {
         _app = null;
     }
 
-    public sealed class SessionsHub : Hub {
+    sealed class DelayedAdmission(TimeSpan delay, ILogger<DefaultHubLifetimeManager<SessionsHub>> logger)
+        : DefaultHubLifetimeManager<SessionsHub>(logger) {
+        public override async Task OnConnectedAsync(HubConnectionContext connection) {
+            await Task.Delay(delay);
+            await base.OnConnectedAsync(connection);
+        }
+    }
+
+    public sealed class SessionsHub(AdmittedConnections admitted) : Hub {
+        public override Task OnConnectedAsync() {
+            admitted.Add();
+            return base.OnConnectedAsync();
+        }
+
+        public override Task OnDisconnectedAsync(Exception? exception) {
+            admitted.Remove();
+            return base.OnDisconnectedAsync(exception);
+        }
+
         public List<DaemonInfo> GetConnectedDaemons() => DaemonsHandler();
 
         public string RequestLaunchAgentV2(JsonElement payload) {

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Eval;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,7 +22,7 @@ public class EvalDaemonObserverProtocol1Tests {
             Score    = null, Verdict = null, Finding = "evidence was truncated"
         };
 
-        observer.OnQuestionCompleted(1, 1, unassessed, 0, 0);
+        observer.OnQuestionCompleted(1, 1, unassessed, new EvalUsage(), "text", TimeSpan.Zero, 1);
         await connection.Signalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(connection.CompletedCalls).IsEmpty();
@@ -39,7 +40,7 @@ public class EvalDaemonObserverProtocol1Tests {
             Score    = 4, Verdict = "pass", Finding = "ok"
         };
 
-        observer.OnQuestionCompleted(1, 1, assessed, 0, 0);
+        observer.OnQuestionCompleted(1, 1, assessed, new EvalUsage(), "text", TimeSpan.Zero, 1);
         await connection.Signalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(connection.FailedCalls).IsEmpty();

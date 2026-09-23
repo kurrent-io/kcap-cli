@@ -4243,6 +4243,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
+    "arm": "S3/gitignore-agents",
+    "root": ".agents/skills",
+    "exclusion": "gitignore",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/copilot/print/S3/S3_gitignore-agents/run1.json",
+      "out/copilot/print/S3/S3_gitignore-agents/run2.json"
+    ],
+    "notes": "tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "copilot",
+    "harness": "copilot",
+    "version": "GitHub Copilot CLI 1.0.85.",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".github/skills",
     "exclusion": "info-exclude",
@@ -4253,6 +4273,26 @@
     "evidence": [
       "out/copilot/print/S3/S3_info-exclude/run1.json",
       "out/copilot/print/S3/S3_info-exclude/run2.json"
+    ],
+    "notes": "tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "copilot",
+    "harness": "copilot",
+    "version": "GitHub Copilot CLI 1.0.85.",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
+    "arm": "S3/info-exclude-agents",
+    "root": ".agents/skills",
+    "exclusion": "info-exclude",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/copilot/print/S3/S3_info-exclude-agents/run1.json",
+      "out/copilot/print/S3/S3_info-exclude-agents/run2.json"
     ],
     "notes": "tools_used=0 skill_loads=1 searches=0"
   },
@@ -4696,6 +4736,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S8",
+    "arm": "S8/ancestor-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/copilot/print/S8/S8_ancestor-agents/run1.json",
+      "out/copilot/print/S8/S8_ancestor-agents/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "copilot",
+    "harness": "copilot",
+    "version": "GitHub Copilot CLI 1.0.85.",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
     "arm": "S8/local",
     "root": ".github/skills",
     "exclusion": "none",
@@ -4706,6 +4766,26 @@
     "evidence": [
       "out/copilot/print/S8/S8_local/run1.json",
       "out/copilot/print/S8/S8_local/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "copilot",
+    "harness": "copilot",
+    "version": "GitHub Copilot CLI 1.0.85.",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
+    "arm": "S8/local-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/copilot/print/S8/S8_local-agents/run1.json",
+      "out/copilot/print/S8/S8_local-agents/run2.json"
     ],
     "notes": "cwd=sub/dir tools_used=0 skill_loads=1 searches=0"
   },
@@ -5549,6 +5629,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
+    "arm": "S3/gitignore-agents",
+    "root": ".agents/skills",
+    "exclusion": "gitignore",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S3/S3_gitignore-agents/run1.json",
+      "out/cursor/print/S3/S3_gitignore-agents/run2.json"
+    ],
+    "notes": "tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".cursor/skills",
     "exclusion": "info-exclude",
@@ -5559,6 +5659,26 @@
     "evidence": [
       "out/cursor/print/S3/S3_info-exclude/run1.json",
       "out/cursor/print/S3/S3_info-exclude/run2.json"
+    ],
+    "notes": "tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
+    "arm": "S3/info-exclude-agents",
+    "root": ".agents/skills",
+    "exclusion": "info-exclude",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S3/S3_info-exclude-agents/run1.json",
+      "out/cursor/print/S3/S3_info-exclude-agents/run2.json"
     ],
     "notes": "tools_used=0 skill_reads=1 searches=0"
   },
@@ -5983,6 +6103,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S8",
+    "arm": "S8/ancestor-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S8/S8_ancestor-agents/run1.json",
+      "out/cursor/print/S8/S8_ancestor-agents/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
     "arm": "S8/local",
     "root": ".cursor/skills",
     "exclusion": "none",
@@ -5993,6 +6133,26 @@
     "evidence": [
       "out/cursor/print/S8/S8_local/run1.json",
       "out/cursor/print/S8/S8_local/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
+    "arm": "S8/local-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S8/S8_local-agents/run1.json",
+      "out/cursor/print/S8/S8_local-agents/run2.json"
     ],
     "notes": "cwd=sub/dir tools_used=0 skill_reads=1 searches=0"
   },
@@ -9261,6 +9421,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
+    "arm": "S3/gitignore-agents",
+    "root": ".agents/skills",
+    "exclusion": "gitignore",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S3/S3_gitignore-agents/run1.json",
+      "out/opencode-v1/print/S3/S3_gitignore-agents/run2.json"
+    ],
+    "notes": "tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".opencode/skills",
     "exclusion": "info-exclude",
@@ -9271,6 +9451,26 @@
     "evidence": [
       "out/opencode-v1/print/S3/S3_info-exclude/run1.json",
       "out/opencode-v1/print/S3/S3_info-exclude/run2.json"
+    ],
+    "notes": "tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
+    "arm": "S3/info-exclude-agents",
+    "root": ".agents/skills",
+    "exclusion": "info-exclude",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S3/S3_info-exclude-agents/run1.json",
+      "out/opencode-v1/print/S3/S3_info-exclude-agents/run2.json"
     ],
     "notes": "tools_used=0 skill_loads=1 searches=0"
   },
@@ -9714,6 +9914,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S8",
+    "arm": "S8/ancestor-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S8/S8_ancestor-agents/run1.json",
+      "out/opencode-v1/print/S8/S8_ancestor-agents/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
     "arm": "S8/local",
     "root": ".opencode/skills",
     "exclusion": "none",
@@ -9724,6 +9944,26 @@
     "evidence": [
       "out/opencode-v1/print/S8/S8_local/run1.json",
       "out/opencode-v1/print/S8/S8_local/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
+    "arm": "S8/local-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S8/S8_local-agents/run1.json",
+      "out/opencode-v1/print/S8/S8_local-agents/run2.json"
     ],
     "notes": "cwd=sub/dir tools_used=0 skill_loads=1 searches=0"
   },
@@ -12064,6 +12304,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
+    "arm": "S3/gitignore-agents",
+    "root": ".agents/skills",
+    "exclusion": "gitignore",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/pi/print/S3/S3_gitignore-agents/run1.json",
+      "out/pi/print/S3/S3_gitignore-agents/run2.json"
+    ],
+    "notes": "tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "pi",
+    "harness": "pi",
+    "version": "0.85.1",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".pi/skills",
     "exclusion": "info-exclude",
@@ -12074,6 +12334,26 @@
     "evidence": [
       "out/pi/print/S3/S3_info-exclude/run1.json",
       "out/pi/print/S3/S3_info-exclude/run2.json"
+    ],
+    "notes": "tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "pi",
+    "harness": "pi",
+    "version": "0.85.1",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S3",
+    "arm": "S3/info-exclude-agents",
+    "root": ".agents/skills",
+    "exclusion": "info-exclude",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/pi/print/S3/S3_info-exclude-agents/run1.json",
+      "out/pi/print/S3/S3_info-exclude-agents/run2.json"
     ],
     "notes": "tools_used=0 skill_reads=1 searches=0"
   },
@@ -12536,6 +12816,26 @@
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S8",
+    "arm": "S8/ancestor-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/pi/print/S8/S8_ancestor-agents/run1.json",
+      "out/pi/print/S8/S8_ancestor-agents/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "pi",
+    "harness": "pi",
+    "version": "0.85.1",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
     "arm": "S8/local",
     "root": ".pi/skills",
     "exclusion": "none",
@@ -12546,6 +12846,26 @@
     "evidence": [
       "out/pi/print/S8/S8_local/run1.json",
       "out/pi/print/S8/S8_local/run2.json"
+    ],
+    "notes": "cwd=sub/dir tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "pi",
+    "harness": "pi",
+    "version": "0.85.1",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S8",
+    "arm": "S8/local-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/pi/print/S8/S8_local-agents/run1.json",
+      "out/pi/print/S8/S8_local-agents/run2.json"
     ],
     "notes": "cwd=sub/dir tools_used=0 skill_reads=1 searches=0"
   },

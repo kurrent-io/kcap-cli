@@ -20,15 +20,9 @@ internal static class RefreshTokenHandoff {
     /// <summary>Best effort and silent: a failure to spawn leaves things exactly as they were.</summary>
     public static void Spawn(ConfigRoot config, string profile, IProcessStarter starter) {
         try {
-            ProcessHelpers.PreventInheritedHandles();
-
-            using var process = starter.Start(BuildStartInfo(config, profile));
-
             // The child must not hold the host's hook pipes, or a host waiting for EOF waits on the
             // child too — the very lifetime this hand-off exists to escape.
-            process?.StandardInput.Close();
-            process?.StandardOutput.Close();
-            process?.StandardError.Close();
+            starter.StartDetached(BuildStartInfo(config, profile));
         } catch {
             // The abandoned refresh may still complete on its own; nothing here can improve on that.
         }

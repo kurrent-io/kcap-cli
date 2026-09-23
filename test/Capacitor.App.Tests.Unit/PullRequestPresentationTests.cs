@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Automation;
@@ -83,6 +84,8 @@ public class PullRequestPresentationTests {
         await h.ShowAsync();
         var selector = h.Card.FindControl<ComboBox>("PullRequestSelector")!;
         await Assert.That(selector.IsEffectivelyVisible).IsEqualTo(visible);
+        await Assert.That(h.Model.SectionEyebrow).IsEqualTo("PULL REQUESTS");
+        await Assert.That(h.Model.SectionMeta).IsEqualTo(count.ToString(CultureInfo.InvariantCulture));
         await Assert.That(h.Model.RepositoryLabel).IsEqualTo("example/repo");
         await Assert.That(h.Model.NumberLabel).IsEqualTo("#1");
         if (visible) {
@@ -111,7 +114,7 @@ public class PullRequestPresentationTests {
         await Assert.That(row.Bounds.Width).IsLessThanOrEqualTo(width);
         var status = row.GetVisualDescendants().OfType<PullRequestStatusLabel>().Single();
         await Assert.That(status.FindControl<TextBlock>("StatusText")!.Text).IsEqualTo("Commented");
-        await Assert.That(status.GetVisualDescendants().OfType<Path>().Single().Data).IsNotNull();
+        await Assert.That(status.GetVisualDescendants().OfType<Path>().Single(path => path.IsEffectivelyVisible).Data).IsNotNull();
         await Assert.That(h.Model.Rows.Single().IsBot).IsTrue();
         var title = row.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == new string('r', 100));
         await Assert.That(title.Bounds.Width).IsGreaterThan(0);
@@ -167,14 +170,15 @@ public class PullRequestPresentationTests {
     });
 
     [Test]
-    public Task Sidebar_status_buttons_have_hover_feedback_and_remain_subdued_when_access_expires() => RunOnUiAsync(async () => {
+    public Task Sidebar_status_rows_keep_a_hand_cursor_without_a_hover_wash() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();
         await h.ShowAsync();
         var checks = h.Card.FindControl<Button>("SidebarChecksButton")!;
         var presenter = checks.GetVisualDescendants().OfType<ContentPresenter>().Single(item => item.Name == "PART_ContentPresenter" && item.TemplatedParent == checks);
+        await Assert.That(checks.Cursor?.ToString()).Contains("Hand");
         h.Window.MouseMove(checks.TranslatePoint(new Point(checks.Bounds.Width / 2, checks.Bounds.Height / 2), h.Window)!.Value);
         Dispatcher.UIThread.RunJobs();
-        await Assert.That(((ISolidColorBrush)presenter.Background!).Color).IsEqualTo(Color.Parse("#2A3040"));
+        await Assert.That(((ISolidColorBrush)presenter.Background!).Color.A).IsEqualTo((byte)0);
 
         h.Source.Failure = "transient";
         h.Time.Advance(TimeSpan.FromSeconds(21));
@@ -194,11 +198,103 @@ public class PullRequestPresentationTests {
         h.Model.SelectedTabIndex = 1;
         await h.SettleAsync();
         await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks passing");
-        await Assert.That(h.Model.ChecksStatus.Detail).IsEqualTo("GitHub summary: successful");
+        await Assert.That(h.Model.ChecksStatus.Detail).IsEqualTo("All checks have passed.");
+        await Assert.That(h.Model.ChecksStatus.Tip).IsEqualTo("All checks have passed.");
         await Assert.That(h.Model.CheckRows.Single().Status!.IsDanger).IsTrue();
         await h.Model.LoadMoreCommand.Execute();
         await h.SettleAsync();
         await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("2 failed");
         await Assert.That(h.Model.ChecksStatus.IsDanger).IsTrue();
     });
+
+    /// A rule separates two comments; the last comment has nothing to separate from.
+    [Test]
+    public Task Comments_are_ruled_apart_but_the_last_carries_no_rule() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.TotalPages = 3;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("conversation");
+        await h.SettleAsync();
+        await h.Model.LoadMoreCommand.Execute();
+        await h.SettleAsync();
+        var list = h.Reader.FindControl<ItemsControl>("DiscussionRows")!;
+        var rows = list.GetVisualDescendants().OfType<Border>().Where(border => border.Classes.Contains("prDiscussion")).ToList();
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(rows[0].BorderThickness.Bottom).IsEqualTo(1);
+        await Assert.That(rows[1].BorderThickness.Bottom).IsEqualTo(0);
+        await h.Model.LoadMoreCommand.Execute();
+        await h.SettleAsync();
+        rows = list.GetVisualDescendants().OfType<Border>().Where(border => border.Classes.Contains("prDiscussion")).ToList();
+        await Assert.That(rows.Count).IsEqualTo(3);
+        await Assert.That(rows[1].BorderThickness.Bottom).IsEqualTo(1);
+        await Assert.That(rows[2].BorderThickness.Bottom).IsEqualTo(0);
+    });
+
+    /// A press focuses the comment's viewer, and a viewer taller than the reader brought into view
+    /// on focus scrolls its top to the top — under the pointer, so the release misses the header.
+    /// The middle comment is the one toggled: collapsing the last would shrink the extent under
+    /// the offset, which is a clamp, not a jump.
+    [Test]
+    public Task A_press_on_a_section_header_toggles_it_without_scrolling_the_reader() => RunOnUiAsync(async () => {
+        await using var h = await ShowConversationAsync(pages: 3);
+        await Assert.That(SectionHeaders(h.Reader).Count).IsEqualTo(3);
+        var scroll = h.Reader.FindControl<ScrollViewer>("ReaderScroll")!;
+        var header = SectionHeaders(h.Reader)[1];
+        scroll.Offset = new Vector(0, header.TranslatePoint(new Point(0, 0), scroll)!.Value.Y - 100);
+        h.Window.UpdateLayout();
+        var offset = scroll.Offset.Y;
+        await Assert.That(header.TranslatePoint(new Point(0, 0), scroll)!.Value.Y).IsEqualTo(100).Within(1);
+
+        Click(h.Window, header);
+        header = SectionHeaders(h.Reader)[1];
+        await Assert.That(header.IsChecked).IsFalse();
+        await Assert.That(scroll.Offset.Y).IsEqualTo(offset).Within(1);
+        await Assert.That(header.TranslatePoint(new Point(0, 0), scroll)!.Value.Y).IsEqualTo(100).Within(1);
+    });
+
+    /// Rows already shown keep their controls, and with them what the reader did to them.
+    [Test]
+    public Task Loading_more_comments_keeps_the_rows_already_shown() => RunOnUiAsync(async () => {
+        await using var h = await ShowConversationAsync(pages: 3, load: 2);
+        var list = h.Reader.FindControl<ItemsControl>("DiscussionRows")!;
+        Click(h.Window, SectionHeaders(h.Reader)[0]);
+        await Assert.That(SectionHeaders(h.Reader)[0].IsChecked).IsFalse();
+        var views = list.GetVisualDescendants().OfType<MarkdownView>().ToList();
+        await Assert.That(views.Count).IsEqualTo(2);
+
+        await h.Model.LoadMoreCommand.Execute();
+        await h.SettleAsync();
+        var after = list.GetVisualDescendants().OfType<MarkdownView>().ToList();
+        await Assert.That(after.Count).IsEqualTo(3);
+        await Assert.That(ReferenceEquals(after[0], views[0])).IsTrue();
+        await Assert.That(ReferenceEquals(after[1], views[1])).IsTrue();
+        await Assert.That(SectionHeaders(h.Reader)[0].IsChecked).IsFalse();
+    });
+
+    static async Task<PullRequestViewTestHost> ShowConversationAsync(int pages, int? load = null) {
+        var h = new PullRequestViewTestHost();
+        var body = string.Concat(Enumerable.Repeat("line\n\n", 30));
+        var n = 0;
+        h.Source.TotalPages = pages;
+        h.Source.PageItem = section => section == "conversation"
+            ? new PullRequestCommentDto { Id = "c" + n++, Availability = "available", Body = $"<details open>\n<summary>S</summary>\n\n{body}</details>\n\nafter" } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("conversation");
+        await h.SettleAsync();
+        for (var i = 1; i < (load ?? pages); i++) { await h.Model.LoadMoreCommand.Execute(); await h.SettleAsync(); }
+        return h;
+    }
+
+    static List<ToggleButton> SectionHeaders(Visual root) =>
+        root.GetVisualDescendants().OfType<ToggleButton>().Where(b => b.Classes.Contains("markdown-details-summary")).ToList();
+
+    static void Click(Window window, Control control) {
+        var point = control.TranslatePoint(new Point(10, control.Bounds.Height / 2), window)!.Value;
+        window.MouseMove(point);
+        window.MouseDown(point, MouseButton.Left);
+        window.MouseUp(point, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
 }

@@ -387,7 +387,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         new("declare_work_item",
             "Attach the CURRENT session (and its continuation chain) to a work item on the Capacitor server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
             new("object", new() {
-                ["issue_key"]    = new("string", "Attach to the work item for this issue key (e.g. 'PROJ-1234'), creating it if none exists yet."),
+                ["issue_key"]    = new("string", "Attach to the work item for this issue, creating it if none exists yet. Accepts a tracker key ('PROJ-1234'), an issue number in this session's repository ('#123'), a qualified reference ('owner/repo#123'), or a GitHub issue URL."),
                 ["pr_number"]    = new("integer", "Attach to the work item for this PR number, creating it if none exists yet."),
                 ["work_item_id"] = new("string", "Attach directly to this work item id."),
                 ["new_title"]    = new("string", "Create a brand-new work item with this title and attach to it."),

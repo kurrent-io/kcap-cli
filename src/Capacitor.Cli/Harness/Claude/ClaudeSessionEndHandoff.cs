@@ -33,7 +33,7 @@ static class ClaudeSessionEndHandoff {
     /// not fully happen — the caller then runs the event inline.
     /// </summary>
     public static bool TrySpawn(string[] args, string body, ConfigRoot config, IProcessStarter starter) {
-        Process? process = null;
+        DetachedChild? child = null;
 
         try {
             var psi = new ProcessStartInfo(Environment.ProcessPath ?? "kcap") {
@@ -52,33 +52,35 @@ static class ClaudeSessionEndHandoff {
             psi.Environment[ConfigRoot.ConfigDirEnvVar] = config.Directory;
 
             // Same pipe-leak hazard as the watcher spawn: the child must not hold Claude's hook
-            // pipes open, or Claude waits on them past the hook's own exit.
-            ProcessHelpers.PreventInheritedHandles();
+            // pipes open, or Claude waits on them past the hook's own exit. The payload travels on
+            // the child's stdin, so this spawn cannot refuse every handle the way the others do —
+            // it hands over that one pipe and nothing else.
+            child = starter.StartDetachedWithStdin(psi);
 
-            process = starter.Start(psi);
-
-            if (process is null) {
+            if (child is null) {
                 Console.Error.WriteLine("[kcap] session-end hand-off: failed to start the detached continuation; running inline");
 
                 return false;
             }
 
-            process.StandardInput.Write(body);
-            process.StandardInput.Close();
-            process.StandardOutput.Close();
-            process.StandardError.Close();
+            using (var payload = new StreamWriter(child.StandardInput)) {
+                payload.Write(body);
+            }
 
             return true;
         } catch (Exception ex) {
             Console.Error.WriteLine($"[kcap] session-end hand-off failed: {ex.Message}; running inline");
 
             // A child that started but never got the full payload must not outlive this failure:
-            // the inline path is about to do the work, and two owners would double-post.
-            try { process?.Kill(entireProcessTree: true); } catch { }
+            // the inline path is about to do the work, and two owners would double-post. Killing
+            // through the child's own handle, rather than re-resolving its pid, is what keeps this
+            // off whatever process has since taken that number.
+            child?.Terminate();
 
             return false;
         } finally {
-            process?.Dispose();
+            // Releases the handle and closes the pipe; the child itself runs on.
+            child?.Dispose();
         }
     }
 

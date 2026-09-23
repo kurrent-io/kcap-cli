@@ -332,6 +332,11 @@ public static partial class DaemonRunner {
         AntigravityReviewerHome.SweepStale(
             coverageStateDir, config.DaemonEpoch ?? "unpinned", new ConsoleErrorLogger());
 
+        // Same contract for the Pi reviewer's launch directory: unconditional, because a daemon whose
+        // operator has since disabled the reviewer still owns what its last incarnation left behind.
+        PiReviewerLaunchDir.SweepStale(
+            coverageStateDir, config.DaemonEpoch ?? "unpinned", new ConsoleErrorLogger());
+
         config.RecordlessSurvivorsImpossible = new CoverageJournal(coverageStateDir, NullLogger.Instance)
             .RecordBoot(daemonLock.InstanceId, daemonLock.PriorInstanceId,
                 priorLockReadFailed: daemonLock.PriorLockIndeterminate, thisEpochContained: OperatingSystem.IsWindows());
@@ -529,8 +534,7 @@ public static partial class DaemonRunner {
 
         // Not an ACP factory either: pi speaks its own LF-framed JSONL-RPC over one LONG-LIVED
         // process for the whole hosted session (see IPiRpcProcess), unlike Antigravity's
-        // exec-per-turn shape above. PR-1 only — interactive hosting; the reviewer lane
-        // (SupportsUnattended) is not implemented yet.
+        // exec-per-turn shape above. Serves both interactive hosting and a gated unattended reviewer.
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new PiRpcHostedAgentRuntimeFactory(
                 sp.GetRequiredService<DaemonConfig>(),
@@ -1246,6 +1250,7 @@ public static partial class DaemonRunner {
         "kiro"        => v => config.KiroUnattendedReviewerEnabled        = v,
         "opencode"    => v => config.OpenCodeUnattendedReviewerEnabled    = v,
         "antigravity" => v => config.AntigravityUnattendedReviewerEnabled = v,
+        "pi"          => v => config.PiUnattendedReviewerEnabled          = v,
         _ => throw new NotSupportedException(
             $"Gated reviewer '{vendor}' is in GatedReviewers.All but no DaemonConfig flag is wired to "
           + $"its opt-out switch, so setting {GatedReviewers.Resolve(vendor)?.EnableEnvVar ?? "it"} "
@@ -1311,6 +1316,9 @@ public static partial class DaemonRunner {
         SeedReviewerAffirmation(
             stateDir, AcpVendorDescriptors.OpenCode.Vendor,
             config.OpenCodeUnattendedReviewerEnabled, config.OpenCodePath, binaries);
+
+        SeedReviewerAffirmation(
+            stateDir, PiVendor, config.PiUnattendedReviewerEnabled, config.PiPath, binaries);
 
         SeedVersionFloor(stateDir, AntigravityVendor, config.AntigravityPath, binaries);
     }
@@ -1431,10 +1439,13 @@ public static partial class DaemonRunner {
     internal const string CopilotLauncherPolicyVersion = "copilot-unattended-v1";
     internal const string AntigravityLauncherPolicyVersion = "antigravity-unattended-v1";
     internal const string OpenCodeLauncherPolicyVersion = "opencode-unattended-v1";
+    internal const string PiLauncherPolicyVersion = "pi-unattended-v1";
 
     /// <summary>The one vendor token this daemon knows agy by. Never <c>agy</c> — that is a binary
     /// name, and the server routes on the vendor.</summary>
     internal const string AntigravityVendor = "antigravity";
+
+    internal const string PiVendor = "pi";
 
     /// <param name="advertised">The already-classified advertised vendors, when the caller has them.
     /// Passing them avoids re-running a classification that spawns vendor binaries; omitting them
@@ -1468,6 +1479,7 @@ public static partial class DaemonRunner {
                 "copilot" => CopilotLauncherPolicyVersion,
                 AntigravityVendor => AntigravityLauncherPolicyVersion,
                 "opencode" => OpenCodeLauncherPolicyVersion,
+                PiVendor  => PiLauncherPolicyVersion,
                 _         => $"{vendor}-unattended-v1"
             };
             // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,

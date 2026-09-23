@@ -35,11 +35,11 @@
                                     IsVisible="{Binding ShowsPullRequestTab}" />
                         </StackPanel>
                     </Border>
-                    <Button Content="Open in web" Command="{Binding OpenInWebCommand}"
+                    <Button x:Name="OpenInWebButton" Content="Open in web" Command="{Binding OpenInWebCommand}" IsVisible="{Binding HasAgent}"
                             Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
                             Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="13.5" />
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
-                            Padding="10,5" FontSize="13.5" />
+                            IsVisible="{Binding HasAgent}" Padding="10,5" FontSize="13.5" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -93,7 +93,7 @@
                     <StackPanel Spacing="10" HorizontalAlignment="Center">
                         <TextBlock Text="{Binding Terminal.State, Converter={x:Static views:TerminalDetachedOrFailedMessageConverter.Instance}}"
                                    Foreground="{StaticResource KcapTextBrush}" HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="380" />
-                        <Button x:Name="ReattachButton" Content="Reattach" Command="{Binding Terminal.ReattachCommand}"
+                        <Button x:Name="ReattachButton" Classes="kcapPrimary" Content="Reattach" Command="{Binding Terminal.ReattachCommand}"
                                 HorizontalAlignment="Center" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
                                 FontWeight="SemiBold" Padding="16,5" />
                     </StackPanel>
@@ -127,7 +127,7 @@
                  active-tab flag lives on the workspace VM, which is not this control's
                  DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
-                               IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive}" />
+                               IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsChat}" />
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
 
             <!-- Over the (still empty) chat host while the daemon is starting the runtime: the

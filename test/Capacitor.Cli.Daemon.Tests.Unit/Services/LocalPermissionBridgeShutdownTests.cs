@@ -47,8 +47,18 @@ public class LocalPermissionBridgeShutdownTests {
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeShutdownTests))]
     public async Task Shutdown_with_no_other_claim_answers_deny_with_no_record_and_the_leg_completes() {
-        var (bridge, _, broker, tmp) = Build();
+        var (bridge, server, broker, tmp) = Build();
         try {
+            // The cancelled await unwinds on a delay, as a loaded runner makes it: StopAsync drains
+            // the HTTP handlers, never the leg, so an immediate read of the count races it.
+            server.AwaitScript = async (_, ct) => {
+                try {
+                    return await new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);
+                } catch (OperationCanceledException) {
+                    await Task.Delay(300, CancellationToken.None);
+                    throw;
+                }
+            };
             await bridge.StartAsync(CancellationToken.None);
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             var response = Post(client, bridge);
@@ -57,7 +67,7 @@ public class LocalPermissionBridgeShutdownTests {
             var stop = bridge.StopAsync(CancellationToken.None);
             await Assert.That(await BehaviorOf(await response)).IsEqualTo("deny");
             await stop;
-            await Assert.That(bridge.ServerLegsInFlightForTest).IsEqualTo(0);
+            await WaitUntil(() => bridge.ServerLegsInFlightForTest == 0, "the server leg");
             await Assert.That(broker.PendingSnapshot().Count).IsEqualTo(0);
             await Assert.That(LogLines(tmp)).IsEmpty().Because("the shutdown claim won — no other party settled, so nothing is recorded");
             await bridge.DisposeAsync();

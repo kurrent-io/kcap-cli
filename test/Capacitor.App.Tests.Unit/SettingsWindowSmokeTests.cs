@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
+using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
@@ -226,7 +227,35 @@ public class SettingsWindowSmokeTests {
         }
     });
 
-    SettingsViewModel MakeViewModel(NotificationSettingsService notifications) {
+    [Test]
+    public Task Blocked_notifications_show_a_notice_whose_button_opens_system_settings() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        var access = new FakeDesktopNotificationAccess(DesktopNotificationAccess.Denied);
+        using var vm = MakeViewModel(notifications, access);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
+            Settle(window);
+            var notice = window.FindControl<Border>("NotificationAccessNotice")!;
+            var button = window.FindControl<Button>("NotificationAccessButton")!;
+            await WaitUntilAsync(() => notice.IsEffectivelyVisible);
+            await Assert.That(button.Content).IsEqualTo("Open System Settings");
+            await Assert.That(button.Classes.Contains("kcapChip")).IsTrue();
+
+            Click(window, button);
+
+            await WaitUntilAsync(() => access.SettingsOpened == 1);
+            access.Current = DesktopNotificationAccess.Allowed;
+            vm.RefreshNotificationAccess();
+            await WaitUntilAsync(() => !notice.IsEffectivelyVisible);
+        } finally { window.Close(); }
+    });
+
+    SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null) {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
@@ -234,7 +263,7 @@ public class SettingsWindowSmokeTests {
             service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
             (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
             (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask,
-            (_, _) => Task.FromResult(true), notificationSettings: notifications);
+            (_, _) => Task.FromResult(true), notificationSettings: notifications, notificationAccess: access);
     }
 
     static async Task WaitUntilAsync(Func<bool> ready) {

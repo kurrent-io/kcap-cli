@@ -32,6 +32,8 @@ public class ChatTabViewModelTests {
     const string ReadCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/repo/x/src/a.cs"}}]}}""";
     const string NoteLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<summary>Agent finished</summary>\n<result>\nAll good.\n</result>\n</task-notification>"}}""";
     const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
+    const string PlanCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_P","name":"mcp__plugin_kcap_kcap-plans__update_plan_task","input":{"ordinal":1,"status":"completed"}}]}}""";
+    const string PlanResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_P","content":"{}"}]}}""";
     const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
     const string AgentLaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
     const string AgentFinishLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}}""";
@@ -49,6 +51,7 @@ public class ChatTabViewModelTests {
         public RecordingOpener Opener { get; } = new();
         public FakePermissionService Permissions { get; } = new();
         public SessionSubagents Subagents { get; }
+        public PlanActivity Plan { get; } = new();
         public TerminalTabViewModel Terminal { get; }
         public ChatTabViewModel Chat { get; }
 
@@ -58,7 +61,7 @@ public class ChatTabViewModelTests {
             Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote, planActivity: Plan);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -297,6 +300,41 @@ public class ChatTabViewModelTests {
             File.AppendAllText(other, ReadCallLine + "\n");
             await h.TickAsync();
             await Assert.That(Group(h.Chat, 0).Calls).Count().IsEqualTo(2);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_plan_write_in_the_transcript_is_reported_once_its_result_is_read() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var writes = 0;
+            h.Plan.PlanWritten += () => writes++;
+            var path = Tmp.CreateFile("t.jsonl", [PlanCallLine]);
+            await h.PushAsync(Dto(path));
+            await Assert.That(writes).IsEqualTo(0);
+
+            File.AppendAllText(path, PlanResultLine + "\n");
+            await h.TickAsync();
+
+            await Assert.That(writes).IsEqualTo(1);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_new_transcript_forgets_the_plan_writes_the_old_one_left_in_flight() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var writes = 0;
+            h.Plan.PlanWritten += () => writes++;
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [PlanCallLine])));
+
+            await h.PushAsync(Dto(Tmp.CreateFile("o.jsonl", [PlanResultLine])));
+
+            await Assert.That(writes).IsEqualTo(0);
             await h.TeardownAsync();
         });
     }
@@ -582,18 +620,66 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var path = Tmp.CreateFile("ask.jsonl", [
-                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""",
             ]);
             await h.PushAsync(Dto(path));
-            h.Permissions.Add(PermissionEntries.Question("q1"));
+            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
             await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
             var group = (ToolGroupItem)h.Chat.Items[0];
             await Assert.That(group.PacksWithCard).IsTrue();
             await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsTrue();
 
-            h.Permissions.Remove("q1");
+            h.Permissions.Remove("r1");
             await WaitUntilAsync(() => CardRows(h.Chat).Length == 0, what: "cleared");
             await Assert.That(group.PacksWithCard).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// The centered card owns a live question, so the group hides the moment the call is read —
+    /// before the card exists. Waiting for the card would show the row for the round trip and
+    /// then take it away. It comes back when the card retires, because until the transcript
+    /// carries the result the row is the only record of the call.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_call_hides_its_group_before_the_card_arrives() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            var group = (ToolGroupItem)h.Chat.Items[0];
+            await Assert.That(CardRows(h.Chat)).IsEmpty();
+            await Assert.That(group.SuppressedForPendingQuestion).IsTrue();
+
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
+            await Assert.That(group.SuppressedForPendingQuestion).IsTrue();
+            await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsFalse();
+
+            h.Permissions.Remove("q1");
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 0, what: "cleared");
+            await Assert.That(group.SuppressedForPendingQuestion).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_suppressed_question_group_returns_when_the_session_ends() {
+        await RunOnUiAsync(async () => {
+            var input = new AvailabilityInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            var group = (ToolGroupItem)h.Chat.Items[0];
+            await Assert.That(group.SuppressedForPendingQuestion).IsTrue();
+
+            input.SetAvailability(SendAvailability.Ended);
+            await Assert.That(group.SuppressedForPendingQuestion).IsFalse();
             await h.TeardownAsync();
         });
     }
@@ -604,10 +690,10 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var path = Tmp.CreateFile("ask.jsonl", [
-                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""",
             ]);
             await h.PushAsync(Dto(path));
-            h.Permissions.Add(PermissionEntries.Question("q1"));
+            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
             await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
             var group = (ToolGroupItem)h.Chat.Items[0];
             await Assert.That(group.PacksWithCard).IsTrue();
@@ -1600,6 +1686,25 @@ public class ChatTabViewModelTests {
         public override bool CanAttach => true;
         public override string? AttachHint => null;
         public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) => Task.FromResult(ChatSendOutcome.Accepted);
+        public override void Dispose() { }
+    }
+
+    sealed class AvailabilityInput : ChatInput {
+        SendAvailability _availability = SendAvailability.Ready;
+
+        public void SetAvailability(SendAvailability availability) {
+            _availability = availability;
+            this.RaisePropertyChanged(nameof(Availability));
+            this.RaisePropertyChanged(nameof(CanAcceptText));
+        }
+
+        public override SendAvailability Availability => _availability;
+        public override bool CanAcceptText => _availability == SendAvailability.Ready;
+        public override string Hint => "";
+        public override bool CanAttach => false;
+        public override string? AttachHint => null;
+        public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) =>
+            Task.FromResult(ChatSendOutcome.Accepted);
         public override void Dispose() { }
     }
 
