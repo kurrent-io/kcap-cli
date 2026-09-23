@@ -4,11 +4,8 @@ using Capacitor.App.Services;
 namespace Capacitor.App.Tests.Unit;
 
 public class LaunchRequestTests {
-    // The genuine on-wire options — same JsonSerializerOptions ServerConnectionService hands
-    // AddJsonProtocol, via the shared LaunchHubJson.Configure. Serializing through a bare
-    // context (as this test used to) proves nothing about what SignalR actually sends: the
-    // server applies snake_case to every hub payload, and camelCase keys here would have
-    // bound null server-side while every test stayed green.
+    // The naming policy ServerConnectionService hands AddJsonProtocol, via LaunchHubJson.Configure:
+    // camelCase keys would bind null server-side while every test stayed green.
     static readonly JsonSerializerOptions Options = BuildOptions();
 
     static JsonSerializerOptions BuildOptions() {

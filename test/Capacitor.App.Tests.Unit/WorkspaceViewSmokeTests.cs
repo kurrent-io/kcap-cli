@@ -18,9 +18,9 @@ using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Headless rendering acceptance for the session workspace: WorkspaceView is a UserControl (like
-/// HomeView), so each test hosts it inside a plain Window purely to give headless something to
-/// Show() -- see HomeViewSmokeTests' identical header comment. Unlike HomeView, this VIEW is
+/// Headless rendering acceptance for the session workspace: WorkspaceView is a UserControl, so
+/// each test hosts it inside a plain Window purely to give headless something to Show(). This
+/// VIEW is
 /// normally handed its DataContext through MainWindow's ContentControl/DataTemplate swap
 /// (WorkspaceNavigationTests exercises that path); a smoke test instead sets DataContext directly,
 /// bypassing the template so the view under test is exactly WorkspaceView, not MainWindow's swap

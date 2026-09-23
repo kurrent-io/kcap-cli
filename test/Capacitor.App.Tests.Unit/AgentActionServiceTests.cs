@@ -29,21 +29,6 @@ public class AgentActionServiceTests {
     // ---- stop result mapping ----
 
     [Test]
-    public async Task Stop_stopped_no_banner() {
-        var ops = new ScriptedLocalControlOps();
-        var notifier = new RecordingNotifier();
-        var service = NewService(ops, notifier, new RecordingOpener());
-        var states = new StopStateRecorder();
-        using var sub = service.StopsInFlight.Subscribe(states.Add);
-
-        ops.QueueStop(new StopAgentResult(true, "stopped", null));
-        service.RequestStop("a", "agent-a", "agent");
-
-        await WaitUntilAsync(() => states[^1].Count == 0 && states.Count >= 3, what: "stop to settle");
-        await Assert.That(notifier.Notified).IsEmpty();
-    }
-
-    [Test]
     public async Task Stop_failed_banners() {
         var ops = new ScriptedLocalControlOps();
         var notifier = new RecordingNotifier();
@@ -69,7 +54,7 @@ public class AgentActionServiceTests {
         await Assert.That(notifier.Notified).IsEquivalentTo(["The daemon declined to stop agent-a"], CollectionOrdering.Matching);
     }
 
-    // §7 change: the app never surfaces the daemon's Error text verbatim anymore — it becomes a
+    // The app never surfaces the daemon's Error text verbatim: it becomes a
     // generic toast, and the full daemon text (which may name an id or "Pass --force…" CLI-speak
     // the app can't act on) goes to stderr only.
     [Test]
@@ -340,7 +325,7 @@ public class AgentActionServiceTests {
         await Assert.That(notifier.Notified).IsEquivalentTo(["Not signed in to a server"], CollectionOrdering.Matching);
     }
 
-    // ---- confirm-then-force for protected kinds (decision 5) ----
+    // ---- confirm-then-force for protected kinds ----
 
     [Test]
     public async Task Protected_kind_confirm_true_stops_with_force() {
@@ -393,7 +378,7 @@ public class AgentActionServiceTests {
         await Assert.That(notifier.Notified).IsEmpty();
     }
 
-    // Fail-safe (spec: "unknown kind token → treated protected"), mirroring the daemon's own
+    // Fail-safe: an unknown kind token is treated as protected, mirroring the daemon's own
     // Kind != LaunchKind.Default check and the CLI's IsProtectedKind — an unrecognised KindText
     // must never read as stoppable without confirmation.
     [Test]

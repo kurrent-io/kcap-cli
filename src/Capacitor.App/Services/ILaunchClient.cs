@@ -20,16 +20,10 @@ public interface ILaunchClient {
     Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct);
 }
 
-/// The RequestLaunchAgentV2 hub argument. A concrete record, not an anonymous type: the app
-/// serializes through source-generated contexts throughout (AppStateStore, KcapCli), and a
-/// reflection dependency here would foreclose ever AOT-publishing it. Member names must match
-/// LaunchAgentRequestV2's properties — the hub binds by name.
-// Explicit snake_case on every member: the server applies PropertyNamingPolicy =
-// SnakeCaseLower to all hub payloads (kcap-server JsonDefaults.ConfigureSignalRPayload), and
-// LaunchHubJson.Configure sets the same policy here. The explicit names are what survive that
-// policy whatever it is set to, and they put the wire contract in plain sight next to the
-// server record each member must match — this file has already shipped one launch-breaking
-// key-casing defect, so the names are pinned rather than derived.
+/// The RequestLaunchAgentV2 hub argument, serialized by SignalR through reflection. Member names
+/// must match LaunchAgentRequestV2's properties — the hub binds by name.
+// Explicit snake_case on every member: the names survive whatever naming policy the hub options
+// carry, and a key that drifts from the server record binds null there without an error.
 public sealed record LaunchAgentRequestV2Payload {
     [JsonPropertyName("daemon_name")]           public required string   DaemonName          { get; init; }
     [JsonPropertyName("prompt")]                public          string?  Prompt              { get; init; }
@@ -48,9 +42,6 @@ public sealed record LaunchAgentRequestV2Payload {
     public string? PermissionMode { get; init; }
 }
 
-[JsonSerializable(typeof(LaunchAgentRequestV2Payload))]
-public partial class LaunchJsonContext : JsonSerializerContext;
-
 /// The RequestLaunchAgentV2 argument, split from the transport so its shape is testable.
 public static class LaunchPayload {
     public static LaunchAgentRequestV2Payload For(LaunchRequest r) => new() {
@@ -60,8 +51,7 @@ public static class LaunchPayload {
         Effort     = string.IsNullOrWhiteSpace(r.Effort) ? null : r.Effort,
         RepoPath   = r.RepoPath,
         Vendor     = r.Vendor,
-        // Null, not an empty array: a launch with no files sends what it sent before attachments
-        // existed.
+        // Null, not an empty array: the server reads an empty array as "these ids, none of them".
         AttachmentIds = r.AttachmentIds is { Count: > 0 } ids ? [.. ids] : null,
         PermissionMode = string.IsNullOrWhiteSpace(r.PermissionMode) ? null : r.PermissionMode,
     };

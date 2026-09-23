@@ -14,9 +14,9 @@ public abstract record GateResult {
 public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBinding, TokenUnusableExpired, EvaluationFailed }
 
 /// <summary>
-/// Decision-1 first-run trigger: local, side-effect-free except the shared resolution path's own
+/// First-run trigger: local, side-effect-free except the shared resolution path's own
 /// v1→v2 migration write on legacy configs (kept intentionally shared with the normal daemon
-/// graph — decision 2 — rather than a purity-motivated divergent read that could resolve a
+/// graph rather than a purity-motivated divergent read that could resolve a
 /// different profile than the graph builds), no refresh. Whether the wizard opens is the exact
 /// inverse of "does TokenStore already consider this profile authenticated" — so every branch
 /// here mirrors a specific TokenStore rule rather than inventing its own.
@@ -37,7 +37,7 @@ public sealed class OnboardingGate(
     /// built from that very value — which is what stops the verdict and the graph identity naming
     /// different profiles.
     public async Task<(GateResult Result, ProfileContext Profiles)> EvaluateAsync(CancellationToken ct) {
-        // Daemon-style resolution — no repo/git discovery, matching decision 1's "local" scope.
+        // Daemon-style resolution — no repo/git discovery: the gate is local.
         var profiles = await AppConfig.ResolveActiveProfile([], config, env);
         GateResult result;
         try {

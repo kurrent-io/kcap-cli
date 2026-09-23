@@ -19,27 +19,26 @@ namespace Capacitor.App.Tests.Unit;
 /// RxSchedulers.MainThreadScheduler), so every test runs inside
 /// AvaloniaSession.WithImmediateRxScheduler and carries [NotInParallel("AvaloniaSession")].
 public class MainWindowViewModelTests {
-    // Real AppNotifier — these tests do not exercise toasts; AgentActionService still needs one.
+    // Real AppNotifier: these tests do not exercise toasts, but AgentActionService needs one.
     static (AgentActionService Actions, IAppNotifier Notifier) NewActions(FakeDaemonClientService service) {
         var notifier = new AppNotifier();
         var actions = new AgentActionService(new ScriptedLocalControlOps(), notifier, new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
         return (actions, notifier);
     }
 
-    /// The view-state/rail-wiring tests' standard construction: a VM over the fake service, with
-    /// an optional workspace factory and rail — mirrors NewActions' shape.
     sealed class UnusedLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
     }
 
+    /// The view-state/rail-wiring tests' standard construction: a VM over the fake service, with
+    /// an optional workspace factory and rail.
     static MainWindowViewModel NewVm(
             FakeDaemonClientService service, Func<string, WorkspaceViewModel>? workspaceFactory = null,
             SessionRailViewModel? rail = null, Func<string, AgentOrigin?>? originOf = null,
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             Action<Func<Task>>? trackWorkspaceTeardown = null, IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null) {
-        var (actions, _) = NewActions(service);
         return new MainWindowViewModel(
             service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             trackWorkspaceTeardown: trackWorkspaceTeardown,
@@ -86,6 +85,17 @@ public class MainWindowViewModelTests {
 
     /// A real WorkspaceViewModel over the fake service and scripted attach/surface fakes — same
     /// pieces WorkspaceNavigationTests.NewNav wires, just without its Nav bookkeeping.
+    /// A window wired to a launcher pane: the Start/Reconnect buttons live on the pane, so their
+    /// visibility is read where LauncherPaneView binds it.
+    static (MainWindowViewModel Vm, HomeViewModel Home, TempDir Tmp) WithLauncher(FakeDaemonClientService service) {
+        var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var home = new HomeViewModel(
+            service, new AppStateStore(path), new UnusedLaunchClient(),
+            () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, home: home);
+        return (vm, home, tmp);
+    }
+
     static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, string agentId) {
         var (actions, _) = NewActions(service);
         var attach = new FakeTerminalAttachClientFactory();
@@ -99,7 +109,6 @@ public class MainWindowViewModelTests {
     public async Task Projections_follow_the_snapshot() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
             using var activation = vm.Activator.Activate();
 
@@ -107,9 +116,7 @@ public class MainWindowViewModelTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
             await Assert.That(vm.DaemonName).IsEqualTo("daemon-a");
-            await Assert.That(vm.DaemonVersion).IsEqualTo("1.2.3");
             await Assert.That(vm.ServerUrl).IsEqualTo("http://localhost:9999");
-            await Assert.That(vm.ConnectionText).IsEqualTo("connected"); // raw wire value, unchanged
             await Assert.That(vm.ConnectionDisplay).IsEqualTo("Connected"); // new presentation projection
         });
     }
@@ -156,7 +163,7 @@ public class MainWindowViewModelTests {
         });
     }
 
-    // ---- VersionDisplay (spec: SEMVER only, everything from the first '+' is build metadata) ----
+    // ---- VersionDisplay (SEMVER only, everything from the first '+' is build metadata) ----
 
     [Test]
     [Arguments("1.2.3+abc", "1.2.3")]
@@ -315,7 +322,6 @@ public class MainWindowViewModelTests {
 
             service.SnapshotsSubject.OnNext(Snap(version: "1.2.3+abc"));
             await Assert.That(vm.VersionDisplay).IsEqualTo("1.2.3");
-            await Assert.That(vm.DaemonVersion).IsEqualTo("1.2.3+abc");
         });
     }
 
@@ -327,34 +333,36 @@ public class MainWindowViewModelTests {
     public async Task Start_and_reconnect_visibility_are_mutually_exclusive() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null));
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsFalse();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsFalse();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            await Assert.That(vm.StartVisible).IsTrue();
-            await Assert.That(vm.RetryVisible).IsFalse();
+            await Assert.That(home.DaemonStartVisible).IsTrue();
+            await Assert.That(home.DaemonRetryVisible).IsFalse();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null));
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task StartVisible_stays_true_while_a_start_is_in_flight_unlike_CanExecute() {
+    public async Task The_start_button_stays_visible_while_a_start_is_in_flight_unlike_CanExecute() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
 
@@ -369,7 +377,7 @@ public class MainWindowViewModelTests {
 
             var execute = vm.StartDaemonCommand.Execute().ToTask();
             await Assert.That(startCanExecute).IsFalse(); // command disabled while in flight...
-            await Assert.That(vm.StartVisible).IsTrue();  // ...but the button itself stays visible
+            await Assert.That(home.DaemonStartVisible).IsTrue();  // ...but the button itself stays visible
 
             gate.SetResult();
             await execute;
@@ -381,7 +389,6 @@ public class MainWindowViewModelTests {
     public async Task Agent_count_renders_only_while_connected() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
             using var activation = vm.Activator.Activate();
 
@@ -389,7 +396,7 @@ public class MainWindowViewModelTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             await Assert.That(vm.AgentCountText).IsEqualTo("2 of 5 agents");
 
-            // Retention is the SERVICE's concern (spec §5) — the fake never clears its snapshot
+            // Retention is the SERVICE's concern; the fake never clears its snapshot
             // on disconnect either; the VM merely stops RENDERING the count.
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
             await Assert.That(vm.AgentCountText).IsEmpty();
@@ -401,7 +408,6 @@ public class MainWindowViewModelTests {
     public async Task Command_enablement_matrix() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
 
             var startCanExecute = false;
@@ -449,8 +455,9 @@ public class MainWindowViewModelTests {
     public async Task Incompatible_renders_neutral_skew_message() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
             using var activation = vm.Activator.Activate();
 
             var startCanExecute = false;
@@ -464,8 +471,8 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.Reason!).Contains("App and daemon are incompatible");
             await Assert.That(vm.Reason!).Contains("Reconnect");
             await Assert.That(vm.Reason!).DoesNotContain("daemon_incompatible");
-            await Assert.That(vm.StartVisible).IsFalse();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
             await Assert.That(startCanExecute).IsFalse();
             await Assert.That(retryCanExecute).IsTrue();
         });
@@ -476,12 +483,11 @@ public class MainWindowViewModelTests {
     public async Task Start_message_lifecycle() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
             using var activation = vm.Activator.Activate();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            await Assert.That(vm.Reason).IsEqualTo(MainWindowViewModel.UnreachableMessage);
+            await Assert.That(vm.Reason).IsEqualTo(HomeViewModel.DaemonDownNotice);
             await Assert.That(vm.Reason!).DoesNotContain("daemon_unreachable");
 
             service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
@@ -517,7 +523,6 @@ public class MainWindowViewModelTests {
     public async Task Lifecycle_status_sets_and_is_cleared_like_a_start_failure() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var lifecycleStatus = new Subject<string?>();
             var vm = new MainWindowViewModel(
                 service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
@@ -537,13 +542,15 @@ public class MainWindowViewModelTests {
     public async Task Reconnect_sets_reconnecting_then_settles_if_still_unreachable() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var (vm, home, tmp) = WithLauncher(service);
+            using var _tmp = tmp;
+            using var _home = home;
             using var activation = vm.Activator.Activate();
 
             // Reconnect is offered while connecting or skewed — not while Start owns the down case.
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null));
             await Assert.That(vm.StartMessage).IsNull();
-            await Assert.That(vm.RetryVisible).IsTrue();
+            await Assert.That(home.DaemonRetryVisible).IsTrue();
 
             var execute = vm.RetryCommand.Execute().ToTask();
             await Assert.That(vm.StartMessage).IsEqualTo(MainWindowViewModel.ReconnectingMessage);
@@ -602,7 +609,6 @@ public class MainWindowViewModelTests {
     public async Task StartDaemonCommand_invokes_the_supplied_startAction_instead_of_StartDaemonAsync() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var calls = 0;
             CancellationToken? seen = null;
             Task StartAction(CancellationToken ct) {
@@ -631,7 +637,6 @@ public class MainWindowViewModelTests {
     public async Task Without_a_workspace_factory_the_window_stays_on_the_tabbed_shell() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
 
             vm.OpenSession("0123456789abcdef0123456789abcdef");
@@ -649,7 +654,6 @@ public class MainWindowViewModelTests {
     public async Task The_navigation_gate_is_shared_across_the_windows_built_over_it() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var gate = new NavigationGate();
             MainWindowViewModel Build() => new(
                 service, CancellationToken.None, TestActivity.New(), TimeProvider.System, navigation: gate);
@@ -673,7 +677,6 @@ public class MainWindowViewModelTests {
     public async Task Deactivation_disposes_subscriptions() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
 
             var activation = vm.Activator.Activate();
@@ -698,21 +701,19 @@ public class MainWindowViewModelTests {
         });
     }
 
-    // ---- Shell view state and rail wiring (spec: Home/Sessions surfaces, orthogonal to
+    // ---- Shell view state and rail wiring (Home/Sessions surfaces, orthogonal to
     // CurrentWorkspace, and the rail's SelectedAgentId tracking the open workspace) ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task OpenSession_switches_to_sessions_view_and_reopening_the_same_id_is_a_noop() {
+    public async Task OpenSession_builds_the_workspace_and_reopening_the_same_id_is_a_noop() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var built = 0;
             var vm = NewVm(service,
                 workspaceFactory: id => { built++; return NewWorkspace(service, id); });
 
-            await Assert.That(vm.IsSessionsView).IsTrue(); // Sessions is the boot surface now
             vm.OpenSession("a1");
-            await Assert.That(vm.IsSessionsView).IsTrue();
             await Assert.That(built).IsEqualTo(1);
 
             vm.OpenSession("a1"); // same id: no teardown/rebuild of a live attach
@@ -720,24 +721,6 @@ public class MainWindowViewModelTests {
 
             vm.OpenSession("a2"); // different id still swaps
             await Assert.That(built).IsEqualTo(2);
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task View_commands_swap_surfaces_and_close_keeps_sessions_view() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id));
-            vm.OpenSession("a1");
-            vm.CloseWorkspace();
-            await Assert.That(vm.CurrentWorkspace).IsNull();
-            await Assert.That(vm.IsSessionsView).IsTrue(); // placeholder pane, not Home
-
-            vm.ShowHomeCommand.Execute().Subscribe();
-            await Assert.That(vm.IsHomeView).IsTrue();
-            vm.ShowSessionsCommand.Execute().Subscribe();
-            await Assert.That(vm.IsSessionsView).IsTrue();
         });
     }
 
@@ -884,36 +867,6 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).AgentId).IsEqualTo("r1");
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
-        });
-    }
-
-    /// A lane change is background-triggered: only the user's own click navigates. A shell yanked
-    /// to Sessions by a row moving machines takes the surface they were reading with it.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_rebind_swaps_the_workspace_without_moving_the_shell_off_the_view_in_use() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var host = new RemoteHost();
-            var service = new FakeDaemonClientService();
-            var vm = NewVm(service,
-                workspaceFactory: id => NewWorkspace(service, id),
-                originOf: _ => AgentOrigin.Remote,
-                remoteWorkspaceFactory: id => host.New(id, "s1"),
-                trackWorkspaceTeardown: teardown => _ = teardown(),
-                directory: host.Directory);
-
-            vm.OpenSession("r1");
-            await vm.ShowHomeCommand.Execute().ToTask();
-            await Assert.That(vm.CurrentView).IsEqualTo(ShellView.Home);
-
-            host.Directory.ProvenTwins.Add("r1");
-            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
-                WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
-                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
-            host.Directory.Rows.Remove("remote:r1");
-
-            await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
-            await Assert.That(vm.CurrentView).IsEqualTo(ShellView.Home);
         });
     }
 

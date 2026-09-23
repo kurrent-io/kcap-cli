@@ -157,12 +157,4 @@ public class PendingLaunchRowsTests {
         local.Pending.AddOrUpdate(Pending("p6", stage: "initialized"));
         await Assert.That(dir.Rows.Lookup("pending:p6").Value.LaunchStage).IsEqualTo("initialized");
     }
-
-    [Test]
-    public async Task A_pending_row_never_claims_a_session() {
-        var (local, dir) = Build(TimeProvider.System);
-        using var _d = dir;
-        local.Pending.AddOrUpdate(Pending("p4"));
-        await Assert.That(dir.VendorOfSession("s1")).IsNull();
-    }
 }

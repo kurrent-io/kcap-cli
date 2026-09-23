@@ -42,7 +42,7 @@ public class PauseControllerTests {
         await Assert.That(notifications).IsEmpty();
     }
 
-    // Spec §6/§12 "detection strictness": an all-wildcard deny at an index OTHER than 0 must not
+    // Detection strictness: an all-wildcard deny at an index OTHER than 0 must not
     // check the toggle — pins HasPauseRuleAtZero against a Rules.Any(...)-shaped regression that
     // would otherwise pass every other test in this file.
     [Test]
@@ -290,7 +290,7 @@ public class PauseControllerTests {
         await Assert.That(states[^1]).IsEqualTo(new PauseState(true, true, false)); // the FIRST desired value won
     }
 
-    // Spec §12: the reverse of Toggle_during_passive_* — a passive refresh arriving while a
+    // The reverse of Toggle_during_passive_* — a passive refresh arriving while a
     // TOGGLE owns the lane must be dropped like any other busy-lane request (RequestRefresh's
     // Lane.Idle check does not distinguish Passive from Toggle occupancy). Passive_dropped_while_busy
     // only proves passive-during-passive; this proves the toggle side.
@@ -442,8 +442,7 @@ public class PauseControllerTests {
 
     [Test]
     public async Task Disconnect_mid_toggle_banners_and_leaves_unverified() {
-        // Spec §12 acceptance pin: "disconnect mid-toggle (→ daemon_unreachable banner +
-        // unverified)" — the SAME disconnected daemon fails both the primary op and the
+        // Disconnect mid-toggle → daemon_unreachable banner + unverified: the SAME disconnected daemon fails both the primary op and the
         // trailing refresh that follows it.
         var ops = new ScriptedLocalControlOps();
         var notifications = new List<string>();
@@ -484,7 +483,7 @@ public class PauseControllerTests {
         // request a refresh until it is actually ACCEPTED — a request while still busy is a
         // silent drop, so GetCalls advancing past the toggle's own call IS the "lane free" proof.
         // The token stays cancelled, so this fresh attempt immediately OCEs too, same as real
-        // LocalControlOps (spec §10) — that's fine, it only needs to prove acceptance.
+        // LocalControlOps; that's fine, it only needs to prove acceptance.
         await WaitUntilAsync(() => { controller.RequestRefresh(); return ops.GetCalls >= 2; },
             what: "lane to free after shutdown cancellation");
 

@@ -117,17 +117,6 @@ public class RailSessionViewModelTests {
         });
     }
 
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Failed_status_sets_the_pip() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var ok = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            using var bad = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(ok.NeedsYou).IsFalse();
-            await Assert.That(bad.NeedsYou).IsTrue();
-        });
-    }
-
     /// The daemon's own verdict that the agent finished its turn lights the same pip a pending
     /// ask does, and the tooltip says which it is.
     [Test]

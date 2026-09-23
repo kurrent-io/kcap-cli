@@ -27,7 +27,7 @@ sealed class RecordingOpener : IUrlOpener {
     }
 }
 
-/// AgentActionService's confirm-then-force seam (decision 5), gated by a per-call
+/// AgentActionService's confirm-then-force seam, gated by a per-call
 /// TaskCompletionSource — mirrors ScriptedLocalControlOps's queue idiom so a test arms the NEXT
 /// call's answer (or holds it open) before triggering it. Every invocation's label is recorded,
 /// which is also how "confirm seam never invoked" is asserted for a non-protected stop.

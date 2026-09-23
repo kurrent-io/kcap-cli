@@ -18,14 +18,16 @@ public sealed class UppercaseConverter : IValueConverter {
 }
 
 /// Activity row outcome badge: the same Connected/Disrupted greens and reds as the status dots,
-/// so "allowed" matches a live session indicator rather than a darker Material green.
-/// ActivityRow stays a plain record (no Avalonia types) — color lives here for the same
-/// UI-thread-affinity reason MainWindowViewModel.Paint documents.
+/// so "allowed" matches a live session indicator rather than a darker Material green. Immutable
+/// brushes, so the shared instances carry no thread affinity.
 public sealed class OutcomeBrushConverter : IValueConverter {
     public static readonly OutcomeBrushConverter Instance = new();
 
+    static readonly IBrush Allowed = new ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
+    static readonly IBrush Denied = new ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
+
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        new SolidColorBrush(Color.Parse(value is true ? StatusColors.Connected : StatusColors.Disrupted));
+        value is true ? Allowed : Denied;
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

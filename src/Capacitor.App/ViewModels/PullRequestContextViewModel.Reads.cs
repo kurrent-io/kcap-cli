@@ -119,8 +119,8 @@ public sealed partial class PullRequestContextViewModel {
                         if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(); return; }
                         state.Pages.Add(saved);
                     }
-                    state.Snapshot = page.SnapshotId; state.Started = page.SnapshotStartedAt; state.Completed = page.SnapshotCompletedAt;
-                    state.Fetched = read.FetchedAt; state.Head = page.HeadSha; state.Coverage = page.Coverage; state.CoverageReason = page.CoverageReason;
+                    state.Snapshot = page.SnapshotId; state.Completed = page.SnapshotCompletedAt;
+                    state.Head = page.HeadSha; state.Coverage = page.Coverage;
                     state.Total = page.Total; state.Excluded = page.ExcludedByFilter; state.Stopped = false; state.Error = null;
                     _sections[key] = state;
                     EnforcePageBudget(state, saved, earlier);

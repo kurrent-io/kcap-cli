@@ -37,6 +37,19 @@ public class McpCanonicalContractTests {
             .IsEquivalentTo(KcapMcpServers.ForCodex.Select(s => s.Name).ToArray());
     }
 
+    /// <summary>Codex reads a plugin descriptor's entries into the same server config as
+    /// config.toml, so the bundled descriptor must carry the flows timeout the TOML writer emits.</summary>
+    [Test]
+    public async Task Bundled_codex_mcp_json_carries_the_flows_tool_timeout() {
+        var servers = (JsonObject)JsonNode.Parse(File.ReadAllText(Path.Combine(RepoTree.KcapDir(), ".codex-mcp.json")))!["mcpServers"]!;
+        var flows   = KcapMcpServers.ForCodex.Single(s => s.Name == "kcap-flows");
+
+        await Assert.That(servers["kcap-flows"]!["tool_timeout_sec"]!.GetValue<long>()).IsEqualTo((long)flows.ToolTimeout!.Value.TotalSeconds);
+        foreach (var (name, node) in servers)
+            if (name != "kcap-flows")
+                await Assert.That(node!["tool_timeout_sec"]).IsNull().Because($"{name} bounds no long call");
+    }
+
     [Test]
     public async Task Codex_subset_keeps_flows_and_memory() {
         var names = KcapMcpServers.ForCodex.Select(s => s.Name).ToArray();

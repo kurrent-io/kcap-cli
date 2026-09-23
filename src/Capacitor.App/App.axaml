@@ -4,11 +4,10 @@
              Name="Kurrent Capacitor"
              RequestedThemeVariant="Dark">
     <Application.Resources>
-        <!-- The Home surface's design palette. Kcap-prefixed keys so these never
-             shadow a FluentTheme resource of the same short name — MainWindow's existing controls
-             stay on FluentTheme defaults untouched. ThemeVariant is Dark because every Kcap*
-             brush is a dark-canvas token: Fluent's light ButtonBackgroundPointerOver would paint
-             a near-white fill under our light Foreground and the control vanishes on hover. -->
+        <!-- The app palette. Kcap-prefixed keys never shadow a FluentTheme resource. ThemeVariant
+             is Dark because every Kcap* brush is a dark-canvas token: Fluent's light
+             ButtonBackgroundPointerOver would paint a near-white fill under our light Foreground
+             and the control vanishes on hover. -->
         <ResourceDictionary>
             <SolidColorBrush x:Key="KcapCanvasBrush" Color="#0B0D12" />
             <SolidColorBrush x:Key="KcapSurfaceBrush" Color="#12151D" />
@@ -17,8 +16,7 @@
             <!-- A rule that must read where content already carries Border-coloured chrome. -->
             <SolidColorBrush x:Key="KcapBorderStrongBrush" Color="#414A5E" />
             <SolidColorBrush x:Key="KcapTextBrush" Color="#F1F3F7" />
-            <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border.
-                 Faint was #6F7687 (~3.7:1 on Raised) — too dim for real copy. -->
+            <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border. -->
             <SolidColorBrush x:Key="KcapMutedBrush" Color="#B0B7C6" />
             <SolidColorBrush x:Key="KcapFaintBrush" Color="#949BAA" />
             <!-- Primary CTAs: near-white fill. Green (KcapSuccess*) is status/selection only. -->
@@ -347,7 +345,7 @@
         <!-- Fluent paints hover/pressed on PART_ContentPresenter, not the Button.Background local
              value — so a chip that sets its own fill still gets a theme fill that clashes with
              KcapTextBrush. These classes pin the template chrome to our tokens (same footgun
-             HomeView.sessionCard / SessionRail.railRow already call out). -->
+             SessionRail.railRow already calls out). -->
         <Style Selector="Button.kcapChip">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -524,8 +522,9 @@
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
-        <!-- In-flight state markers (a starting session's dot, a running check) share one pulse. -->
-        <Style Selector=":is(Control).pulsing">
+        <!-- In-flight state markers (a starting session's dot, a running check, a live tool-call
+             row) share one pulse. -->
+        <Style Selector=":is(Control).pulsing, Border.toolRunning">
             <Style.Animations>
                 <Animation Duration="0:0:1.1" IterationCount="Infinite">
                     <KeyFrame Cue="0%">
@@ -554,22 +553,6 @@
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        </Style>
-        <!-- Live tool-call status: a soft pulse so an in-flight row is never a blank gap. -->
-        <Style Selector="Border.toolRunning">
-            <Style.Animations>
-                <Animation Duration="0:0:1.1" IterationCount="Infinite">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
-                    <KeyFrame Cue="50%">
-                        <Setter Property="Opacity" Value="1" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
         </Style>
     </Application.Styles>
 </Application>

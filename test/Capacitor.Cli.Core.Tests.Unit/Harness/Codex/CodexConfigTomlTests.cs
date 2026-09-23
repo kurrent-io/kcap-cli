@@ -400,6 +400,73 @@ public class CodexConfigTomlTests {
     }
 
     [Test]
+    public async Task RegisterKcapMcpServers_gives_only_the_flows_entry_a_tool_timeout() {
+        using var tmp = new TempDir();
+        var path = tmp.GetResolvedPath("config.toml");
+
+        CodexConfigToml.RegisterKcapMcpServers(path, resolveBinaryPath: () => TestBinaryPath);
+
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That((long)((TomlTable)servers["kcap-flows"])["tool_timeout_sec"]).IsEqualTo(600L);
+        foreach (var name in new[] { "kcap-review", "kcap-sessions", "kcap-memory", "kcap-workitems" })
+            await Assert.That(((TomlTable)servers[name]).ContainsKey("tool_timeout_sec")).IsFalse();
+    }
+
+    /// <summary>An owned flows entry without the timeout, with the ledger claim taken over that
+    /// shape — what a ledger on disk can still hold. The claim is a verbatim fixture: one produced by
+    /// the writer under test would carry the timeout already, and the test would prove nothing.</summary>
+    [Test]
+    public async Task RegisterKcapMcpServers_adds_the_tool_timeout_to_an_owned_flows_entry_written_without_it() {
+        using var tmp = new TempDir();
+        var path = tmp.GetResolvedPath("config.toml");
+        tmp.CreateFile("config.toml", """
+            [mcp_servers.kcap-flows]
+            command = "/opt/a/kcap"
+            args = ["mcp", "flows"]
+            [mcp_servers.other]
+            command = "/usr/local/bin/other"
+            args = ["serve"]
+            """);
+        tmp.CreateFile("mcp-ownership-v1.json", """
+            {"version":1,"entries":{"kcap-flows":{"fingerprint":"a27d21a1f7efe97e2307d85b6bb3ecec45fd17a4edf2ce226aa0e1f2af740121","normalized_table":{"args":[{"type":"string","value":"mcp"},{"type":"string","value":"flows"}],"command":{"type":"string","value":"/opt/a/kcap"}}}}}
+            """);
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path, resolveBinaryPath: () => "/opt/a/kcap");
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That((long)((TomlTable)servers["kcap-flows"])["tool_timeout_sec"]).IsEqualTo(600L);
+        await Assert.That((string)((TomlTable)servers["other"])["command"]).IsEqualTo("/usr/local/bin/other");
+        await Assert.That(((TomlTable)servers["other"]).ContainsKey("tool_timeout_sec")).IsFalse();
+
+        // Healed and re-claimed: a second pass finds nothing to do, and uninstall still owns it.
+        await Assert.That(CodexConfigToml.RegisterKcapMcpServers(path, resolveBinaryPath: () => "/opt/a/kcap"))
+            .IsEqualTo(CodexConfigToml.Change.Unchanged);
+        await Assert.That(CodexConfigToml.UnregisterKcapMcpServers(path)).IsEqualTo(CodexConfigToml.Change.Updated);
+        var remaining = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That(remaining.ContainsKey("kcap-flows")).IsFalse();
+        await Assert.That(remaining.ContainsKey("other")).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_preserves_a_flows_tool_timeout_the_user_changed() {
+        using var tmp = new TempDir();
+        var path = tmp.GetResolvedPath("config.toml");
+        CodexConfigToml.RegisterKcapMcpServers(path, resolveBinaryPath: () => TestBinaryPath);
+        var root = ReadToml(path);
+        var flows = (TomlTable)((TomlTable)root["mcp_servers"])["kcap-flows"];
+        flows["tool_timeout_sec"] = 900L;
+        File.WriteAllText(path, TomlSerializer.Serialize(root));
+
+        CodexConfigToml.RegisterKcapMcpServers(path, resolveBinaryPath: () => TestBinaryPath);
+
+        var after = (TomlTable)((TomlTable)ReadToml(path)["mcp_servers"])["kcap-flows"];
+        await Assert.That((long)after["tool_timeout_sec"]).IsEqualTo(900L);
+        await Assert.That(CodexConfigToml.UnregisterKcapMcpServers(path)).IsEqualTo(CodexConfigToml.Change.UpdatedWithPreservedEntries);
+        await Assert.That(((TomlTable)ReadToml(path)["mcp_servers"]).ContainsKey("kcap-flows")).IsTrue();
+    }
+
+    [Test]
     public async Task UnregisterKcapMcpServers_removes_absolute_registered_owned_entries() {
         using var tmp = new TempDir();
         var path = tmp.GetResolvedPath("config.toml");

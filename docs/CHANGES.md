@@ -18,6 +18,37 @@ waited, and the legacy `tokens.json` is moved into its owner's slot before any w
 `active_profile` changes the selection. Mutations whose decision depends on what the file says go
 through a strict variant that refuses an unreadable config rather than publishing a default over it.
 
+## A driver finds its flow without the id, and owns the harness timeout it can
+
+`start_review_flow` hands the driver its `flow_run_id` only in the reply that ends the call. A
+harness that aborts the call first — Codex at its 300 s default, or any harness a user configured
+shorter — leaves the driver with a running flow and no handle on it, and context compaction loses
+the same handle later. So the two status tools take the id as optional: without one they list the
+calling session's flows (`GET /api/flows?requesting_session_id=…&state=all`) and read the newest
+open one. Several open flows are listed rather than guessed between, since a wrong guess has the
+driver acting on another task's review. With none open the newest settled flow is read, so a run
+that failed while the driver was away reports as failed instead of "no flow". The lookup sends the
+session id the server resolved once for the start, so the two forms can never diverge; an explicit
+`session_id` is canonicalized as every other kcap MCP server does it. A server without the route
+answers 404, which the tool words as "pass the id", not as a missing flow. The session exists on
+Claude Code and Codex only: the JSON harnesses export nothing per process into the MCP child, their
+starts carry no session, and a bare call there answers the no-session error, so the guidance names
+the two harnesses rather than promising every driver a way back — a local run ledger is the way to
+cover the rest.
+
+The Codex registration carries `tool_timeout_sec = 600`. The CLI already ends every flow call under
+300 s, so the entry is not what stops Codex aborting today; it is what stops a per-client budget, or
+a user-shortened Codex default, from bringing the abort back silently. It goes through the ordinary
+heal lane: an entry kcap wrote is rewritten to the new shape on the next setup or refresh, and an
+entry the user edited — a timeout of their own included, as the ownership fingerprint covers
+integer values — is left as it is. The static plugin descriptor is untouched: whether Codex reads
+the key from plugin JSON is unverified, and an unknown key there could cost the whole plugin.
+
+The descriptions of the four blocking tools and both flow skills say the rest before it happens: the
+call blocks for minutes, a harness abort means the flow is still running, and the recovery is the
+status tool with `wait: true` — not a second start, and not an investigation, which is where a
+driver spent its turn when it had only the harness's own error text to go on.
+
 ## The cloud terminal mirror has its own lane per agent
 
 An agent's PTY is drained by one loop that feeds every surface. When that loop awaited a shared

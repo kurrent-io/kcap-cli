@@ -111,7 +111,6 @@ public sealed partial class WorkContextViewModel {
         private set {
             if (ReferenceEquals(_issue, value)) return;
             this.RaiseAndSetIfChanged(ref _issue, value);
-            this.RaisePropertyChanged(nameof(HasIssue));
             NotifyIdentity();
         }
     }
@@ -134,7 +133,6 @@ public sealed partial class WorkContextViewModel {
     public bool HasParts => _parts.Count > 0;
     public bool HasBlockers => _blockedBy.Count > 0;
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
-    public bool HasIssue => Issue is not null;
     public bool HasContributors => _contributors.Count > 0;
     /// The card carries the PR picker and the live checks and review rows, so it stays while it
     /// has a PR to select or something to say; a list settled with neither leaves the pane's own

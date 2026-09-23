@@ -5,8 +5,6 @@ public sealed record PullRequestStatus(string Text, string Kind = "neutral", str
     public bool IsSuccess => Kind is "success" or "merged";
     public bool IsWarning => Kind is "conflict" or "warning";
     public bool IsDanger => Kind is "failure" or "closed";
-    /// Live / in-progress kinds share muted: open, draft, and a running check (only the check pulses).
-    public bool IsMuted => Kind is "pending" or "draft" or "open";
     public bool IsPulsing => Kind == "pending";
     /// Git lifecycle marks stay stroke glyphs. Outcome discs are filled; in-flight / waiting
     /// kinds stay hollow (pending pulse, review-required ring) like subagent running.

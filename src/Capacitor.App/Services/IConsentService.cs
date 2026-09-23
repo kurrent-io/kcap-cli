@@ -6,7 +6,7 @@ namespace Capacitor.App.Services;
 
 /// How a resolve settled. Only <see cref="TransportFailure"/> leaves the request pending; every
 /// other value is conclusive (the entry is removed and its identity tombstoned). Caller
-/// cancellation is not a value here — it propagates as OperationCanceledException (spec §5).
+/// cancellation is not a value here — it propagates as OperationCanceledException.
 public enum ConsentResolveKind { Applied, AppliedRuleRejected, AlreadyDecided, RuleSkippedNoRequester, TransportFailure }
 
 /// What became of the optional "remember this requester" rule. The service disambiguates because
@@ -21,7 +21,7 @@ public sealed record ConsentResolveOutcome(ConsentResolveKind Kind, ConsentRuleO
 
 /// One pending consent request. <see cref="RequestId"/> is the cache key and the per-agent queue
 /// identity (the daemon reuses it across launches); <see cref="PromptId"/> is the daemon-minted
-/// REQUEST identity every cache guard and the resolve echo key on (spec §4.1).
+/// REQUEST identity every cache guard and the resolve echo key on.
 public sealed class PendingConsent {
     internal PendingConsent(ConsentPendingDto dto, DateTimeOffset deadlineHint, DateTimeOffset pruneAfter) {
         Dto          = dto;
@@ -55,7 +55,7 @@ public interface IConsentService : IDisposable {
     /// Fires once per request identity, on its FIRST surfacing — a PromptId not already cached
     /// under its key and never surfaced before (so a same-RequestId successor DOES fire and a
     /// resubscribe's replay does NOT). Unconditional beyond that: the service knows nothing about
-    /// windows, so the prompt-window coordinator is what filters by visibility (spec §5/§6).
+    /// windows, so the prompt-window coordinator is what filters by visibility.
     IObservable<Unit> EntryAdded { get; }
 
     Task<ConsentResolveOutcome> ResolveAsync(PendingConsent target, bool allow, bool saveRule, CancellationToken ct);

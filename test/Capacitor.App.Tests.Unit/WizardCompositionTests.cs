@@ -47,7 +47,7 @@ static class WizardCompositionFixtures {
 /// (a) Fresh-machine happy path: a None-provider Paste sign-in through the REAL façade (the only
 /// scripted external is the /auth/config HTTP call), driven through the REAL step VMs and the
 /// REAL OnboardingViewModel all the way to the Done summary — with no kcap CLI resolved anywhere
-/// in the composition, the fresh-machine shape spec §9 documents.
+/// in the composition, the fresh-machine shape.
 ///
 /// [NotInParallel]: the process-global headless session, since composing the wizard constructs
 /// ReactiveUI VMs.

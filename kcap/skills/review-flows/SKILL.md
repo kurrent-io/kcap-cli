@@ -21,6 +21,8 @@ These four tools are aliases of the generic flow tools (`start_flow`, `send_to_p
 
 `round_timeout` is an **inactivity** bound, not a wall-clock cap: a round only fails for taking too long if the reviewer goes genuinely quiet for that whole stretch — an actively-working reviewer can legitimately run a round for a long time. If a status check (or a `submit_review_round`/`start_review_flow` call) returns the benign "Flow still running" text, that is an expected outcome on a long round, not a problem — re-enter the wait with `get_review_flow_status(flow_run_id, wait: true)`, which blocks (via bounded, internally-retried checks — never a raw long-poll) until the round finishes or roughly 3.5 minutes pass, then call it again if it's still running. A round result of **`unclear` now genuinely means the reviewer went dead or silent** (no activity for the whole inactivity bound, or it crashed/was stopped) — it is no longer a symptom of a merely slow reviewer, so treat it as a liveness problem (see the `participant_unreachable` and `participant_died`/`participant_stopped` entries below), not as "the review is taking a while."
 
+**A harness tool timeout is not a flow failure.** `start_review_flow` and `submit_review_round` block for minutes while the reviewer works. If your harness aborts the call with its own tool timeout (on Codex the error reads `timed out awaiting tools/call`), the flow is still running server-side. Do not start a new flow and do not investigate — call `get_review_flow_status(wait: true)`. Without a `flow_run_id` it reads the newest open flow this session started (pass `session_id` for another session's), so it works even when the aborted start never handed you the id or context compaction dropped it; with several open flows it lists them for you to pick from. That lookup needs a session identity, which the flows server has on Claude Code and Codex only — on any other harness the `flow_run_id` must be passed.
+
 ## Role-surface safety gate
 
 Classify the session before any flow action:
@@ -130,7 +132,7 @@ After applying the role-surface safety gate, if `start_review_flow` / `submit_re
 
 ## Core rules
 
-1. **Start exactly one flow per user task.** Call `start_review_flow` once and hold the returned `flow_run_id`. Do NOT start a new flow for follow-up rounds — reuse the same ID.
+1. **Start exactly one flow per user task.** Call `start_review_flow` once and hold the returned `flow_run_id`. Do NOT start a new flow for follow-up rounds — reuse the same ID. If the id is gone (a harness timeout aborted the start, or compaction dropped it), get it back with `get_review_flow_status(wait: true)` on Claude Code and Codex — never by starting another flow.
 2. **After receiving a `findings` result**, address every finding, then call `submit_review_round` with the updated context and the same `flow_run_id`.
 3. **Do NOT finish the user task while the flow has unresolved findings.** Keep iterating until the reviewer returns `clean`.
 4. **Only call `close_review_flow` after a `clean` result.** Then report completion to the user.
@@ -175,7 +177,7 @@ if findings:
 |---|---|---|---|
 | `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (explicit reviewer model override — REQUIRES `vendor`; only pass it when the user named a model), `instructions`, `mode` (`context-only` — optional) | Once, at the start of a review task. |
 | `submit_review_round` | `flow_run_id`, `context` | `instructions` | After addressing findings. Pass the same `flow_run_id` and the updated context. |
-| `get_review_flow_status` | `flow_run_id` | `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself. |
+| `get_review_flow_status` | — | `flow_run_id` (on Claude Code and Codex, omit to read the newest open flow this session started; several open flows are listed instead — other harnesses must pass it), `session_id` (look up another session's flows; defaults to this session), `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself, and omit `flow_run_id` to recover a flow whose id you never received or lost. |
 | `close_review_flow` | `flow_run_id` | — | Only after the reviewer returns `clean`. |
 
 ## Example (code review)

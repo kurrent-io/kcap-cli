@@ -25,10 +25,9 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal Guid? DispatchId { get; private set; }
     /// Queued by another client: shown, never acknowledged here, retired when the server drops it.
     public bool IsForeign { get; private init; }
-    public string Sender { get; private init; } = "";
 
     internal static QueuedChatMessage FromServer(QueuedInputItem item) =>
-        new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true, Sender = item.SenderUserId ?? "" };
+        new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true };
 
     internal void MarkQueued(Guid dispatchId) {
         DispatchId = dispatchId;

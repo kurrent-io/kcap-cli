@@ -6,10 +6,9 @@ namespace Capacitor.App.Tests.Unit;
 /// pulses grey, a conflict takes the warning colour, open and draft are muted, merged is success.
 public class PullRequestStatusTests {
     [Test]
-    public async Task A_pending_check_pulses_in_the_muted_colour() {
+    public async Task A_pending_check_pulses() {
         var status = new PullRequestStatus("Checks pending", "pending");
         await Assert.That(status.IsPulsing).IsTrue();
-        await Assert.That(status.IsMuted).IsTrue();
         await Assert.That(status.IsWarning).IsFalse();
     }
 
@@ -26,7 +25,6 @@ public class PullRequestStatusTests {
         var status = new PullRequestStatus("Review required", "warning");
         await Assert.That(status.IsWarning).IsTrue();
         await Assert.That(status.IsPulsing).IsFalse();
-        await Assert.That(status.IsMuted).IsFalse();
         await Assert.That(status.Tip).Contains("required review");
     }
 
@@ -41,9 +39,8 @@ public class PullRequestStatusTests {
     }
 
     [Test]
-    public async Task A_draft_is_muted_and_still() {
+    public async Task A_draft_is_still() {
         var status = new PullRequestStatus("Draft", "draft");
-        await Assert.That(status.IsMuted).IsTrue();
         await Assert.That(status.IsPulsing).IsFalse();
         await Assert.That(status.IsSuccess).IsFalse();
     }
@@ -52,12 +49,9 @@ public class PullRequestStatusTests {
     public async Task Success_failure_and_merged_keep_their_colours() {
         await Assert.That(new PullRequestStatus("", "success").IsSuccess).IsTrue();
         await Assert.That(new PullRequestStatus("", "merged").IsSuccess).IsTrue();
-        await Assert.That(new PullRequestStatus("", "merged").IsMuted).IsFalse();
-        await Assert.That(new PullRequestStatus("", "open").IsMuted).IsTrue();
         await Assert.That(new PullRequestStatus("", "open").IsSuccess).IsFalse();
         await Assert.That(new PullRequestStatus("", "failure").IsDanger).IsTrue();
         await Assert.That(new PullRequestStatus("", "closed").IsDanger).IsTrue();
-        await Assert.That(new PullRequestStatus("", "neutral").IsMuted).IsFalse();
     }
 
     [Test]

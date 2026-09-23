@@ -67,7 +67,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         // Resolved at click time: an item enabled by a later SetFeedbackAction must invoke that action.
         var bug      = Item("Report a Bug…",  () => _openFeedback?.Invoke(FeedbackCategory.Bug),      enabled: _openFeedback is not null);
         var feedback = Item("Send Feedback…", () => _openFeedback?.Invoke(FeedbackCategory.Feedback), enabled: _openFeedback is not null);
-        var items    = new ReportItems(window, bug, feedback);
+        var items    = new ReportItems(bug, feedback);
         _reportItems.Add(items);
         window.Closed += (_, _) => _reportItems.Remove(items);
 

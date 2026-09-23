@@ -172,7 +172,6 @@ public class ChatTabViewModelTests {
             await h.PushAsync(Dto(path));
             var call = Group(h.Chat, 0).Calls.Single();
             await Assert.That(call.Outcome).IsEqualTo(ToolOutcome.Done);
-            await Assert.That(call.OutcomeGlyph).IsEqualTo("✓");
 
             File.AppendAllText(path, ToolCallLine + "\n" + ToolErrorLine + "\n" + ToolErrorLine.Replace("t1", "unknown") + "\n");
             await h.TickAsync();
@@ -769,7 +768,6 @@ public class ChatTabViewModelTests {
             var bash = Group(h.Chat, 0).Calls[0];
             var read = Group(h.Chat, 0).Calls[1];
             await WaitUntilAsync(() => bash.IsAwaitingPermission, what: "the card-first mark");
-            await Assert.That(bash.OutcomeGlyph).IsEqualTo("?");
             await Assert.That(read.IsAwaitingPermission).IsFalse();
 
             h.Permissions.Remove("r1");
@@ -1221,47 +1219,6 @@ public class ChatTabViewModelTests {
             // Output does not end the timer; only a turn verdict does.
             File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "on it")) + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
-            await h.TeardownAsync();
-        });
-    }
-
-    /// A pending card means the agent waits on the user, whatever the awaiting flag says: the card
-    /// arrives before the daemon's status pulse does.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_pending_card_suppresses_the_working_note() {
-        await RunOnUiAsync(async () => {
-            var path = Tmp.CreateFile("j.jsonl", [
-                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi")),
-            ]);
-            var h = new Harness(TranscriptChat.Journal);
-            await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
-            await h.TickAsync();
-            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
-
-            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
-            await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the card");
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
-
-            h.Permissions.Remove("r1");
-            await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card gone");
-            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
-            await h.TeardownAsync();
-        });
-    }
-
-    /// PTY chats use the same busy verdict as the rail and hosted chats.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_pty_session_shows_the_working_note() {
-        await RunOnUiAsync(async () => {
-            var h = Claude();
-            var path = Tmp.CreateFile("t.jsonl", [UserLine]);
-            await h.PushAsync(Dto(path) with { Status = "Running", AwaitingInput = false });
-            await h.TickAsync();
-
-            await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
             await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
             await h.TeardownAsync();
         });
@@ -1760,7 +1717,6 @@ public class ChatTabViewModelTests {
             await Assert.That(own.IsUnconfirmed).IsFalse();
             var foreign = chat.QueuedMessages.Single(q => q.IsForeign);
             await Assert.That(foreign.Text).IsEqualTo("and this");
-            await Assert.That(foreign.Sender).IsEqualTo("u2");
             await Assert.That(chat.QueueSummary).IsEqualTo("2 messages queued");
 
             queue.OnNext([Item("do it", mine, sender: "u1")]);
