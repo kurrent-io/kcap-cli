@@ -74,3 +74,8 @@ Options:
 
 Re-running the same command is idempotent — a server-side watermark dedupes
 already-imported lines so nothing is double-loaded.
+
+Transcript records are secret-redacted before upload, with a 4 MiB UTF-8 limit
+per record and batch. Records that cannot be safely processed produce a warning
+and a numbered capture-loss marker; other records continue importing. Install
+server capture-loss support first so session details can show these warnings.

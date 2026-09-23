@@ -6,12 +6,29 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// Task 8: at shutdown (idle-timeout / parent-exit) with the hub down, the final drain's
-/// undelivered transcript tail (state.LinesProcessed → EOF) must not be silently dropped — it is
-/// spooled into the dedicated <see cref="TranscriptSpool"/> so the global drain (task 3) replays it
-/// after recovery, without a manual `kcap import`.
+/// Undelivered shutdown tails must remain replayable after an outage.
 /// </summary>
 public class ShutdownTranscriptSpoolTests {
+    [Test]
+    public async Task ShutdownSpoolsCaptureLossWithItsSourceCoordinate() {
+        using var tmp = new TempDir();
+        var raw = "{\"content\":\"" + new string('x', 4 * 1024 * 1024) + " ghp_0123456789abcdef\"}";
+        var path = tmp.CreateFile("source.jsonl", "{}\n" + raw + "\n");
+        var spool = new TranscriptSpool(tmp.PathTo("spool"), time: TimeProvider.System);
+
+        await Watch.SpoolUndeliveredTranscriptTailAsync(spool, path, Sid, null, "claude", 1, CancellationToken.None);
+
+        var replay = new List<string>();
+        await spool.DrainAsync(Sid, body => { replay.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+            () => false, CancellationToken.None);
+        var batch = System.Text.Json.Nodes.JsonNode.Parse(replay.Single())!;
+        await Assert.That(batch["line_numbers"]![0]!.GetValue<int>()).IsEqualTo(1);
+        var line = batch["lines"]![0]!.GetValue<string>();
+        var marker = System.Text.Json.Nodes.JsonNode.Parse(line)!;
+        await Assert.That(marker["type"]!.GetValue<string>()).IsEqualTo("kcap_capture_loss");
+        await Assert.That(line.Contains("ghp_", StringComparison.Ordinal)).IsFalse();
+    }
+
     [TempHome] public required TempHome Home { get; init; }
 
     WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter(), TimeProvider.System);
@@ -212,12 +229,7 @@ public class ShutdownTranscriptSpoolTests {
         await Assert.That(spool.HasBacklog(Sid)).IsTrue();
     }
 
-    /// <summary>
-    /// Review fix 2 (SECURITY): the spooled tail must be secret-redacted exactly like the live drain
-    /// (DrainNewLines → SecretRedactor.RedactLine). Otherwise a secret in an undelivered line lands
-    /// on disk raw and is POSTed unredacted on replay. A GitHub `ghp_` token must be replaced with
-    /// [REDACTED] in the spooled batch, and the raw token must appear nowhere on disk.
-    /// </summary>
+    /// <summary>Spool files and replayed bodies contain only redacted content.</summary>
     [Test]
     public async Task spooled_tail_is_secret_redacted() {
         using var tmp = new TempDir();

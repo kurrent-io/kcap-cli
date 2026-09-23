@@ -225,6 +225,8 @@ kcap import --antigravity       # only Antigravity
 
 Sessions are imported most-recent-first, so your latest work appears in the dashboard earliest.
 
+Transcript uploads redact secrets before sending. Large records are preserved within the 4 MiB UTF-8 limit; records that cannot be safely processed produce a capture-loss warning and a numbered marker, so file totals or plans may be incomplete.
+
 > **Already-running sessions.** On a *first* `plugin install --kiro`, any Kiro session already running loaded no kcap integration, so it isn't captured live — the install names it and where it is. It is not lost: the agent writes its transcript to disk regardless, so `kcap import --kiro` backfills it once it ends. kcap deliberately does not offer to restart it, which would mean killing an interactive session on a terminal it does not own with no way to relaunch it. Nothing is printed when there is no such session, or when you re-run an install you already had — that session started *with* the integration and is being captured.
 
 > **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Because Pi also ships no built-in MCP, the same command installs an MCP-bridge extension (`~/.pi/agent/extensions/kcap-mcp.ts`, opt out `--skip-pi-mcp`) that exposes the kcap MCP servers as native Pi tools, plus a steering block in `~/.pi/agent/AGENTS.md` (opt out `--skip-pi-instructions`). Historical `kcap import --pi` works with or without any of it.
@@ -835,6 +837,8 @@ not under your home directory. Off by default.
 
 
 ### Loading historical sessions
+
+Live capture and import use the same bounded secret redaction. Each record and each batch of encoded lines is limited to 4 MiB of UTF-8 content. If a record exceeds the size or processing bounds, the CLI reports the reason and uploads a capture-loss marker at its source line number. Other records continue importing. Install server support for capture-loss markers before rolling out this CLI behavior so session details can display the warning.
 
 Backfill older sessions from every detected coding agent in a single run. All seven agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`, `~/.gemini/tmp/<project>/chats/`, `~/.kiro/sessions/cli/`, `~/.pi/agent/sessions/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 

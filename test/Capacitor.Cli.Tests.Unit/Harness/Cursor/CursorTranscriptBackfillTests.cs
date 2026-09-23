@@ -6,6 +6,28 @@ using Capacitor.Cli.Harness.Cursor;
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
 public class CursorTranscriptBackfillTests {
+    [Test]
+    public async Task BackfillSplitsLargeEncodedRecordsWithinByteBudget() {
+        using var tmp = new TempDir();
+        var line = "{\"role\":\"assistant\",\"content\":\"" + new string('x', 1_500_000) + "\"}";
+        var path = tmp.CreateFile("large.jsonl", string.Join('\n', Enumerable.Repeat(line, 3)) + "\n");
+        var posted = new List<string>();
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent),
+            (_, body) => { posted.Add(body); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(),
+            path, () => false, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(stats.LinesPosted).IsEqualTo(3);
+        await Assert.That(posted.Count).IsEqualTo(2);
+        foreach (var body in posted) {
+            var lines = JsonNode.Parse(body)!["lines"]!.AsArray();
+            await Assert.That(lines.Sum(x => System.Text.Encoding.UTF8.GetByteCount(x!.GetValue<string>())))
+                .IsLessThanOrEqualTo(4 * 1024 * 1024);
+        }
+    }
+
     CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
