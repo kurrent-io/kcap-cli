@@ -31,6 +31,15 @@ public class McpPlansServerTests {
     }
 
     [Test]
+    public async Task Declare_document_names_where_the_content_goes() {
+        // An approval reviewer reads the tool description, not the server instructions: a tool that
+        // "records" a local file's content without saying where reads as an upload to nowhere.
+        var declare = McpPlansServer.BuildToolsList().Single(t => t.Name == "declare_plan_document");
+        await Assert.That(declare.Description).Contains("Capacitor server");
+        await Assert.That(declare.Description).Contains("kcap login");
+    }
+
+    [Test]
     public async Task Every_tool_declares_its_required_arguments() {
         var byName = McpPlansServer.BuildToolsList().ToDictionary(t => t.Name);
         await Assert.That(byName["declare_plan_document"].InputSchema.Required).IsEquivalentTo(new[] { "kind", "path" });

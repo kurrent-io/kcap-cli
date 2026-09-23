@@ -6,6 +6,23 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The ledger servers are pre-approved, and every tool advertises annotations
+
+Codex decides whether an MCP call needs approval from the tool's annotations, and with its automatic
+reviewer on, a call that needs approval is judged by a model that sees the tool description and the
+arguments and can end the turn outright. No kcap tool advertised annotations, and the MCP spec reads
+a missing one as destructive, open-world and not read-only, so every kcap call went to approval,
+pure reads included, and `declare_plan_document` was refused as an upload with no named destination.
+
+Every tool now carries the annotations for what it does. Codex's default mode runs a tool marked
+non-destructive and closed-world without approval, so the annotations alone unblock the reads and
+the additive writes on every server, and only a destructive tool reaches the reviewer, labelled as
+such. Registration pre-approves `kcap-workitems` and `kcap-plans` beside the three read-only servers,
+since even their destructive tools touch only the session's own record; `kcap-memory` stays on
+annotations, because a save or rescope can widen who sees a memory, the same reason `kcap-artefacts`
+is not pre-approved, and `kcap-flows` launches a paid hosted agent. The plans description names
+where the content goes, because the reviewer reads the description and never the server instructions.
+
 ## A driver finds its flow without the id, and owns the harness timeout it can
 
 `start_review_flow` hands the driver its `flow_run_id` only in the reply that ends the call. A

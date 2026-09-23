@@ -2229,7 +2229,8 @@ class McpFlowsServer(
                     ["model"]        = new("string", "Optional reviewer model override for this review. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
                 ["kind", "target_kind", "target_ref", "target_title", "context"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "submit_review_round",
@@ -2244,7 +2245,8 @@ class McpFlowsServer(
                     ["instructions"] = new("string", "Optional instructions for this round.")
                 },
                 ["flow_run_id", "context"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "get_review_flow_status",
@@ -2260,7 +2262,8 @@ class McpFlowsServer(
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
                 []
-            )
+            ),
+            McpToolAnnotations.Additive
         ),
         new(
             "close_review_flow",
@@ -2272,7 +2275,8 @@ class McpFlowsServer(
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow.")
                 },
                 ["flow_run_id"]
-            )
+            ),
+            McpToolAnnotations.Destructive
         ),
         new(
             "start_flow",
@@ -2298,7 +2302,8 @@ class McpFlowsServer(
                     ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
                 ["target_kind", "target_ref", "target_title", "context"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "send_to_participant",
@@ -2315,7 +2320,8 @@ class McpFlowsServer(
                     ["async"]        = new("boolean", "Optional. Defaults to true.")
                 },
                 ["flow_run_id", "participant", "message"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "get_flow_status",
@@ -2331,7 +2337,8 @@ class McpFlowsServer(
                     ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
                 []
-            )
+            ),
+            McpToolAnnotations.Additive
         ),
         new(
             "close_flow",
@@ -2343,7 +2350,8 @@ class McpFlowsServer(
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_flow.")
                 },
                 ["flow_run_id"]
-            )
+            ),
+            McpToolAnnotations.Destructive
         ),
         new(
             "list_reviewer_vendors",
@@ -2353,7 +2361,8 @@ class McpFlowsServer(
             "driver_vendor (the harness running THIS session, or absent when it cannot be determined — treat absent as unknown, and do not claim a different model), " +
             "and diagnostics counts. This does NOT start a review — it only reports availability; use start_review_flow to run one. " +
             "Availability is a snapshot: a vendor listed here can still be rejected by start_review_flow if the daemon dropped in between.",
-            new("object", new(), [])
+            new("object", new(), []),
+            McpToolAnnotations.Read
         )
     ];
 }
