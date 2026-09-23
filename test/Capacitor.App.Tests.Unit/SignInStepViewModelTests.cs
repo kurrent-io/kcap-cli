@@ -202,6 +202,26 @@ public class SignInStepViewModelTests {
         await Assert.That(runs).IsEqualTo(1); // entering the step starts nothing
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_commit_whose_credential_was_not_saved_does_not_satisfy_the_step() {
+        var (satisfied, isError, status) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Connect.Prefill("https://acme.example");
+            h.Operation = (_, _) => Task.FromResult<AuthResult>(
+                new AuthResult.Committed("acme", "https://acme.example:443", AuthProvider.GitHubApp, "sam", [], CredentialSaved: false));
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            await h.SignIn();
+
+            return (h.Vm.Satisfied, h.Vm.StatusIsError, h.Vm.Status);
+        });
+
+        await Assert.That(satisfied).IsFalse();
+        await Assert.That(isError).IsTrue();
+        await Assert.That(status).IsEqualTo("Signed in, but the credential could not be saved.");
+    }
+
     // ── cancellation and failure ─────────────────────────────────────────────
 
     [Test]

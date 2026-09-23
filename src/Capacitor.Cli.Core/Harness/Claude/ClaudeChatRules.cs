@@ -43,9 +43,10 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 var raw = envelope.Text ?? "";
                 // A bang command is its own user record: the command in bash-input, the output in
                 // bash-stdout/stderr. A message that only quotes those tags is left as written.
-                if (BashCommand(raw) is { } command) return envelope with { Text = "! " + WithoutAttachmentTrailer(command) };
+                if (BashCommand(raw) is { } command)
+                    return envelope with { Text = "! " + WithoutAttachmentTrailer(command), ToolKind = ChatDisplayKind.Shell };
                 if (BashOutput(raw) is { } output)
-                    return output.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = output };
+                    return output.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = output, ToolKind = ChatDisplayKind.Shell };
                 var text = StripWrappers(raw);
                 return text.Length == 0 ? null : envelope with { Text = text };
             }

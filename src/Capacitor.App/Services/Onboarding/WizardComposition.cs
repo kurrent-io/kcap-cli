@@ -25,7 +25,8 @@ internal sealed record WizardFacadeSpec(
     CliTelemetry                                               Telemetry,
     AuthEndpoints                                              Endpoints,
     TimeProvider                                               Time,
-    Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit);
+    Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit,
+    CommitPrecondition?                                        Precondition = null);
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
 /// (including ones the shell filtered out as inapplicable — the summary still names them), and the
@@ -90,7 +91,7 @@ internal static class WizardComposition {
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
             SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
-            spec.Time, spec.BeforeCommit), spec.Profile);
+            spec.Time, spec.BeforeCommit), spec.Profile, spec.Precondition);
 
     /// The ONE façade a wizard run signs in through — provisioner armed (a provisioner-less façade
     /// dead-ends "Create a workspace" at "ask your admin") and the consent-flip claim arming hook wired as
@@ -99,11 +100,12 @@ internal static class WizardComposition {
             ConfigRoot root, TokenStore tokenStore, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
             GitHubOAuthClient github, WorkOSClient workos,
             string profile, WizardBridges bridges, ConsentFlipClaims claims, TimeProvider time,
-            Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation) =>
+            Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation,
+            CommitPrecondition? precondition = null) =>
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
             bridges.Provisioner, bridges.Telemetry, bridges.Endpoints, time,
-            WizardAuthService.ArmingHook(claims)));
+            WizardAuthService.ArmingHook(claims), precondition));
 
     internal static WizardGraph BuildGraph(WizardGraphOptions options) {
         var claims = options.Claims;
