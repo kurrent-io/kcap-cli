@@ -374,8 +374,8 @@ causation, and never a savings figure.
 
 **`What did I leave unfinished in my last session?`** — `search_sessions` with `author: <user>`
 for their most recent session, then `get_session_summary`: the answer lives in the summary's
-Unfinished/Risks section. Quote it with the session id; if the summary has no such section, say
-so plainly rather than inferring one from the transcript.
+Unfinished section (Unfinished/Risks in older summaries). Quote it with the session id; if the
+summary has no such section, say so plainly rather than inferring one from the transcript.
 
 **`Pick up where my last session left off`** — same lookup, then actually resume: load the
 summary's context and unfinished items, restate in two sentences where the work stopped, and ask
