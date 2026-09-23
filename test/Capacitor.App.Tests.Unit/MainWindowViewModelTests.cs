@@ -690,16 +690,14 @@ public class MainWindowViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task OpenSession_switches_to_sessions_view_and_reopening_the_same_id_is_a_noop() {
+    public async Task OpenSession_builds_the_workspace_and_reopening_the_same_id_is_a_noop() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var built = 0;
             var vm = NewVm(service,
                 workspaceFactory: id => { built++; return NewWorkspace(service, id); });
 
-            await Assert.That(vm.IsSessionsView).IsTrue(); // Sessions is the boot surface now
             vm.OpenSession("a1");
-            await Assert.That(vm.IsSessionsView).IsTrue();
             await Assert.That(built).IsEqualTo(1);
 
             vm.OpenSession("a1"); // same id: no teardown/rebuild of a live attach
@@ -707,24 +705,6 @@ public class MainWindowViewModelTests {
 
             vm.OpenSession("a2"); // different id still swaps
             await Assert.That(built).IsEqualTo(2);
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task View_commands_swap_surfaces_and_close_keeps_sessions_view() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id));
-            vm.OpenSession("a1");
-            vm.CloseWorkspace();
-            await Assert.That(vm.CurrentWorkspace).IsNull();
-            await Assert.That(vm.IsSessionsView).IsTrue(); // placeholder pane, not Home
-
-            vm.ShowHomeCommand.Execute().Subscribe();
-            await Assert.That(vm.IsHomeView).IsTrue();
-            vm.ShowSessionsCommand.Execute().Subscribe();
-            await Assert.That(vm.IsSessionsView).IsTrue();
         });
     }
 
@@ -871,36 +851,6 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).AgentId).IsEqualTo("r1");
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
-        });
-    }
-
-    /// A lane change is background-triggered: only the user's own click navigates. A shell yanked
-    /// to Sessions by a row moving machines takes the surface they were reading with it.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_rebind_swaps_the_workspace_without_moving_the_shell_off_the_view_in_use() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var host = new RemoteHost();
-            var service = new FakeDaemonClientService();
-            var vm = NewVm(service,
-                workspaceFactory: id => NewWorkspace(service, id),
-                originOf: _ => AgentOrigin.Remote,
-                remoteWorkspaceFactory: id => host.New(id, "s1"),
-                trackWorkspaceTeardown: teardown => _ = teardown(),
-                directory: host.Directory);
-
-            vm.OpenSession("r1");
-            await vm.ShowHomeCommand.Execute().ToTask();
-            await Assert.That(vm.CurrentView).IsEqualTo(ShellView.Home);
-
-            host.Directory.ProvenTwins.Add("r1");
-            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
-                WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
-                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
-            host.Directory.Rows.Remove("remote:r1");
-
-            await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
-            await Assert.That(vm.CurrentView).IsEqualTo(ShellView.Home);
         });
     }
 

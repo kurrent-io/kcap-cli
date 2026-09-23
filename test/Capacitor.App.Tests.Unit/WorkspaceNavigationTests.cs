@@ -112,7 +112,6 @@ public class WorkspaceNavigationTests {
         nav.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         return new(nav.Daemon, new AppStateStore(statePath), launch, () => Task.FromResult(Array.Empty<string>()),
             TimeProvider.System,
-            openSession: id => nav.Vm.OpenSession(id),
             navigationGeneration: () => nav.Vm.NavigationGeneration,
             openSessionIfCurrent: nav.Vm.OpenSessionIfCurrent,
             launchFailures: failures, launchFailed: nav.Vm.CloseFailedLaunch);

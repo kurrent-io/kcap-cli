@@ -12,11 +12,6 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// Which surface owns the window: Home (status block + launcher + cards + Activity) or
-/// Sessions (rail | workspace). Orthogonal to CurrentWorkspace, which only means anything in
-/// Sessions view.
-public enum ShellView { Home, Sessions }
-
 /// Projects IDaemonClientService.Status/Snapshots into display text and drives Start/Reconnect.
 /// Display projections are activation-scoped (WhenActivated). StartDaemonCommand/RetryCommand and
 /// their canExecute pipelines are built in the constructor so they exist pre-activation.
@@ -134,10 +129,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the same instance.
     public ActivityViewModel Activity { get; }
 
-    /// The Home surface's launcher and cards — constructed at the composition root over the SAME
+    /// The launcher pane's view model, built at the composition root over the SAME
     /// IDaemonClientService instance this window uses, never a second daemon connection. Null
-    /// only for a caller that doesn't supply one; HomeView
-    /// tolerates a null DataContext, same as any other unbound view.
+    /// only for a caller that doesn't supply one; LauncherPaneView tolerates a null DataContext.
     public HomeViewModel? Home { get; }
 
     readonly NavigationGate _navigation;
@@ -149,29 +143,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly SerialDisposable _rebind = new();
 
     ISessionWorkspace? _currentWorkspace;
-    /// null = the Sessions surface shows its placeholder pane; non-null = that session's workspace,
+    /// null = the launcher pane shows; non-null = that session's workspace,
     /// local or remote. Exactly one at a time, and this VM owns it: every swap starts the outgoing
     /// one's tracked teardown.
     public ISessionWorkspace? CurrentWorkspace {
         get => _currentWorkspace;
         private set => this.RaiseAndSetIfChanged(ref _currentWorkspace, value);
     }
-
-    // Sessions is the default view; Home stays in the tree, hidden.
-    ShellView _currentView = ShellView.Sessions;
-    public ShellView CurrentView {
-        get => _currentView;
-        private set {
-            this.RaiseAndSetIfChanged(ref _currentView, value);
-            this.RaisePropertyChanged(nameof(IsHomeView));
-            this.RaisePropertyChanged(nameof(IsSessionsView));
-        }
-    }
-    public bool IsHomeView => CurrentView == ShellView.Home;
-    public bool IsSessionsView => CurrentView == ShellView.Sessions;
-
-    public ReactiveCommand<Unit, Unit> ShowHomeCommand { get; }
-    public ReactiveCommand<Unit, Unit> ShowSessionsCommand { get; }
 
     /// The Sessions rail (repo → worktree → session over daemon.Agents) — null for a caller
     /// without one, same nullable-seam shape as Home/workspaceFactory above.
@@ -186,7 +164,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// a per-window counter, so a window built after shutdown began sees the latch too.
     public int NavigationGeneration => _navigation.Generation;
 
-    /// Clears the open workspace back to the Sessions surface's placeholder pane — the same command
+    /// Clears the open workspace back to the launcher pane — the same command
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
@@ -319,8 +297,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
-        ShowHomeCommand = ReactiveCommand.Create(() => { CurrentView = ShellView.Home; });
-        ShowSessionsCommand = ReactiveCommand.Create(() => { CurrentView = ShellView.Sessions; });
         CanOpenFeedback     = openFeedback is not null;
         OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
         OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
@@ -494,14 +470,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         });
     }
 
-    /// Card and rail click: swaps to this session's workspace — the local one, or the remote card
+    /// Rail click: swaps to this session's workspace — the local one, or the remote card
     /// host when the id belongs to another machine. A caller that knows which row was clicked says
     /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
     /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
     /// running.
     public void OpenSession(string agentId, AgentOrigin? origin = null) {
         if (_navigation.ShutdownLatched) return;
-        CurrentView = ShellView.Sessions;
 
         // Neither lane holds the id: opening the local workspace for it would attach a terminal to
         // an agent this machine never ran.
@@ -625,11 +600,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
-        // The row moved machines on its own; only a click of the user's own navigates, so the
-        // surface they are reading survives the swap underneath it.
-        var view = CurrentView;
         OpenSession(open.AgentId, origin);
-        CurrentView = view;
         if (!terminal || ReferenceEquals(CurrentWorkspace, open)) return;
         switch (CurrentWorkspace) {
             case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;

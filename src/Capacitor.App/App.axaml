@@ -345,7 +345,7 @@
         <!-- Fluent paints hover/pressed on PART_ContentPresenter, not the Button.Background local
              value — so a chip that sets its own fill still gets a theme fill that clashes with
              KcapTextBrush. These classes pin the template chrome to our tokens (same footgun
-             HomeView.sessionCard / SessionRail.railRow already call out). -->
+             SessionRail.railRow already calls out). -->
         <Style Selector="Button.kcapChip">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
