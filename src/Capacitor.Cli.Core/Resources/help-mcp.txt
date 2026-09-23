@@ -84,7 +84,7 @@ mcp flows:
   Claude Code auto-registers `kcap-flows` via the plugin's `.mcp.json`.
   `kcap setup` / `kcap plugin install --codex` register it conservatively
   in Codex's config.toml, and the native Codex plugin descriptor includes it.
-  The work-launching server is never marked read-only or auto-approved.
+  The work-launching server is never auto-approved on registration.
 
 mcp memory:
   Exposes six tools — search_memories, get_memory, save_memory, update_memory,

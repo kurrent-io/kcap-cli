@@ -1471,6 +1471,31 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    [Arguments("!kubectl get pods")]
+    [Arguments("! kubectl get pods")]
+    public async Task A_bang_command_echo_clears_the_queue_and_shows_the_command_and_output(string typed) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("bash.jsonl", []);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = typed;
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                File.AppendAllText(path, """{"type":"user","message":{"content":"<bash-input>kubectl get pods</bash-input>"}}""" + "\n");
+                File.AppendAllText(path, """{"type":"user","message":{"content":"<bash-stdout>web</bash-stdout><bash-stderr></bash-stderr>"}}""" + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Single().Text).IsEqualTo("! kubectl get pods");
+                await Assert.That(h.Chat.Items.OfType<SystemNoteItem>().Single().Text).IsEqualTo("web");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_slash_command_echo_acknowledges_input_without_a_display_row() {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();

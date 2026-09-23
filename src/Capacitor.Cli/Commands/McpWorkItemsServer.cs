@@ -392,12 +392,12 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["work_item_id"] = new("string", "Attach directly to this work item id."),
                 ["new_title"]    = new("string", "Create a brand-new work item with this title and attach to it."),
                 ["session_id"]   = new("string", "Session id to attach. Defaults to the session this server runs in when omitted.")
-            }, [])),
+            }, []), McpToolAnnotations.Additive),
         new("get_session_work_items",
             "List the work items the current session is attached to.",
             new("object", new() {
                 ["session_id"] = new("string", "Session id to look up. Defaults to the session this server runs in when omitted.")
-            }, [])),
+            }, []), McpToolAnnotations.Read),
 
         new("declare_loose_end",
             "Record a loose end — a concrete piece of work this session leaves unfinished (a missing test, "
@@ -406,7 +406,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["text"]       = new("string", "The unfinished work, as one plain-text sentence; the server accepts 12-500 characters after normalizing whitespace and case."),
                 ["session_id"] = new("string", "Session id to declare against. Defaults to the session this server runs in when omitted.")
-            }, ["text"])),
+            }, ["text"]), McpToolAnnotations.Upsert),
 
         // The declared work-breakdown / relation surface. NOTE: no tool
         // here accepts `source` or `declared_by`. The server resolves both from the authenticated
@@ -420,14 +420,14 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["parent_id"] = new("string", "The work item being broken down."),
                 ["part_ids"]  = new("array", "Work item ids that are parts of the parent.", new("string", "A work item id."))
-            }, ["parent_id", "part_ids"])),
+            }, ["parent_id", "part_ids"]), McpToolAnnotations.Upsert),
 
         new("retract_work_breakdown",
             "Retract a previously declared breakdown, detaching the named parts from the parent.",
             new("object", new() {
                 ["parent_id"] = new("string", "The work item whose breakdown is being retracted."),
                 ["part_ids"]  = new("array", "Work item ids to detach from the parent.", new("string", "A work item id."))
-            }, ["parent_id", "part_ids"])),
+            }, ["parent_id", "part_ids"]), McpToolAnnotations.Destructive),
 
         new("declare_work_relation",
             "Declare a dependency between two work items: 'blocks' means from_id blocks to_id, "
@@ -437,7 +437,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["from_id"]       = new("string", "The work item the relation starts from."),
                 ["to_id"]         = new("string", "The work item on the other end of the relation."),
                 ["relation_kind"] = new("string", "Either 'blocks' or 'blocked_by'.")
-            }, ["from_id", "to_id", "relation_kind"])),
+            }, ["from_id", "to_id", "relation_kind"]), McpToolAnnotations.Upsert),
 
         new("retract_work_relation",
             "Retract a previously declared dependency between two work items.",
@@ -445,7 +445,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["from_id"]       = new("string", "The work item the relation starts from."),
                 ["to_id"]         = new("string", "The work item on the other end of the relation."),
                 ["relation_kind"] = new("string", "Either 'blocks' or 'blocked_by'.")
-            }, ["from_id", "to_id", "relation_kind"])),
+            }, ["from_id", "to_id", "relation_kind"]), McpToolAnnotations.Destructive),
 
         new("get_work_item_topology",
             "Read a work item's declared breakdown and relations — its parent, parts, and dependencies. "
@@ -453,7 +453,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
           + "placeholders.",
             new("object", new() {
                 ["work_item_id"] = new("string", "The work item whose topology to read.")
-            }, ["work_item_id"])),
+            }, ["work_item_id"]), McpToolAnnotations.Read),
 
         new("merge_work_item",
             "Merge a work item INTO another so both read as the survivor: the merged item's sessions and links "
@@ -465,7 +465,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["work_item_id"]      = new("string", "The work item to merge away (the duplicate)."),
                 ["into_work_item_id"] = new("string", "The work item that survives (prefer the issue- or PR-keyed one).")
-            }, ["work_item_id", "into_work_item_id"])),
+            }, ["work_item_id", "into_work_item_id"]), McpToolAnnotations.Destructive),
 
         new("detach_work_item",
             "Detach a session from a work item it was wrongly attached to. The removal is durable: automated "
@@ -474,6 +474,6 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["work_item_id"] = new("string", "The work item to detach the session from."),
                 ["session_id"]   = new("string", "Session id to detach. Defaults to the session this server runs in when omitted.")
-            }, ["work_item_id"]))
+            }, ["work_item_id"]), McpToolAnnotations.Destructive)
     ];
 }

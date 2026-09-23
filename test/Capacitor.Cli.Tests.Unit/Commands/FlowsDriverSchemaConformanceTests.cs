@@ -450,7 +450,7 @@ public class FlowsDriverSchemaConformanceTests {
         await Assert.That(flows!.Args)
             .IsEquivalentTo(new[] { "mcp", "flows", "--driver", projection.Harness }, CollectionOrdering.Matching);
         // Flows launches a PAID hosted reviewer, so it must never be auto-approved on registration.
-        await Assert.That(flows.ReadOnly).IsFalse();
+        await Assert.That(flows.AutoApprove).IsFalse();
     }
 
     // Install/uninstall must read the SAME ownership tuple. If the remove paths or Kiro's "is the MCP

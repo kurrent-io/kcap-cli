@@ -12,7 +12,7 @@ Search and recall past Kurrent Capacitor sessions from inside the agent.
 
 | Tool | Description |
 |------|-------------|
-| `search_sessions` | Free-text + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
+| `search_sessions` | Keyword (one to three terms or identifiers) + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
 | `get_session_summary` | Concise `summary_text` + `plan` for a session |
 | `get_session_transcript` | Speaker-tagged transcript window, with `around_event` drill-in for search hits |
 

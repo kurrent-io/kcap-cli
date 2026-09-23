@@ -57,18 +57,14 @@ public class KcapMcpServersTests {
     }
 
     [Test]
-    public async Task Artefacts_is_not_read_only() {
-        // ReadOnly drives per-server trust (auto-approval). publish_artefact and
-        // set_artefact_visibility both write, so this server must keep prompting.
-        var artefacts = KcapMcpServers.All.Single(s => s.Name == "kcap-artefacts");
-        await Assert.That(artefacts.ReadOnly).IsFalse();
-    }
-
-    [Test]
-    public async Task Analytics_is_read_only() {
-        // ReadOnly drives Codex per-server trust (auto-approval) — analytics tools are pure reads.
-        var analytics = KcapMcpServers.All.Single(s => s.Name == "kcap-analytics");
-        await Assert.That(analytics.ReadOnly).IsTrue();
+    public async Task Auto_approve_covers_reads_and_own_record_writers_only() {
+        // AutoApprove drives per-server trust on Codex and Gemini. kcap-flows launches a paid hosted
+        // agent, and kcap-memory and kcap-artefacts can widen who may see something, so those three
+        // rely on their tool annotations instead.
+        var approved = KcapMcpServers.All.Where(s => s.AutoApprove).Select(s => s.Name).ToArray();
+        await Assert.That(approved).IsEquivalentTo(new[] {
+            "kcap-review", "kcap-sessions", "kcap-analytics", "kcap-workitems", "kcap-plans"
+        });
     }
 
     [Test]

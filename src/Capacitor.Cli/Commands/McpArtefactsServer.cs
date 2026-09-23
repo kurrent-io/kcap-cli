@@ -523,11 +523,11 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                   + "('owner' (default, only you see answers), 'aggregate' (viewers see tallies, no names or text) or "
                   + "'named' (viewers see who said what)), min_responses_to_reveal, and closes_at. Without it, answers "
                   + "are an opaque blob only you can read.")
-            }, ["title"])),
+            }, ["title"]), McpToolAnnotations.Additive),
 
         new("list_my_artefacts",
             "List the artefacts you can see, newest change first — id, title, audience, latest version and URL.",
-            new("object", new(), [])),
+            new("object", new(), []), McpToolAnnotations.Read),
 
         new("await_artefact_responses",
             "Wait for people to answer an artefact you published, then read what they said. Blocks until "
@@ -539,7 +539,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["version"]         = new("integer", "Which version's answers to wait for. Defaults to the latest."),
                 ["min_respondents"] = new("integer", "How many distinct people must have answered before this returns. Defaults to 1."),
                 ["timeout_s"]       = new("integer", "How long to wait, in seconds. Defaults to 300; the server caps one wait at 1500 and you may call again.")
-            }, ["artefact_id"])),
+            }, ["artefact_id"]), McpToolAnnotations.Read),
 
         new("get_artefact_results",
             "Read an artefact's answers without waiting: per-field tallies, and each person's current "
@@ -548,7 +548,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["artefact_id"] = new("string", "The artefact to read."),
                 ["version"]     = new("integer", "Which version's answers to read. Defaults to the latest.")
-            }, ["artefact_id"])),
+            }, ["artefact_id"]), McpToolAnnotations.Read),
 
         new("close_artefact_responses",
             "Close a version to further answers, freezing its results. Reversible: pass closed=false to "
@@ -558,7 +558,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["artefact_id"] = new("string", "The artefact to close."),
                 ["version"]     = new("integer", "Which version to close."),
                 ["closed"]      = new("boolean", "false reopens. Defaults to true.")
-            }, ["artefact_id", "version"])),
+            }, ["artefact_id", "version"]), McpToolAnnotations.Upsert),
 
         new("set_artefact_visibility",
             "Change who may open an artefact. This replaces the whole audience: a grant left out is one "
@@ -568,6 +568,6 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["visibility"]  = new("string", "'none' (only you), 'org' (anyone in the organization), or 'scoped' (only the grants below)."),
                 ["grants"]      = new("array", "Under 'scoped', the complete list of who may open it.",
                                       new("object", "One audience member: grant_type ('user', 'team' or 'project'), grantee_id, and an optional grantee_name."))
-            }, ["artefact_id", "visibility"]))
+            }, ["artefact_id", "visibility"]), McpToolAnnotations.Destructive)
     ];
 }

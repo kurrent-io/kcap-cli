@@ -1,14 +1,16 @@
 namespace Capacitor.Cli.Core.Mcp;
 
 /// <summary>One kcap MCP server, described semantically (no harness field names).
-/// <paramref name="ReadOnly"/> marks a server whose tools are all side-effect-free (pure reads),
-/// so it is safe to auto-approve on registration where the harness supports per-server trust —
-/// see <see cref="McpConfigShape.Trust"/>. Servers that write (kcap-memory's save) or launch work
-/// (kcap-flows' start_review_flow spawns a paid hosted reviewer) are NOT read-only and keep
-/// prompting. <paramref name="ToolTimeout"/> is how long one of the server's tool calls may block;
-/// a harness with a per-server tool timeout has it written into the registration, so the harness
-/// never aborts a call the server itself bounds.</summary>
-public sealed record KcapMcpServer(string Name, string[] Args, bool NeedsProjectCwd, string? Description, bool ReadOnly = false, TimeSpan? ToolTimeout = null);
+/// <paramref name="AutoApprove"/> marks a server safe to run without a per-call prompt where the
+/// harness has a per-server trust knob (see <see cref="McpConfigShape.Trust"/>): every tool either
+/// reads, or writes only to the session's own Capacitor record, the destination the hooks already
+/// post to unprompted. kcap-flows launches a paid hosted agent, and kcap-memory and kcap-artefacts
+/// can widen who may see something, so those rely on each tool's annotations instead: a harness
+/// that reads them still runs the reads and additive writes unprompted and gates the destructive
+/// ones. <paramref name="ToolTimeout"/> is how long one of
+/// the server's tool calls may block; a harness with a per-server tool timeout has it written into
+/// the registration, so the harness never aborts a call the server itself bounds.</summary>
+public sealed record KcapMcpServer(string Name, string[] Args, bool NeedsProjectCwd, string? Description, bool AutoApprove = false, TimeSpan? ToolTimeout = null);
 
 /// <summary>The single source of truth for the kcap MCP servers. Every writer
 /// (Codex TOML, the JSON harnesses, the bundled `.mcp.json`) derives from this.</summary>
@@ -23,9 +25,9 @@ public static class KcapMcpServers {
 
     public static readonly IReadOnlyList<KcapMcpServer> All = [
         new("kcap-review",   ["mcp", "review"],   NeedsProjectCwd: false,
-            "PR review context tools — query implementation session transcripts.", ReadOnly: true),
+            "PR review context tools — query implementation session transcripts.", AutoApprove: true),
         new("kcap-sessions", ["mcp", "sessions"], NeedsProjectCwd: true,
-            "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided). Repo-aware; reach for it before git log or grep for history questions.", ReadOnly: true),
+            "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided). Repo-aware; reach for it before git log or grep for history questions.", AutoApprove: true),
         // A start or round call holds the tool call open while the reviewer works, bounded by the
         // flows server at under 5 minutes; the registration's timeout sits well above that bound.
         new("kcap-flows",    ["mcp", "flows"],    NeedsProjectCwd: true,
@@ -34,20 +36,20 @@ public static class KcapMcpServers {
         new("kcap-memory",   ["mcp", "memory"],   NeedsProjectCwd: true,
             "Team memory — search, read, and save durable learnings."),
         new("kcap-workitems", ["mcp", "workitems"], NeedsProjectCwd: true,
-            "Attach the current session to a work item (issue, PR, or a brand-new item), and list what a session is attached to."),
+            "Attach the current session to a work item (issue, PR, or a brand-new item), and list what a session is attached to.", AutoApprove: true),
         new("kcap-plans", ["mcp", "plans"], NeedsProjectCwd: true,
-            "Declare the plan, spec or design document a session works from and the plan's task list; update task status and read the plan back after compaction."),
+            "Declare the plan, spec or design document a session works from and the plan's task list; update task status and read the plan back after compaction.", AutoApprove: true),
         new("kcap-artefacts", ["mcp", "artefacts"], NeedsProjectCwd: true,
             "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. Sandboxed with no network access, so everything is inlined; private until you set visibility."),
         new("kcap-analytics", ["mcp", "analytics"], NeedsProjectCwd: true,
-            "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with read-only SQL. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide.", ReadOnly: true),
+            "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with read-only SQL. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide.", AutoApprove: true),
     ];
 
     /// <summary>Codex receives the full set. Kept as a named per-harness seam so a future
     /// divergence has a home, but today it is the whole `All` list — `kcap-workitems` is now
     /// registered everywhere (its session id resolves from an explicit arg / `CLAUDE_CODE_SESSION_ID` / `KCAP_SESSION_ID` /
-    /// `CODEX_THREAD_ID`, and its breakdown/relation tools need no session id at all). Flows remains
-    /// non-read-only and is never auto-approved.</summary>
+    /// `CODEX_THREAD_ID`, and its breakdown/relation tools need no session id at all). Flows is
+    /// never auto-approved.</summary>
     public static IReadOnlyList<KcapMcpServer> ForCodex => All;
 
     /// <summary>The bare (pre-stamp) set for every non-Claude JSON harness (Cursor, Copilot,
