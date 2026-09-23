@@ -22,6 +22,28 @@ public sealed class SystemNoteItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;
 }
 
+/// A bang command the user ran, and the output record that follows it. The output arrives later,
+/// so it is filled in on the same item.
+public sealed class ShellCommandItem : ChatItemViewModel {
+    public ShellCommandItem(string command) { Command = command; }
+
+    public string Command { get; }
+    public bool HasCommand => Command.Length > 0;
+
+    string? _output;
+    public string? Output {
+        get => _output;
+        internal set {
+            if (_output == value) return;
+            _output = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HasOutput));
+        }
+    }
+
+    public bool HasOutput => !string.IsNullOrEmpty(_output);
+}
+
 public enum ToolOutcome { Running, Done, Error }
 
 public sealed class ToolCallItem(string name, string detail, ToolCategory category) : ChatItemViewModel {

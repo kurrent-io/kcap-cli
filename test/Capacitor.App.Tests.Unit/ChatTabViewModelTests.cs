@@ -1486,10 +1486,32 @@ public class ChatTabViewModelTests {
                 await send;
                 File.AppendAllText(path, """{"type":"user","message":{"content":"<bash-input>kubectl get pods</bash-input>"}}""" + "\n");
                 File.AppendAllText(path, """{"type":"user","message":{"content":"<bash-stdout>web</bash-stdout><bash-stderr></bash-stderr>"}}""" + "\n");
+                File.AppendAllText(path, NoteLine + "\n");
                 await h.TickAsync();
                 await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
-                await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Single().Text).IsEqualTo("! kubectl get pods");
-                await Assert.That(h.Chat.Items.OfType<SystemNoteItem>().Single().Text).IsEqualTo("web");
+                var shell = h.Chat.Items.OfType<ShellCommandItem>().Single();
+                await Assert.That(shell.Command).IsEqualTo("! kubectl get pods");
+                await Assert.That(shell.Output).IsEqualTo("web");
+                await Assert.That(h.Chat.Items.OfType<UserTurnItem>()).IsEmpty();
+                await Assert.That(h.Chat.Items.OfType<SystemNoteItem>().Single().Text).IsEqualTo("**Agent finished**\n\nAll good.");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Bang_output_fills_the_command_row_when_it_arrives_later() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            try {
+                var path = Tmp.CreateFile("bash-later.jsonl", ["""{"type":"user","message":{"content":"<bash-input>kubectl get pods</bash-input>"}}"""]);
+                await h.PushAsync(Dto(path));
+                var shell = h.Chat.Items.OfType<ShellCommandItem>().Single();
+                await Assert.That(shell.HasOutput).IsFalse();
+                File.AppendAllText(path, """{"type":"user","message":{"content":"<bash-stdout>web</bash-stdout>"}}""" + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.Items.OfType<ShellCommandItem>().Single()).IsSameReferenceAs(shell);
+                await Assert.That(shell.Output).IsEqualTo("web");
             } finally { await h.TeardownAsync(); }
         });
     }

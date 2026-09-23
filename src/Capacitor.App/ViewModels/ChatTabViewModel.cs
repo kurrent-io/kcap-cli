@@ -62,6 +62,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly Dictionary<string, PendingPermissionRequest> _requests = new(StringComparer.Ordinal);
     readonly HashSet<ToolCallItem> _marked = new(ReferenceEqualityComparer.Instance);
     ToolGroupItem? _openGroup;
+    /// The bang command waiting for the output record that follows it.
+    ShellCommandItem? _openShell;
 
     /// The feed and the generation it belongs to, taken as one reference: reading them separately
     /// lets a switch land between them and tag a read of the old source with the new generation,
@@ -613,6 +615,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _pendingTools.Clear();
         _settledTools.Clear();
         _openGroup = null;
+        _openShell = null;
         _marked.Clear();
         _subagents.Clear();
         _planActivity?.Clear();
@@ -711,6 +714,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _pendingTools.Clear();
                 _settledTools.Clear();
                 _openGroup = null;
+                _openShell = null;
                 _marked.Clear();
                 _subagents.Clear();
                 _planActivity?.Clear();
@@ -748,19 +752,37 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             }
             foreach (var e in projected.Envelopes) {
                 switch (e.Kind) {
+                    case AcpEventKind.UserMessage when e.ToolKind == ChatDisplayKind.Shell:
+                        _openGroup = null;
+                        _openShell = new ShellCommandItem(e.Text ?? "");
+                        fresh.Add(_openShell);
+                        break;
                     case AcpEventKind.UserMessage:
                         _openGroup = null;
+                        _openShell = null;
                         fresh.Add(new UserTurnItem(e.Text ?? ""));
                         break;
                     case AcpEventKind.AssistantText:
                         _openGroup = null;
+                        _openShell = null;
                         fresh.Add(new AssistantTextItem(e.Text ?? ""));
+                        break;
+                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell && _openShell is { HasOutput: false } shell:
+                        _openGroup = null;
+                        shell.Output = e.Text ?? "";
+                        break;
+                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell:
+                        _openGroup = null;
+                        _openShell = null;
+                        fresh.Add(new ShellCommandItem("") { Output = e.Text ?? "" });
                         break;
                     case AcpEventKind.SystemNote:
                         _openGroup = null;
+                        _openShell = null;
                         fresh.Add(new SystemNoteItem(e.Text ?? ""));
                         break;
                     case AcpEventKind.ToolCall: {
+                        _openShell = null;
                         var name = e.ToolName ?? "tool";
                         var category = ToolSummary.Categorize(name, e.ToolInputJson);
                         var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root, category), category);
