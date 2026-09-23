@@ -257,25 +257,12 @@ public class ImportChainsTests : IDisposable {
 
     [Test]
     public async Task ImportChainsAsync_dispatches_independent_chains_in_parallel() {
-        // WireMock adds a 200ms server-side delay to every transcript POST.
-        // If chains run serially: 4 × 200ms = 800ms minimum.
-        // If chains run in parallel (4 workers): all 4 transcript POSTs arrive at the server
-        // within a short window; the spread between first and last POST arrival should be
-        // well under 200ms (they all start roughly simultaneously).
-        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromMilliseconds(200)));
-        _server.Given(Request.Create().WithPath("/hooks/session-start*").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200));
-        _server.Given(Request.Create().WithPath("/hooks/session-end*").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
-        _server.Given(Request.Create().WithPath("/hooks/subagent-start").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200));
-        _server.Given(Request.Create().WithPath("/hooks/subagent-stop").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200));
+        // Each transcript POST parks until all four are in flight. A single worker cannot reach the
+        // fourth: it does not send the next session's post until this one returns, so the gate opens
+        // only when the four workers really overlap.
+        using var gate = new TranscriptOverlapGate(expected: 4);
+        using var client = new HttpClient(gate, disposeHandler: false);
 
-        // 4 independent chains, 1 session each.
-        // MakeNewNoGit omits Meta.Cwd so DetectRepositoryAsync is never called —
-        // git process startup would pollute the arrival-time spread.
         var chains = Enumerable.Range(0, 4)
             .Select(i => new List<ImportCommand.SessionClassification> { MakeNewNoGit($"par{i}", 50) })
             .ToList();
@@ -292,24 +279,39 @@ public class ImportChainsTests : IDisposable {
             OnBackgroundWorkReady = _ => { },
         };
 
-        using var client = new HttpClient();
-        await Import().ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
+        var result = await Import().ImportChainsAsync(client, "http://localhost", chains, events, CancellationToken.None);
 
-        // Verify all 4 transcript POSTs arrived at the server.
-        var transcriptEntries = _server.LogEntries
-            .Where(e => e.RequestMessage.Path == "/hooks/transcript")
-            .OrderBy(e => e.RequestMessage.DateTime)
-            .ToList();
-        await Assert.That(transcriptEntries.Count).IsEqualTo(4);
+        await Assert.That(gate.Overlapped).IsTrue();
+        await Assert.That(result.Errored).IsEqualTo(0);
+        await Assert.That(result.Loaded).IsEqualTo(4);
+    }
 
-        var firstArrival = transcriptEntries.First().RequestMessage.DateTime;
-        var lastArrival  = transcriptEntries.Last().RequestMessage.DateTime;
-        var spreadMs     = (lastArrival - firstArrival).TotalMilliseconds;
+    /// Holds each <c>/hooks/transcript</c> POST until <paramref name="expected"/> of them are inside
+    /// <see cref="SendAsync"/> together. Any other route answers immediately so the workers can reach
+    /// the transcript post.
+    sealed class TranscriptOverlapGate(int expected) : HttpMessageHandler {
+        readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int _inFlight;
 
-        // Serial dispatch spreads the four arrivals over 3 × 200ms, since each chain waits for the
-        // previous; parallel dispatch lands them in one window, which a loaded runner stretches to
-        // 171ms. 400 separates the two outcomes with room either side — a discriminator, not a budget.
-        await Assert.That(spreadMs).IsLessThan(400);
+        public bool Overlapped { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            if (request.RequestUri?.AbsolutePath == "/hooks/transcript") {
+                if (Interlocked.Increment(ref _inFlight) == expected) {
+                    Overlapped = true;
+                    _release.TrySetResult();
+                }
+
+                var opened = await Task.WhenAny(_release.Task, Task.Delay(TimeSpan.FromSeconds(10), ct));
+                Interlocked.Decrement(ref _inFlight);
+                if (opened != _release.Task)
+                    return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+            }
+
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                Content = new StringContent("{}")
+            };
+        }
     }
 
     [Test]

@@ -102,7 +102,10 @@ sealed class FakeServerLane : IServerLane {
     /// The channel is in place before the tail shows in Tails, which is the moment tests start
     /// pushing to it.
     public async IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, [EnumeratorCancellation] CancellationToken ct) {
-        var channel = Channel.CreateUnbounded<StreamEventEnvelope>();
+        // A push resumes the feed on this thread. A pool-queued continuation is what a later poll misses.
+        var channel = Channel.CreateUnbounded<StreamEventEnvelope>(new UnboundedChannelOptions {
+            AllowSynchronousContinuations = true,
+        });
         lock (_tailLock) _tailChannels[stream] = channel;
         Append(ref _tails, (stream, fromPosition));
         Append(ref _calls, $"tail:{stream}@{fromPosition?.ToString(CultureInfo.InvariantCulture) ?? "start"}");

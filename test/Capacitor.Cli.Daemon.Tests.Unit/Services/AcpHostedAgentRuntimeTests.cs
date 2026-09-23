@@ -875,6 +875,17 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(result).IsEqualTo("…");
     }
 
+    static string JournalText(string path) {
+        try { return JournalFiles.ReadText(path); }
+        catch (IOException) { return ""; }
+    }
+
+    static bool ChunksLanded(Harness h, string path) {
+        var seen = (h.Runtime.OpenRunTextForTest ?? "") + JournalText(path);
+        return seen.Contains("marker-a", StringComparison.Ordinal)
+            && seen.Contains("marker-b", StringComparison.Ordinal);
+    }
+
     static List<AcpEventEnvelope> JournalEnvelopes(string path) {
         var list = new List<AcpEventEnvelope>();
         foreach (var line in JournalFiles.ReadLines(path)) if (EnvelopeJournalFormat.TryRead(line, out var e)) list.Add(e);
@@ -915,10 +926,16 @@ public class AcpHostedAgentRuntimeTests {
         h.StartFakeAgentLoop();
         await h.Runtime.StartAsync("/abs/worktree", "p", h.Cts.Token).WaitAsync(HangGuard);
         h.Fake.EmitAgentText("marker-a"); h.Fake.EmitAgentText("marker-b"); // capacity 1: earlier envelopes are evicted from the live channel
-        await Task.Delay(100);
-        await h.Runtime.DisposeAsync();  // flushes any open run, then completes the channel
+        // A prompt that ends flushes the open run, so the chunks may already be in the journal
+        // rather than still buffered. Either place means the read loop has them.
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (DateTime.UtcNow < deadline && !ChunksLanded(h, journal.Path)) await Task.Delay(10);
+        await Assert.That(ChunksLanded(h, journal.Path)).IsTrue();
+        await h.Runtime.DisposeAsync();  // flushes whatever is still open, then completes the channel
+        deadline = DateTime.UtcNow + HangGuard;
+        while (DateTime.UtcNow < deadline && !JournalText(journal.Path).Contains("marker-b", StringComparison.Ordinal))
+            await Task.Delay(10);
         h.Fake.EmitAgentText("marker-late");
-        await Task.Delay(100);
         await journal.CompleteAsync();
 
         var joined = string.Join("\n", JournalEnvelopes(journal.Path).Select(e => e.Text));

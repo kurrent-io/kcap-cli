@@ -19,6 +19,12 @@ public class ProcessHelpersDetachedStdinTests {
 
     static string Comspec => Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
 
+    static string ReadShared(string path) {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     [Test]
     public async Task The_payload_reaches_the_childs_stdin() {
         Skip.Unless(OperatingSystem.IsWindows(), "handle inheritance is a Windows mechanism");
@@ -36,21 +42,23 @@ public class ProcessHelpersDetachedStdinTests {
                 writer.Write("""{"hook_event_name":"SessionEnd","session_id":"abc"}""");
             }
 
-            // Read only once the child has exited: until cmd closes its redirect the file is open
-            // for write, and Windows refuses a reader for as long as it is. The child's handle in
-            // DetachedChild keeps the pid from being reused, so looking it up by pid is safe; a
-            // lookup that fails means it has already exited, which is the state being waited for.
-            using var exitBound = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
-            try {
-                using var process = Process.GetProcessById(pid);
-                await process.WaitForExitAsync(exitBound.Token);
-            } catch (ArgumentException) {
-                // Already exited.
+            // cmd's redirect stays open for write until the child exits, and File.ReadAllText
+            // denies that writer, so the open fails for a moment after the pid is already gone.
+            // A shared read is compatible with the redirect and can see the payload as it lands.
+            var expected = """{"hook_event_name":"SessionEnd","session_id":"abc"}""";
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            var text     = "";
+            while (DateTime.UtcNow < deadline) {
+                try {
+                    text = ReadShared(sink).Trim();
+                    if (text == expected) break;
+                } catch (IOException) {
+                    // Not created yet.
+                }
+                await Task.Delay(10);
             }
 
-            await Assert.That(File.ReadAllText(sink).Trim())
-                        .IsEqualTo("""{"hook_event_name":"SessionEnd","session_id":"abc"}""");
+            await Assert.That(text).IsEqualTo(expected);
         } finally {
             Kill(pid);
         }

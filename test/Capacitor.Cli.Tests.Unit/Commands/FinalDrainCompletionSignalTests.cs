@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -70,19 +71,37 @@ public class WaitForFinalLineCompletionAsyncTests {
     public async Task still_growing_line_completes_within_the_window_returns_true() {
         using var tmp = TempDir.WithPathTo("transcript.tmp", out var path);
 
-        // Starts mid-record (no trailing newline, unparseable) — the writer "finishes" the
-        // record shortly after, before the bounded wait gives up.
+        // Incomplete when the wait first reads it. The poll then parks on the clock; the line is
+        // finished before that delay is released, so the next read must report complete.
         await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writ");
 
-        var writer = Task.Run(async () => {
-            await Task.Delay(40);
-            await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writing\"}\n");
-        });
+        var clock = new FakeTimeProvider();
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = WatchCommand.WaitForFinalLineCompletionAsync(
+            path, new DelayObservingTime(clock, parked), attempts: 6, delayMs: 20);
+        await parked.Task;
 
-        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 6, delayMs: 20);
-        await writer;
+        await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writing\"}\n");
+        clock.Advance(TimeSpan.FromMilliseconds(20));
 
-        await Assert.That(result).IsTrue();
+        await Assert.That(await result).IsTrue();
+    }
+
+    /// Forwards to a <see cref="FakeTimeProvider"/> and signals the first time the wait arms a delay,
+    /// which is after it has read the file and found it incomplete.
+    sealed class DelayObservingTime(FakeTimeProvider inner, TaskCompletionSource parked) : TimeProvider {
+        public override TimeZoneInfo LocalTimeZone => inner.LocalTimeZone;
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) {
+            // Register the timer before signalling. The waiter advances the clock from that signal,
+            // and an advance that lands before the timer exists never fires.
+            var timer = inner.CreateTimer(callback, state, dueTime, period);
+            parked.TrySetResult();
+            return timer;
+        }
     }
 
     [Test]
