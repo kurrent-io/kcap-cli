@@ -265,17 +265,37 @@ public class TokenStoreProfileTests {
         await Assert.That(loaded!.GitHubUsername).IsEqualTo("legacy");
     }
 
+    /// Logout removes all token material, including temps leaked by a crash between write and
+    /// move — one whose profile is gone from config and has no token file included.
     [Test]
     public async Task DeleteAsync_removes_leaked_temp_files() {
-        // Logout must remove ALL token material, including temps leaked by a crash
-        // between write and move.
         Directory.CreateDirectory(TokensDir);
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json.999.deadbeef.tmp"), "secret");
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "orphan.json.7.cafe.tmp"), "secret");
 
         await AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
 
         await Assert.That(Directory.EnumerateFiles(TokensDir, "*.tmp").Any()).IsFalse();
+    }
+
+    /// A temp is a live writer's until its lock is released, so logout sweeps it under that lock
+    /// rather than unlinking a file the writer is about to publish.
+    [Test]
+    public async Task Logout_sweeps_a_leaked_temp_only_under_its_owners_lock() {
+        Directory.CreateDirectory(TokensDir);
+        var temp = Path.Combine(TokensDir, "acme.json.1.aaaa.tmp");
+        await File.WriteAllTextAsync(temp, "secret");
+
+        Task logout;
+        using (new FileStream(Path.Combine(TokensDir, "acme.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            logout = AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
+            await Task.Delay(200);
+            await Assert.That(File.Exists(temp)).IsTrue();
+        }
+        await logout;
+
+        await Assert.That(File.Exists(temp)).IsFalse();
     }
 
     [Test]

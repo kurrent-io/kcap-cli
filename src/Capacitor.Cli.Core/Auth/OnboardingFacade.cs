@@ -13,6 +13,7 @@ sealed record CommitRequest(
     string                              ActiveProfile,
     string                              CanonicalServer,
     Func<ProfileConfig, ProfileConfig>? ConfigMutation,
+    // Its callback marks the ACTIVE profile's credential landed; another profile's save does not count.
     Func<Action, Task<string?>>?        PublishTokens,
     // False for a login that must not claim the profile for this server (see LoginTarget.Foreign).
     bool                                WriteStamp = true,
@@ -512,7 +513,9 @@ public sealed class OnboardingFacade(
     }
 
     // Inside the boundary: each tenant's exchange is network-then-save, and ANY failure — mapped or
-    // thrown — costs that tenant its token (today's per-tenant warning) rather than the whole commit.
+    // thrown — costs that tenant its token (a per-tenant warning) rather than the whole commit. Only
+    // the picked tenant's save counts as the boundary's credential: it is the active profile, and
+    // another tenant's token landing says nothing about it.
     async Task<string?> ExchangeEveryTenantAsync(
             DiscoveredTenant[] tenants, DiscoveredTenant picked, string githubAccessToken, Action saved) {
         using var http = httpFactory.CreateClient(CapacitorClients.Anonymous);
@@ -533,10 +536,16 @@ public sealed class OnboardingFacade(
 
                 var outcome = await store.SaveGuardedAsync(
                     tenant.ProfileName, exchanged.Value.Tokens, cfg => cfg.Profiles.ContainsKey(tenant.ProfileName), CancellationToken.None);
-                if (outcome == GuardedWriteOutcome.Written) saved();
-                else WarnExchangeFailed(tenant.ProfileName);
+                if (outcome != GuardedWriteOutcome.Written) {
+                    WarnExchangeFailed(tenant.ProfileName);
 
-                if (tenant.ProfileName == picked.ProfileName) pickedUsername = exchanged.Value.Username;
+                    continue;
+                }
+
+                if (tenant.ProfileName == picked.ProfileName) {
+                    saved();
+                    pickedUsername = exchanged.Value.Username;
+                }
             } catch (Exception) {
                 WarnExchangeFailed(tenant.ProfileName);
             }

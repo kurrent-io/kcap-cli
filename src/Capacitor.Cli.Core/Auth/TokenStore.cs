@@ -252,20 +252,27 @@ public sealed class TokenStore(
         SweepLeakedTemps(profile);
     }
 
-    // Best-effort removal of temp files leaked by a crash between write and move
-    // ({profile}.json.{pid}.{guid}.tmp) — these carry token secrets. Pass a profile to
-    // scope to that profile's temps, or null to sweep all (logout). Matched by filename
-    // prefix (not a glob) so a profile name containing a wildcard char can't widen it.
-    void SweepLeakedTemps(string? profile = null) {
+    // Best-effort removal of the profile's temp files leaked by a crash between write and move
+    // ({profile}.json.{pid}.{guid}.tmp) — these carry token secrets. Only under the profile's
+    // lock: a live writer's temp is unlinked otherwise, and its publish fails. Matched by
+    // filename prefix (not a glob) so a profile name containing a wildcard char can't widen it.
+    void SweepLeakedTemps(string profile) {
         if (!Directory.Exists(TokenDir)) return;
-        var prefix = profile is null ? null : $"{profile}.json.";
+        var prefix = $"{profile}.json.";
         try {
             foreach (var tmp in Directory.EnumerateFiles(TokenDir, "*.tmp")) {
-                if (prefix is null || Path.GetFileName(tmp).StartsWith(prefix, StringComparison.Ordinal)) {
+                if (Path.GetFileName(tmp).StartsWith(prefix, StringComparison.Ordinal)) {
                     try { File.Delete(tmp); } catch { /* best-effort */ }
                 }
             }
         } catch { /* best-effort */ }
+    }
+
+    // The profile a leaked temp belongs to, or null for a file that is not one of ours.
+    static string? TempOwner(string fileName) {
+        if (!fileName.EndsWith(".tmp", StringComparison.Ordinal)) return null;
+        var at = fileName.LastIndexOf(".json.", StringComparison.Ordinal);
+        return at > 0 ? fileName[..at] : null;
     }
 
     // ── Legacy (profile-resolving) overloads ────────────────────────────────
@@ -312,8 +319,12 @@ public sealed class TokenStore(
         var names = new HashSet<string>(cfg.Profiles.Keys, StringComparer.Ordinal);
         if (Directory.Exists(TokenDir)) {
             try {
-                foreach (var file in Directory.EnumerateFiles(TokenDir, "*.json"))
-                    names.Add(Path.GetFileNameWithoutExtension(file));
+                // A leaked temp names its owner too, so it is swept under that owner's lock.
+                foreach (var file in Directory.EnumerateFiles(TokenDir)) {
+                    var fileName = Path.GetFileName(file);
+                    if (fileName.EndsWith(".json", StringComparison.Ordinal)) names.Add(Path.GetFileNameWithoutExtension(fileName));
+                    else if (TempOwner(fileName) is { } owner) names.Add(owner);
+                }
             } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort: config's names still get deleted */ }
         }
         names.Remove(cfg.ActiveName);
@@ -332,8 +343,6 @@ public sealed class TokenStore(
             try { if (File.Exists(LegacyTokenPath)) File.Delete(LegacyTokenPath); }
             catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort */ }
         } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort */ }
-
-        SweepLeakedTemps();
     }
 
     /// Whether <paramref name="other"/> reads the file <paramref name="profile"/>'s credential is
@@ -664,7 +673,7 @@ public sealed class TokenStore(
         try {
             // Re-read under the lock. A file deleted since the pre-lock read is a sign-out, not a
             // credential to bring back from the copy in hand; a file the pre-lock read parsed but
-            // is corrupt now is refreshed from that copy, as a corrupt file always was.
+            // is corrupt now is refreshed from that copy.
             var (state, onDisk) = await ReadTokenFileAsync(ProfileTokenPath(profile));
             StoredTokens latest;
             if (state == TokenFileState.Loaded) {

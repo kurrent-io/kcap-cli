@@ -314,6 +314,7 @@ public class OnboardingFacadeTests {
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsTrue();
         await Assert.That(TokenFileExists("acme")).IsTrue();
         await Assert.That(TokenFileExists("contoso")).IsFalse();
         await Assert.That(progress.Errors).Contains(
@@ -334,8 +335,10 @@ public class OnboardingFacadeTests {
 
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
 
-        // The throwing tenant loses only its own token; the boundary still finishes the rest.
+        // The throwing tenant loses only its own token; the boundary still finishes the rest. It is
+        // the picked one, so the commit reports no credential even though contoso's landed.
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsFalse();
         await Assert.That(TokenFileExists("acme")).IsFalse();
         await Assert.That(TokenFileExists("contoso")).IsTrue();
         await Assert.That(progress.Errors).Contains(
