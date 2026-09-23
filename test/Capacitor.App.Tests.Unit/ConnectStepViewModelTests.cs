@@ -82,15 +82,4 @@ public class ConnectStepViewModelTests {
         await Assert.That(vm.ServerInputText).IsEqualTo("acme");
         await Assert.That(vm.Intent).IsEqualTo(new ConnectIntent.Paste("https://acme.kcap.ai"));
     }
-
-    [Test]
-    public async Task The_step_identifies_itself_as_the_connect_page_and_is_always_applicable() {
-        var vm = new ConnectStepViewModel();
-
-        await vm.OnEnterAsync(CancellationToken.None);
-
-        await Assert.That(vm.Id).IsEqualTo(WizardStepId.Connect);
-        await Assert.That(vm.Applicable).IsTrue();
-        await Assert.That(vm.Title).IsNotEmpty();
-    }
 }

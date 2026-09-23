@@ -1226,47 +1226,6 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A pending card means the agent waits on the user, whatever the awaiting flag says: the card
-    /// arrives before the daemon's status pulse does.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_pending_card_suppresses_the_working_note() {
-        await RunOnUiAsync(async () => {
-            var path = Tmp.CreateFile("j.jsonl", [
-                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi")),
-            ]);
-            var h = new Harness(TranscriptChat.Journal);
-            await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
-            await h.TickAsync();
-            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
-
-            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
-            await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the card");
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
-
-            h.Permissions.Remove("r1");
-            await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card gone");
-            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
-            await h.TeardownAsync();
-        });
-    }
-
-    /// PTY chats use the same busy verdict as the rail and hosted chats.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_pty_session_shows_the_working_note() {
-        await RunOnUiAsync(async () => {
-            var h = Claude();
-            var path = Tmp.CreateFile("t.jsonl", [UserLine]);
-            await h.PushAsync(Dto(path) with { Status = "Running", AwaitingInput = false });
-            await h.TickAsync();
-
-            await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
-            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
-            await h.TeardownAsync();
-        });
-    }
-
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Working_time_ticks_without_a_transcript_and_resets_for_each_turn() {

@@ -143,7 +143,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         }
     }
 
-    /// The single call on a lone card — header status binds here.
     public ToolCallItem? LoneCall => _calls.Count == 1 ? _calls[0] : null;
 
     bool _hasFailure;

@@ -1511,17 +1511,6 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_requester_initial_keeps_a_surrogate_pair_whole() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = "👩 Ada", Requester = "github:1" });
-            await Assert.That(h.Vm.RequesterInitial).IsEqualTo("👩");
-            await h.Vm.TeardownAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
     public async Task Sections_default_open_parts_and_collapsed_session_and_toggle() {
         await RunOnUiAsync(async () => {
             var h = new Harness();

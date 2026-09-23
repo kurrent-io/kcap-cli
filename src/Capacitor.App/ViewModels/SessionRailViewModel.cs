@@ -73,7 +73,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         // PermissionService.AgentsWithPending emits from background continuations; marshal once
         // here so every nested OAPH downstream (RailSessionViewModel, RailWorktreeViewModel) sees
         // it on the UI thread without adding its own ObserveOn.
-        var pending = (agentsWithPending ?? Observable.Return((IReadOnlySet<string>)new HashSet<string>()))
+        var pending = (agentsWithPending ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         // Marshaled once here, like `pending` above, so every nested OAPH downstream sees it on
         // the UI thread without its own ObserveOn.

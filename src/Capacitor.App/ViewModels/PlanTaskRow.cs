@@ -19,18 +19,14 @@ public sealed class PlanTaskRow(string taskId) : ReactiveObject {
         private set {
             if (_state == value) return;
             this.RaiseAndSetIfChanged(ref _state, value);
-            this.RaisePropertyChanged(nameof(IsPending));
             this.RaisePropertyChanged(nameof(IsInProgress));
             this.RaisePropertyChanged(nameof(IsCompleted));
-            this.RaisePropertyChanged(nameof(IsSkipped));
             this.RaisePropertyChanged(nameof(IsSettled));
         }
     }
 
-    public bool IsPending    => State == PlanTaskState.Pending;
     public bool IsInProgress => State == PlanTaskState.InProgress;
     public bool IsCompleted  => State == PlanTaskState.Completed;
-    public bool IsSkipped    => State == PlanTaskState.Skipped;
     /// The server's own rule for progress: a skipped task is as settled as a completed one.
     public bool IsSettled    => State is PlanTaskState.Completed or PlanTaskState.Skipped;
 

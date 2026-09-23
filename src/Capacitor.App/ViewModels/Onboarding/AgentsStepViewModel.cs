@@ -14,7 +14,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 internal sealed record AgentVendor(HarnessId Id, string Label, string? Flag);
 
 /// Taken from Core's registry so the app and the CLI enumerate the same vendors, in the same order —
-/// a tenth harness appears here without an edit.
+/// a new harness appears here without an edit.
 internal static class AgentVendors {
     public static readonly IReadOnlyList<AgentVendor> All =
         [.. HarnessRegistry.Identities.Select(h => new AgentVendor(h.Id, h.Label, h.Id.PluginInstallFlag))];
@@ -105,11 +105,8 @@ public sealed class AgentsStepViewModel : ReactiveObject, IWizardStep {
         get;
         private set {
             this.RaiseAndSetIfChanged(ref field, value);
-            this.RaisePropertyChanged(nameof(Idle));
         }
     }
-
-    public bool Idle => !Busy;
 
     public bool Satisfied {
         get;

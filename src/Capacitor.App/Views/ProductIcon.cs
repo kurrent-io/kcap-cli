@@ -4,12 +4,8 @@ using Avalonia.Platform;
 
 namespace Capacitor.App.Views;
 
-/// The product mark (Assets/kcap-icon.png), loaded once from its avares:// URI — spec §4's tray
-/// base bitmap, and also MainWindow's and the startup-error window's Icon, so every window
-/// surface uses the same asset. TrayIconRenderer draws Bitmap scaled into each per-state
-/// composite; MainWindow.axaml sets its own Icon via the same URI directly (Avalonia's
-/// IconTypeConverter resolves avares:// strings without needing this class), so only the
-/// startup-error window (built entirely in code) consumes WindowIcon here.
+/// The product mark, loaded once. TrayIconRenderer composites Bitmap; the windows built in code
+/// take WindowIcon. XAML windows name the same avares:// URI directly.
 static class ProductIcon {
     const string AssetUri = "avares://Kurrent Capacitor/Assets/kcap-icon.png";
 

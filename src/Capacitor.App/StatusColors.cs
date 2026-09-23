@@ -1,10 +1,7 @@
 namespace Capacitor.App;
 
-/// Hex-only constants (plain strings, not Brush instances) shared by MainWindowViewModel's
-/// status word and TrayIconRenderer's per-state tray-icon overlay, so the window and the
-/// tray icon can never disagree about what a color means. Callers build their own Brush per
-/// use (see MainWindowViewModel.Paint) rather than caching one here, for the same
-/// UI-thread-affinity reason documented there.
+/// Status hex values shared by every status surface so they cannot disagree. Plain strings: a
+/// caller that caches must use an immutable brush.
 public static class StatusColors {
     public const string Connected   = "#4CAF50";
     public const string InProgress  = "#FFB300";

@@ -8,8 +8,7 @@ namespace Capacitor.App.Views;
 
 /// The Home tab: DataContext is supplied externally (a plainly-constructed
 /// HomeViewModel), same contract as ConsentPromptWindow/MainWindow — this view never builds its
-/// own ViewModel. The launcher card and its pickers live in LauncherPaneView now; the converters
-/// below stay here because both views share them via the Views namespace.
+/// own ViewModel. The converters below are shared with LauncherPaneView and SignInStepView.
 public partial class HomeView : UserControl {
     public HomeView() => InitializeComponent();
 

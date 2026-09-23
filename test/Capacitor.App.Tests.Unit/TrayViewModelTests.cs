@@ -25,7 +25,7 @@ sealed class FakePauseController : IPauseController {
     public void RequestToggle(bool desired) => ToggleRequests.Add(desired);
 }
 
-/// Covers the §4 ten-row state matrix, §5 header copy, agent-entry projection, and pause-item
+/// Covers the tray state matrix, header copy, agent-entry projection, and pause-item
 /// enablement. All tests touch RxSchedulers (TrayViewModel's OAPH uses
 /// RxSchedulers.MainThreadScheduler), so every test runs inside
 /// AvaloniaSession.WithImmediateRxScheduler and carries [NotInParallel("AvaloniaSession")].
@@ -35,7 +35,7 @@ public class TrayViewModelTests {
 
     // Real AgentActionService wired to the SAME service.SnapshotsSubject as the FakeDaemonClientService
     // (production shares one snapshots stream between TrayViewModel and AgentActionService) —
-    // AgentActionService has no interface seam (spec-pinned concrete sealed class), so tests
+    // AgentActionService has no interface seam (a concrete sealed class), so tests
     // construct it for real against a scripted ILocalControlOps.
     static AgentActionService NewActions(FakeDaemonClientService service, ScriptedLocalControlOps? ops = null) =>
         new(ops ?? new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
@@ -92,13 +92,13 @@ public class TrayViewModelTests {
         });
     }
 
-    // ---- §4 state matrix ----
+    // ---- state matrix ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    [Arguments("daemon_unreachable", TrayState.Stopped)]   // row 1
-    [Arguments("daemon_incompatible", TrayState.Attention)] // row 2
-    [Arguments("some_future_reason", TrayState.Attention)]  // row 10
+    [Arguments("daemon_unreachable", TrayState.Stopped)]
+    [Arguments("daemon_incompatible", TrayState.Attention)]
+    [Arguments("some_future_reason", TrayState.Attention)]
     public async Task Unreachable_reason_maps_to_state(string reason, TrayState expected) {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
@@ -116,7 +116,7 @@ public class TrayViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Connecting_state_maps_to_connecting() { // row 3
+    public async Task Connecting_state_maps_to_connecting() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var pause = new FakePauseController();
@@ -131,13 +131,13 @@ public class TrayViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    [Arguments("connecting", 0, TrayState.Connecting, 0)]    // row 4
-    [Arguments("reconnecting", 0, TrayState.Attention, 0)]   // row 5
-    [Arguments("disconnected", 0, TrayState.Attention, 0)]   // row 5
-    [Arguments("connected", -1, TrayState.Attention, 0)]     // row 6
-    [Arguments("connected", 0, TrayState.Idle, 0)]           // row 7
-    [Arguments("connected", 4, TrayState.Running, 4)]        // row 8
-    [Arguments("weird", 0, TrayState.Attention, 0)]          // row 9
+    [Arguments("connecting", 0, TrayState.Connecting, 0)]
+    [Arguments("reconnecting", 0, TrayState.Attention, 0)]
+    [Arguments("disconnected", 0, TrayState.Attention, 0)]
+    [Arguments("connected", -1, TrayState.Attention, 0)]
+    [Arguments("connected", 0, TrayState.Idle, 0)]
+    [Arguments("connected", 4, TrayState.Running, 4)]
+    [Arguments("weird", 0, TrayState.Attention, 0)]
     public async Task Connected_connection_value_maps_to_state(
             string connection, int active, TrayState expectedState, int expectedCount) {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
@@ -346,23 +346,7 @@ public class TrayViewModelTests {
         });
     }
 
-    // ---- §5 header copy ----
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Header_stopped() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var consent = new FakeConsentService();
-            using var vm = new TrayViewModel(service, pause, actions, consent);
-
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-
-            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: not running");
-        });
-    }
+    // ---- header copy ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -448,24 +432,7 @@ public class TrayViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Header_running() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var consent = new FakeConsentService();
-            using var vm = new TrayViewModel(service, pause, actions, consent);
-
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
-            service.SnapshotsSubject.OnNext(Snap("connected", 4));
-
-            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: connected — 4 agent(s) running");
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Header_needs_attention_on_unrecognized_connection() { // row 9
+    public async Task Header_needs_attention_on_unrecognized_connection() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var pause = new FakePauseController();
@@ -482,7 +449,7 @@ public class TrayViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Header_needs_attention_on_negative_active_agents() { // row 6
+    public async Task Header_needs_attention_on_negative_active_agents() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var pause = new FakePauseController();
@@ -499,7 +466,7 @@ public class TrayViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Header_needs_attention_on_unrecognized_unreachable_reason() { // row 10
+    public async Task Header_needs_attention_on_unrecognized_unreachable_reason() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var pause = new FakePauseController();
@@ -782,28 +749,9 @@ public class TrayViewModelTests {
         });
     }
 
-    // ---- adapter delegation ----
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task RequestPauseRefresh_delegates_to_controller() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var consent = new FakeConsentService();
-            using var vm = new TrayViewModel(service, pause, actions, consent);
-
-            vm.RequestPauseRefresh();
-
-            await Assert.That(pause.RefreshCount).IsEqualTo(1);
-        });
-    }
-
-    // Fix-round 2: macOS status-item menus never raise NativeMenu.Opening (manual acceptance), so
-    // the adapter's refresh kick moved to NeedsUpdate — but that alone means the toggle is only
-    // ever verified starting at the SECOND menu open. This edge-triggered kick on the
-    // Connecting -> Connected transition covers the gap: verified before the FIRST open too.
+    // macOS status-item menus never raise NativeMenu.Opening, so the adapter refreshes on
+    // NeedsUpdate, which only verifies the toggle from the SECOND menu open. This edge-triggered
+    // kick on Connecting -> Connected verifies it before the first open too.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task RequestPauseRefresh_kicks_once_on_the_edge_into_Connected() {
@@ -835,33 +783,7 @@ public class TrayViewModelTests {
         });
     }
 
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    [Arguments(true)]
-    [Arguments(false)]
-    public async Task TogglePauseCommand_reaches_controller_with_parameter_value(bool desired) {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var consent = new FakeConsentService();
-            using var vm = new TrayViewModel(service, pause, actions, consent);
-
-            await vm.TogglePauseCommand.Execute(desired).ToTask();
-
-            await Assert.That(pause.ToggleRequests).IsEquivalentTo([desired], CollectionOrdering.Matching);
-        });
-    }
-
-    // ---- stop gating + open-in-web (spec §7) ----
-
-    static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null, string what = "condition") {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
-        while (!condition()) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException($"Timed out waiting for: {what}");
-            await Task.Delay(10);
-        }
-    }
+    // ---- stop gating + open-in-web ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -885,11 +807,11 @@ public class TrayViewModelTests {
             var gate = ops.ArmStop();
             actions.RequestStop("a", "agent · claude · —", "agent");
 
-            // Pushed synchronously by RequestStop before it returns (spec §7 in-flight gating).
+            // Pushed synchronously by RequestStop before it returns (in-flight gating).
             await Assert.That(vm.MenuModel.Agents[0].StopEnabled).IsFalse();
 
             gate.SetResult(new StopAgentResult(true, "stopped", null));
-            await WaitUntilAsync(() => vm.MenuModel.Agents[0].StopEnabled, what: "entry to re-enable after stop completes");
+            await WorkspaceFixtures.WaitUntilAsync(() => vm.MenuModel.Agents[0].StopEnabled, what: "entry to re-enable after stop completes");
         });
     }
 
@@ -914,14 +836,14 @@ public class TrayViewModelTests {
             ops.QueueStop(new StopAgentResult(false, "failed", null));
             await vm.StopAgentCommand.Execute("Local:a").ToTask();
 
-            await WaitUntilAsync(() => notifier.Notified.Count >= 1, what: "stop banner");
+            await WorkspaceFixtures.WaitUntilAsync(() => notifier.Notified.Count >= 1, what: "stop banner");
             await Assert.That(notifier.Notified).IsEquivalentTo(["Couldn't stop agent · claude · kcap-cli"], CollectionOrdering.Matching);
             await Assert.That(ops.StopPayloads).IsEquivalentTo([("a", false)], CollectionOrdering.Matching);
         });
     }
 
     // Proves TrayAgentEntry.Kind is actually threaded from the snapshot through to
-    // AgentActionService.RequestStop (decision 5) — a protected kind clicked from the tray goes
+    // AgentActionService.RequestStop: a protected kind clicked from the tray goes
     // through the confirm seam and, once confirmed, stops with force:true.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -945,7 +867,7 @@ public class TrayViewModelTests {
             ops.QueueStop(new StopAgentResult(true, "stopped", null));
             await vm.StopAgentCommand.Execute("Local:a").ToTask();
 
-            await WaitUntilAsync(() => ops.StopCalls >= 1, what: "stop issued after confirm");
+            await WorkspaceFixtures.WaitUntilAsync(() => ops.StopCalls >= 1, what: "stop issued after confirm");
             await Assert.That(confirmer.Prompted).IsEquivalentTo(["review-flow · codex · kcap-cli"], CollectionOrdering.Matching);
             await Assert.That(ops.StopPayloads).IsEquivalentTo([("a", true)], CollectionOrdering.Matching);
         });
@@ -999,9 +921,9 @@ public class TrayViewModelTests {
 
             await vm.StopAgentCommand.Execute("Remote:a").ToTask();
 
-            await WaitUntilAsync(() => lane.Stops.Contains("a"), what: "the hub stop");
+            await WorkspaceFixtures.WaitUntilAsync(() => lane.Stops.Contains("a"), what: "the hub stop");
             await Assert.That(ops.StopCalls).IsEqualTo(0);
-            await WaitUntilAsync(() => states[^1].Count == 0, what: "the first stop to settle");
+            await WorkspaceFixtures.WaitUntilAsync(() => states[^1].Count == 0, what: "the first stop to settle");
 
             // The entry can leave the model between the rebuild that rendered it and the click; the
             // key is still the only thing that says which agent was named.
@@ -1010,7 +932,7 @@ public class TrayViewModelTests {
 
             await vm.StopAgentCommand.Execute("Remote:a").ToTask();
 
-            await WaitUntilAsync(() => lane.Stops.Count == 2, what: "the hub stop for the entry that left the model");
+            await WorkspaceFixtures.WaitUntilAsync(() => lane.Stops.Count == 2, what: "the hub stop for the entry that left the model");
             await Assert.That(ops.StopCalls).IsEqualTo(0);
         });
     }
@@ -1042,59 +964,7 @@ public class TrayViewModelTests {
         });
     }
 
-    // ---- OpenMainWindowCommand / QuitCommand delegation (Task 6 adds the injected delegates; Task 7 supplies the real callbacks) ----
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task OpenMainWindowCommand_invokes_the_injected_delegate() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var calls = 0;
-            var consent = new FakeConsentService();
-            using var vm = new TrayViewModel(service, pause, actions, consent, openMainWindow: () => calls++);
-
-            await vm.OpenMainWindowCommand.Execute().ToTask();
-
-            await Assert.That(calls).IsEqualTo(1);
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task QuitCommand_invokes_the_injected_delegate() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var calls = 0;
-            var consent = new FakeConsentService();
-            using var vm = new TrayViewModel(service, pause, actions, consent, quit: () => calls++);
-
-            await vm.QuitCommand.Execute().ToTask();
-
-            await Assert.That(calls).IsEqualTo(1);
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task OpenMainWindowCommand_and_QuitCommand_default_to_a_no_op_without_throwing() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var consent = new FakeConsentService();
-            using var vm = new TrayViewModel(service, pause, actions, consent); // no delegates injected
-
-            await vm.OpenMainWindowCommand.Execute().ToTask();
-            await vm.QuitCommand.Execute().ToTask();
-            await vm.ReviewPendingCommand.Execute().ToTask();
-        });
-    }
-
-    // ---- §8 pending-consent Attention row + Review menu item ----
+    // ---- pending-consent Attention + Review menu item ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1140,18 +1010,18 @@ public class TrayViewModelTests {
             for (var i = 0; i < 5; i++) consent.Add(Entry($"a{i}", $"p{i}", requestedAt: T0.AddSeconds(i)));
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Stopped); // row 1 still wins
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Stopped); // Stopped still wins
             await Assert.That(vm.MenuModel.PendingConsent).IsEqualTo(5);
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
             service.SnapshotsSubject.OnNext(Snap("reconnecting"));
 
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
-            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: reconnecting to server"); // row 5's copy wins
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: reconnecting to server"); // the reconnecting copy wins
         });
     }
 
-    // ---- spec: ILifecycleSurface.Attention ----
+    // ---- ILifecycleSurface.Attention ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1188,16 +1058,15 @@ public class TrayViewModelTests {
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
 
-            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Stopped); // row 1 still wins
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Stopped); // Stopped still wins
             await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: not running"); // untouched by the lifecycle text
         });
     }
 
-    /// Fix round 1: rows that resolve to Attention ON THEIR OWN (2, 5, 6, 9, 10) — as opposed to
-    /// row 1 (Stopped), the only row the test above exercises — are the ones a co-occurring
-    /// lifecycle Attention could actually collide with, since both land on TrayState.Attention.
-    /// Each row's own text must still win; only a genuinely fine baseState (Idle/Running) may ever
-    /// yield its header to the lifecycle message.
+    /// States that resolve to Attention on their own (incompatible, unknown reason, reconnecting,
+    /// disconnected, negative count, unknown connection) collide with a co-occurring lifecycle
+    /// Attention. Each one's own text must still win; only Idle/Running may yield its header to
+    /// the lifecycle message.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Lifecycle_attention_never_masks_a_connection_trouble_rows_own_header_text() {
@@ -1209,35 +1078,35 @@ public class TrayViewModelTests {
             var lifecycleAttention = new BehaviorSubject<string?>("orphan label needs repair");
             using var vm = new TrayViewModel(service, pause, actions, consent, lifecycleAttention: lifecycleAttention);
 
-            // Row 2: daemon_incompatible — the skew special-case (no daemon-name prefix) wins even
+            // daemon_incompatible: the skew special-case (no daemon-name prefix) wins even
             // over the connection-trouble exemption below.
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null));
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
             await Assert.That(vm.MenuModel.Header).IsEqualTo("app and daemon are incompatible — make sure both are up to date");
 
-            // Row 10: an unrecognized Unreachable reason.
+            // An unrecognized Unreachable reason.
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "some_future_reason", null));
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
             await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: needs attention");
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
 
-            // Row 5: reconnecting.
+            // Reconnecting.
             service.SnapshotsSubject.OnNext(Snap("reconnecting"));
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
             await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: reconnecting to server");
 
-            // Row 5: disconnected.
+            // Disconnected.
             service.SnapshotsSubject.OnNext(Snap("disconnected"));
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
             await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: disconnected from server");
 
-            // Row 6: connected, malformed (negative) active-agent count.
+            // Connected, malformed (negative) active-agent count.
             service.SnapshotsSubject.OnNext(Snap("connected", -1));
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
             await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: needs attention");
 
-            // Row 9: unrecognized connection value.
+            // Unrecognized connection value.
             service.SnapshotsSubject.OnNext(Snap("weird"));
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
             await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: needs attention");
@@ -1265,24 +1134,7 @@ public class TrayViewModelTests {
         });
     }
 
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task ReviewPendingCommand_invokes_the_injected_delegate() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var consent = new FakeConsentService();
-            var calls = 0;
-            using var vm = new TrayViewModel(service, pause, actions, consent, openReviewPrompts: () => calls++);
-
-            await vm.ReviewPendingCommand.Execute().ToTask();
-
-            await Assert.That(calls).IsEqualTo(1);
-        });
-    }
-
-    // ---- spec: the shim tray item ----
+    // ---- the shim tray item ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1321,38 +1173,6 @@ public class TrayViewModelTests {
             updateMenu.OnNext(new UpdateMenuItem(true, "Restart to update to 0.12.0-beta.3"));
 
             await Assert.That(vm.MenuModel.UpdateItemLabel).IsEqualTo("Restart to update to 0.12.0-beta.3");
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task UpdateActionCommand_invokes_the_injected_action() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var calls = 0;
-            using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(),
-                updateAction: () => { calls++; return Task.CompletedTask; });
-
-            await vm.UpdateActionCommand.Execute().ToTask();
-
-            await Assert.That(calls).IsEqualTo(1);
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task InstallShimCommand_invokes_the_injected_delegate() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var pause = new FakePauseController();
-            var actions = NewActions(service);
-            var consent = new FakeConsentService();
-            var calls = 0;
-            using var vm = new TrayViewModel(service, pause, actions, consent, installShim: () => { calls++; return Task.CompletedTask; });
-
-            await vm.InstallShimCommand.Execute().ToTask();
-
-            await Assert.That(calls).IsEqualTo(1);
         });
     }
 

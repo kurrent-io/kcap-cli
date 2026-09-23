@@ -67,10 +67,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// ownership/connected check at the moment of launch, whatever the UI-affordance state said.
     public const string MachineUnavailableMessage = "This machine is no longer available. Choose a different one.";
 
-    /// The daemon capability that accepts uploaded attachment ids on a launch.
-    internal const string AttachCapability = "input/2";
     internal const string SignInToAttach = "sign in to attach files";
-    internal const string DaemonNeedsAttachments = "attachments need the daemon updated";
 
     internal const string ConnectingNotice     = "Connecting to the server…";
     /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
@@ -98,7 +95,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     string _selectedRepoPath = ScratchRepoPath;
     // Subject (not WhenAnyValue) so the ctor can compose StartButtonTip — same reason as
-    // _signInRequired above.
+    // _signInRequired below.
     readonly BehaviorSubject<string> _selectedRepoPathChanges = new(ScratchRepoPath);
     public string SelectedRepoPath {
         get => _selectedRepoPath;
@@ -293,8 +290,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     bool _remoteMachineSelected;
-    /// False ⇒ every existing repo/harness/launch behavior is untouched by a HomeViewModel that
-    /// never wires the machine picker.
+    /// False ⇒ the local repo/harness/launch behavior, which is all a HomeViewModel that never
+    /// wires the machine picker ever sees.
     public bool RemoteMachineSelected {
         get => _remoteMachineSelected;
         private set => this.RaiseAndSetIfChanged(ref _remoteMachineSelected, value);
@@ -507,9 +504,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
 
         // A remote selection swaps in RemoteAvailabilityFor (lane + the selected daemon's latest
-        // Connected AND still-owned-by-the-viewer) rather than changing AvailabilityFor itself —
-        // the local gate stays exactly what every existing (non-machine-picking) caller already
-        // exercises. FindMachine re-verifies ownership against _lastViewerId on every emission, so
+        // Connected AND still-owned-by-the-viewer) rather than changing AvailabilityFor itself, so
+        // the local gate is the same for a caller that never picks a machine. FindMachine re-verifies ownership against _lastViewerId on every emission, so
         // a registry update that reassigns an already-selected name to a different owner revokes
         // launch readiness rather than trusting the selection made when it was still valid.
         // Shared with notices/signInState/StartButtonTip below — every surface that asks "can I
@@ -832,10 +828,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             string? viewerId, string machine, bool remote) =>
         signedIn && (remote
             ? LaunchAttachments.IsCapable(FindMachine(daemons, machine, viewerId)?.Version)
-            : localCapabilities is { } caps && caps.Contains(AttachCapability));
+            : localCapabilities is { } caps && caps.Contains(LocalFrameChatInput.AttachCapability));
 
     internal static string? AttachHintFor(bool signedIn, bool canAttach) =>
-        !signedIn ? SignInToAttach : canAttach ? null : DaemonNeedsAttachments;
+        !signedIn ? SignInToAttach : canAttach ? null : LocalFrameChatInput.DaemonNeedsAttachments;
 
     bool CanAttachFor(LaunchDraft draft) =>
         CanAttachTo(_signedIn, _currentCapabilities, _currentDaemons, _lastViewerId, draft.Machine, draft.Remote);
@@ -925,7 +921,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         foreach (var key in byRepo?.Keys ?? [])
             Add(key);
         // An agent's RepoPath can be a worktree checkout (review flows launch into the
-        // requester's worktree) — the menu offers the repository, never the checkout (GH #655).
+        // requester's worktree) — the menu offers the repository, never the checkout.
         foreach (var agent in _daemon.Agents.Items)
             if (agent.RepoPath is { Length: > 0 } repoPath)
                 Add(GitRepository.ResolveMainRepoRoot(repoPath));

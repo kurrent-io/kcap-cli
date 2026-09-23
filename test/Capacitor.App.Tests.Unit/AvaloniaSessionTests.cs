@@ -5,13 +5,6 @@ using Avalonia.Threading;
 namespace Capacitor.App.Tests.Unit;
 
 public class AvaloniaSessionTests {
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Dispatch_runs_on_the_headless_session() {
-        var answer = await AvaloniaSession.DispatchAsync(() => 42);
-        await Assert.That(answer).IsEqualTo(42);
-    }
-
     /// <summary>Per-test isolation rebuilds the application on every dispatch, and each rebuild
     /// releases Dispatcher.UIThread before reclaiming it — a window any concurrent thread reading
     /// that property takes for itself, after which building the application verifies access against

@@ -63,7 +63,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     }
 
     public long? CurrentOffset {
-        get { lock (_lock) return _position is { } p ? p + 1 : null; }
+        get { lock (_lock) return CurrentOffsetLocked(); }
     }
 
     public FeedRead ReadAppended() {

@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Capacitor.App.Services;
 
-/// App-owned UX state only — nothing lifecycle-safety-bearing lives here (spec §3.5). Persisted
+/// App-owned UX state only — nothing lifecycle-safety-bearing lives here. Persisted
 /// under the app's ConfigRoot as `app-state.json`; the CLI's own fixed-namespace
 /// marker is the source of truth for anything safety-bearing.
 public sealed record AppState(

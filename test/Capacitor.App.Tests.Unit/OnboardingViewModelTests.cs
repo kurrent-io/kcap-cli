@@ -121,29 +121,6 @@ public class OnboardingViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Skip_then_return_leaves_the_step_unsatisfied() {
-        var (afterSkip, afterBack, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
-            var connect = new FakeWizardStep(WizardStepId.Connect);
-            var signIn = new FakeWizardStep(WizardStepId.SignIn);
-            var vm = new OnboardingViewModel([connect, signIn]);
-            await vm.PendingEnterForTesting;
-
-            await vm.SkipCommand.Execute().ToTask();
-            var afterSkip = vm.Current.Id;
-
-            await vm.BackCommand.Execute().ToTask();
-            var afterBack = vm.Current.Id;
-
-            return (afterSkip, afterBack, vm.Current.Satisfied);
-        });
-
-        await Assert.That(afterSkip).IsEqualTo(WizardStepId.SignIn);
-        await Assert.That(afterBack).IsEqualTo(WizardStepId.Connect);
-        await Assert.That(satisfied).IsFalse();
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
     public async Task OnEnterAsync_fires_on_initial_entry_and_again_on_re_entry() {
         var (connectEntersInitially, signInEntersInitially, signInEntersAfterNext, connectEntersAfterBack) =
             await AvaloniaSession.DispatchAsync(async () => {

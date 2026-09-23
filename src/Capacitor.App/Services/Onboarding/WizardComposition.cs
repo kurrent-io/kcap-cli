@@ -29,7 +29,7 @@ internal sealed record WizardFacadeSpec(
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
 /// (including ones the shell filtered out as inapplicable — the summary still names them), and the
-/// Import step by name — the close path must cancel its in-flight run directly (spec §7), which
+/// Import step by name — the close path must cancel its in-flight run directly, which
 /// CanLeaveAsync alone does not cover since closing the window never navigates away from a step.
 internal sealed record WizardGraph(
     OnboardingViewModel ViewModel, WizardAuthService Auth, IReadOnlyList<IWizardStep> Steps,
@@ -70,7 +70,7 @@ internal sealed record WizardGraphOptions(
     TimeProvider                                                                 Time,
     CancellationToken                                                            ShutdownToken);
 
-/// The wizard half of the composition root (spec decision 2), split out of App so it can be driven
+/// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
     internal const string CliMissingNote     = "kcap isn't on this machine";
@@ -93,7 +93,7 @@ internal static class WizardComposition {
             spec.Time, spec.BeforeCommit), spec.Profile);
 
     /// The ONE façade a wizard run signs in through — provisioner armed (a provisioner-less façade
-    /// dead-ends "Create a workspace" at "ask your admin") and the decision-7 arming hook wired as
+    /// dead-ends "Create a workspace" at "ask your admin") and the consent-flip claim arming hook wired as
     /// before-commit, so a claim exists before anything durable is published.
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> BuildOperation(
             ConfigRoot root, TokenStore tokenStore, IHttpClientFactory httpFactory, IAuthProxyClient proxy,

@@ -59,7 +59,6 @@ public sealed class TerminalFeedSanitizer {
     }
 
     static string RewriteSgr(ReadOnlySpan<char> parameters) {
-        if (parameters.IsEmpty) return Esc + "[m";
         var groups = parameters.ToString().Split(';');
         var kept = new List<string>(groups.Length);
         for (var k = 0; k < groups.Length; k++) {
