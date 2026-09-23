@@ -8,6 +8,7 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Notifications;
+using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Config;
@@ -87,7 +88,7 @@ public class SettingsWindowSmokeTests {
             await Assert.That(window.Bounds.Width).IsEqualTo(540d);
             await Assert.That(window.Bounds.Height).IsEqualTo(580d);
             await Assert.That(capacity.Bounds.Height).IsGreaterThan(0d);
-            tabs.SelectedIndex = 1;
+            tabs.SelectedIndex = 2; // Daemon, Profiles (hidden — no profiles VM here), Notifications
             Dispatcher.UIThread.RunJobs();
             await Assert.That(window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsEffectivelyEnabled).IsFalse();
             await Assert.That(window.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!.IsEffectivelyEnabled).IsFalse();
@@ -96,6 +97,56 @@ public class SettingsWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(name.IsEffectivelyVisible).IsTrue();
         } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Profiles_tab_lists_rows_with_chip_actions_and_purple_marks() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with {
+            ActiveProfile = "work",
+            Profiles = new() {
+                ["work"]  = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } },
+                ["other"] = new Profile { ServerUrl = "https://other.example" }
+            }
+        });
+        var tokens = AuthFixtures.NewTokenStore(Config.Root);
+        var profiles = new ProfilesSettingsViewModel(Config.Root, tokens,
+            new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, TimeProvider.System), "work",
+            (_, _, _) => Task.CompletedTask, (_, _) => Task.FromResult(false));
+        await profiles.RefreshAsync();
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(active: 0));
+        using var vm = new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"),
+            service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true),
+            profiles: profiles);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            var tab  = window.FindControl<TabItem>("ProfilesTab")!;
+            tabs.SelectedItem = tab;
+            Dispatcher.UIThread.RunJobs();
+            Settle(window);
+
+            // A TabItem's own visual tree is its header only; the selected tab's content is hosted
+            // by the TabControl's PART_SelectedContentHost, so the row content is found from tabs.
+            var chips = tabs.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("kcapChip")).ToList();
+            await Assert.That(chips.Any(b => b.Content as string == "Sign in")).IsTrue();
+            await Assert.That(chips.Any(b => b.Content as string == "Remove" && b.IsVisible)).IsTrue();
+
+            var marks = tabs.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("profileMark") && t.IsVisible).ToList();
+            await Assert.That(marks.Count).IsEqualTo(2); // Active and This app, both on "work"
+            foreach (var mark in marks)
+                await Assert.That(ReferenceEquals(mark.Foreground, window.FindResource("KcapPurpleBrush"))).IsTrue();
+
+            var statuses = tabs.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("profileStatus")).Select(t => t.Text).ToList();
+            await Assert.That(statuses).Contains("Signed out");
+        } finally {
+            window.Close();
+        }
     });
 
     [Test]
@@ -108,7 +159,7 @@ public class SettingsWindowSmokeTests {
         var window = new SettingsWindow { DataContext = vm };
         try {
             window.Show();
-            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 1;
+            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
             Settle(window);
             var permissions = window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!;
 
@@ -133,7 +184,7 @@ public class SettingsWindowSmokeTests {
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
                 var tabs = window.FindControl<TabControl>("SettingsTabs")!;
-                tabs.SelectedIndex = 1;
+                tabs.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
                 Dispatcher.UIThread.RunJobs();
                 var permissions = window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!;
                 var questions = window.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!;
@@ -165,7 +216,7 @@ public class SettingsWindowSmokeTests {
             try {
                 reopened.Show();
                 Dispatcher.UIThread.RunJobs();
-                reopened.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 1;
+                reopened.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(reopened.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsChecked).IsFalse();
                 await Assert.That(reopened.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!.IsChecked).IsFalse();
@@ -187,7 +238,7 @@ public class SettingsWindowSmokeTests {
         var window = new SettingsWindow { DataContext = vm };
         try {
             window.Show();
-            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 1;
+            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
             Settle(window);
             var notice = window.FindControl<Border>("NotificationAccessNotice")!;
             var button = window.FindControl<Button>("NotificationAccessButton")!;

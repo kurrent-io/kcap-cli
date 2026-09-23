@@ -15,11 +15,24 @@ starts without a session in `flow-runs-v1.json` under the config root, keyed on 
 (or working directory), and a bare status call without a session confirms every entry that
 workspace retains with `GET /api/flows/{id}` — all of them, because a fixed probe count would let
 newer settled runs hide an open one. A 404 on a run recorded within the start poll's not-found grace
-answers "retry" rather than skipping it, since the server may not have caught up with the start. The record is written before the start's poll
-lane begins, which is what makes it survive an abort: the server ignores MCP cancellations, so the
-lane holds the id after the harness has given up on the call. Session-bearing harnesses record
-nothing and keep the server-side lookup. Several chats in one workspace share the ledger; the same
-"several open flows are listed" rule applies, so the worst case is a choice, never a wrong run.
+answers "retry" rather than skipping it, since the server may not have caught up with the start.
+The record is written before the start's poll lane begins, which is what makes it survive an abort:
+the server ignores MCP cancellations, so the lane holds the id after the harness has given up on
+the call. Session-bearing harnesses record nothing and keep the server-side lookup. Several chats in
+one workspace share the ledger; the same "several open flows are listed" rule applies, so the worst
+case is a choice, never a wrong run.
+
+## Profiles in Settings, and every credential write under its profile lock
+
+The desktop app lists profiles from `config.json` and grades each with the same refresh-free gate
+the app starts with, so a row never spends a single-use refresh token. Removal is one operation in
+Core shared with `kcap profile remove`: it decides on the locked config, refuses the active profile
+instead of resetting the selection to an empty `default`, and deletes the credential under the
+profile's token lock only when no remaining profile can still read that file. Every token write
+now takes that lock, a refresh re-reads under it rather than reviving a file deleted while it
+waited, and the legacy `tokens.json` is moved into its owner's slot before any writer of
+`active_profile` changes the selection. Mutations whose decision depends on what the file says go
+through a strict variant that refuses an unreadable config rather than publishing a default over it.
 
 ## The ledger servers are pre-approved, and every tool advertises annotations
 
@@ -68,6 +81,7 @@ The descriptions of the four blocking tools and both flow skills say the rest be
 call blocks for minutes, a harness abort means the flow is still running, and the recovery is the
 status tool with `wait: true` — not a second start, and not an investigation, which is where a
 driver spent its turn when it had only the harness's own error text to go on.
+
 ## The cloud terminal mirror has its own lane per agent
 
 An agent's PTY is drained by one loop that feeds every surface. When that loop awaited a shared

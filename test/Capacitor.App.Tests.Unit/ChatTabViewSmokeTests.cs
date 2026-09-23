@@ -685,6 +685,36 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_bang_command_renders_as_a_command_card() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("bash.jsonl", [
+                """{"type":"user","message":{"content":"<bash-input>kubectl get pods</bash-input>"}}""",
+                """{"type":"user","message":{"content":"<bash-stdout>NAME\nweb</bash-stdout><bash-stderr>warn</bash-stderr>"}}""",
+            ]));
+            host.Settle();
+            var command = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("shellCommand"));
+            await Assert.That(command.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Right);
+            var chip = command.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("toolKindChip"));
+            await Assert.That(chip.Text).IsEqualTo("You");
+            var commandLine = command.GetVisualDescendants().OfType<SelectableTextBlock>().Single();
+            await Assert.That(commandLine.Text).IsEqualTo("! kubectl get pods");
+            await Assert.That(commandLine.Classes).Contains("toolLine");
+            var output = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("shellOutput"));
+            await Assert.That(output.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+            var outputChip = output.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("toolKindChip"));
+            await Assert.That(outputChip.Text).IsEqualTo("Output");
+            var outputLine = output.GetVisualDescendants().OfType<SelectableTextBlock>().Single();
+            await Assert.That(outputLine.Text).IsEqualTo("NAME\nweb\nwarn");
+            await Assert.That(outputLine.Classes).Contains("prose");
+            await Assert.That(command.GetVisualDescendants().OfType<MarkdownView>().Any()).IsFalse();
+            await Assert.That(output.GetVisualDescendants().OfType<MarkdownView>().Any()).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Chat_bubbles_carry_a_kind_chip() {
         await RunOnUiAsync(async () => {
             var host = new Host();
@@ -1363,7 +1393,7 @@ public class ChatTabViewSmokeTests {
             host.Permissions.Add(PermissionEntries.Question("q1",
                 toolInputJson: """{"questions":[{"question":"Tags","multiSelect":true,"options":[{"label":"X"},{"label":"Y"}]}]}"""));
             host.Settle();
-            var accent = (IBrush)Application.Current!.FindResource("KcapSuccessBrush")!;
+            var accent = (IBrush)Application.Current!.FindResource("KcapInfoBrush")!;
             var option = Option(host, "X");
             await Assert.That(option.BorderBrush).IsNotSameReferenceAs(accent);
 
@@ -1371,7 +1401,7 @@ public class ChatTabViewSmokeTests {
             await WaitUntilAsync(() => option.Classes.Contains("selected"), what: "the selected class");
             host.Settle();
             await Assert.That(option.BorderBrush).IsSameReferenceAs(accent);
-            await Assert.That(option.Background).IsSameReferenceAs((IBrush)Application.Current!.FindResource("KcapSuccessDimBrush")!);
+            await Assert.That(option.Background).IsSameReferenceAs((IBrush)Application.Current!.FindResource("KcapInfoDimBrush")!);
             await Assert.That(Option(host, "Y").BorderBrush).IsNotSameReferenceAs(accent);
 
             Click(host, option);

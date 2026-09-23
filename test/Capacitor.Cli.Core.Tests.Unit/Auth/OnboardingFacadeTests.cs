@@ -99,6 +99,7 @@ public class OnboardingFacadeTests {
         var result = await facade.LoginAsync("https://acme.kcap.ai", forceDevice: true, profile: "acme", CancellationToken.None);
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsTrue();
         await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("acme"))!.AccessToken).IsEqualTo("capacitor-jwt");
 
         // No repoint and no claim on a server the profile doesn't name.
@@ -313,6 +314,7 @@ public class OnboardingFacadeTests {
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsTrue();
         await Assert.That(TokenFileExists("acme")).IsTrue();
         await Assert.That(TokenFileExists("contoso")).IsFalse();
         await Assert.That(progress.Errors).Contains(
@@ -333,8 +335,10 @@ public class OnboardingFacadeTests {
 
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
 
-        // The throwing tenant loses only its own token; the boundary still finishes the rest.
+        // The throwing tenant loses only its own token; the boundary still finishes the rest. It is
+        // the picked one, so the commit reports no credential even though contoso's landed.
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsFalse();
         await Assert.That(TokenFileExists("acme")).IsFalse();
         await Assert.That(TokenFileExists("contoso")).IsTrue();
         await Assert.That(progress.Errors).Contains(
@@ -620,5 +624,88 @@ public class OnboardingFacadeTests {
                            + "cannot tell a pending workspace from a failed sign-in");
         await Assert.That(File.Exists(ConfigPath)).IsFalse();
         await Assert.That(TokenFileExists("acme")).IsFalse();
+    }
+
+    // ── commit-time preconditions ────────────────────────────────────────────
+
+    Task Seed(string profile, string url) => ConfigMutator.MutateAsync(Config.Root, c => c with {
+        Profiles = new Dictionary<string, Profile> { [profile] = new() { ServerUrl = url } }
+    });
+
+    [Test]
+    public async Task LoginAsync_with_ExpectServer_commits_and_reports_the_saved_credential_when_nothing_changed() {
+        await Seed("acme", "https://acme.kcap.ai");
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var facade = NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+
+        var result = await facade.LoginAsync("https://acme.kcap.ai", forceDevice: true, profile: "acme", CancellationToken.None,
+            adoptServer: true, precondition: new CommitPrecondition.ExpectServer("https://acme.kcap.ai"));
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsTrue();
+        await Assert.That(TokenFileExists("acme")).IsTrue();
+    }
+
+    [Test]
+    public async Task LoginAsync_with_ExpectServer_refuses_a_profile_repointed_before_commit() {
+        await Seed("acme", "https://acme.kcap.ai");
+        using var handler  = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var       progress = new RecordingAuthProgress();
+        // The hook runs after authentication and before the config write: the window the guard closes.
+        var facade = NewFacade(Config.Root, progress, handler,
+            beforeCommit: (_, ct) => ConfigMutator.MutateAsync(Config.Root, c => c with {
+                Profiles = new Dictionary<string, Profile> { ["acme"] = new() { ServerUrl = "https://elsewhere.example" } }
+            }, ct));
+
+        var result = await facade.LoginAsync("https://acme.kcap.ai", forceDevice: true, profile: "acme", CancellationToken.None,
+            adoptServer: true, precondition: new CommitPrecondition.ExpectServer("https://acme.kcap.ai"));
+
+        await Assert.That(result).IsTypeOf<AuthResult.Failed>();
+        await Assert.That(TokenFileExists("acme")).IsFalse();
+        await Assert.That(ReadConfig().Profiles["acme"].ServerUrl).IsEqualTo("https://elsewhere.example");
+        await Assert.That(ReadConfig().Profiles["acme"].AuthProvider).IsNull();
+    }
+
+    [Test]
+    public async Task LoginAsync_with_ExpectServer_refuses_a_profile_removed_before_commit() {
+        await Seed("acme", "https://acme.kcap.ai");
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var facade = NewFacade(Config.Root, new RecordingAuthProgress(), handler,
+            beforeCommit: (_, ct) => ConfigMutator.MutateAsync(Config.Root, c => c with { Profiles = new Dictionary<string, Profile>() }, ct));
+
+        var result = await facade.LoginAsync("https://acme.kcap.ai", forceDevice: true, profile: "acme", CancellationToken.None,
+            adoptServer: true, precondition: new CommitPrecondition.ExpectServer("https://acme.kcap.ai"));
+
+        await Assert.That(result).IsTypeOf<AuthResult.Failed>();
+        await Assert.That(TokenFileExists("acme")).IsFalse();
+        await Assert.That(ReadConfig().Profiles.ContainsKey("acme")).IsFalse();
+    }
+
+    [Test]
+    public async Task LoginAsync_with_ExpectServer_refuses_a_config_corrupted_before_commit() {
+        await Seed("acme", "https://acme.kcap.ai");
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var facade = NewFacade(Config.Root, new RecordingAuthProgress(), handler,
+            beforeCommit: (_, ct) => File.WriteAllTextAsync(ConfigPath, "{ not json", ct));
+
+        var result = await facade.LoginAsync("https://acme.kcap.ai", forceDevice: true, profile: "acme", CancellationToken.None,
+            adoptServer: true, precondition: new CommitPrecondition.ExpectServer("https://acme.kcap.ai"));
+
+        await Assert.That(result).IsTypeOf<AuthResult.Failed>();
+        await Assert.That(await File.ReadAllTextAsync(ConfigPath)).IsEqualTo("{ not json");
+        await Assert.That(TokenFileExists("acme")).IsFalse();
+    }
+
+    [Test]
+    public async Task LoginAsync_foreign_for_a_never_existing_profile_still_saves_the_credential() {
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var facade = NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+
+        var result = await facade.LoginAsync("https://acme.kcap.ai", forceDevice: true, profile: "ghost", CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsTrue();
+        await Assert.That(TokenFileExists("ghost")).IsTrue();
+        await Assert.That(ReadConfig().Profiles.ContainsKey("ghost")).IsFalse();
     }
 }
