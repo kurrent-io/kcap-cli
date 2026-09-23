@@ -67,10 +67,10 @@ public class JsonMcpConfigWriterTests {
         await Assert.That((bool)servers["kcap-review"]!["trust"]!).IsTrue();
         await Assert.That((bool)servers["kcap-sessions"]!["trust"]!).IsTrue();
         await Assert.That((bool)servers["kcap-analytics"]!["trust"]!).IsTrue();
-        await Assert.That((bool)servers["kcap-memory"]!["trust"]!).IsTrue();
         await Assert.That((bool)servers["kcap-workitems"]!["trust"]!).IsTrue();
         await Assert.That((bool)servers["kcap-plans"]!["trust"]!).IsTrue();
         await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();     // launches a paid hosted reviewer
+        await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();    // can widen a memory's audience
         await Assert.That(servers["kcap-artefacts"]!["trust"]).IsNull(); // can widen a page's audience
     }
 

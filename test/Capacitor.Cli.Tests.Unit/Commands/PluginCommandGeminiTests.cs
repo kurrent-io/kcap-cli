@@ -42,14 +42,14 @@ public class PluginCommandGeminiTests {
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-flows");
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-memory");
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-analytics");
-        // Reads and own-record writers are trusted; the paid launcher and the page publisher still prompt.
+        // Reads and own-record writers are trusted; servers that can widen an audience or launch paid work still prompt.
         await Assert.That(servers["kcap-review"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-sessions"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-analytics"]!["trust"]!.GetValue<bool>()).IsTrue();
-        await Assert.That(servers["kcap-memory"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-workitems"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-plans"]!["trust"]!.GetValue<bool>()).IsTrue();
         await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();
+        await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();
         await Assert.That(servers["kcap-artefacts"]!["trust"]).IsNull();
         await Assert.That(servers["my-tool"]).IsNotNull();  // user server preserved
         await Assert.That(root["hooks"]).IsNotNull();       // hooks block preserved

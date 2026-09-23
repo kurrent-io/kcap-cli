@@ -3,9 +3,11 @@ namespace Capacitor.Cli.Core.Mcp;
 /// <summary>One kcap MCP server, described semantically (no harness field names).
 /// <paramref name="AutoApprove"/> marks a server safe to run without a per-call prompt where the
 /// harness has a per-server trust knob (see <see cref="McpConfigShape.Trust"/>): every tool either
-/// reads, or writes only to the user's own Capacitor workspace, the destination the session hooks
-/// already post to unprompted. kcap-flows launches a paid hosted agent and kcap-artefacts can widen
-/// who may open a page, so both keep prompting. <paramref name="ToolTimeout"/> is how long one of
+/// reads, or writes only to the session's own Capacitor record, the destination the hooks already
+/// post to unprompted. kcap-flows launches a paid hosted agent, and kcap-memory and kcap-artefacts
+/// can widen who may see something, so those rely on each tool's annotations instead: a harness
+/// that reads them still runs the reads and additive writes unprompted and gates the destructive
+/// ones. <paramref name="ToolTimeout"/> is how long one of
 /// the server's tool calls may block; a harness with a per-server tool timeout has it written into
 /// the registration, so the harness never aborts a call the server itself bounds.</summary>
 public sealed record KcapMcpServer(string Name, string[] Args, bool NeedsProjectCwd, string? Description, bool AutoApprove = false, TimeSpan? ToolTimeout = null);
@@ -32,7 +34,7 @@ public static class KcapMcpServers {
             "Structured AI agent flows — launches a SEPARATE hosted participant agent; requires login + a running daemon.",
             ToolTimeout: TimeSpan.FromMinutes(10)),
         new("kcap-memory",   ["mcp", "memory"],   NeedsProjectCwd: true,
-            "Team memory — search, read, and save durable learnings.", AutoApprove: true),
+            "Team memory — search, read, and save durable learnings."),
         new("kcap-workitems", ["mcp", "workitems"], NeedsProjectCwd: true,
             "Attach the current session to a work item (issue, PR, or a brand-new item), and list what a session is attached to.", AutoApprove: true),
         new("kcap-plans", ["mcp", "plans"], NeedsProjectCwd: true,

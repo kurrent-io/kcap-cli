@@ -14,12 +14,13 @@ arguments and can end the turn outright. No kcap tool advertised annotations, an
 a missing one as destructive, open-world and not read-only, so every kcap call went to approval,
 pure reads included, and `declare_plan_document` was refused as an upload with no named destination.
 
-Registration now pre-approves `kcap-memory`, `kcap-workitems` and `kcap-plans` beside the three
-read-only servers: their writes land only in the user's own Capacitor workspace, the destination the
-session hooks already post to without a prompt. `kcap-flows` launches a paid hosted agent and
-`kcap-artefacts` can widen who may open a page, so both keep prompting. Every tool carries the
-annotations for what it does, so a harness deciding from them runs reads unprompted and reviews a
-write as additive or destructive rather than at the spec's worst case. The plans description names
+Every tool now carries the annotations for what it does. Codex's default mode runs a tool marked
+non-destructive and closed-world without approval, so the annotations alone unblock the reads and
+the additive writes on every server, and only a destructive tool reaches the reviewer, labelled as
+such. Registration pre-approves `kcap-workitems` and `kcap-plans` beside the three read-only servers,
+since even their destructive tools touch only the session's own record; `kcap-memory` stays on
+annotations, because a save or rescope can widen who sees a memory, the same reason `kcap-artefacts`
+is not pre-approved, and `kcap-flows` launches a paid hosted agent. The plans description names
 where the content goes, because the reviewer reads the description and never the server instructions.
 
 ## A driver finds its flow without the id, and owns the harness timeout it can

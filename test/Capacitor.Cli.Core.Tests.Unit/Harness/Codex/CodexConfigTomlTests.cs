@@ -258,15 +258,15 @@ public class CodexConfigTomlTests {
         string? Mode(string name) =>
             ((TomlTable)servers[name]).TryGetValue("default_tools_approval_mode", out var v) ? (string)v : null;
 
-        // Reads, and writes that land only in the user's own Capacitor workspace, never prompt.
+        // Reads, and writes that land only in the session's own Capacitor record, never prompt.
         await Assert.That(Mode("kcap-review")).IsEqualTo("approve");
         await Assert.That(Mode("kcap-sessions")).IsEqualTo("approve");
         await Assert.That(Mode("kcap-analytics")).IsEqualTo("approve");
-        await Assert.That(Mode("kcap-memory")).IsEqualTo("approve");
         await Assert.That(Mode("kcap-workitems")).IsEqualTo("approve");
         await Assert.That(Mode("kcap-plans")).IsEqualTo("approve");
-        // A paid hosted launch and a page's audience stay behind a prompt.
+        // A paid hosted launch and anything that can widen an audience stay on the tool annotations.
         await Assert.That(Mode("kcap-flows")).IsNull();
+        await Assert.That(Mode("kcap-memory")).IsNull();
         await Assert.That(Mode("kcap-artefacts")).IsNull();
     }
 

@@ -59,10 +59,11 @@ public class KcapMcpServersTests {
     [Test]
     public async Task Auto_approve_covers_reads_and_own_record_writers_only() {
         // AutoApprove drives per-server trust on Codex and Gemini. kcap-flows launches a paid hosted
-        // agent and kcap-artefacts can widen who may open a page, so both must keep prompting.
+        // agent, and kcap-memory and kcap-artefacts can widen who may see something, so those three
+        // rely on their tool annotations instead.
         var approved = KcapMcpServers.All.Where(s => s.AutoApprove).Select(s => s.Name).ToArray();
         await Assert.That(approved).IsEquivalentTo(new[] {
-            "kcap-review", "kcap-sessions", "kcap-analytics", "kcap-memory", "kcap-workitems", "kcap-plans"
+            "kcap-review", "kcap-sessions", "kcap-analytics", "kcap-workitems", "kcap-plans"
         });
     }
 
