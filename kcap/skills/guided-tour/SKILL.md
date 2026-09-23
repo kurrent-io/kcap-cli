@@ -381,7 +381,8 @@ action still to do, say so plainly rather than inferring one from the transcript
 
 **`Pick up where my last session left off`** — same lookup, then actually resume: load the
 summary's context and its unfinished actions (found as above), restate in two sentences where the
-work stopped, and ask which action to continue with. This one is an action, not a report — end by
+work stopped, and ask which action to continue with. If there are none, say no unfinished action
+was recorded and ask what they want to work on next. This one is an action, not a report — end by
 doing, not describing.
 
 **Prompt suggestions you compose** — anywhere you offer a `Prompt ❯` line of your own (rule 5
