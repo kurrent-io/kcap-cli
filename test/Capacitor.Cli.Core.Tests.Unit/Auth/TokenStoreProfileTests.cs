@@ -311,6 +311,19 @@ public class TokenStoreProfileTests {
         await Assert.That(File.Exists(Path.Combine(TokensDir, "contoso.json.2.bbbb.tmp"))).IsTrue();
     }
 
+    /// `acme.json.other` is a valid profile whose temps begin with acme's own prefix.
+    [Test]
+    public async Task Delete_profile_leaves_the_temps_of_a_profile_its_name_prefixes() {
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"), "secret");
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json.other.json.2.bbbb.tmp"), "other");
+
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteGuardedAsync("acme", guard: null);
+
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json.other.json.2.bbbb.tmp"))).IsTrue();
+    }
+
     [Test]
     public async Task SaveAsync_cleans_up_temp_when_publish_fails() {
         // Force File.Move to fail by making the destination an existing directory; the

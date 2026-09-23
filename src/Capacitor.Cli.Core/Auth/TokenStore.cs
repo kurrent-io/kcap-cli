@@ -254,14 +254,13 @@ public sealed class TokenStore(
 
     // Best-effort removal of the profile's temp files leaked by a crash between write and move
     // ({profile}.json.{pid}.{guid}.tmp) — these carry token secrets. Only under the profile's
-    // lock: a live writer's temp is unlinked otherwise, and its publish fails. Matched by
-    // filename prefix (not a glob) so a profile name containing a wildcard char can't widen it.
+    // lock: a live writer's temp is unlinked otherwise, and its publish fails. Matched on the
+    // parsed owner, exactly: a prefix match would take the temps of `acme.json.other` for `acme`.
     void SweepLeakedTemps(string profile) {
         if (!Directory.Exists(TokenDir)) return;
-        var prefix = $"{profile}.json.";
         try {
             foreach (var tmp in Directory.EnumerateFiles(TokenDir, "*.tmp")) {
-                if (Path.GetFileName(tmp).StartsWith(prefix, StringComparison.Ordinal)) {
+                if (TempOwner(Path.GetFileName(tmp)) == profile) {
                     try { File.Delete(tmp); } catch { /* best-effort */ }
                 }
             }
