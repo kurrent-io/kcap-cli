@@ -138,7 +138,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     const string ServerInstructions =
         "Use these tools to recall prior work — 'have we done X before', 'why did we', 'who decided Y', " +
         "'when did we work on Z'. Search here before grepping the code or git log — they search the reasoning " +
-        "across past sessions, not just the code.";
+        "across past sessions, not just the code. Also use them to find an unfinished plan a session left " +
+        "behind (list_repo_plans) or to read a plan's task ledger (get_declared_plans).";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -279,12 +280,14 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     /// best-effort: its failure or timeout returns the summary without them.</summary>
     async Task<string> HandleSessionSummaryAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl) {
         try {
-            var recapUrl  = BuildSummaryUrl(baseUrl, arguments);
-            var sessionId = arguments!["session_id"]!.GetValue<string>();
+            var sessionId = arguments?["session_id"]?.GetValue<string>()
+             ?? throw new ArgumentException("Missing required argument: session_id");
+
+            var recapUrl = BuildSummaryUrl(baseUrl, sessionId);
 
             // The stdio loop is serial, so a stalled lookup would block every later request.
             using var plansCts  = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
-            var       plansTask = FetchDeclaredPlansAsync(client, $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/plans", plansCts.Token);
+            var       plansTask = FetchDeclaredPlansAsync(client, BuildSessionPlansUrl(baseUrl, sessionId), plansCts.Token);
 
             using var recap = await client.GetAsync(recapUrl);
             var       body  = await recap.Content.ReadAsStringAsync();
@@ -394,13 +397,16 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
         singlePlan = planId is not null;
 
-        if (planId is null) return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId!)}/plans";
+        if (planId is null) return BuildSessionPlansUrl(baseUrl, sessionId!);
 
         if (planId is "current" or "." or "..")
             throw new ArgumentException("`plan_id` must be a plan id. To read the plans of a session, pass session_id instead.");
 
         return $"{baseUrl}/api/plans/{Uri.EscapeDataString(planId)}";
     }
+
+    internal static string BuildSessionPlansUrl(string baseUrl, string sessionId) =>
+        $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/plans";
 
     // A non-string JSON value must surface as a validation error, not as the generic internal
     // error the outer guard produces for an InvalidOperationException from GetValue<string>().
@@ -545,12 +551,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         }
     }
 
-    static string BuildSummaryUrl(string baseUrl, JsonObject? args) {
-        var id = args?["session_id"]?.GetValue<string>()
-         ?? throw new ArgumentException("Missing required argument: session_id");
-
-        return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/recap?chain=false";
-    }
+    static string BuildSummaryUrl(string baseUrl, string sessionId) =>
+        $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/recap?chain=false";
 
     static string BuildTurnDetailUrl(string baseUrl, JsonObject? args) {
         var id = args?["session_id"]?.GetValue<string>()
@@ -905,7 +907,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_summary",
-            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Use this to orient yourself before drilling into the full transcript.",
+            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Use this to orient yourself before drilling into the full transcript.",
             new(
                 "object",
                 new() { ["session_id"] = new("string", "Session ID returned by search_sessions") },

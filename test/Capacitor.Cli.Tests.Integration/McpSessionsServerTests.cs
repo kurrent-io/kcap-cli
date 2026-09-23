@@ -189,6 +189,7 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
             await Assert.That(result["instructions"]?.GetValue<string>()).IsNotNull();
             await Assert.That(result["instructions"]!.GetValue<string>()).IsNotEmpty();
+            await Assert.That(result["instructions"]!.GetValue<string>()).Contains("list_repo_plans");
         } finally {
             await ShutdownAsync(proc);
         }
@@ -363,6 +364,27 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(response["result"]?["isError"]).IsNull();
             await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
             await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_session_summary_reports_a_failing_recap_even_when_plans_succeed() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("boom"));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """[{"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true}]"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var text     = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).IsEqualTo("Error: HTTP 500 — boom");
+            await Assert.That(text).DoesNotContain("declared_plans");
         } finally {
             await ShutdownAsync(proc);
         }
