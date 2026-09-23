@@ -19,7 +19,7 @@
             <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border. -->
             <SolidColorBrush x:Key="KcapMutedBrush" Color="#B0B7C6" />
             <SolidColorBrush x:Key="KcapFaintBrush" Color="#949BAA" />
-            <!-- Primary CTAs: near-white fill. Green (KcapSuccess*) is status/selection only. -->
+            <!-- Primary CTAs: near-white fill. Green is status only; a selection uses info blue. -->
             <SolidColorBrush x:Key="KcapPrimaryBrush" Color="#F1F3F7" />
             <SolidColorBrush x:Key="KcapOnPrimaryBrush" Color="#0B0D12" />
             <SolidColorBrush x:Key="KcapSuccessBrush" Color="#5BE0B3" />

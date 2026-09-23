@@ -1363,7 +1363,7 @@ public class ChatTabViewSmokeTests {
             host.Permissions.Add(PermissionEntries.Question("q1",
                 toolInputJson: """{"questions":[{"question":"Tags","multiSelect":true,"options":[{"label":"X"},{"label":"Y"}]}]}"""));
             host.Settle();
-            var accent = (IBrush)Application.Current!.FindResource("KcapSuccessBrush")!;
+            var accent = (IBrush)Application.Current!.FindResource("KcapInfoBrush")!;
             var option = Option(host, "X");
             await Assert.That(option.BorderBrush).IsNotSameReferenceAs(accent);
 
@@ -1371,7 +1371,7 @@ public class ChatTabViewSmokeTests {
             await WaitUntilAsync(() => option.Classes.Contains("selected"), what: "the selected class");
             host.Settle();
             await Assert.That(option.BorderBrush).IsSameReferenceAs(accent);
-            await Assert.That(option.Background).IsSameReferenceAs((IBrush)Application.Current!.FindResource("KcapSuccessDimBrush")!);
+            await Assert.That(option.Background).IsSameReferenceAs((IBrush)Application.Current!.FindResource("KcapInfoDimBrush")!);
             await Assert.That(Option(host, "Y").BorderBrush).IsNotSameReferenceAs(accent);
 
             Click(host, option);
