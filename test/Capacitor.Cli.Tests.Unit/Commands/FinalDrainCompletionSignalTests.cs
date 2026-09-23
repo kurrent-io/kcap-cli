@@ -45,11 +45,10 @@ public class WaitForFinalLineCompletionAsyncTests {
 
     [Test]
     public async Task still_growing_line_completes_within_the_window_returns_true() {
-        using var tmp = TempDir.WithPathTo("transcript.tmp", out var path);
-
+        using var tmp = new TempDir();
         // Incomplete when the wait first reads it. The poll then parks on the clock; the line is
         // finished before that delay is released, so the next read must report complete.
-        await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writ");
+        var path = tmp.CreateFile("transcript.tmp", "{\"a\":1}\n{\"b\":\"still writ");
 
         var clock = new FakeTimeProvider();
         var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -57,7 +56,7 @@ public class WaitForFinalLineCompletionAsyncTests {
             path, new DelayObservingTime(clock, parked), attempts: 6, delayMs: 20);
         await parked.Task;
 
-        await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writing\"}\n");
+        tmp.CreateFile("transcript.tmp", "{\"a\":1}\n{\"b\":\"still writing\"}\n");
         clock.Advance(TimeSpan.FromMilliseconds(20));
 
         await Assert.That(await result).IsTrue();
