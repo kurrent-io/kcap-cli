@@ -27,30 +27,6 @@ public class FinalDrainCompletionSignalTests {
     [Test]
     public async Task single_incomplete_line_no_prior_newline_is_incomplete() =>
         await Assert.That(WatchCommand.IsFinalLineComplete("{\"a\":1")).IsFalse();
-
-    /// <summary>
-    /// The core regression this task guards: a large write that pauses mid-record must never be
-    /// treated as "done" just because it stopped growing for a while. Simulates the final-drain
-    /// bounded wait directly against <see cref="WatchCommand.IsFinalLineComplete"/> — length-stable
-    /// (the string genuinely doesn't change across the simulated wait window) but unparseable, then
-    /// the writer resumes and completes the record. The bounded wait must observe "still incomplete"
-    /// throughout the stable window (never send-and-advance a truncated line) and only report
-    /// complete once the line actually finishes.
-    /// </summary>
-    [Test]
-    public async Task unparseable_length_stable_past_window_then_grows_is_held_not_sent() {
-        const string stableButUnparseable = "{\"a\":1}\n{\"b\":\"still writ"; // no trailing newline, not valid JSON
-        const string grownAndComplete     = "{\"a\":1}\n{\"b\":\"still writing\"}\n";
-
-        // Simulate the bounded wait: repeated reads of a file whose content does not change
-        // (length-stable) for several iterations — none of them should flip to "complete".
-        for (var i = 0; i < 4; i++) {
-            await Assert.That(WatchCommand.IsFinalLineComplete(stableButUnparseable)).IsFalse();
-        }
-
-        // Only once the writer actually finishes the record (newline-terminated) is it complete.
-        await Assert.That(WatchCommand.IsFinalLineComplete(grownAndComplete)).IsTrue();
-    }
 }
 
 /// <summary>

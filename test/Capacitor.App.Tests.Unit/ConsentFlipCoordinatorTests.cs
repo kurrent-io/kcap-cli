@@ -277,7 +277,7 @@ public class ConsentFlipCoordinatorTests {
         h.Coordinator.Start();
         h.Client.StatusSubject.OnNext(Connected(ConsentFlipCoordinator.ConsentV3Capability));
 
-        await Task.Delay(150); // give a wrongly-firing get every chance to appear
+        await WaitUntilAsync(() => h.Coordinator.PassCount >= 1, what: "the pass to settle");
         await Assert.That(h.Ops.GetCalls).IsEqualTo(0);
         await Assert.That(h.Claims.Pending()).IsEquivalentTo([Claim]);
     }
@@ -354,7 +354,7 @@ public class ConsentFlipCoordinatorTests {
         h.Coordinator.Start();
         h.Client.StatusSubject.OnNext(Connected(ConsentFlipCoordinator.ConsentV3Capability));
 
-        await Task.Delay(150); // give a wrongly-firing get every chance to appear
+        await WaitUntilAsync(() => h.Coordinator.PassCount >= 1, what: "the pass to settle");
         await Assert.That(h.Ops.GetCalls).IsEqualTo(0);
         await Assert.That(h.Claims.Pending()).IsEquivalentTo([other]);
     }
@@ -416,7 +416,6 @@ public class ConsentFlipCoordinatorTests {
 
         h.Coordinator.Start();
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the confirm prompt");
-        await Task.Delay(150); // give a wrongly-firing ack every chance to appear
         await Assert.That(h.Store.State.ConsentQuarantineAcked).IsFalse();
 
         var freshSurface = new FakeLifecycleSurface();
@@ -437,7 +436,6 @@ public class ConsentFlipCoordinatorTests {
 
         h.Coordinator.Start();
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the confirm prompt");
-
         await Task.Delay(150); // give a wrongly-firing ack every chance to appear
         await Assert.That(h.Store.State.ConsentQuarantineAcked).IsFalse();
     }

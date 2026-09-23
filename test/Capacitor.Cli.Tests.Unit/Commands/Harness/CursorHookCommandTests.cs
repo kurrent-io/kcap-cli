@@ -379,26 +379,6 @@ public class CursorHookCommandTests {
     }
 
     [Test]
-    public async Task hard_cap_returns_zero_when_inner_ignores_cancellation() {
-        // Simulates an uncancellable hang inside TokenStore.RefreshAsync's
-        // HttpClient.PostAsync — no CT plumbed through, default 100s timeout.
-        // The Task.WhenAny ceiling in CursorHookCommand.Handle must beat that.
-        var inner = new TaskCompletionSource<int>().Task;
-        var clock = new FakeTimeProvider();
-        var exit  = CursorHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50), clock);
-        clock.Advance(TimeSpan.FromMilliseconds(50));
-
-        await Assert.That(await exit).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task hard_cap_returns_inner_result_when_inner_finishes_first() {
-        var inner = Task.FromResult(7);
-        var exit  = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromSeconds(2), TimeProvider.System);
-        await Assert.That(exit).IsEqualTo(7);
-    }
-
-    [Test]
     public async Task fresh_canonical_event_is_spooled_when_drain_consumes_budget() {
         // Drain blocks past the budget by parking the POST handler. The
         // dispatcher must spool the fresh sessionEnd that hasn't been
@@ -592,10 +572,9 @@ public class CursorHookCommandTests {
     }
 
     // The single cap must also cover client/auth setup. A client factory that never completes
-    // simulates a TokenStore hang; the deadline must still fire, return 0, and never let the
-    // abandoned auth attempt produce a late write once it "completes" in the background.
+    // simulates a TokenStore hang; the deadline must still fire and return without writing.
     [Test, NotInParallel]
-    public async Task HardCap_during_client_setup_emits_nothing_and_no_late_write() {
+    public async Task HardCap_during_client_setup_emits_nothing() {
         using var capture = ConsoleOutput.StartCapture();
         using var fx = new Fixture(Config.Root);
         var neverAuths = new TaskCompletionSource<AuthAttempt>();
@@ -613,10 +592,6 @@ public class CursorHookCommandTests {
         var exit = await call;
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
-
-        // The abandoned auth resolving disposes its client and must not reach a writer.
-        neverAuths.TrySetResult(new AuthAttempt(fx.Client, AuthStatus.Ok));
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
     }
 

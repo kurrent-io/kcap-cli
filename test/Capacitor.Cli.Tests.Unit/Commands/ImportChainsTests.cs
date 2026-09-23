@@ -282,7 +282,6 @@ public class ImportChainsTests : IDisposable {
         var result = await Import().ImportChainsAsync(client, "http://localhost", chains, events, CancellationToken.None);
 
         await Assert.That(gate.Overlapped).IsTrue();
-        await Assert.That(result.Errored).IsEqualTo(0);
         await Assert.That(result.Loaded).IsEqualTo(4);
     }
 

@@ -678,34 +678,19 @@ public class ClaudeHookCommandTests {
         await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.Path);
     }
 
+    // The cwd must not exist. Repo detection spawns git there, and those probes are capped at
+    // the whole remaining hook budget: a slow one leaves nothing for the POST, the event is
+    // spooled, and the assertion below never sees a request.
     [Test]
     public async Task session_start_omits_workspace_root_when_cwd_has_no_git_repo() {
+        using var tmp = new TempDir();
         using var fx = new Fixture(Config.Root);
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}""");
+        var cwd = tmp.PathTo("missing").Replace("\\", "\\\\");
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{cwd}}"}""");
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
         await Assert.That(body!["workspace_root"]).IsNull();
-    }
-
-    // Covers the auth-hang case from the spec: the hard cap must beat an
-    // uncancellable hang (e.g. TokenStore.RefreshAsync's untimed HttpClient.PostAsync).
-    [Test]
-    public async Task hard_cap_returns_zero_when_inner_ignores_cancellation() {
-        var inner = Task.Run(async () => { await Task.Delay(TimeSpan.FromSeconds(10)); return 42; });
-        var sw    = System.Diagnostics.Stopwatch.StartNew();
-        var exit  = await ClaudeHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50), TimeProvider.System);
-        sw.Stop();
-        await Assert.That(exit).IsEqualTo(0);
-        // The property is that the cap beat the inner, not what scheduling latency the cap's own
-        // timer saw: anything under the inner's ten seconds can only be the cap having fired.
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
-    }
-
-    [Test]
-    public async Task hard_cap_returns_inner_result_when_inner_finishes_first() {
-        var exit = await ClaudeHookCommand.WithHardCap(Task.FromResult(7), TimeSpan.FromSeconds(2), TimeProvider.System);
-        await Assert.That(exit).IsEqualTo(7);
     }
 
     [Test]

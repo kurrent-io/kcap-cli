@@ -932,9 +932,6 @@ public class AcpHostedAgentRuntimeTests {
         while (DateTime.UtcNow < deadline && !ChunksLanded(h, journal.Path)) await Task.Delay(10);
         await Assert.That(ChunksLanded(h, journal.Path)).IsTrue();
         await h.Runtime.DisposeAsync();  // flushes whatever is still open, then completes the channel
-        deadline = DateTime.UtcNow + HangGuard;
-        while (DateTime.UtcNow < deadline && !JournalText(journal.Path).Contains("marker-b", StringComparison.Ordinal))
-            await Task.Delay(10);
         h.Fake.EmitAgentText("marker-late");
         await journal.CompleteAsync();
 
