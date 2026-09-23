@@ -11,7 +11,6 @@ public sealed partial class PullRequestContextViewModel {
     public string Branches => CanDisplay ? (_overview?.HeadRef ?? "?") + " → " + (_overview?.BaseRef ?? "?") : "";
     public string FetchedLabel => CanDisplay && _overviewRead?.FetchedAt is { } at ? "Fetched " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
     public string AccessLabel => CanDisplay ? (_grace ? "Access refresh paused" : "Access checked for " + (_overview?.AccessCheckedFor ?? "linked GitHub account")) : "";
-    public string CheckSummary => ChecksStatus.Detail ?? ChecksStatus.Text;
     public string? Description => CanDisplayReader && _section == "overview" ? _overview?.Description : null;
     public bool DescriptionTruncated => CanDisplayReader && _overview?.DescriptionTruncated == true;
     public string DescriptionNote => !CanDisplayReader ? "Refresh access to open PR content." : _overview?.Description is null ? "Description unavailable." : _overview.Description.Length == 0 ? "No description." : "";
@@ -48,7 +47,7 @@ public sealed partial class PullRequestContextViewModel {
 
     static readonly string[] NotifiedProperties = [
         nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
-        nameof(Title), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel), nameof(CheckSummary),
+        nameof(Title), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel),
         nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
         nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
         nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(SectionTitle),

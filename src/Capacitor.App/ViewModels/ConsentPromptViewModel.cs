@@ -189,9 +189,9 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
             .Select(c => c is not null && !string.IsNullOrEmpty(c.Dto.Requester))
             .ToProperty(this, x => x.AllowRememberVisible, initialValue: false);
 
-        // Constructor-scoped, exactly like MainWindowViewModel's Start/RetryVisible: the commands
-        // must exist and be assertable before any window activates, and these observables only
-        // ever observe THIS object's own property changes (always raised on the UI thread).
+        // Constructor-scoped: the commands must exist and be assertable before any window
+        // activates, and these observables only ever observe THIS object's own property
+        // changes (always raised on the UI thread).
         var canResolve = this
             .WhenAnyValue(x => x.Current, x => x.Phase,
                 (target, phase) => target is not null && phase is ConsentPromptPhase.Ready or ConsentPromptPhase.Expired);

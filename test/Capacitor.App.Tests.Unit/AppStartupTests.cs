@@ -86,11 +86,11 @@ public class AppStartupTests {
     /// local-only AgentDirectory would leave the window looking identical for every LOCAL
     /// assertion, so this pins two REMOTE-only signals: the lane's own diagnostic (ServerLaneTip)
     /// and a remote-only row (never producible by the NoRemoteAgents/NoServerLane fallback)
-    /// reaching the rail's hosted count.
+    /// reaching the rail.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_threads_the_injected_directory_and_lane_through() {
-        var (tip, hostedText) = await AvaloniaSession.DispatchAsync(() => {
+        var (tip, railRows) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
             var remoteAgents = new FakeRemoteAgents();
@@ -107,7 +107,7 @@ public class AppStartupTests {
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
-            var result = (vm.ServerLaneTip, vm.Rail?.HostedText);
+            var result = (vm.ServerLaneTip, vm.Rail?.Repos.Sum(r => r.Worktrees.Sum(w => w.Sessions.Count)));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -115,7 +115,7 @@ public class AppStartupTests {
         });
 
         await Assert.That(tip).IsEqualTo("diagnostic-marker");
-        await Assert.That(hostedText).IsEqualTo("1 hosted");
+        await Assert.That(railRows).IsEqualTo(1);
     }
 
     sealed class AcceptingLaunchClient(string agentId) : ILaunchClient {

@@ -41,9 +41,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _isEmpty;
     public bool IsEmpty => _isEmpty.Value;
 
-    readonly ObservableAsPropertyHelper<string> _hostedText;
-    public string HostedText => _hostedText.Value;
-
     readonly ObservableCollectionExtended<RailRepoViewModel> _reposSource = new();
     public ReadOnlyObservableCollection<RailRepoViewModel> Repos { get; }
 
@@ -86,11 +83,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .Select(c => c == 0)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.IsEmpty, initialValue: directory.Rows.Count == 0)
-            .DisposeWith(_disposables);
-        _hostedText = directory.Rows.CountChanged
-            .Select(c => $"{c} hosted")
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .ToProperty(this, x => x.HostedText, initialValue: $"{directory.Rows.Count} hosted")
             .DisposeWith(_disposables);
 
         Repos = new ReadOnlyObservableCollection<RailRepoViewModel>(_reposSource);
