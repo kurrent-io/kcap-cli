@@ -408,7 +408,7 @@ public class ConsentServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(0); // evicted by conclusion, never double-removed
     }
 
-    // ---- 13/14: loop lifecycle ----
+    // ---- loop lifecycle ----
 
     [Test]
     public async Task Stream_end_while_connected_retries_after_1s() {

@@ -230,7 +230,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(named).IsTrue();
     }
 
-    // ---- 7/8: already decided ----
+    // ---- already decided ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -469,7 +469,7 @@ public class ConsentPromptViewModelTests {
         await Assert.That(closedAfterBeat).IsEqualTo(1); // still empty a beat later: really empty
     }
 
-    // ---- 12b: clear+replay must not flicker the window shut ----
+    // ---- clear+replay must not flicker the window shut ----
 
     /// A resubscribe clears the cache and the daemon replays into it as two separate changesets,
     /// so an OPEN window saw the intermediate empty state, closed itself, and was then re-raised
