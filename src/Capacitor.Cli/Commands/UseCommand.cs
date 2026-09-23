@@ -35,9 +35,11 @@ public sealed class UseCommand(ConfigRoot config, WorkingDirectory workdir, Toke
                 await Console.Error.WriteLineAsync("The configuration file could not be read; nothing was changed.");
                 return 1;
             }
+            // Decided again under the lock below; here it keeps a switch that will fail from moving a credential.
+            if (!before.Profiles.ContainsKey(name)) return await UnknownAsync(name);
             try {
                 await tokens.MigrateLegacyAsync(before.ActiveName);
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) {
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException or ArgumentException) {
                 await Console.Error.WriteLineAsync(
                     $"Could not move the saved sign-in of profile '{before.ActiveName}' ({ex.Message}); nothing was changed.");
                 return 1;
@@ -53,9 +55,7 @@ public sealed class UseCommand(ConfigRoot config, WorkingDirectory workdir, Toke
                     : c with { ProfileBindings = new Dictionary<string, string>(c.ProfileBindings) { [repoPath!] = name } };
             });
         } catch (UnknownProfile) {
-            await Console.Error.WriteLineAsync(
-                $"Profile '{name}' not found. Run `kcap profile list` to see available profiles; the active profile was not changed.");
-            return 1;
+            return await UnknownAsync(name);
         } catch (ConfigUnreadableException) {
             await Console.Error.WriteLineAsync(
                 "The configuration file could not be read; the active profile was not changed.");
@@ -78,6 +78,12 @@ public sealed class UseCommand(ConfigRoot config, WorkingDirectory workdir, Toke
         }
 
         return 0;
+    }
+
+    static async Task<int> UnknownAsync(string name) {
+        await Console.Error.WriteLineAsync(
+            $"Profile '{name}' not found. Run `kcap profile list` to see available profiles; the active profile was not changed.");
+        return 1;
     }
 
     sealed class UnknownProfile : Exception;

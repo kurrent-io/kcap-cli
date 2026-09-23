@@ -30,11 +30,11 @@ public static class ProfileRemoval {
             return new(ProfileRemovalOutcome.ConfigUnreadable);
         }
 
-        // Deleted only when no remaining profile can read the file: a same-name recreation, or a
-        // case-alias on a case-insensitive filesystem, owns it now.
+        // Deleted only when no remaining profile reads the same file: a same-name recreation, or a
+        // case-alias where the filesystem folds case, owns it now.
         try {
             var outcome = await tokens.DeleteGuardedAsync(name,
-                cfg => !cfg.Profiles.Keys.Any(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase)), ct);
+                cfg => !cfg.Profiles.Keys.Any(k => tokens.SharesTokenFile(name, k)), ct);
 
             return outcome == GuardedWriteOutcome.ConfigUnreadable
                 ? new(ProfileRemovalOutcome.RemovedTokenRetained, "config unreadable")

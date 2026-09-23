@@ -304,8 +304,9 @@ public sealed class TokenStore(
         && string.Equals(profile, cfg.ActiveName, StringComparison.Ordinal);
 
     /// Logout. Each credential goes under its own lock, so a refresh holding one finishes and its
-    /// result is deleted rather than recreated after the fact; the legacy file goes under the active
-    /// profile's lock, the one a legacy-only refresh holds.
+    /// result is deleted rather than recreated after the fact. The active profile's file and the
+    /// legacy file go under one hold of the active lock: a legacy-only refresh slipping between two
+    /// holds would recreate the profile file after its delete.
     public async Task DeleteAsync(CancellationToken ct = default) {
         ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var cfg);
         var names = new HashSet<string>(cfg.Profiles.Keys, StringComparer.Ordinal);
@@ -315,6 +316,7 @@ public sealed class TokenStore(
                     names.Add(Path.GetFileNameWithoutExtension(file));
             } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort: config's names still get deleted */ }
         }
+        names.Remove(cfg.ActiveName);
 
         foreach (var name in names) {
             try { await DeleteGuardedAsync(name, guard: null, ct); }
@@ -323,10 +325,30 @@ public sealed class TokenStore(
 
         try {
             using var lockStream = await AcquireProfileLockAsync(cfg.ActiveName, ct);
+            DeleteLocked(cfg.ActiveName);
             if (File.Exists(LegacyTokenPath)) File.Delete(LegacyTokenPath);
+        } catch (ArgumentException) {
+            // A name the layout rejects can hold no lock and own no file, so nothing races this delete.
+            try { if (File.Exists(LegacyTokenPath)) File.Delete(LegacyTokenPath); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort */ }
         } catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort */ }
 
         SweepLeakedTemps();
+    }
+
+    /// Whether <paramref name="other"/> reads the file <paramref name="profile"/>'s credential is
+    /// in: the same name, or a case-alias where the filesystem folds case. Two spellings the
+    /// directory lists separately are two files, whatever <see cref="File.Exists(string)"/> says.
+    public bool SharesTokenFile(string profile, string other) {
+        if (string.Equals(profile, other, StringComparison.Ordinal)) return true;
+        if (!string.Equals(profile, other, StringComparison.OrdinalIgnoreCase)) return false;
+
+        var path      = ProfileTokenPath(profile);
+        var otherPath = ProfileTokenPath(other);
+        if (!File.Exists(path) || !File.Exists(otherPath)) return false;
+
+        var listed = Directory.EnumerateFiles(TokenDir).Select(f => Path.GetFileName(f)).ToHashSet(StringComparer.Ordinal);
+        return !(listed.Contains(Path.GetFileName(path)) && listed.Contains(Path.GetFileName(otherPath)));
     }
 
     /// Settles the legacy <c>tokens.json</c> under <paramref name="owner"/>'s lock: moved into the

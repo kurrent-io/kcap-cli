@@ -72,8 +72,12 @@ public class ProfileRemovalTests {
         await Assert.That(File.Exists(Path.Combine(TokensDir, "gone.json"))).IsTrue();
     }
 
+    /// A case-alias reads the removed profile's file only where the filesystem folds case; on one
+    /// that does not, the alias has a file of its own or none, and the removed profile's goes.
     [Test]
-    public async Task A_case_alias_keeps_the_shared_token_file() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_case_alias_keeps_the_token_file_only_where_the_filesystem_folds_case(bool aliasSignedIn) {
         await ConfigMutator.MutateAsync(Config.Root, c => c with {
             ActiveProfile = "default",
             Profiles = new Dictionary<string, Profile> {
@@ -84,12 +88,15 @@ public class ProfileRemovalTests {
         });
         var store = AuthFixtures.NewTokenStore(Config.Root);
         await store.SaveAsync("acme", Tokens("a"));
+        if (aliasSignedIn) await store.SaveAsync("Acme", Tokens("A"));
+        var foldsCase = File.Exists(Path.Combine(TokensDir, "ACME.json"));
 
         var result = await ProfileRemoval.RemoveAsync(Config.Root, store, "acme");
 
         await Assert.That(result.Outcome).IsEqualTo(ProfileRemovalOutcome.Removed);
         await Assert.That(ConfigMutator.LoadPure(ConfigPath).Profiles.ContainsKey("acme")).IsFalse();
-        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsEqualTo(foldsCase);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "Acme.json"))).IsEqualTo(aliasSignedIn || foldsCase);
     }
 
     /// A name config accepts but the token layout rejects: the profile still goes, and the refusal

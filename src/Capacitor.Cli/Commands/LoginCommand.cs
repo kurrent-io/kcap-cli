@@ -56,6 +56,9 @@ public sealed class LoginCommand(
     /// </summary>
     internal static int MapDiscoverResult(AuthResult result, IAuthProgress progress) {
         switch (result) {
+            // The façade already reported the lost credential; exit 0 would let a script read it as signed in.
+            case AuthResult.Committed { CredentialSaved: false }:
+                return 1;
             case AuthResult.Committed committed:
                 if (committed.Provider != AuthProvider.WorkOS) {
                     progress.Notice($"Logged in. Active profile: {committed.ActiveProfile}.");

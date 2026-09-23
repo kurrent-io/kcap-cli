@@ -378,6 +378,22 @@ public class TokenStoreProfileTests {
         await Assert.That(File.Exists(LegacyPath)).IsFalse();
     }
 
+    /// An active name the token layout rejects can hold no lock; logout still removes the legacy
+    /// file rather than reporting a sign-out it did not do.
+    [Test]
+    public async Task Logout_deletes_the_legacy_credential_when_the_active_name_can_hold_no_lock() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "bad/name",
+            Profiles = new Dictionary<string, Profile> { ["bad/name"] = new() }
+        });
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(LegacyPath, Json(MakeTokens("legacy")));
+
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
+
+        await Assert.That(File.Exists(LegacyPath)).IsFalse();
+    }
+
     static string Json(StoredTokens tokens) =>
         System.Text.Json.JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens);
 

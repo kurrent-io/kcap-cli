@@ -143,6 +143,34 @@ public class UseCommandTests {
     }
 
     [Test]
+    public async Task Use_Global_UnknownProfile_LeavesTheLegacyCredentialAlone() {
+        await SeedTwo("a");
+        var legacy = Config.PathTo("tokens.json");
+        await File.WriteAllTextAsync(legacy, "{}");
+
+        var result = await Command().SetProfile("zzz", repoPath: null, global: true, save: false, savePath: null);
+
+        await Assert.That(result).IsEqualTo(1);
+        await Assert.That(File.Exists(legacy)).IsTrue();
+        await Assert.That(File.Exists(Config.PathTo("tokens", "a.json"))).IsFalse();
+    }
+
+    /// An active name config holds but the token layout rejects is a refusal with a line, not a crash.
+    [Test]
+    public async Task Use_Global_ReportsAnActiveNameTheTokenLayoutRejects() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "bad/name",
+            Profiles = new Dictionary<string, Profile> { ["bad/name"] = new(), ["b"] = new() { ServerUrl = "https://b.example" } }
+        });
+        await File.WriteAllTextAsync(Config.PathTo("tokens.json"), "{}");
+
+        var result = await Command().SetProfile("b", repoPath: null, global: true, save: false, savePath: null);
+
+        await Assert.That(result).IsEqualTo(1);
+        await Assert.That(ConfigMutator.LoadPure(AppConfig.GetConfigPath(Config.Root)).ActiveProfile).IsEqualTo("bad/name");
+    }
+
+    [Test]
     public async Task Use_Global_RefusesWhenTheMigrationFails() {
         await SeedTwo("a");
         await File.WriteAllTextAsync(Config.PathTo("tokens.json"), "{}");

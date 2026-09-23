@@ -117,7 +117,7 @@ static class CommitBoundary {
         try {
             await store.MigrateLegacyAsync(before.ActiveName, ct);
             return null;
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) {
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException or ArgumentException) {
             return $"Error: could not move the saved sign-in of profile '{before.ActiveName}': {ex.Message}";
         }
     }
