@@ -19,6 +19,7 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
     IReadOnlyList<ProfileRow> _rows = [];
     string? _message;
     bool _isBusy;
+    int _refreshGeneration;
 
     public ProfilesSettingsViewModel(
             ConfigRoot config, TokenStore tokens, OnboardingGate gate, string boundProfile,
@@ -56,11 +57,14 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
     public ReactiveCommand<ProfileRow, Unit> SignInCommand { get; }
     public ReactiveCommand<ProfileRow, Unit> RemoveCommand { get; }
 
-    /// Rebuilds the rows from a fresh read; an unreadable config keeps the rows shown and says so.
-    public async Task RefreshAsync() {
+    /// Rebuilds the rows from a fresh read and reports whether the config was readable; an
+    /// unreadable one keeps the rows shown and says so. Only the newest refresh publishes: an
+    /// older one still grading rows would otherwise overwrite it with profiles that have since changed.
+    public async Task<bool> RefreshAsync() {
+        var generation = ++_refreshGeneration;
         if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(_config), out var config)) {
             Message = "Could not read the profile configuration.";
-            return;
+            return false;
         }
 
         var rows = new List<ProfileRow>();
@@ -68,7 +72,8 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
             rows.Add(new ProfileRow(name, profile.ServerUrl, name == config.ActiveName, name == _boundProfile,
                 await StatusAsync(name, profile)));
         }
-        Rows = rows;
+        if (generation == _refreshGeneration) Rows = rows;
+        return true;
     }
 
     // Refresh-free on purpose: grading a row must never spend a single-use refresh token.
@@ -138,9 +143,9 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
         } finally { IsBusy = false; }
     }
 
-    // Every action re-reads first: a row that no longer matches the file is refused, not acted on.
+    // Every action re-reads first: an unreadable file, or a row that no longer matches it, is refused, not acted on.
     async Task<ProfileRow?> CurrentAsync(ProfileRow row) {
-        await RefreshAsync();
+        if (!await RefreshAsync()) return null;
         var current = Rows.FirstOrDefault(r => r.Name == row.Name);
         var sameServer = current is not null
             && (string.Equals(current.ServerUrl, row.ServerUrl, StringComparison.Ordinal)

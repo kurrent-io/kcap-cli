@@ -154,9 +154,24 @@ public class ProfilesSettingsViewModelTests {
         var before = vm.Rows.Count;
         await File.WriteAllTextAsync(AppConfig.GetConfigPath(Config.Root), "{ not json");
 
-        await vm.RefreshAsync();
+        await Assert.That(await vm.RefreshAsync()).IsFalse();
 
         await Assert.That(vm.Message).IsEqualTo("Could not read the profile configuration.");
         await Assert.That(vm.Rows.Count).IsEqualTo(before);
+    });
+
+    /// The rows kept after a failed read are not a match: an action on one of them stops at the read.
+    [Test]
+    public Task Actions_are_refused_while_the_config_is_unreadable() => AvaloniaSession.RunOnUiAsync(async () => {
+        var opened = false;
+        var vm = Make(await Seed(), openSignIn: (_, _, _) => { opened = true; return Task.CompletedTask; });
+        await vm.RefreshAsync();
+        var row = vm.Rows.Single(r => r.Name == "other");
+        await File.WriteAllTextAsync(AppConfig.GetConfigPath(Config.Root), "{ not json");
+
+        await vm.SignInCommand.Execute(row).ToTask();
+
+        await Assert.That(opened).IsFalse();
+        await Assert.That(vm.Message).IsEqualTo("Could not read the profile configuration.");
     });
 }
