@@ -454,6 +454,84 @@ public class OnboardingViewModelTests {
         await Assert.That(accepted).IsFalse();
     }
 
+    // ── TryAdvanceFrom: a step that finished by itself ───────────────────────
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task TryAdvanceFrom_moves_to_the_step_after_the_one_that_finished() {
+        var (accepted, currentId) = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Defaults),
+                new FakeWizardStep(WizardStepId.Done),
+            ]);
+            await vm.PendingEnterForTesting;
+
+            var ok = vm.TryAdvanceFrom(WizardStepId.SignIn, vm.Visit);
+            await WaitForIdleAsync(vm);
+
+            return (ok, vm.Current.Id);
+        });
+
+        await Assert.That(accepted).IsTrue();
+        await Assert.That(currentId).IsEqualTo(WizardStepId.Defaults);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task TryAdvanceFrom_is_refused_once_the_user_has_left_that_step_or_closed_the_wizard() {
+        var (elsewhere, elsewhereId, closed, closedId) = await AvaloniaSession.DispatchAsync(async () => {
+            var moved = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Defaults),
+                new FakeWizardStep(WizardStepId.Done),
+            ]);
+            await moved.PendingEnterForTesting;
+            var visit = moved.Visit;
+            await moved.NextCommand.Execute().ToTask();
+
+            var late = moved.TryAdvanceFrom(WizardStepId.SignIn, visit);
+            await WaitForIdleAsync(moved);
+
+            var shut = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Done),
+            ]);
+            await shut.PendingEnterForTesting;
+            shut.RequestClose();
+
+            return (late, moved.Current.Id, shut.TryAdvanceFrom(WizardStepId.SignIn, shut.Visit), shut.Current.Id);
+        });
+
+        await Assert.That(elsewhere).IsFalse();
+        await Assert.That(elsewhereId).IsEqualTo(WizardStepId.Defaults); // not skipped past
+        await Assert.That(closed).IsFalse();
+        await Assert.That(closedId).IsEqualTo(WizardStepId.SignIn);
+    }
+
+    /// Coming back to the step is a new visit: a callback armed on the earlier one is stale even
+    /// though the current step id matches again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task TryAdvanceFrom_is_refused_on_a_return_visit_to_the_same_step() {
+        var (accepted, currentId) = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Connect), new FakeWizardStep(WizardStepId.SignIn),
+                new FakeWizardStep(WizardStepId.Defaults),
+            ]);
+            await vm.PendingEnterForTesting;
+            await vm.NextCommand.Execute().ToTask();
+            var visit = vm.Visit;
+            await vm.BackCommand.Execute().ToTask();
+            await vm.NextCommand.Execute().ToTask();
+
+            var ok = vm.TryAdvanceFrom(WizardStepId.SignIn, visit);
+            await WaitForIdleAsync(vm);
+
+            return (ok, vm.Current.Id);
+        });
+
+        await Assert.That(accepted).IsFalse();
+        await Assert.That(currentId).IsEqualTo(WizardStepId.SignIn);
+    }
+
     // TryGoTo's navigation is fire-and-forget by design (it answers the caller immediately), so
     // tests wait for the shared gate to reopen rather than for a task they were never handed.
     static async Task WaitForIdleAsync(OnboardingViewModel vm) {

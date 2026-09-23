@@ -16,6 +16,9 @@ namespace Capacitor.App.ViewModels.Onboarding;
 public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     internal const int LogLimit = 200;
 
+    /// How long a host keeps the success line on screen before moving on, so it is not a flash.
+    internal static readonly TimeSpan SuccessHold = TimeSpan.FromMilliseconds(1600);
+
     /// One pending UI answer. The flow parks on <see cref="AskAsync"/>; the view resolves it, a
     /// cancel releases it, and the prompt is torn down either way.
     sealed class UiQuestion<T> {
@@ -47,6 +50,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     readonly IAppStateStore          _appState;
     readonly IUrlOpener              _urlOpener;
     readonly Action<Action>          _post;
+    readonly string?                 _committedDetail;
 
     readonly UiQuestion<ProvisionMode> _mode    = new();
     readonly UiQuestion<string?>       _orgName = new();
@@ -88,14 +92,18 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             WizardBridges        bridges,
             ConsentFlipClaims    claims,
             IAppStateStore       appState,
-            IUrlOpener           urlOpener) {
-        _service   = service;
-        _connect   = connect;
-        _picker    = bridges.Picker;
-        _claims    = claims;
-        _appState  = appState;
-        _urlOpener = urlOpener;
-        _post      = bridges.Post;
+            IUrlOpener           urlOpener,
+            // What the host does next, under the success headline. The step cannot know: the
+            // wizard moves on, the re-auth dialog refreshes and closes.
+            string?              committedDetail = null) {
+        _service         = service;
+        _connect         = connect;
+        _picker          = bridges.Picker;
+        _claims          = claims;
+        _appState        = appState;
+        _urlOpener       = urlOpener;
+        _post            = bridges.Post;
+        _committedDetail = committedDetail;
 
         bridges.Progress.NoticeReceived += line => {
             // Kept as the failure detail's fallback: a decline is reported as a notice, not an error.
@@ -190,6 +198,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     /// The Sign-in step's answer to a WorkOS "I already have a workspace": the Connect step is
     /// prefilled here, and the event lets the shell navigate back to it.
     public event Action<string>? RetargetRequested;
+
+    /// Sign-in committed and nothing on this page still waits for the user. Held back while a
+    /// quarantine notice is up: moving on would leave it on a page nobody is looking at.
+    public event Action? Completed;
 
     public ObservableCollection<string>           Log     { get; } = [];
     public ObservableCollection<DiscoveredTenant> Tenants { get; } = [];
@@ -412,6 +424,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         ClearTransient();
         Apply(result);
         await SurfaceQuarantineAsync().ConfigureAwait(true);
+
+        if (Satisfied && QuarantineNotice is null) Completed?.Invoke();
     }
 
     // The Connect intent IS the mode; only a discovery that found nothing has to ask.
@@ -424,10 +438,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         switch (result) {
             case AuthResult.Committed committed:
                 Satisfied = true;
-                SetStatus(
-                    CommittedStatus(committed),
-                    isError: false,
-                    "You're signed in. Refreshing…");
+                SetStatus(CommittedStatus(committed), isError: false, _committedDetail);
 
                 break;
             case AuthResult.Cancelled:
@@ -462,12 +473,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
     string ReadyStatus() => _connect.Intent switch {
         // Destination only — the window title already says "Sign in"; detail explains what happens.
-        ConnectIntent.Paste paste       => paste.ServerInput,
-        ConnectIntent.Discover discover => discover.Provider == AuthProvider.WorkOS
-            ? "Find your workspaces with single sign-on"
-            : "Find your workspaces with GitHub",
-        ConnectIntent.Create => "Create a workspace",
-        _                    => "Choose how to connect on the Connect step.",
+        ConnectIntent.Paste paste => paste.ServerInput,
+        ConnectIntent.Discover    => "Find your workspaces with single sign-on",
+        ConnectIntent.Create      => "Create a workspace",
+        _                         => "Choose how to connect on the Connect step.",
     };
 
     string ReadyDetail() => _connect.Intent switch {
@@ -502,6 +511,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: consent quarantine ack failed unexpectedly: {ex.Message}");
         }
+
+        if (Satisfied) Completed?.Invoke();
     }
 
     void ResetForRun(ConnectIntent intent) {

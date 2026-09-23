@@ -1053,21 +1053,34 @@ public class AgentOrchestratorVendorTests {
     }
 
     [Test]
-    public async Task Stopping_an_agent_releases_a_read_loop_blocked_on_a_full_terminal_queue() {
+    public async Task Stopping_an_agent_with_the_cloud_blocked_cancels_its_send_before_it_unregisters() {
         using var repoPath = GitRepo.CreateWithCommit();
 
-        // The send blocks (full/down queue) until its ct cancels; the PTY keeps the
-        // stream open so the read loop is genuinely parked inside the blocked send.
+        // The send blocks until its ct cancels; the PTY keeps the stream open so the pump is
+        // genuinely parked inside the blocked send.
         var sendEntered   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sendUnblocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var server     = new CaptureServerConnection { SendEntered = sendEntered, SendUnblocked = sendUnblocked };
+        var unblockedAtUnregister = false;
+
+        var server = new CaptureServerConnection {
+            SendEntered         = sendEntered,
+            SendUnblocked       = sendUnblocked,
+            OnAgentUnregistered = () => unblockedAtUnregister = sendUnblocked.Task.IsCompleted
+        };
         var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
         var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
 
         var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+
+        // A finite grace lets a starved scheduler abandon the pump and finalize before it truly
+        // ends — this test's ordering assertion must not read that abandonment as a defect.
+        orch.CloudSinkOptions = new CloudTerminalSinkOptions {
+            DrainBound        = TimeSpan.FromMilliseconds(100),
+            CancellationGrace = TimeSpan.FromMinutes(10),
+        };
 
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
             AgentId: "agent-bp",
@@ -1080,17 +1093,16 @@ public class AgentOrchestratorVendorTests {
             Vendor: "claude"
         ));
 
-        // Wait until the read loop has produced a chunk and is parked in the blocked send.
+        // The pump, not the read loop, is parked in the blocked send.
         await sendEntered.Task.WaitAsync(WaitHarness.Bounded);
 
-        // Stopping the agent cancels ReadCts. The blocked enqueue MUST be released by
-        // that cancellation; otherwise the read loop (and its finally-block cleanup)
-        // stalls until daemon shutdown. Before the fix the enqueue awaited the
-        // daemon-lifetime token instead, so this never completes.
+        // Stopping ends the read loop at once; its sink gets the drain bound, then its send is
+        // cancelled, and only then does the agent finalize and unregister.
         await orch.HandleStopAgentForTest("agent-bp");
 
         await sendUnblocked.Task.WaitAsync(WaitHarness.Bounded);
-
+        await WaitHarness.PollUntilAsync(() => server.AgentUnregisteredCalls.Count == 1);
+        await Assert.That(unblockedAtUnregister).IsTrue();
     }
 
     [Test]

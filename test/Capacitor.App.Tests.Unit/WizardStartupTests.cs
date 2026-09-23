@@ -2,6 +2,7 @@ using Capacitor.Cli.Core.Telemetry;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -17,6 +18,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
 using AppUnderTest = Capacitor.App.App;
 using Capacitor.Cli.Core.Harness;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -135,6 +137,7 @@ static class WizardFixtures {
         public string? CliPath = "/opt/kcap/bin/kcap";
         public string? ShimTarget = "/opt/kcap/bin/kcap";
         public IReadOnlySet<HarnessId> Detected = VendorDetection.Build("claude");
+        public TimeProvider Time = TimeProvider.System;
 
         public GraphHarness(ConfigRoot root) {
             Root    = root;
@@ -191,7 +194,7 @@ static class WizardFixtures {
             ShimApplicable: ShimApplicable,
             ShimTarget: ShimTarget,
             DefaultDaemonName: "daemon-a",
-            Time: TimeProvider.System,
+            Time: Time,
             ShutdownToken: CancellationToken.None);
 
         public void Dispose() => _config.Dispose();
@@ -228,7 +231,7 @@ public class WizardStartupTests {
             };
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var attempt = graph.Auth.Begin(new ConnectIntent.Discover(AuthProvider.GitHubApp));
+            var attempt = graph.Auth.Begin(new ConnectIntent.Discover());
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             await AppUnderTest.HandoffAfterWizardAsync(graph.Auth, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
@@ -950,6 +953,68 @@ public class WizardStartupTests {
         }).WaitAsync(TimeSpan.FromSeconds(30));
     }
 
+    // ── the sign-in step's committed answer ───────────────────────────────────
+
+    static AuthResult.Committed CommittedSignIn() =>
+        new(ProfileConfig.DefaultName, "https://acme.example:443", AuthProvider.WorkOS, "sam", []);
+
+    static async Task<(WizardGraph Graph, SignInStepViewModel SignIn)> OnTheSignInStepAsync(WizardFixtures.GraphHarness harness) {
+        var graph = WizardComposition.BuildGraph(harness.Options());
+        await graph.ViewModel.PendingEnterForTesting;
+
+        graph.ViewModel.TryGoTo(WizardStepId.SignIn);
+        await WizardFixtures.WaitUntilAsync(
+            () => graph.ViewModel.Current.Id == WizardStepId.SignIn, what: "the jump to the sign-in step");
+
+        return (graph, graph.Steps.OfType<SignInStepViewModel>().Single());
+    }
+
+    /// The success line stays readable for the hold, then the wizard moves on by itself.
+    [Test]
+    public async Task A_committed_sign_in_moves_the_wizard_on_after_the_success_hold() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var time = new FakeTimeProvider();
+            using var harness = new WizardFixtures.GraphHarness(Config.Root) { Time = time };
+            harness.Operation = (_, _) => Task.FromResult<AuthResult>(CommittedSignIn());
+
+            var (graph, signIn) = await OnTheSignInStepAsync(harness);
+            await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.SignIn);
+
+            time.Advance(TimeSpan.FromSeconds(5));
+            await WizardFixtures.WaitUntilAsync(
+                () => graph.ViewModel.Current.Id == WizardStepId.Defaults, what: "the move past the sign-in step");
+
+            return true;
+        }).WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    /// A user who navigated during the hold stays where they went — including back on Sign in
+    /// itself, where the step id alone would let the stale hold through.
+    [Test]
+    [Arguments(false, WizardStepId.Connect)]
+    [Arguments(true, WizardStepId.SignIn)]
+    public async Task A_committed_sign_in_never_pulls_the_user_off_a_step_they_chose(bool returned, WizardStepId expected) {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var time = new FakeTimeProvider();
+            using var harness = new WizardFixtures.GraphHarness(Config.Root) { Time = time };
+            harness.Operation = (_, _) => Task.FromResult<AuthResult>(CommittedSignIn());
+
+            var (graph, signIn) = await OnTheSignInStepAsync(harness);
+            await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await graph.ViewModel.BackCommand.Execute().ToTask();
+            if (returned) await graph.ViewModel.NextCommand.Execute().ToTask();
+
+            time.Advance(TimeSpan.FromSeconds(5));
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(expected);
+
+            return true;
+        }).WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
     // ── late binding (the adapters the daemon step is composed over) ──────────
 
     [Test]
@@ -1388,7 +1453,7 @@ public class WizardStartupResolutionTests {
             };
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var attempt = graph.Auth.Begin(new ConnectIntent.Discover(AuthProvider.WorkOS));
+            var attempt = graph.Auth.Begin(new ConnectIntent.Discover());
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             graph.ViewModel.RequestClose();
@@ -1454,7 +1519,7 @@ public class WizardStartupResolutionTests {
         using var handler = new StubAuthHandler { Status = HttpStatusCode.ServiceUnavailable };
         ConnectIntent intent = intentName == "create"
             ? new ConnectIntent.Create()
-            : new ConnectIntent.Discover(AuthProvider.WorkOS);
+            : new ConnectIntent.Discover();
 
         WizardFacadeSpec? spec = null;
         var operation = WizardComposition.BuildOperation(

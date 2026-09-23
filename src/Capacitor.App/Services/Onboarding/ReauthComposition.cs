@@ -35,6 +35,10 @@ internal static class ReauthComposition {
         var connect = new ConnectStepViewModel();
         connect.Prefill(serverUrl);
 
-        return new ReauthGraph(new SignInStepViewModel(auth, connect, bridges, claims, appState, urlOpener), auth);
+        return new ReauthGraph(
+            new SignInStepViewModel(
+                auth, connect, bridges, claims, appState, urlOpener,
+                committedDetail: "You're signed in. Refreshing…"),
+            auth);
     }
 }

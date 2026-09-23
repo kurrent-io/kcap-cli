@@ -348,4 +348,30 @@ public class TerminalTranscriptTests {
 
         await Assert.That(line0).IsEqualTo("hello");
     }
+
+    [Test]
+    public async Task A_terminal_reset_clears_what_was_fed_before_it() {
+        // The daemon repairs a desynced mirror with ESC c followed by a replay, so a remote
+        // viewer that ignored the reset would paint the replay over stale content. The reset is
+        // fed on its own and both rows are read before any replay text can overwrite them: a
+        // reset that only homed the cursor would leave "stale" intact on the second row and the
+        // tail of the first.
+        var (before, rowsAfterReset, afterReplay) = await AvaloniaSession.DispatchAsync(() => {
+            var surface = new XtermTerminalSurface(cols: 80, rows: 24);
+            surface.Feed("stale-line\r\nstale");
+            var engine = surface.Model.Terminal.Engine;
+            var first  = (engine.GetLine(0), engine.GetLine(1));
+
+            surface.Feed("\u001bc");
+            var cleared = (engine.GetLine(0).Trim(), engine.GetLine(1).Trim());
+
+            surface.Feed("fresh");
+
+            return (first, cleared, (engine.GetLine(0), engine.GetLine(1).Trim()));
+        });
+
+        await Assert.That(before).IsEqualTo(("stale-line", "stale"));
+        await Assert.That(rowsAfterReset).IsEqualTo(("", ""));
+        await Assert.That(afterReplay).IsEqualTo(("fresh", ""));
+    }
 }
