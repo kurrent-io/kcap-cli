@@ -171,7 +171,7 @@ public partial class LauncherPaneView : UserControl {
 
         var check = new TextBlock {
             Text = "✓", FontSize = 13, IsVisible = option.Selected,
-            Foreground = Brush("KcapSuccessBrush"), Margin = new Thickness(12, 0, 0, 0),
+            Foreground = Brush("KcapInfoBrush"), Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
 
@@ -346,7 +346,7 @@ public partial class LauncherPaneView : UserControl {
         var text = Brush("KcapTextBrush");
         var muted = Brush("KcapMutedBrush");
         var faint = Brush("KcapFaintBrush");
-        var success = Brush("KcapSuccessBrush");
+        var info = Brush("KcapInfoBrush");
         var raised = Brush("KcapSurfaceRaisedBrush");
         var border = Brush("KcapBorderBrush");
 
@@ -409,7 +409,7 @@ public partial class LauncherPaneView : UserControl {
             var body = new StackPanel();
             body.Children.Add(new TextBlock {
                 Text = label, FontSize = 13.5, FontWeight = FontWeight.SemiBold,
-                Foreground = selected ? success : enabled ? text : faint,
+                Foreground = selected ? info : enabled ? text : faint,
             });
             body.Children.Add(sub);
 
