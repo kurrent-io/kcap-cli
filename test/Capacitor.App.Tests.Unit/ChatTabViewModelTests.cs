@@ -29,6 +29,12 @@ public class ChatTabViewModelTests {
     const string ToolCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}""";
     const string ToolResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
     const string ToolErrorLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"boom","is_error":true}]}}""";
+    const string MatchingQuestion = """{"questions":[{"question":"Run payload?","header":"Run payload","options":[{"label":"Yes"},{"label":"No"}]}]}""";
+    const string OtherQuestion = """{"questions":[{"question":"Something else?","options":[{"label":"A"}]}]}""";
+    const string QuestionCallLine = """{"type":"assistant","timestamp":"2026-08-28T10:00:00Z","message":{"content":[{"type":"tool_use","id":"qtool","name":"AskUserQuestion","input":{"questions":[{"question":"Run payload?","header":"Run payload","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}""";
+    const string QuestionResultLine = """{"type":"user","timestamp":"2026-08-28T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"qtool","content":"The user did not answer the questions."}]}}""";
+    const string QuestionAgainLine = """{"type":"assistant","timestamp":"2026-08-28T11:00:00Z","message":{"content":[{"type":"tool_use","id":"qtool2","name":"AskUserQuestion","input":{"questions":[{"question":"Run payload?","header":"Run payload","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}""";
+    const string QuestionAgainResultLine = """{"type":"user","timestamp":"2026-08-28T11:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"qtool2","content":"The user did not answer the questions."}]}}""";
     const string ReadCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/repo/x/src/a.cs"}}]}}""";
     const string NoteLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<summary>Agent finished</summary>\n<result>\nAll good.\n</result>\n</task-notification>"}}""";
     const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
@@ -841,6 +847,80 @@ public class ChatTabViewModelTests {
             await WaitUntilAsync(() => h.Permissions.Withdrawn.Count == 2, what: "the late request withdrawn");
             await Assert.That(h.Permissions.Withdrawn[1]).IsEqualTo("r4");
             await Assert.That(h.Chat.PendingCards.Count).IsEqualTo(2);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// AskUserQuestion's hook has no tool-use id, so the card is retired from the question text
+    /// once that ask has a result. A different question, a plain prompt with no id, and a card
+    /// requested after the result stay.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_settled_question_withdraws_matching_cards_that_have_no_tool_id() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("q.jsonl", [QuestionCallLine]);
+            await h.PushAsync(Dto(path));
+
+            h.Permissions.Add(PermissionEntries.Question("q-match", toolInputJson: MatchingQuestion));
+            h.Permissions.Add(PermissionEntries.Question("q-dup", toolInputJson: MatchingQuestion));
+            h.Permissions.Add(PermissionEntries.Question("q-other", toolInputJson: OtherQuestion));
+            h.Permissions.Add(PermissionEntries.Question("q-later", toolInputJson: MatchingQuestion, requestedAt: "2026-08-28T12:00:00.0000000+00:00"));
+            h.Permissions.Add(PermissionEntries.Entry("r-plain", "a1", vendor: "codex"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 5, what: "five cards");
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            File.AppendAllText(path, QuestionResultLine + "\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 3, what: "the answered question withdrawn");
+            await Assert.That(h.Permissions.Withdrawn).IsEquivalentTo(["q-match", "q-dup"]);
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            h.Permissions.Add(PermissionEntries.Question("q-late", toolInputJson: MatchingQuestion));
+            await WaitUntilAsync(() => h.Permissions.Withdrawn.Count == 3, what: "the late card withdrawn");
+            await Assert.That(h.Permissions.Withdrawn[2]).IsEqualTo("q-late");
+            await Assert.That(h.Chat.PendingCards.Count).IsEqualTo(3);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A second ask of the same question is still open, so a card for it is not retired by the
+    /// earlier result. The result of that second ask is what retires it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_open_question_is_not_retired_by_an_earlier_ask_of_the_same_text() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("q.jsonl", [QuestionCallLine, QuestionResultLine, QuestionAgainLine]);
+            await h.PushAsync(Dto(path));
+
+            h.Permissions.Add(PermissionEntries.Question("q-live", toolInputJson: MatchingQuestion, requestedAt: "2026-08-28T09:00:00.0000000+00:00"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the open question");
+            await Assert.That(h.Permissions.Withdrawn).IsEmpty();
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            File.AppendAllText(path, QuestionAgainResultLine + "\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 0, what: "the second ask withdrawn");
+            await Assert.That(h.Permissions.Withdrawn).IsEquivalentTo(["q-live"]);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// An unparsed requested_at is the minimum timestamp, which is older than every settled ask.
+    /// That is not evidence the card predates the result.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_whose_time_did_not_parse_is_not_retired_by_a_settled_ask() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("q.jsonl", [QuestionCallLine, QuestionResultLine]);
+            await h.PushAsync(Dto(path));
+
+            h.Permissions.Add(PermissionEntries.Question("q-bad", toolInputJson: MatchingQuestion, requestedAt: "not-a-timestamp"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the untimed question");
+            await Assert.That(h.Permissions.Withdrawn).IsEmpty();
             await h.TeardownAsync();
         });
     }

@@ -38,8 +38,11 @@ public class TokenStoreProfileTests {
 
     [Test]
     public async Task Legacy_tokens_json_is_migrated_on_first_profile_save() {
-        // Write a legacy tokens.json in the config base dir
         Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "acme",
+            Profiles = new Dictionary<string, Profile> { ["acme"] = new() { ServerUrl = "https://acme.example" } }
+        });
 
         await File.WriteAllTextAsync(
             LegacyPath,
@@ -49,6 +52,80 @@ public class TokenStoreProfileTests {
         await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("acme", MakeTokens("alice"));
 
         await Assert.That(File.Exists(LegacyPath)).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Save_for_another_profile_leaves_the_active_profiles_legacy_credential() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "a",
+            Profiles = new Dictionary<string, Profile> {
+                ["a"] = new() { ServerUrl = "https://a.example" }, ["b"] = new() { ServerUrl = "https://b.example" }
+            }
+        });
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await File.WriteAllTextAsync(LegacyPath,
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy-a"), CapacitorJsonContext.Default.StoredTokens));
+
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("b", MakeTokens("bob"));
+
+        await Assert.That(File.Exists(LegacyPath)).IsTrue();
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadForProfileAsync("a"))!.GitHubUsername).IsEqualTo("legacy-a");
+    }
+
+    [Test]
+    public async Task SaveGuardedAsync_writes_only_when_the_guard_passes() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            Profiles = new Dictionary<string, Profile> { ["acme"] = new() { ServerUrl = "https://acme.example" } }
+        });
+        var store = AuthFixtures.NewTokenStore(Config.Root);
+
+        var refused = await store.SaveGuardedAsync("ghost", MakeTokens("x"), cfg => cfg.Profiles.ContainsKey("ghost"));
+        var written = await store.SaveGuardedAsync("acme", MakeTokens("alice"), cfg => cfg.Profiles.ContainsKey("acme"));
+
+        await Assert.That(refused).IsEqualTo(GuardedWriteOutcome.GuardRefused);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "ghost.json"))).IsFalse();
+        await Assert.That(written).IsEqualTo(GuardedWriteOutcome.Written);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsTrue();
+    }
+
+    [Test]
+    public async Task SaveGuardedAsync_reports_an_unreadable_config_and_writes_nothing() {
+        var configPath = AppConfig.GetConfigPath(Config.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        await File.WriteAllTextAsync(configPath, "{ not json");
+
+        var outcome = await AuthFixtures.NewTokenStore(Config.Root).SaveGuardedAsync("acme", MakeTokens("alice"), _ => true);
+
+        await Assert.That(outcome).IsEqualTo(GuardedWriteOutcome.ConfigUnreadable);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Save_for_default_under_an_unreadable_config_leaves_the_legacy_file() {
+        var configPath = AppConfig.GetConfigPath(Config.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        await File.WriteAllTextAsync(configPath, "{ not json");
+        await File.WriteAllTextAsync(LegacyPath,
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", MakeTokens("who"));
+
+        await Assert.That(File.Exists(LegacyPath)).IsTrue();
+    }
+
+    [Test]
+    public async Task SaveAsync_waits_for_a_peer_holding_the_profile_lock() {
+        Directory.CreateDirectory(TokensDir);
+        var store = AuthFixtures.NewTokenStore(Config.Root);
+        Task save;
+        using (new FileStream(Path.Combine(TokensDir, "acme.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            save = store.SaveAsync("acme", MakeTokens("alice"));
+            await Task.Delay(200);
+            await Assert.That(save.IsCompleted).IsFalse();
+        }
+        await save;
+
         await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsTrue();
     }
 
@@ -77,7 +154,7 @@ public class TokenStoreProfileTests {
         await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("acme", MakeTokens("alice"));
         await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("contoso", MakeTokens("bob"));
 
-        AuthFixtures.NewTokenStore(Config.Root).Delete("acme");
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteGuardedAsync("acme", guard: null);
 
         await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("acme")).IsNull();
         await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("contoso"))!.GitHubUsername).IsEqualTo("bob");
@@ -188,17 +265,37 @@ public class TokenStoreProfileTests {
         await Assert.That(loaded!.GitHubUsername).IsEqualTo("legacy");
     }
 
+    /// Logout removes all token material, including temps leaked by a crash between write and
+    /// move — one whose profile is gone from config and has no token file included.
     [Test]
     public async Task DeleteAsync_removes_leaked_temp_files() {
-        // Logout must remove ALL token material, including temps leaked by a crash
-        // between write and move.
         Directory.CreateDirectory(TokensDir);
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json.999.deadbeef.tmp"), "secret");
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "orphan.json.7.cafe.tmp"), "secret");
 
         await AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
 
         await Assert.That(Directory.EnumerateFiles(TokensDir, "*.tmp").Any()).IsFalse();
+    }
+
+    /// A temp is a live writer's until its lock is released, so logout sweeps it under that lock
+    /// rather than unlinking a file the writer is about to publish.
+    [Test]
+    public async Task Logout_sweeps_a_leaked_temp_only_under_its_owners_lock() {
+        Directory.CreateDirectory(TokensDir);
+        var temp = Path.Combine(TokensDir, "acme.json.1.aaaa.tmp");
+        await File.WriteAllTextAsync(temp, "secret");
+
+        Task logout;
+        using (new FileStream(Path.Combine(TokensDir, "acme.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            logout = AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
+            await Task.Delay(200);
+            await Assert.That(File.Exists(temp)).IsTrue();
+        }
+        await logout;
+
+        await Assert.That(File.Exists(temp)).IsFalse();
     }
 
     [Test]
@@ -208,10 +305,23 @@ public class TokenStoreProfileTests {
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"), "secret");
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "contoso.json.2.bbbb.tmp"), "other");
 
-        AuthFixtures.NewTokenStore(Config.Root).Delete("acme");
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteGuardedAsync("acme", guard: null);
 
         await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(TokensDir, "contoso.json.2.bbbb.tmp"))).IsTrue();
+    }
+
+    /// `acme.json.other` is a valid profile whose temps begin with acme's own prefix.
+    [Test]
+    public async Task Delete_profile_leaves_the_temps_of_a_profile_its_name_prefixes() {
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"), "secret");
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json.other.json.2.bbbb.tmp"), "other");
+
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteGuardedAsync("acme", guard: null);
+
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json.other.json.2.bbbb.tmp"))).IsTrue();
     }
 
     [Test]
@@ -245,4 +355,138 @@ public class TokenStoreProfileTests {
         GitHubUsername = username,
         Provider       = AuthProvider.GitHubApp
     };
+
+    [Test]
+    public async Task DeleteGuardedAsync_deletes_only_when_the_guard_passes() {
+        var store = AuthFixtures.NewTokenStore(Config.Root);
+        await store.SaveAsync("acme", MakeTokens("alice"));
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            Profiles = new Dictionary<string, Profile> { ["acme"] = new() { ServerUrl = "https://acme.example" } }
+        });
+
+        var refused = await store.DeleteGuardedAsync("acme", cfg => !cfg.Profiles.ContainsKey("acme"));
+        await Assert.That(refused).IsEqualTo(GuardedWriteOutcome.GuardRefused);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsTrue();
+
+        await ConfigMutator.MutateAsync(Config.Root, c => c with { Profiles = new Dictionary<string, Profile>() });
+        var deleted = await store.DeleteGuardedAsync("acme", cfg => !cfg.Profiles.ContainsKey("acme"));
+        await Assert.That(deleted).IsEqualTo(GuardedWriteOutcome.Written);
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Logout_waits_for_a_refresh_holding_the_lock_and_then_deletes_its_result() {
+        var store = AuthFixtures.NewTokenStore(Config.Root);
+        await store.SaveAsync("alpha", MakeTokens("alice"));
+        var alphaPath = Path.Combine(TokensDir, "alpha.json");
+
+        Task logout;
+        using (new FileStream(Path.Combine(TokensDir, "alpha.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            logout = store.DeleteAsync();
+            await Task.Delay(200);
+            await Assert.That(File.Exists(alphaPath)).IsTrue();
+            // The refresh that holds the lock persists its result before releasing.
+            await File.WriteAllTextAsync(alphaPath,
+                System.Text.Json.JsonSerializer.Serialize(MakeTokens("refreshed"), CapacitorJsonContext.Default.StoredTokens));
+        }
+        await logout;
+
+        await Assert.That(File.Exists(alphaPath)).IsFalse();
+    }
+
+    [Test]
+    public async Task Logout_deletes_a_legacy_only_credential_under_the_active_profiles_lock() {
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(LegacyPath,
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+
+        Task logout;
+        using (new FileStream(Path.Combine(TokensDir, "default.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            logout = AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
+            await Task.Delay(200);
+            await Assert.That(File.Exists(LegacyPath)).IsTrue();
+        }
+        await logout;
+
+        await Assert.That(File.Exists(LegacyPath)).IsFalse();
+    }
+
+    /// An active name the token layout rejects can hold no lock; logout still removes the legacy
+    /// file rather than reporting a sign-out it did not do.
+    [Test]
+    public async Task Logout_deletes_the_legacy_credential_when_the_active_name_can_hold_no_lock() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "bad/name",
+            Profiles = new Dictionary<string, Profile> { ["bad/name"] = new() }
+        });
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(LegacyPath, Json(MakeTokens("legacy")));
+
+        await AuthFixtures.NewTokenStore(Config.Root).DeleteAsync();
+
+        await Assert.That(File.Exists(LegacyPath)).IsFalse();
+    }
+
+    static string Json(StoredTokens tokens) =>
+        System.Text.Json.JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens);
+
+    [Test]
+    public async Task MigrateLegacyAsync_moves_the_file_into_the_owners_slot_when_it_is_empty() {
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await File.WriteAllTextAsync(LegacyPath, Json(MakeTokens("legacy")));
+
+        await AuthFixtures.NewTokenStore(Config.Root).MigrateLegacyAsync("a");
+
+        await Assert.That(File.Exists(LegacyPath)).IsFalse();
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("a"))!.GitHubUsername).IsEqualTo("legacy");
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task MigrateLegacyAsync_deletes_the_file_when_the_owner_already_has_one(bool ownerFileValid) {
+        Directory.CreateDirectory(TokensDir);
+        var ownerContent = ownerFileValid ? Json(MakeTokens("own")) : "{ corrupt";
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "a.json"), ownerContent);
+        await File.WriteAllTextAsync(LegacyPath, Json(MakeTokens("legacy")));
+
+        await AuthFixtures.NewTokenStore(Config.Root).MigrateLegacyAsync("a");
+
+        await Assert.That(File.Exists(LegacyPath)).IsFalse();
+        await Assert.That(await File.ReadAllTextAsync(Path.Combine(TokensDir, "a.json")))
+            .IsEqualTo(ownerContent);
+    }
+
+    [Test]
+    public async Task MigrateLegacyAsync_is_a_no_op_without_a_legacy_file() {
+        await AuthFixtures.NewTokenStore(Config.Root).MigrateLegacyAsync("a");
+
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "a.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task MigrateLegacyAsync_throws_when_the_token_directory_cannot_be_created() {
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await File.WriteAllTextAsync(LegacyPath, Json(MakeTokens("legacy")));
+        await File.WriteAllTextAsync(TokensDir, "a file where the directory should be");
+
+        await Assert.That(() => AuthFixtures.NewTokenStore(Config.Root).MigrateLegacyAsync("a")).Throws<IOException>();
+        await Assert.That(File.Exists(LegacyPath)).IsTrue();
+    }
+
+    [Test]
+    public async Task After_migration_a_newly_selected_profile_reads_no_credential() {
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await File.WriteAllTextAsync(LegacyPath, Json(MakeTokens("legacy-a")));
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            ActiveProfile = "a",
+            Profiles = new Dictionary<string, Profile> { ["a"] = new() { ServerUrl = "https://a.example" }, ["b"] = new() { ServerUrl = "https://b.example" } }
+        });
+
+        await AuthFixtures.NewTokenStore(Config.Root).MigrateLegacyAsync("a");
+        await ConfigMutator.MutateAsync(Config.Root, c => c with { ActiveProfile = "b" });
+
+        await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).LoadForProfileAsync("b")).IsNull();
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadForProfileAsync("a"))!.GitHubUsername).IsEqualTo("legacy-a");
+    }
 }

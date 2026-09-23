@@ -116,6 +116,29 @@ public sealed class PendingPermissionRequest {
         return QuestionFingerprints().ToHashSet(StringComparer.Ordinal).Overlaps(other.QuestionFingerprints());
     }
 
+    internal bool OverlapsQuestion(IReadOnlySet<string> texts) {
+        if (!IsQuestion || texts.Count == 0) return false;
+        foreach (var fingerprint in QuestionFingerprints())
+            if (texts.Contains(fingerprint)) return true;
+        return false;
+    }
+
+    /// Every question in an AskUserQuestion payload, plus the header joins a card fingerprints.
+    internal static HashSet<string>? QuestionTexts(string? toolInputJson) {
+        if (ClaudeElicitation.TryParse(toolInputJson) is not { } parsed) return null;
+        var texts = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var q in parsed.Questions) {
+            var question = q.Question.Trim();
+            if (question.Length == 0) continue;
+            texts.Add(question);
+            if (q.Header is { Length: > 0 } header) {
+                texts.Add($"{header}\n{question}");
+                texts.Add($"{header}\n\n{question}");
+            }
+        }
+        return texts.Count == 0 ? null : texts;
+    }
+
     IEnumerable<string> QuestionFingerprints() {
         if (AcpQuestion?.Prompt?.Trim() is { Length: > 0 } prompt)
             yield return prompt;
