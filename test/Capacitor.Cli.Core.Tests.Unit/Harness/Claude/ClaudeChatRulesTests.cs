@@ -31,6 +31,53 @@ public class ClaudeChatRulesTests {
     }
 
     [Test]
+    public async Task A_bang_command_shows_the_command_and_acknowledges_it() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"<bash-input>kubectl get pods</bash-input>"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(result.Envelopes[0].Text).IsEqualTo("! kubectl get pods");
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "!kubectl get pods" });
+    }
+
+    [Test]
+    public async Task An_attached_bang_command_shows_the_typed_command_and_keeps_the_trailer_for_the_queue() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"<bash-input>kubectl get pods\n\n[Attached files: .attached/x/a.png]</bash-input>"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].Text).IsEqualTo("! kubectl get pods");
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "!kubectl get pods\n\n[Attached files: .attached/x/a.png]" });
+    }
+
+    [Test]
+    public async Task Bang_output_is_a_system_note_and_a_blank_one_is_dropped() {
+        var shown = P("""{"type":"user","message":{"content":"<bash-stdout>NAME\nweb</bash-stdout><bash-stderr></bash-stderr>"}}""");
+        await Assert.That(shown).Count().IsEqualTo(1);
+        await Assert.That(shown[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(shown[0].Text).IsEqualTo("NAME\nweb");
+
+        var stderr = P("""{"type":"user","message":{"content":"<bash-stdout></bash-stdout><bash-stderr>denied</bash-stderr>"}}""");
+        await Assert.That(stderr).Count().IsEqualTo(1);
+        await Assert.That(stderr[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(stderr[0].Text).IsEqualTo("denied");
+
+        var both = P("""{"type":"user","message":{"content":"<bash-stdout>ok</bash-stdout><bash-stderr>warn</bash-stderr>"}}""");
+        await Assert.That(both[0].Text).IsEqualTo("ok\nwarn");
+
+        await Assert.That(P("""{"type":"user","message":{"content":"<bash-stdout></bash-stdout><bash-stderr></bash-stderr>"}}""")).IsEmpty();
+    }
+
+    [Test]
+    public async Task Quoted_bash_tags_stay_a_user_message_and_do_not_acknowledge_a_bang() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"see <bash-input>ls</bash-input> below"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(result.Envelopes[0].Text).IsEqualTo("see <bash-input>ls</bash-input> below");
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "see <bash-input>ls</bash-input> below" });
+    }
+
+    [Test]
     public async Task String_user_content_is_one_user_message_with_its_timestamp() {
         var e = P("""{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"2026-08-26T12:00:00Z"}""");
         await Assert.That(e).Count().IsEqualTo(1);
