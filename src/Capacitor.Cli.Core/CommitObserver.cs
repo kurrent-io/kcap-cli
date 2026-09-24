@@ -1,12 +1,11 @@
 using System.Globalization;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// Finds the commits a Claude transcript shows landing and places each in the repository that holds
-/// it, asking git on this machine. The command alone cannot say where a commit went:
+/// Finds the commits a transcript's shell steps show landing and places each in the repository that
+/// holds it, asking git on this machine. The command alone cannot say where a commit went:
 /// <c>cd src/cli &amp;&amp; git commit</c> runs outside the folder its transcript line records. A
 /// commit is seen through git's <c>[branch sha] subject</c> summary, or, for a commit command that
 /// printed none, as the HEAD committed while it ran; a failed or aborted one never is.
@@ -37,49 +36,30 @@ public sealed class CommitObserver(
     readonly Dictionary<string, Call> _calls = new(StringComparer.Ordinal);
     readonly Queue<string>            _order = new();
 
-    /// <summary>Every commit one transcript line's tool results show landing. A line the observer
-    /// cannot read yields nothing, so it never stalls the batch carrying it.</summary>
-    public async Task<IReadOnlyList<ObservedCommit>> ObserveAsync(string line) {
-        if (!line.Contains("tool_use", StringComparison.Ordinal)) return [];
+    /// <summary>Every commit these steps' results show landing. A step git cannot answer for yields
+    /// nothing, so it never stalls the batch carrying it.</summary>
+    public async Task<IReadOnlyList<ObservedCommit>> ObserveAsync(ShellSteps steps) {
+        foreach (var call in steps.Calls) Remember(call.Id, new Call(call.Command, steps.At));
+        if (steps.Cwd is not { } cwd || steps.Results.Count == 0) return [];
 
         try {
-            return await ObserveLineAsync(line);
+            return await ObserveResultsAsync(cwd, steps);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             return [];
         }
     }
 
-    async Task<List<ObservedCommit>> ObserveLineAsync(string line) {
-        using var doc  = JsonDocument.Parse(line);
-        var       root = doc.RootElement;
-
-        if (Prop(Prop(root, "message"), "content") is not { ValueKind: JsonValueKind.Array } content) return [];
-
-        var cwd = Str(root, "cwd");
-        DateTimeOffset? at = DateTimeOffset.TryParse(Str(root, "timestamp"), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t)
-            ? t
-            : null;
-
+    async Task<List<ObservedCommit>> ObserveResultsAsync(string cwd, ShellSteps steps) {
         List<ObservedCommit> found = [];
 
-        foreach (var block in content.EnumerateArray()) {
-            var type = Str(block, "type");
-
-            if (type == "tool_use" && Str(block, "name") is "Bash" && Str(block, "id") is { } id
-             && Str(Prop(block, "input"), "command") is { } bash) {
-                Remember(id, new Call(bash, at));
-                continue;
-            }
-
-            if (type != "tool_result" || cwd is null || Str(block, "tool_use_id") is not { } resultOf) continue;
-
+        foreach (var result in steps.Results) {
             // A result whose call this observer never saw (a watcher restart, a background run read back
             // through BashOutput) still counts, but only once git confirms the commit.
-            var call = _calls.GetValueOrDefault(resultOf);
+            var call = _calls.GetValueOrDefault(result.CallId);
             if (call is not null && !CommitCommandRegex.IsMatch(call.Command)) continue;
 
             var command   = call?.Command ?? "";
-            var summaries = SummaryRegex.Matches(ResultText(block));
+            var summaries = SummaryRegex.Matches(result.Output);
 
             foreach (Match summary in summaries) {
                 var sha     = summary.Groups["sha"].Value;
@@ -93,7 +73,7 @@ public sealed class CommitObserver(
             }
 
             // `git commit -q`, or output sent elsewhere: no summary, so the commit is the HEAD made during the call.
-            if (summaries.Count == 0 && call?.At is { } from && at is { } to && !IsError(block)
+            if (summaries.Count == 0 && call?.At is { } from && steps.At is { } to && !result.IsError
              && await FindAsync(cwd, command, dir => HeadCommittedBetweenAsync(dir, from, to), BranchOfAsync, "") is { } quiet)
                 found.Add(quiet);
         }
@@ -185,20 +165,4 @@ public sealed class CommitObserver(
         _order.Enqueue(id);
         if (_order.Count > RememberedCommands) _calls.Remove(_order.Dequeue());
     }
-
-    static bool IsError(JsonElement result) => Prop(result, "is_error") is { ValueKind: JsonValueKind.True };
-
-    static string ResultText(JsonElement result) {
-        if (Prop(result, "content") is not { } content) return "";
-        if (content.ValueKind == JsonValueKind.String) return content.GetString() ?? "";
-        if (content.ValueKind != JsonValueKind.Array) return "";
-
-        return string.Join('\n', content.EnumerateArray().Select(part => Str(part, "text")).OfType<string>());
-    }
-
-    static JsonElement? Prop(JsonElement? element, string property) =>
-        element is { ValueKind: JsonValueKind.Object } e && e.TryGetProperty(property, out var value) ? value : null;
-
-    static string? Str(JsonElement? element, string property) =>
-        Prop(element, property) is { ValueKind: JsonValueKind.String } value ? value.GetString() : null;
 }

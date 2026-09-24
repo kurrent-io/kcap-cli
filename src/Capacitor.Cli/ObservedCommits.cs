@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
+using Capacitor.Models.Transcripts.Harness.Claude;
 
 namespace Capacitor.Cli;
 
@@ -22,8 +23,9 @@ static class ObservedCommits {
     /// placeholder.</summary>
     public static async Task CollectAsync(CommitObserver observer, IEnumerable<string> rawLines, List<ObservedCommit> into) {
         foreach (var line in rawLines)
-            foreach (var commit in await observer.ObserveAsync(line))
-                if (Redacted(commit) is var redacted && !into.Contains(redacted)) into.Add(redacted);
+            if (ClaudeShellSteps.Read(line) is { } steps)
+                foreach (var commit in await observer.ObserveAsync(steps))
+                    if (Redacted(commit) is var redacted && !into.Contains(redacted)) into.Add(redacted);
     }
 
     static ObservedCommit Redacted(ObservedCommit commit) =>

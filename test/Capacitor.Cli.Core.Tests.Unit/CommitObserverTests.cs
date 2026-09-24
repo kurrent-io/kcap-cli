@@ -1,5 +1,3 @@
-using System.Text.Json.Nodes;
-
 namespace Capacitor.Cli.Core.Tests.Unit;
 
 /// <summary>A commit is placed in the repository git finds it in, never the folder its transcript
@@ -18,7 +16,7 @@ public class CommitObserverTests {
     readonly List<string> _gitCalls = [];
 
     CommitObserver Observer(string commitDir, string subject = "Fix watcher crash, fixes #45", DateTimeOffset? headAt = null, string? submodules = null) {
-        Directory.CreateDirectory(Sub);
+        Tmp.CreateDir("src", "cli");
 
         return new CommitObserver(
             (arguments, dir, _) => {
@@ -41,21 +39,14 @@ public class CommitObserverTests {
             top => Task.FromResult<(string?, string?)>(top == Sub ? ("kurrent-io", "kcap-cli") : ("kurrent-io", "kcap-server")));
     }
 
-    string ToolUse(string id, string command) => new JsonObject {
-        ["type"] = "assistant", ["cwd"] = Root, ["timestamp"] = CalledAt.ToString("O"),
-        ["message"] = new JsonObject { ["content"] = new JsonArray(new JsonObject {
-            ["type"] = "tool_use", ["id"] = id, ["name"] = "Bash", ["input"] = new JsonObject { ["command"] = command } }) }
-    }.ToJsonString();
+    ShellSteps ToolUse(string id, string command) => new(Root, CalledAt, [new(id, command)], []);
 
-    string ToolResults(params (string Id, string Output)[] results) => new JsonObject {
-        ["type"] = "user", ["cwd"] = Root, ["timestamp"] = CalledAt.AddSeconds(3).ToString("O"),
-        ["message"] = new JsonObject { ["content"] = new JsonArray(results.Select(r => (JsonNode)new JsonObject {
-            ["type"] = "tool_result", ["tool_use_id"] = r.Id, ["content"] = r.Output }).ToArray()) }
-    }.ToJsonString();
+    ShellSteps ToolResults(params (string Id, string Output)[] results) =>
+        new(Root, CalledAt.AddSeconds(3), [], [..results.Select(r => new ShellSteps.Result(r.Id, r.Output, IsError: false))]);
 
-    static async Task<IReadOnlyList<ObservedCommit>> Observe(CommitObserver observer, params string[] lines) {
+    static async Task<IReadOnlyList<ObservedCommit>> Observe(CommitObserver observer, params ShellSteps[] steps) {
         var all = new List<ObservedCommit>();
-        foreach (var line in lines) all.AddRange(await observer.ObserveAsync(line));
+        foreach (var step in steps) all.AddRange(await observer.ObserveAsync(step));
         return all;
     }
 
@@ -162,11 +153,4 @@ public class CommitObserverTests {
 
         await Assert.That(_gitCalls).DoesNotContain("submodule status --recursive");
     }
-
-    [Test]
-    [Arguments("{\"message\":\"tool_use\"}")]
-    [Arguments("[\"tool_use\"]")]
-    [Arguments("{\"message\":{\"content\":[\"tool_use\"]}}")]
-    public async Task A_line_of_an_unexpected_shape_yields_nothing(string line) =>
-        await Assert.That(await Observer(Root).ObserveAsync(line)).IsEmpty();
 }

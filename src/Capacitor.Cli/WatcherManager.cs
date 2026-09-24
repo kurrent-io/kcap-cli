@@ -459,6 +459,7 @@ public sealed partial class WatcherManager(
             var newLines       = new List<string>();
             var newLineNumbers = new List<int>();
             var rawLines       = new List<string>();
+            var commits        = vendor == "claude" ? ObservedCommits.NewObserver(router, config, time) : null;
 
             await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var       reader = new StreamReader(stream);
@@ -494,9 +495,9 @@ public sealed partial class WatcherManager(
             // A live batch already told the server this session's commits are observed, so these
             // lines must carry theirs too.
             List<ObservedCommit>? observed = null;
-            if (vendor == "claude") {
+            if (commits is not null) {
                 observed = [];
-                await ObservedCommits.CollectAsync(ObservedCommits.NewObserver(router, config, time), rawLines, observed);
+                await ObservedCommits.CollectAsync(commits, rawLines, observed);
             }
 
             var batch = new TranscriptBatch {
