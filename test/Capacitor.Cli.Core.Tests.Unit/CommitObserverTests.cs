@@ -17,7 +17,7 @@ public class CommitObserverTests {
 
     readonly List<string> _gitCalls = [];
 
-    CommitObserver Observer(string commitDir, string subject = "Fix watcher crash, fixes #45", DateTimeOffset? headAt = null) {
+    CommitObserver Observer(string commitDir, string subject = "Fix watcher crash, fixes #45", DateTimeOffset? headAt = null, string? submodules = null) {
         Directory.CreateDirectory(Sub);
 
         return new CommitObserver(
@@ -32,7 +32,11 @@ public class CommitObserverTests {
                     "rev-parse --abbrev-ref HEAD"                   => "main",
                     "rev-parse --show-toplevel"                     => dir,
                     _                                               => null
-                } : arguments == "rev-parse --show-toplevel" ? Root : null);
+                } : arguments switch {
+                    "rev-parse --show-toplevel"    => Root,
+                    "submodule status --recursive" => submodules,
+                    _                              => null
+                });
             },
             top => Task.FromResult<(string?, string?)>(top == Sub ? ("kurrent-io", "kcap-cli") : ("kurrent-io", "kcap-server")));
     }
@@ -138,6 +142,16 @@ public class CommitObserverTests {
         await Assert.That(during.Single().Sha).IsEqualTo(Full);
         await Assert.That(during.Single().Branch).IsEqualTo("main");
         await Assert.That(before).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_commit_in_a_submodule_whose_path_has_a_space_is_placed_there() {
+        var module = Tmp.CreateDir("vendor", "my lib");
+        var commits = await Observe(Observer(module, submodules: $"{Full} vendor/my lib (heads/main)\n-{Full} vendor/other"),
+            ToolUse("t1", "git commit -m 'Fix watcher crash, fixes #45'"),
+            ToolResults(("t1", $"[main {Short}] Fix watcher crash, fixes #45")));
+
+        await Assert.That(commits.Single().Sha).IsEqualTo(Full);
     }
 
     [Test]

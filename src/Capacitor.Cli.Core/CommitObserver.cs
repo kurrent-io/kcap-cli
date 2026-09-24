@@ -30,6 +30,8 @@ public sealed class CommitObserver(
         @"(?:(?:^|&&|\|\||[;\n(])\s*(?<verb>cd|pushd)|\bgit\s+(?<verb>-C))\s+(?<dir>""[^""]+""|'[^']+'|[^\s;&|)]+)",
         RegexOptions.Compiled);
 
+    static readonly Regex SubmoduleRegex = new(@"^[ +\-U]?[0-9a-f]+ (?<path>.+?)(?: \([^()]*\))?\r?$", RegexOptions.Compiled | RegexOptions.Multiline);
+
     sealed record Call(string Command, DateTimeOffset? At);
 
     readonly Dictionary<string, Call> _calls = new(StringComparer.Ordinal);
@@ -174,10 +176,7 @@ public sealed class CommitObserver(
         if (!Directory.Exists(cwd) || await git("rev-parse --show-toplevel", cwd, GitTimeout) is not { } top
          || await git("submodule status --recursive", top, GitTimeout) is not { Length: > 0 } status) return [];
 
-        return status.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(entry => entry.Trim().Split(' '))
-            .Where(parts => parts.Length >= 2)
-            .Select(parts => Path.GetFullPath(Path.Combine(top, parts[1])));
+        return SubmoduleRegex.Matches(status).Select(entry => Path.GetFullPath(Path.Combine(top, entry.Groups["path"].Value)));
     }
 
     void Remember(string id, Call call) {
