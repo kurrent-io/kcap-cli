@@ -553,10 +553,21 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             first["hits"]                 = merged;
             first["widened_to_all_repos"] = true;
 
+            // The flag describes one request's lexical lanes; a lexical hit in either scope clears it.
+            var firstNoLexical   = ReadNoLexicalMatch(first);
+            var widenedNoLexical = ReadNoLexicalMatch(widened);
+
+            if (firstNoLexical is not null || widenedNoLexical is not null) {
+                first["no_lexical_match"] = (firstNoLexical ?? true) && (widenedNoLexical ?? true);
+            }
+
             return first.ToJsonString();
         } catch {
             return firstBody;
         }
+
+        static bool? ReadNoLexicalMatch(JsonObject body) =>
+            body["no_lexical_match"] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
     }
 
     static string BuildSummaryUrl(string baseUrl, string sessionId) =>
