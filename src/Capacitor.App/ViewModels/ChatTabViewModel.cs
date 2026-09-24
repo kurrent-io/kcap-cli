@@ -551,6 +551,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     return;
                 }
             }
+            // The upload can finish after the menu is on screen. The text would be typed into
+            // that menu, so the draft and the chips stay where they are.
+            if (HasUsageLimitQuestion) return;
             var chipIds = files.Select(f => f.Id).ToList();
             var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
             _lastSent = queued;

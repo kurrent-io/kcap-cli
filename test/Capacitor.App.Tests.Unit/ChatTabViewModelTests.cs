@@ -62,12 +62,12 @@ public class ChatTabViewModelTests {
         public ChatTabViewModel Chat { get; }
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
-                       ChatInput? input = null, string? unavailableNote = null) {
+                       ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null) {
             seed?.Invoke(Permissions);
             Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote, planActivity: Plan);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote, planActivity: Plan);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -1824,6 +1824,55 @@ public class ChatTabViewModelTests {
                 await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
             } finally { await h.TeardownAsync(); }
         });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_send_still_uploading_when_the_usage_limit_appears_is_not_pasted_into_the_menu() {
+        await RunOnUiAsync(async () => {
+            var input = new RecordingChatInput();
+            var uploader = new HoldingUploader();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, uploader: uploader);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit",
+                "What do you want to do?", [
+                    new(1, "Stop and wait for limit to reset"),
+                    new(2, "Wait here, then continue automatically shortly"),
+                ]);
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                h.Chat.ComposerText = "keep going";
+                h.Chat.Tray.AddAll([new StagedAttachment("note.txt", "text/plain", "hi"u8.ToArray())]);
+
+                var sending = h.Chat.SendCommand.Execute().ToTask();
+                await uploader.Started.Task;
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+                uploader.Release.SetResult(new UploadOutcome(UploadKind.Uploaded, ["file-1"], null));
+                await sending;
+
+                await Assert.That(input.Sent).IsEmpty();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("keep going");
+                await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    sealed class HoldingUploader : IAttachmentUploader {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<UploadOutcome> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<UploadOutcome> UploadAsync(IReadOnlyList<StagedAttachment> files, CancellationToken ct) {
+            Started.TrySetResult();
+            return Release.Task;
+        }
+    }
+
+    sealed class RecordingChatInput : AcceptingChatInput {
+        public List<string> Sent { get; } = [];
+        public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
+            Sent.Add(text);
+            return Task.FromResult(ChatSendOutcome.Accepted);
+        }
     }
 
     sealed class KeyRecordingInput : AcceptingChatInput {
