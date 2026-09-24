@@ -78,4 +78,55 @@ public class KiroCrewHookInstallerTests {
         await Assert.That(lines[0]).IsEqualTo("hook --kiro --event agentSpawn");
         await Assert.That(lines[1]).IsEqualTo("""{"hook_event_name":"agentSpawn"}""");
     }
+
+    [Test]
+    public async Task Install_leaves_a_script_kcap_did_not_write() {
+        Directory.CreateDirectory(Path.GetDirectoryName(Script)!);
+        await File.WriteAllTextAsync(Script, "#!/bin/sh\necho mine\n");
+
+        await Assert.That(KiroCrewHookInstaller.Install(Script, "/opt/kcap/bin")).IsEqualTo(KiroCrewHookInstaller.Outcome.Unowned);
+        await Assert.That(await File.ReadAllTextAsync(Script)).IsEqualTo("#!/bin/sh\necho mine\n");
+    }
+
+    /// <summary>A refresh must tell a script the user deleted from one never installed.</summary>
+    [Test]
+    public async Task A_deleted_script_reads_as_removed_until_kcap_removes_its_record() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await Assert.That(KiroCrewHookInstaller.WasRemoved(Script)).IsFalse();
+
+        KiroCrewHookInstaller.Install(Script, null);
+        File.Delete(Script);
+        await Assert.That(KiroCrewHookInstaller.WasRemoved(Script)).IsTrue();
+
+        KiroCrewHookInstaller.Remove(Script);
+        await Assert.That(KiroCrewHookInstaller.WasRemoved(Script)).IsFalse();
+    }
+
+    /// <summary>The install-time directory is data to the shell: a <c>$</c> or quote in it neither runs
+    /// nor breaks the lookup.</summary>
+    [Test]
+    public async Task Script_treats_the_install_time_directory_as_data() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var bin      = Tmp.PathTo("it's $(touch pwned) `x`");
+        var captured = Tmp.PathTo("captured.txt");
+        Directory.CreateDirectory(bin);
+        var fake = Path.Combine(bin, "kcap");
+        await File.WriteAllTextAsync(fake, $"#!/bin/sh\necho ran > '{captured}'\n");
+        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        KiroCrewHookInstaller.Install(Script, bin);
+
+        var psi = new ProcessStartInfo(Script) { RedirectStandardInput = true, UseShellExecute = false, WorkingDirectory = Tmp.Path };
+        psi.Environment["PATH"] = "/usr/bin:/bin";
+
+        using var process = Process.Start(psi)!;
+        process.StandardInput.Close();
+        await process.WaitForExitAsync();
+
+        await Assert.That(process.ExitCode).IsEqualTo(0);
+        await Assert.That(File.Exists(captured)).IsTrue();
+        await Assert.That(File.Exists(Tmp.PathTo("pwned"))).IsFalse();
+    }
 }

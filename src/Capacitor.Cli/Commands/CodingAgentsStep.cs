@@ -372,6 +372,10 @@ internal static class CodingAgentsStep {
                 writeLine("  [dim]· Kiro Crew hook already installed — no change needed[/]");
 
                 return false;
+            case KiroCrewHookInstaller.Outcome.Unowned:
+                writeLine($"  [yellow]⚠[/] {script} exists and was not written by kcap — left alone, so Kiro Crew sessions are not recorded.");
+
+                return false;
             case KiroCrewHookInstaller.Outcome.Unsupported:
                 return false;
             default:

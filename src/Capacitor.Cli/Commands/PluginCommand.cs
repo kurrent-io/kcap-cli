@@ -1717,27 +1717,44 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <summary>
     /// Wires Kiro Crew when it is present: its agents run this same <c>kiro-cli</c> under profiles
     /// Crew regenerates, so they never carry kcap.json's hook or read <c>~/.kiro/skills</c>. A refresh
-    /// creates them too, because the Kiro opt-in covers Crew and Crew is often installed after kcap —
-    /// but the skills only while the user still keeps kcap's Kiro skills. Never fails the install.
+    /// wires a Crew installed since kcap, because the Kiro opt-in covers Crew — but once kcap has wired
+    /// Crew, a refresh only keeps what is still there, so a hook or skills the user deleted stay
+    /// deleted. Never fails the install.
     /// </summary>
     async Task InstallKiroCrewAsync(bool refreshOnly, bool installSkills) {
         var kiro = env.Harnesses.Of<KiroHarness>();
         var crew = kiro.Crew;
         if (!crew.IsPresent()) return;
 
-        var kcapDir = env.Binaries.Resolve("kcap") is { } kcap ? Path.GetDirectoryName(kcap) : null;
+        var wiredBefore = KiroCrewHookInstaller.IsInstalled(crew.SpawnHookScript) || KiroCrewHookInstaller.WasRemoved(crew.SpawnHookScript);
+        var kcapDir     = env.Binaries.Resolve("kcap") is { } kcap ? Path.GetDirectoryName(kcap) : null;
 
-        switch (KiroCrewHookInstaller.Install(crew.SpawnHookScript, kcapDir)) {
+        var outcome = refreshOnly && KiroCrewHookInstaller.WasRemoved(crew.SpawnHookScript)
+            ? KiroCrewHookInstaller.Outcome.Unchanged
+            : KiroCrewHookInstaller.Install(crew.SpawnHookScript, kcapDir);
+
+        switch (outcome) {
             case KiroCrewHookInstaller.Outcome.Written:
                 await env.Stdout.WriteLineAsync(
                     $"Kiro Crew hook installed ({crew.SpawnHookScript}). Restart Kiro Crew so its agents pick it up.");
+                break;
+            case KiroCrewHookInstaller.Outcome.Unowned:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: {crew.SpawnHookScript} exists and was not written by kcap, so Kiro Crew sessions are not recorded. "
+                  + "Move it aside and re-run: kcap plugin install --kiro");
                 break;
             case KiroCrewHookInstaller.Outcome.Failed:
                 await env.Stderr.WriteLineAsync($"Warning: could not write the Kiro Crew hook to {crew.SpawnHookScript}.");
                 break;
         }
 
-        if (installSkills && (!refreshOnly || AgentsSkillsInstaller.IsInstalled(kiro.Paths.SkillsDir)))
+        if (!installSkills) return;
+
+        if (!refreshOnly)
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: false);
+        else if (wiredBefore)
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: true);
+        else if (AgentsSkillsInstaller.IsInstalled(kiro.Paths.SkillsDir))
             await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: false);
     }
 

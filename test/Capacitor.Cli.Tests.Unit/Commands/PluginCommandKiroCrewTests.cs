@@ -117,4 +117,41 @@ public class PluginCommandKiroCrewTests {
         foreach (var name in AgentsSkillsInstaller.SourceNames)
             await Assert.That(AgentsSkillsInstaller.HasSkill(crew.SkillsDir, name)).IsFalse();
     }
+
+    /// <summary>The npm upgrade runs this refresh; it must not bring back what the user deleted.</summary>
+    [Test]
+    public async Task Refresh_keeps_a_deleted_hook_and_deleted_skills_deleted() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var env  = Env();
+        var crew = env.Harnesses.Of<KiroHarness>().Crew;
+        SeedAgent(env);
+        Directory.CreateDirectory(crew.Root);
+        await Run(env, "plugin", "install", "--kiro");
+
+        File.Delete(crew.SpawnHookScript);
+        AgentsSkillsInstaller.Remove(crew.SkillsDir);
+
+        await Assert.That(await Run(env, "plugin", "install", "--kiro", "--if-installed")).IsEqualTo(0);
+
+        await Assert.That(File.Exists(crew.SpawnHookScript)).IsFalse();
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(crew.SkillsDir)).IsFalse();
+    }
+
+    [Test]
+    public async Task Install_leaves_a_users_own_hook_of_the_same_name() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var env  = Env();
+        var crew = env.Harnesses.Of<KiroHarness>().Crew;
+        SeedAgent(env);
+        Directory.CreateDirectory(crew.Root);
+        Directory.CreateDirectory(crew.HooksDir);
+        await File.WriteAllTextAsync(crew.SpawnHookScript, "#!/bin/sh\necho mine\n");
+
+        await Assert.That(await Run(env, "plugin", "install", "--kiro")).IsEqualTo(0);
+        await Assert.That(await Run(env, "plugin", "remove", "--kiro")).IsEqualTo(0);
+
+        await Assert.That(await File.ReadAllTextAsync(crew.SpawnHookScript)).IsEqualTo("#!/bin/sh\necho mine\n");
+    }
 }
