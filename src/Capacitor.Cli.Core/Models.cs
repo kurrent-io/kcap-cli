@@ -2139,7 +2139,10 @@ public readonly record struct DaemonConnect(
         // 1 = verdict-only RunQuestion/FinalizeEval; 2 = RunQuestionV2/FinalizeEvalV2 with outcomes
         // and coded failures. A daemon predating this field sends nothing, which the server reads
         // as 1.
-        int                                         EvalProtocolVersion = 1
+        int                                         EvalProtocolVersion = 1,
+        // Vendor tokens this daemon can host a single-pass PR review on. A daemon predating this
+        // field sends nothing, which the server reads as Claude only.
+        string[]?                                   PrReviewVendors = null
     );
 
 public sealed record UnattendedVendorCapability(

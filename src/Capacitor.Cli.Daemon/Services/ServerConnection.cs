@@ -690,6 +690,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // wire-compatible with old servers (ignored).
                     AcpPresetVendors: _config.AcpPresetVendors,
                     PermissionModeVendors: _config.PermissionModeVendors,
+                    PrReviewVendors: _config.PrReviewVendors,
                     // Read off the handler, never asserted: an unwired connection (early startup,
                     // a test, a second ServerConnection) would otherwise invite RequestStatusReport2
                     // frames that its null-conditional invoke answers with silence.

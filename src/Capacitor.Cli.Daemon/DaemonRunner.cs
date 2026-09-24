@@ -619,6 +619,7 @@ public static partial class DaemonRunner {
             .ToArray();
 
         config.PermissionModeVendors = Harness.Claude.ClaudePermissionModePolicy.AdvertisedVendors(config.SupportedVendors);
+        config.PrReviewVendors       = AdvertisedPrReviewVendors(runtimeFactories);
 
         // Reviewer vendor override support: a strict subset of SupportedVendors — only vendors that
         // can also run fully unattended without routing an interaction to a human. The server gates
@@ -1412,6 +1413,13 @@ public static partial class DaemonRunner {
             .OrderBy(s => s.Vendor, StringComparer.Ordinal)
             .ToArray();
     }
+
+    internal static string[] AdvertisedPrReviewVendors(IEnumerable<IHostedAgentRuntimeFactory> factories) =>
+        factories
+            .Where(f => f.SupportsPrReview && f.IsAvailable())
+            .Select(f => f.Vendor)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>The advertised subset of a <see cref="ClassifyUnattendedVendors"/> result.</summary>
     internal static string[] AdvertisedUnattendedVendors(IEnumerable<UnattendedVendorStatus> statuses) =>
