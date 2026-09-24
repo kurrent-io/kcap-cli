@@ -107,8 +107,13 @@ if (isHook && args.Contains("--claude")) {
 
     if (ClaudeSessionEndHandoff.IsDetached(args)) {
         ClaudeSessionEndHandoff.EnterDetached(claudeHookBody, config);
-    } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config, SystemProcessStarter.Instance)) {
-        return 0;
+    } else {
+        // Here, not in the handler: the detached continuation has lost the Claude process that
+        // pairs a /clear's end with its start.
+        claudeHookBody = ClaudeClearLink.Apply(claudeHookBody, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false));
+
+        if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config, SystemProcessStarter.Instance))
+            return 0;
     }
 }
 

@@ -7,12 +7,13 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli;
 
 public sealed partial class WatcherManager(
         ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, IProcessStarter starter,
-        WatcherPaths paths, IWatcherSpawner spawner, TimeProvider time) {
+        WatcherPaths paths, IWatcherSpawner spawner, TimeProvider time, GitProviderRouter router) {
     // The one URL this process resolved. No member takes one: a watcher spawned against a different
     // server than the hook that spawned it would stream a session nothing on this side can see.
     // Nullable because an offline invocation resolves none — the IsPostable guards refuse that.
@@ -457,6 +458,7 @@ public sealed partial class WatcherManager(
 
             var newLines       = new List<string>();
             var newLineNumbers = new List<int>();
+            var rawLines       = new List<string>();
 
             await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var       reader = new StreamReader(stream);
@@ -477,6 +479,7 @@ public sealed partial class WatcherManager(
                     // finalize drain delivers).
                     newLines.Add(SecretRedactor.RedactLine(line));
                     newLineNumbers.Add(lineIndex);
+                    rawLines.Add(line);
                 }
 
                 lineIndex++;
@@ -488,12 +491,21 @@ public sealed partial class WatcherManager(
                 return;
             }
 
+            // A live batch already told the server this session's commits are observed, so these
+            // lines must carry theirs too.
+            List<ObservedCommit>? observed = null;
+            if (vendor == "claude") {
+                observed = [];
+                await ObservedCommits.CollectAsync(ObservedCommits.NewObserver(router, config, time), rawLines, observed);
+            }
+
             var batch = new TranscriptBatch {
-                SessionId   = sessionId,
-                AgentId     = agentId,
-                Lines       = [..newLines],
-                LineNumbers = [..newLineNumbers],
-                Vendor      = vendor == "claude" ? null : vendor
+                SessionId       = sessionId,
+                AgentId         = agentId,
+                Lines           = [..newLines],
+                LineNumbers     = [..newLineNumbers],
+                Vendor          = vendor == "claude" ? null : vendor,
+                ObservedCommits = observed?.ToArray(),
             };
 
             var       batchJson = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);

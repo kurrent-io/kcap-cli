@@ -48,7 +48,7 @@ public class UnusableUrlGuardTests : IDisposable {
 
     WatcherManager GuardedManager(IProcessStarter starter) =>
         new(Config.Root, Bad, new FixedCapacitorHttpClient(), starter,
-            WatcherPaths.FromEnvironment(Config.Root), GuardedSpawner(starter), TimeProvider.System);
+            WatcherPaths.FromEnvironment(Config.Root), GuardedSpawner(starter), TimeProvider.System, new GitProviderRouter());
 
     public UnusableUrlGuardTests() {
         _tdir = _tmp.PathTo("tdir");

@@ -37,7 +37,7 @@ public class WatcherHeartbeatStalenessTests {
         TestWatchers.In(Paths, Root, Profiles, new FixedCapacitorHttpClient());
 
     static WatcherManager Managing(IWatcherSpawner spawner) =>
-        new(Root, Profiles, new FixedCapacitorHttpClient(), SystemProcessStarter.Instance, Paths, spawner, TimeProvider.System);
+        new(Root, Profiles, new FixedCapacitorHttpClient(), SystemProcessStarter.Instance, Paths, spawner, TimeProvider.System, new Capacitor.Cli.PrDetection.GitProviderRouter());
 
     static string? _previousWatcherDir;
 

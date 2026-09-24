@@ -40,6 +40,12 @@ record TranscriptBatch {
     [JsonPropertyName("strict")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Strict { get; init; }
+
+    // Null when the watcher does not observe commits. Otherwise the commits these lines show landing,
+    // and the server reads no commit evidence from the lines' shell commands. Older servers ignore it.
+    [JsonPropertyName("observed_commits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ObservedCommit[]? ObservedCommits { get; init; }
 }
 
 public record ErrorEntry(
@@ -155,6 +161,10 @@ class WatchState {
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
     public List<string> BufferedLines       { get; } = [];
+
+    // Claude watchers: places the commits each batch shows landing, held until that batch lands.
+    public CommitObserver?      Commits         { get; set; }
+    public List<ObservedCommit> ObservedCommits { get; } = [];
     public List<int>    BufferedLineNumbers { get; } = [];
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
