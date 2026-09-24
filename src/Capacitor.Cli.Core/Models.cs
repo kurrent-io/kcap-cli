@@ -472,6 +472,10 @@ public record EvalCatalogDto {
 
     [JsonPropertyName("questions")]
     public List<EvalCatalogQuestionDto> Questions { get; init; } = [];
+
+    // Present only when the server enables the CLI evidence route; absent on every older server and with the gate off.
+    [JsonPropertyName("evidence_retrieval")]
+    public Eval.Evidence.EvalEvidenceAdvertisementDto? EvidenceRetrieval { get; init; }
 }
 
 /// <summary>A single active question from <c>GET /api/eval/catalog</c>.</summary>
@@ -1030,6 +1034,15 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineOutput))]
 [JsonSerializable(typeof(QuestionResultV2))]
 [JsonSerializable(typeof(FinalizeEvalV2Command))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeManifestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceReadErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsResponseDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceEventPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceTurnPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceBodyChunkDto))]
+[JsonSerializable(typeof(EvalTraceCoverage))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(List<CliProjectSummary>))]
 [JsonSerializable(typeof(CliProjectDetail))]
@@ -2261,16 +2274,21 @@ public readonly record struct FinalizeEvalCommand(
 /// <summary>Server → daemon: discard any cached context for this run (e.g. dashboard aborted).</summary>
 public readonly record struct CancelEvalCommand(string EvalRunId);
 
-/// <summary>Daemon → server: prepare-phase result.</summary>
+/// <summary>Daemon → server: prepare-phase result. The trailing fields are set on the evidence route;
+/// Route is legacy, evidence_one_shot or evidence_retrieval.</summary>
 public readonly record struct PrepareResult(
-        bool    Success,
-        string? Error,
-        string? CanonicalSessionId,
-        int     TraceEntries,
-        int     TraceChars,
-        int     ToolResultsTotal,
-        int     ToolResultsTruncated,
-        long    BytesSaved
+        bool            Success,
+        string?         Error,
+        string?         CanonicalSessionId,
+        int             TraceEntries,
+        int             TraceChars,
+        int             ToolResultsTotal,
+        int             ToolResultsTruncated,
+        long            BytesSaved,
+        string?         EvidenceScopeVersion = null,
+        string?         Route                = null,
+        int?            SourceCount          = null,
+        DateTimeOffset? ExpiresAt            = null
     );
 
 /// <summary>Daemon → server: per-question judge result.</summary>

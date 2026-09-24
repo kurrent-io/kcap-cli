@@ -102,6 +102,24 @@ public class ClaudeCliRunnerDetailedTests {
         await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.OutputUnparseable);
     }
 
+    [Test]
+    public async Task RunDetailedAsync_returns_spend_budget_with_the_subtype_for_a_spend_cap_envelope() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+
+        using var fake = new FakeClaudeOnPath("""
+            #!/bin/sh
+            echo '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"result":""}'
+            exit 1
+            """);
+
+        var outcome = await ClaudeCliRunner.RunDetailedAsync(
+            "irrelevant", TimeSpan.FromSeconds(10), TimeProvider.System, _ => { }, null,
+            TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()));
+
+        await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.SpendBudget);
+        await Assert.That(outcome.Subtype).IsEqualTo("error_max_budget_usd");
+    }
+
     /// <summary>Puts a `claude` on PATH running the given shell script. Mirrors
     /// <c>ImportSkipTitleTests.FakeClaudeOnPath</c>.</summary>
     sealed class FakeClaudeOnPath : IDisposable {

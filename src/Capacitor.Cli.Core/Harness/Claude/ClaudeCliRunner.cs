@@ -17,8 +17,9 @@ record ClaudeCliResult(
     );
 
 /// <summary>Outcome of <see cref="ClaudeCliRunner.RunDetailedAsync"/>: exactly one of
-/// <see cref="Result"/> and <see cref="Failure"/> is set.</summary>
-readonly record struct ClaudeCliOutcome(ClaudeCliResult? Result, ClaudeCliFailure? Failure);
+/// <see cref="Result"/> and <see cref="Failure"/> is set. <see cref="Subtype"/> is the result
+/// envelope's <c>subtype</c> when the run failed with one.</summary>
+readonly record struct ClaudeCliOutcome(ClaudeCliResult? Result, ClaudeCliFailure? Failure, string? Subtype = null);
 
 enum ClaudeCliFailure {
     /// <summary>The internal per-call timeout elapsed; the subprocess was killed.</summary>
@@ -27,7 +28,9 @@ enum ClaudeCliFailure {
     /// stdout or the session transcript.</summary>
     ProcessFailure,
     /// <summary>The process exited zero but produced no parseable result.</summary>
-    OutputUnparseable
+    OutputUnparseable,
+    /// <summary>The run stopped at <c>--max-budget-usd</c> (an <c>error_max_budget_usd</c> envelope).</summary>
+    SpendBudget
 }
 
 static class ClaudeCliRunner {
@@ -371,7 +374,7 @@ static class ClaudeCliRunner {
                 log("Skipping transcript fallback: --json-schema was required and not satisfied");
             }
 
-            return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable);
+            return ClassifyFailure(stdout, nonZeroExit);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // External cancellation wins over the internal timeout: kill the
             // subprocess (otherwise the await unblocks but claude keeps
@@ -394,6 +397,19 @@ static class ClaudeCliRunner {
 
             return new(null, ClaudeCliFailure.Timeout);
         }
+    }
+
+    /// <summary>An unrecovered run's failure. The envelope's subtype is kept: an <c>is_error</c> envelope is otherwise dropped
+    /// whole, and the subtype is the only thing that tells a spend or turn cap from any other process failure.</summary>
+    internal static ClaudeCliOutcome ClassifyFailure(string stdout, bool nonZeroExit) {
+        string? subtype = null;
+        try {
+            using var doc = JsonDocument.Parse(stdout);
+            subtype = doc.RootElement.Str("subtype");
+        } catch (JsonException) { }
+
+        if (subtype == "error_max_budget_usd") return new(null, ClaudeCliFailure.SpendBudget, subtype);
+        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, subtype);
     }
 
     /// <summary>

@@ -77,18 +77,17 @@ public static class EvalService {
     // 15-min wallclock pairs with RetrospectiveMaxTurns=15: gives the judge
     // room for the prompt's 6 MCP tool calls plus structured-output and
     // reasoning headroom even under cold-start claude CLI latency.
-    static readonly TimeSpan RetrospectiveTimeout = TimeSpan.FromMinutes(15);
+    internal static readonly TimeSpan RetrospectiveTimeout = TimeSpan.FromMinutes(15);
 
-    // DEV-1486: tools-enabled per-question judges reuse the retrospective's
-    // MCP tool surface. DEV-1576: original 10 turns / $0.50 was too tight —
-    // judges hit error_max_turns mid-investigation and produced null
-    // verdicts because StructuredOutput never ran. Bumped to 15 turns /
-    // $1.00 to match the retrospective ceiling; the prompt's "at most 6
-    // tool calls" still bounds investigation depth.
-    const int    ToolsPerQuestionMaxTurns     = 15;
-    const double ToolsPerQuestionMaxBudgetUsd = 1.00;
+    // 15 turns and a $1.00 budget bound investigation depth alongside the prompt's own
+    // at-most-6-tool-calls cap.
+    const int             ToolsPerQuestionMaxTurns     = 15;
+    internal const double ToolsPerQuestionMaxBudgetUsd = 1.00;
 
-    static readonly TimeSpan ToolsPerQuestionTimeout = TimeSpan.FromMinutes(10);
+    internal static readonly TimeSpan ToolsPerQuestionTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>The text-only per-question judge's wallclock budget.</summary>
+    internal static readonly TimeSpan OneShotQuestionTimeout = TimeSpan.FromMinutes(5);
 
     // The inline judge MCP server is registered under this key in the
     // --mcp-config we pass to claude; the key becomes the `mcp__<key>__<tool>`
@@ -101,6 +100,9 @@ public static class EvalService {
     /// on every <see cref="SessionEvalCompletedPayloadV4.CoveragePolicyVersion"/> and on every
     /// <see cref="EvalEvidenceCoverage.PolicyVersion"/> the CLI attaches.</summary>
     public const string CoveragePolicyVersion = "coverage-v1";
+
+    /// <summary>The evidence-retrieval route's coverage policy version.</summary>
+    public const string EvidenceCoveragePolicyVersion = "coverage-v2";
 
     // Shared between RunRetrospectiveAsync and the tools-enabled per-question
     // branch of RunQuestionAsync. Built from JudgeMcpServerName so the
@@ -556,7 +558,7 @@ public static class EvalService {
 
             outcome = await ClaudeCliRunner.RunDetailedAsync(
                 prompt,
-                TimeSpan.FromMinutes(5),
+                OneShotQuestionTimeout,
                 time,
                 msg => { diagnostics.Add(msg); observer.OnInfo($"  {msg}"); },
                 ctx.Profile,
@@ -572,11 +574,7 @@ public static class EvalService {
         }
 
         if (outcome.Failure is { } failureKind) {
-            var code = failureKind switch {
-                ClaudeCliFailure.Timeout           => EvalFailureCodes.JudgeTimeout,
-                ClaudeCliFailure.OutputUnparseable => EvalFailureCodes.VerdictParseFailed,
-                _                                   => EvalFailureCodes.ChatError
-            };
+            var code = LegacyFailureCode(failureKind);
             var reason = diagnostics.Count == 0
                 ? $"claude {code}"
                 : $"claude {code}; {string.Join(" | ", diagnostics.Select(d => Truncate(d, 300)))}";
@@ -628,8 +626,23 @@ public static class EvalService {
             }
         }
 
-        return new QuestionRunResult(assessment, null);
+        return new QuestionRunResult(assessment, null, EvalUsage.FromResult(result));
     }
+
+    // The legacy routes keep reading every harness failure but a timeout or an unparseable reply as chat_error.
+    internal static string LegacyFailureCode(ClaudeCliFailure failure) => failure switch {
+        ClaudeCliFailure.Timeout           => EvalFailureCodes.JudgeTimeout,
+        ClaudeCliFailure.OutputUnparseable => EvalFailureCodes.VerdictParseFailed,
+        _                                  => EvalFailureCodes.ChatError
+    };
+
+    internal static string EvidenceFailureCode(ClaudeCliOutcome outcome) => outcome switch {
+        { Failure: ClaudeCliFailure.Timeout }           => EvalFailureCodes.JudgeTimeout,
+        { Failure: ClaudeCliFailure.SpendBudget }       => EvalFailureCodes.SpendBudget,
+        { Subtype: "error_max_turns" }                  => EvalFailureCodes.IterationCap,
+        { Failure: ClaudeCliFailure.OutputUnparseable } => EvalFailureCodes.VerdictParseFailed,
+        _                                               => EvalFailureCodes.ChatError
+    };
 
     /// <summary>Measures retrieval loss for the text path — the trace embeds the whole compacted
     /// session, so what the run set out to deliver is exactly what <see cref="EvalContext.Compaction"/>
