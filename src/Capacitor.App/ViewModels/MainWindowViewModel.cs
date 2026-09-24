@@ -164,6 +164,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Enabled once the app has a Settings window to open — the same action the app menu and tray
     /// use.
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+    volatile Action? _openSettings;
 
     /// Off macOS no native app menu is drawn, so Settings, the changelog and the version ride the
     /// rail's help flyout instead.
@@ -294,9 +295,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
         OpenChangelogCommand = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.ChangelogUrl));
         AppMenuInWindow     = appMenuInWindow ?? !OperatingSystem.IsMacOS();
-        var settings        = (settingsAction ?? Observable.Return<Action?>(null)).Replay(1).RefCount();
-        OpenSettingsCommand = ReactiveCommand.CreateFromObservable(
-            () => settings.Take(1).Do(open => open?.Invoke()).Select(_ => Unit.Default),
+        var settings        = settingsAction ?? Observable.Return<Action?>(null);
+        settings.Subscribe(open => _openSettings = open);
+        OpenSettingsCommand = ReactiveCommand.Create(
+            () => _openSettings?.Invoke(),
             settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
         var offersSignIn    = requestSignIn is not null;

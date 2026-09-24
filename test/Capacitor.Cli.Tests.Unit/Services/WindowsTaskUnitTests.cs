@@ -37,6 +37,15 @@ public class WindowsTaskUnitTests {
     }
 
     [Test]
+    public async Task EnvFromWrapper_reads_back_what_the_wrapper_sets() {
+        var spec = Spec() with { Environment = new Dictionary<string, string> { ["KCAP_PROFILE"] = "work", ["X"] = "50%done" } };
+
+        var env = WindowsTaskUnit.EnvFromWrapper(WindowsTaskUnit.Wrapper(spec));
+
+        await Assert.That(env).IsEquivalentTo(new Dictionary<string, string> { ["KCAP_PROFILE"] = "work", ["X"] = "50%done" });
+    }
+
+    [Test]
     public async Task BinaryFromWrapper_unescapes_doubled_percent() {
         var spec = Spec() with { DaemonBinaryPath = @"C:\dir%x\kcap-daemon.exe" };
         await Assert.That(WindowsTaskUnit.BinaryFromWrapper(WindowsTaskUnit.Wrapper(spec)))

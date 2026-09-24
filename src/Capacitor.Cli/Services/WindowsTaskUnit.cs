@@ -248,6 +248,21 @@ static class WindowsTaskUnit {
     /// since the wrapper can survive while the baked kcap-daemon.exe path is stale.
     /// Reverses the <c>%%</c> cmd-escaping applied at write time.
     /// </summary>
+    /// The environment the wrapper sets, read back from its <c>set "K=V"</c> lines with the
+    /// <c>%%</c> escaping reversed — the Windows counterpart of the launchd plist's EnvironmentVariables.
+    public static Dictionary<string, string> EnvFromWrapper(string wrapperText) {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in wrapperText.Split('\n')) {
+            var line = raw.TrimEnd('\r');
+            if (!line.StartsWith("set \"", StringComparison.Ordinal) || !line.EndsWith('"')) continue;
+            var body = line[5..^1];
+            var eq = body.IndexOf('=');
+            if (eq <= 0) continue;
+            env[body[..eq].Replace("%%", "%")] = body[(eq + 1)..].Replace("%%", "%");
+        }
+        return env;
+    }
+
     public static string? BinaryFromWrapper(string wrapperText) {
         var line = wrapperText.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.StartsWith('"'));
         if (line is null) return null;

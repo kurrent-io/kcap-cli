@@ -47,8 +47,23 @@ sealed class WindowsScheduledTaskServiceManager(
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
         var state = WindowsTaskUnit.StatusFromQuery(code, stdout);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
-        return new ServiceQuery(probe, File.Exists(wrapper), state, bin, null);
+        var jobPid = state == ServiceState.Running && OperatingSystem.IsWindows()
+            ? TaskOwnedPid(_daemonPid(serviceId), WindowsProcessTable.Snapshot())
+            : null;
+        return new ServiceQuery(probe, File.Exists(wrapper), state, bin, jobPid);
     }
+
+    /// The task's job pid, launchd's sense: the running daemon, when the task is what started it. The
+    /// action is `conhost --headless cmd /c wrapper`, so a daemon the task runs is a child of a live
+    /// cmd.exe that is itself a child of conhost.exe. A daemon started by hand has neither above it.
+    internal static int? TaskOwnedPid(int? daemonPid, IReadOnlyDictionary<int, WindowsProcessEntry> table) {
+        if (daemonPid is not { } pid || !table.TryGetValue(pid, out var daemon)) return null;
+        if (!table.TryGetValue(daemon.ParentPid, out var wrapper) || !IsImage(wrapper, "cmd.exe")) return null;
+        if (!table.TryGetValue(wrapper.ParentPid, out var host) || !IsImage(host, "conhost.exe")) return null;
+        return pid;
+    }
+
+    static bool IsImage(WindowsProcessEntry entry, string exe) => string.Equals(entry.ExeName, exe, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking schtasks.</summary>

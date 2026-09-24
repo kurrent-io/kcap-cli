@@ -748,7 +748,7 @@ public partial class App : Application {
             vm = new SettingsViewModel(settings, service, ops,
                 async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, _time, OneShotProbeTimeout, ct)).Reachable,
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
-                ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
+                ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS() || OperatingSystem.IsWindows(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
@@ -806,6 +806,19 @@ public partial class App : Application {
 
     static async Task<bool> RelaunchForSettingsAsync(
             IClassicDesktopStyleApplicationLifetime desktop, TimeProvider time, CancellationToken ct) {
+        // Windows has no bundle to reopen: a second copy of this executable is the relaunch, as
+        // `open -n` starts a second instance on macOS.
+        if (OperatingSystem.IsWindows()) {
+            if (Environment.ProcessPath is not { } exe) return false;
+            try {
+                using var next = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
+            } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) {
+                return false;
+            }
+            desktop.TryShutdown();
+            return true;
+        }
+
         if (InstallLocation.BundleRoot(Environment.ProcessPath) is not { } bundle) return false;
         var result = await new ProcessRunner(time).RunAsync("/usr/bin/open", ["-n", bundle],
             new RunOptions(Timeout: TimeSpan.FromSeconds(10)), ct);

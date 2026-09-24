@@ -137,12 +137,11 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        // --verify is a launchd-only slice for now: the engine's readiness/version check needs a
-        // manager that actually implements a verify-aware WriteAndBootstrap, and the on-disk
-        // recheck needs GenerateFiles to return exactly one file (Windows returns two). Reject
-        // early and clearly rather than let either assumption fail deep inside the transaction.
-        if (verify && manager is not LaunchdServiceManager) {
-            await Console.Error.WriteLineAsync("install --verify is only supported on macOS (launchd) in this release.");
+        // --verify needs a manager whose Query reports the job's own pid. launchd runs the full
+        // transaction engine; a Windows Scheduled Task runs WindowsServiceVerify below. systemd has
+        // neither yet, so it is refused here rather than failing deep inside a transaction.
+        if (verify && manager is not (LaunchdServiceManager or WindowsScheduledTaskServiceManager)) {
+            await Console.Error.WriteLineAsync("install --verify is only supported on macOS (launchd) and Windows in this release.");
             return 1;
         }
 
@@ -171,10 +170,13 @@ sealed class DaemonServiceCommands(
             // to a valid server URL here too, so the transaction never destroys a working unit only to
             // install one whose daemon would exit config-invalid and never satisfy readiness.
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
-            var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
-                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
-                time, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable);
-            var exit   = await engine.InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
+            var exit = manager is WindowsScheduledTaskServiceManager
+                ? await NewWindowsVerify(() => profileUrlValid)
+                    .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId)
+                : await new ServiceVerify(store, root, (LaunchdServiceManager)manager,
+                        n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
+                        time, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable)
+                    .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
             if (exit != VerifyExit.Ok) return exit;
         } else {
             // Plain (non-verify) install serializes on the same per-label lock every other mutating
@@ -265,20 +267,31 @@ sealed class DaemonServiceCommands(
     }
 
     /// <summary>
-    /// Routes plain vs <c>--verify</c> starts. <c>--verify</c> is gated to launchd like
-    /// <see cref="Install"/>'s own gate — the engine's readiness/ownership poll needs a
-    /// manager whose WriteAndBootstrap/Query actually implement the verify algorithm.
+    /// Routes plain vs <c>--verify</c> starts. <c>--verify</c> needs a manager whose Query reports the
+    /// job's own pid: launchd, or a Windows Scheduled Task through <see cref="WindowsServiceVerify"/>.
     /// </summary>
     internal async Task<int> Start(string[] args) {
         if (!args.Contains("--verify")) return await StartPlain();
 
+        if (manager is WindowsScheduledTaskServiceManager) {
+            var exit = await NewWindowsVerify().StartVerifiedAsync(id);
+            if (exit == VerifyExit.Ok) {
+                try { await Console.Out.WriteLineAsync($"Service '{id}' started (verified)."); } catch (IOException) { }
+            }
+            return exit;
+        }
+
         if (manager is not LaunchdServiceManager) {
-            await Console.Error.WriteLineAsync("start --verify is only supported on macOS (launchd) in this release.");
+            await Console.Error.WriteLineAsync("start --verify is only supported on macOS (launchd) and Windows in this release.");
             return 1;
         }
 
         return await StartVerified();
     }
+
+    WindowsServiceVerify NewWindowsVerify(Func<bool>? profileViable = null) =>
+        new(store, manager, n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
+            profileViable);
 
     async Task<int> StartPlain() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
@@ -630,7 +643,9 @@ sealed class DaemonServiceCommands(
         if (!unitPresent) return (null, null, null, null);
 
         try {
-            var env = LaunchdUnit.EnvFromPlist(File.ReadAllText(LaunchdUnit.PlistPath(home, id)));
+            var env = manager is WindowsScheduledTaskServiceManager
+                ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(WindowsTaskUnit.WrapperPath(root, id)))
+                : LaunchdUnit.EnvFromPlist(File.ReadAllText(LaunchdUnit.PlistPath(home, id)));
             env.TryGetValue(ProfileOverrides.ProfileVar, out var profile);
             env.TryGetValue("KCAP_EXPECT_SERVER_URL", out var expectedServer);
             env.TryGetValue("KCAP_CONSENT_SEED_DEFAULT", out var consentSeed);
