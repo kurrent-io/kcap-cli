@@ -503,7 +503,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["target_key"] = new("string", "The dismissed suggestion's target_key."),
                 ["repo_hash"]  = new("string", "The repository scope to return the refreshed suggestions for, if any.")
-            }, ["target_key"]), McpToolAnnotations.Upsert),
+            }, ["target_key"]), McpToolAnnotations.Destructive),
 
         new("list_dismissed_next_work",
             "List the suggestions the user has dismissed, most recent first, with when and why each was dismissed.",

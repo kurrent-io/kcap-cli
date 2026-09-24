@@ -556,6 +556,14 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
+    public async Task Restore_next_work_is_destructive_because_it_removes_a_dismissal() {
+        var byName = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
+
+        await Assert.That(byName["restore_next_work"].Annotations).IsEqualTo(McpToolAnnotations.Destructive);
+        await Assert.That(byName["dismiss_next_work"].Annotations).IsEqualTo(McpToolAnnotations.Upsert);
+    }
+
+    [Test]
     public async Task Dispatch_dismiss_next_work_posts_the_target_key_to_the_dismissals_route() {
         var h = await DispatchAsync("dismiss_next_work", """{"target_key":"tk1"}""");
 
