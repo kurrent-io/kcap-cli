@@ -79,19 +79,19 @@ public static class KiroCrewParentResolver {
         }
 
         foreach (var dir in dirs) {
-            // A finished sub-agent keeps its state.json; tombstone.json covers one whose state was cleaned up.
-            var record = ReadObject(Path.Combine(dir.FullName, "state.json")) is { } state && GuidOf(state, "session_id") is not null
-                ? state
-                : ReadObject(Path.Combine(dir.FullName, "tombstone.json"));
-
-            if (record is null
-             || GuidOf(record, "session_id") is not { } session
-             || StringOf(record, "parent_session") is not { Length: > 0 } chat
-             || EpochOf(record, "started") is not { } started) continue;
-
-            yield return new(session, chat, started);
+            // A finished sub-agent keeps its state.json; tombstone.json covers one whose state is gone or incomplete.
+            if ((RecordFrom(Path.Combine(dir.FullName, "state.json")) ?? RecordFrom(Path.Combine(dir.FullName, "tombstone.json"))) is { } record)
+                yield return record;
         }
     }
+
+    static SubagentRecord? RecordFrom(string path) =>
+        ReadObject(path) is { } obj
+     && GuidOf(obj, "session_id") is { } session
+     && StringOf(obj, "parent_session") is { Length: > 0 } chat
+     && EpochOf(obj, "started") is { } started
+            ? new SubagentRecord(session, chat, started)
+            : null;
 
     static string? ParentFor(SubagentRecord record, JsonObject? map, string sessionsDir) {
         if (map?[record.Chat] is not JsonObject entry) return null;

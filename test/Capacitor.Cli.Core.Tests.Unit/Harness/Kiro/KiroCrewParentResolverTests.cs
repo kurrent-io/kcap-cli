@@ -62,6 +62,18 @@ public class KiroCrewParentResolverTests {
         await Assert.That(ParentOf(Child)).IsEqualTo(Parent);
     }
 
+    /// <summary>A state file missing a field the join needs does not hide a complete tombstone.</summary>
+    [Test]
+    public async Task An_incomplete_state_falls_back_to_a_complete_tombstone() {
+        SeedSessionMap();
+        SeedKiroSession(Parent, ChildStartedAt.AddMinutes(-5));
+        SeedSubagent("tombstone.json");
+        await File.WriteAllTextAsync(Path.Combine(Crew.SubagentsDir, "65eed35b", "state.json"),
+            $"{{\"id\": \"65eed35b\", \"session_id\": \"{Child}\", \"status\": \"running\"}}");
+
+        await Assert.That(ParentOf(Child)).IsEqualTo(Parent);
+    }
+
     /// <summary>Crew writes the child's session id a moment after spawn; until then there is no link.</summary>
     [Test]
     public async Task A_sub_agent_Crew_has_not_recorded_yet_resolves_to_nothing() {
