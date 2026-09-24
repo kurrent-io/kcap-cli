@@ -5,41 +5,35 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// The PATH shim step. Reuses PathShimInstaller as-is (AppleScript sudo, non-forcing
-/// symlink, post-install re-probe) and claims ShimOffered so the post-wizard ShimOfferCoordinator
-/// never re-offers this machine.
+/// The PATH shim step. Reuses the OS's ICliPathInstaller as-is and claims ShimOffered so the
+/// post-wizard ShimOfferCoordinator never re-offers this machine.
 public sealed class ShimStepViewModel : ReactiveObject, IWizardStep {
-    readonly PathShimInstaller _installer;
-    readonly IAppStateStore    _store;
-    readonly string?           _target;
-    readonly string            _destination;
+    readonly ICliPathInstaller? _installer;
+    readonly IAppStateStore     _store;
+    readonly string?            _target;
 
     bool    _offerClaimed;
     bool    _busy;
     bool    _satisfied;
     string? _message;
 
-    public ShimStepViewModel(bool applicable, PathShimInstaller installer, IAppStateStore store, string? target)
-        : this(applicable, installer, store, target, PathShimInstaller.Destination) { }
-
-    // Test seam mirroring ShimOfferCoordinator's own destination-override constructor (real filesystem taxonomy against a temp path, never the real /usr/local/bin/kcap).
-    internal ShimStepViewModel(
-            bool applicable, PathShimInstaller installer, IAppStateStore store, string? target, string destination) {
-        Applicable   = applicable;
+    public ShimStepViewModel(bool applicable, ICliPathInstaller? installer, IAppStateStore store, string? target) {
+        Applicable   = applicable && installer is not null;
         _installer   = installer;
         _store       = store;
         _target      = target;
-        _destination = destination;
 
         InstallCommand = ReactiveCommand.CreateFromTask(RunInstallAsync, this.WhenAnyValue(x => x.Idle));
     }
 
-    /// Pure decision: macOS AND a resolved absolute CLI path AND the login-shell
-    /// probe positively found no kcap on the terminal PATH. A null (unknown) probe fails quiet —
-    /// never offer on an inconclusive read. Called by the composition root with a pre-probed
-    /// value, since Applicable is sync and the probe is async.
-    public static bool ComputeApplicable(bool isMacOs, string? target, bool? kcapOnPath) =>
-        isMacOs && target is not null && kcapOnPath == false;
+    /// Pure decision: an installer for this OS AND a resolved absolute CLI path AND the PATH probe
+    /// positively found no kcap on the terminal PATH. A null (unknown) probe fails quiet — never
+    /// offer on an inconclusive read. Called by the composition root with a pre-probed value, since
+    /// Applicable is sync and the probe is async.
+    public static bool ComputeApplicable(bool hasInstaller, string? target, bool? kcapOnPath) =>
+        hasInstaller && target is not null && kcapOnPath == false;
+
+    public string Disclosure => _installer?.Disclosure ?? "";
 
     public WizardStepId Id         => WizardStepId.Shim;
     public string       Title      => "Command-line tool";
@@ -74,7 +68,7 @@ public sealed class ShimStepViewModel : ReactiveObject, IWizardStep {
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) => Task.FromResult(true);
 
     async Task RunInstallAsync() {
-        if (_target is null) {
+        if (_target is null || _installer is null) {
             Message = "kcap CLI not found";
             return;
         }
@@ -82,7 +76,7 @@ public sealed class ShimStepViewModel : ReactiveObject, IWizardStep {
         Busy = true;
         try {
             await ClaimOfferedOnceAsync().ConfigureAwait(false);
-            Apply(await _installer.InstallAsync(_target, _destination, CancellationToken.None).ConfigureAwait(false));
+            Apply(await _installer.InstallAsync(_target, CancellationToken.None).ConfigureAwait(false));
         } finally {
             Busy = false;
         }

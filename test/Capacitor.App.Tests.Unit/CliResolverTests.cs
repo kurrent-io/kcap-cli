@@ -65,7 +65,7 @@ public class CliResolverTests {
     public async Task ResolvePath_uses_the_bundle_sibling_when_present() {
         var sibling = Path.Combine("/Applications/Kurrent Capacitor.app/Contents/MacOS", "kcap");
 
-        var path = CliResolver.ResolvePath(_ => null, p => p == sibling, "/Applications/Kurrent Capacitor.app/Contents/MacOS");
+        var path = CliResolver.ResolvePath(_ => null, p => p == sibling, "/Applications/Kurrent Capacitor.app/Contents/MacOS", "kcap");
 
         await Assert.That(path).IsEqualTo(sibling);
     }
@@ -75,5 +75,20 @@ public class CliResolverTests {
         var path = CliResolver.ResolvePath(_ => "/opt/kcap/kcap", _ => true, "/Applications/Kurrent Capacitor.app/Contents/MacOS");
 
         await Assert.That(path).IsEqualTo("/opt/kcap/kcap");
+    }
+
+    [Test]
+    public async Task ResolvePath_finds_the_windows_sibling_by_its_exe_name() {
+        const string dir = @"C:\Users\me\AppData\Local\KurrentCapacitor\current";
+        var sibling = Path.Combine(dir, "kcap.exe");
+
+        var path = CliResolver.ResolvePath(_ => null, p => p == sibling, dir, "kcap.exe");
+
+        await Assert.That(path).IsEqualTo(sibling);
+    }
+
+    [Test]
+    public async Task BundledCliFileName_matches_the_platform() {
+        await Assert.That(CliResolver.BundledCliFileName).IsEqualTo(OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
     }
 }

@@ -18,6 +18,7 @@
     <Window.KeyBindings>
         <KeyBinding Gesture="Meta+N" Command="{Binding CloseWorkspaceCommand}" />
         <KeyBinding Gesture="Ctrl+N" Command="{Binding CloseWorkspaceCommand}" />
+        <KeyBinding Gesture="Ctrl+OemComma" Command="{Binding OpenSettingsCommand}" />
     </Window.KeyBindings>
     <!-- Rail | launcher-or-workspace. The right pane's empty state IS the launcher.
          Workspace content is a template so the terminal is only built once a session opens.

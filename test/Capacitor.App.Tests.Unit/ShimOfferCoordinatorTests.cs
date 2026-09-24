@@ -8,8 +8,8 @@ namespace Capacitor.App.Tests.Unit;
 /// The shim offer surface: the once-ever auto-offer gated on PhaseClosed + a positive
 /// probe result, and the "Install command-line tool…" tray item's independent visibility/manual
 /// retry. FakeLoginShellProbe and FakeLifecycleSurface are shared from
-/// DaemonLifecycleControllerTests.cs (same namespace); PathShimInstaller is real (sealed, no
-/// interface), driven through the internal destination-override constructor so nothing
+/// DaemonLifecycleControllerTests.cs (same namespace); PathShimInstaller is real, driven through
+/// its destination parameter so nothing
 /// here ever touches the real /usr/local/bin/kcap.
 public class ShimOfferCoordinatorTests {
     static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null, string what = "condition") {
@@ -70,16 +70,16 @@ public class ShimOfferCoordinatorTests {
         public readonly ShimOfferCoordinator Coordinator;
 
         public Harness(
-                bool immediatePhaseClosed = false, bool noTarget = false, Func<bool>? isMacOs = null,
+                bool immediatePhaseClosed = false, bool noTarget = false, bool noInstaller = false,
                 bool autoOfferSuppressed = false) {
             Target      = noTarget ? null : Path.Combine(TempDir, "target-cli");
             Destination = Path.Combine(TempDir, "kcap");
-            Installer   = new PathShimInstaller(Runner, Probe);
+            Installer   = new PathShimInstaller(Runner, Probe, Destination);
 
             var phaseClosed = immediatePhaseClosed ? Task.CompletedTask : PhaseClosedSource.Task;
             Coordinator = new ShimOfferCoordinator(
-                phaseClosed, Probe, Installer, Store, Surface, Target, CancellationToken.None, Destination,
-                isMacOs ?? (() => true), autoOfferSuppressed);
+                phaseClosed, Probe, noInstaller ? null : Installer, Store, Surface, Target, CancellationToken.None,
+                autoOfferSuppressed);
             Coordinator.Offerable.Subscribe(OfferableValues.Add);
         }
 
@@ -113,11 +113,11 @@ public class ShimOfferCoordinatorTests {
         await WaitUntilAsync(() => h.OfferableValues.Contains(true), what: "the item to become visible");
     }
 
-    // ---- macOS-only, no-op elsewhere ----
+    // ---- no installer for this OS: a no-op ----
 
     [Test]
-    public async Task Off_macOS_never_probes_never_offers_and_the_menu_item_stays_hidden() {
-        using var h = new Harness(immediatePhaseClosed: true, isMacOs: () => false);
+    public async Task Without_an_installer_never_probes_never_offers_and_the_menu_item_stays_hidden() {
+        using var h = new Harness(immediatePhaseClosed: true, noInstaller: true);
         var probed = false;
         h.Probe.KcapOnPathBehavior = _ => { probed = true; return Task.FromResult<bool?>(false); };
         h.Coordinator.Start();
@@ -129,8 +129,8 @@ public class ShimOfferCoordinatorTests {
     }
 
     [Test]
-    public async Task Off_macOS_manual_install_is_a_no_op_no_installer_spawn() {
-        using var h = new Harness(isMacOs: () => false);
+    public async Task Without_an_installer_manual_install_is_a_no_op_no_installer_spawn() {
+        using var h = new Harness(noInstaller: true);
 
         await h.Coordinator.RunManualInstallAsync();
 
@@ -184,7 +184,7 @@ public class ShimOfferCoordinatorTests {
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the shim offer dialog");
         await Assert.That(h.OfferableValues).Contains(true);
         await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindShim);
-        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(ShimOfferCoordinator.ShimDisclosure);
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(h.Installer.Disclosure);
         await Assert.That(h.Surface.Prompts[0].PathDegraded).IsFalse();
     }
 

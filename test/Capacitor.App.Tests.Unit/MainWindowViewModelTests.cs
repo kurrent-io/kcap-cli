@@ -1147,4 +1147,17 @@ public class MainWindowViewModelTests {
             await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl]);
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Changelog_opens_through_the_link_policy() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var opener = new RecordingOpener();
+            var vm = NewVm(new FakeDaemonClientService(), opener: opener);
+
+            await vm.OpenChangelogCommand.Execute().ToTask();
+
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.ChangelogUrl]);
+        });
+    }
 }

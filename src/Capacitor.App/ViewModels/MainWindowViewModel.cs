@@ -159,6 +159,18 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// a tenant is exactly the one who needs the docs.
     public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }
 
+    public ReactiveCommand<Unit, Unit> OpenChangelogCommand { get; }
+
+    /// Enabled once the app has a Settings window to open — the same action the app menu and tray
+    /// use.
+    public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+
+    /// Off macOS no native app menu is drawn, so Settings, the changelog and the version ride the
+    /// rail's help flyout instead.
+    public bool AppMenuInWindow { get; }
+
+    public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
+
     /// Opens the bug/feedback window for one category; inert without an action to route it to.
     public ReactiveCommand<FeedbackCategory, Unit> OpenFeedbackCommand { get; }
 
@@ -262,7 +274,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
-            Action? requestSignIn = null) {
+            Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
+            bool? appMenuInWindow = null) {
         _service = service;
         _time = time;
         Activity = activity;
@@ -279,6 +292,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         CanOpenFeedback     = openFeedback is not null;
         OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
         OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
+        OpenChangelogCommand = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.ChangelogUrl));
+        AppMenuInWindow     = appMenuInWindow ?? !OperatingSystem.IsMacOS();
+        var settings        = (settingsAction ?? Observable.Return<Action?>(null)).Replay(1).RefCount();
+        OpenSettingsCommand = ReactiveCommand.CreateFromObservable(
+            () => settings.Take(1).Do(open => open?.Invoke()).Select(_ => Unit.Default),
+            settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
         var offersSignIn    = requestSignIn is not null;
 

@@ -800,6 +800,54 @@ public class MainWindowSmokeTests {
         }
     });
 
+    /// Off macOS the help flyout carries the app menu's Settings, Changelog and version — the only
+    /// in-window route to Settings where no native menu bar is drawn. Settings stays inert until the
+    /// app hands it an action.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(true)]
+    [Arguments(false)]
+    public Task Rail_help_carries_the_app_menu_when_no_native_menu_is_drawn(bool inWindow) => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var settings = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
+        var opened = 0;
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            settingsAction: settings, appMenuInWindow: inWindow);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+
+            var items = rail.FindControl<StackPanel>("RailAppMenuItems")!;
+            var settingsButton = rail.FindControl<Button>("RailHelpSettingsButton")!;
+            await Assert.That(items.IsVisible).IsEqualTo(inWindow);
+            await Assert.That(settingsButton.Content).IsEqualTo("Settings…");
+            await Assert.That(rail.FindControl<Button>("RailHelpChangelogButton")!.Content).IsEqualTo("Changelog");
+            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Kurrent Capacitor ");
+            await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
+
+            settings.OnNext(() => opened++);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(settingsButton.IsEffectivelyEnabled).IsTrue();
+            settingsButton.Command!.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(opened).IsEqualTo(1);
+
+            flyout.Hide();
+            Dispatcher.UIThread.RunJobs();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     /// Hover copy names what each footer fragment is. Extra info the compact row dropped (URL,
     /// lane diagnostic, pending-update copy) sits on the lighter line; the fragment's name is
     /// the darker caption under it, or the whole tip when there is nothing extra. Visible

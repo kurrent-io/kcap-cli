@@ -60,7 +60,7 @@ internal sealed record WizardGraphOptions(
     Func<MutationRequest, CancellationToken, Task<MutationOutcome>>              RunMutation,
     IDaemonObservation                                                           Observation,
     IAppStateStore                                                               AppState,
-    PathShimInstaller                                                            ShimInstaller,
+    ICliPathInstaller?                                                           ShimInstaller,
     IUrlOpener                                                                   UrlOpener,
     ILoginShellProbe                                                             Probe,
     Func<ILoginShellProbe, Func<CancellationToken, Task<IReadOnlySet<HarnessId>>>> DetectionFeed,
