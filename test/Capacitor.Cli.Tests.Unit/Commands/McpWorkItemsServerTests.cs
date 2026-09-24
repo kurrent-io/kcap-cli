@@ -108,7 +108,8 @@ public class McpWorkItemsServerTests {
             "declare_work_breakdown", "retract_work_breakdown",
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
-            "merge_work_item", "detach_work_item"
+            "merge_work_item", "detach_work_item",
+            "dismiss_next_work", "restore_next_work", "list_dismissed_next_work"
         });
     }
 
@@ -540,6 +541,88 @@ public class McpWorkItemsServerTests {
         await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
         await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends/declare");
         await Assert.That(h.Body).IsEqualTo("""{"session_id":"s1","text":"Add the retry test"}""");
+    }
+
+    [Test]
+    public async Task Next_work_tools_declare_target_key_required_and_repo_hash_optional() {
+        var byName = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
+
+        foreach (var name in (string[])["dismiss_next_work", "restore_next_work"]) {
+            await Assert.That(byName[name].InputSchema.Required).IsEquivalentTo(new[] { "target_key" });
+            await Assert.That(byName[name].InputSchema.Properties.Keys).IsEquivalentTo(new[] { "target_key", "repo_hash" });
+        }
+
+        await Assert.That(byName["list_dismissed_next_work"].InputSchema.Required).IsEmpty();
+    }
+
+    [Test]
+    public async Task Dispatch_dismiss_next_work_posts_the_target_key_to_the_dismissals_route() {
+        var h = await DispatchAsync("dismiss_next_work", """{"target_key":"tk1"}""");
+
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/next-work/dismissals");
+        await Assert.That(h.Body).IsEqualTo("""{"target_key":"tk1"}""");
+    }
+
+    [Test]
+    public async Task Dispatch_dismiss_next_work_carries_repo_hash_when_supplied() {
+        var h = await DispatchAsync("dismiss_next_work", """{"target_key":"tk1","repo_hash":"rh1"}""");
+
+        await Assert.That(h.Body).IsEqualTo("""{"target_key":"tk1","repo_hash":"rh1"}""");
+    }
+
+    [Test]
+    public async Task Dispatch_restore_next_work_targets_the_restore_route() {
+        var h = await DispatchAsync("restore_next_work", """{"target_key":"tk1"}""");
+
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/next-work/dismissals/restore");
+        await Assert.That(h.Body).IsEqualTo("""{"target_key":"tk1"}""");
+    }
+
+    [Test]
+    public async Task Dispatch_list_dismissed_next_work_is_a_GET_with_no_body() {
+        var h = await DispatchAsync("list_dismissed_next_work", "{}");
+
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Get);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/next-work/dismissals");
+        await Assert.That(h.Body).IsNull();
+    }
+
+    sealed class FixedStatusHandler(System.Net.HttpStatusCode status, string body) : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+    }
+
+    [Test]
+    public async Task A_not_presented_refusal_surfaces_as_a_tool_error_naming_it() {
+        using var client = new HttpClient(new FixedStatusHandler(System.Net.HttpStatusCode.Conflict, """{"code":"not_presented","message":"no longer presented"}"""));
+        var request = new JsonObject {
+            ["params"] = new JsonObject {
+                ["name"]      = "dismiss_next_work",
+                ["arguments"] = JsonNode.Parse("""{"target_key":"tk1"}""")
+            }
+        };
+
+        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x");
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains("not_presented");
+    }
+
+    [Test]
+    public async Task Dispatch_of_a_next_work_tool_with_a_missing_target_key_never_reaches_the_network() {
+        var h = await DispatchAsync("dismiss_next_work", "{}");
+
+        await Assert.That(h.Calls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Server_instructions_point_at_the_next_work_dismiss_tools() {
+        var instructions = McpWorkItemsServer.ServerInstructions;
+
+        await Assert.That(instructions).Contains("dismiss_next_work");
+        await Assert.That(instructions).Contains("restore_next_work");
     }
 
     [Test]

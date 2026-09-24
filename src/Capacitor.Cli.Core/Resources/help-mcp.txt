@@ -108,12 +108,13 @@ mcp memory:
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
 mcp workitems:
-  Exposes ten tools for agents to attach the current session (and its
+  Exposes thirteen tools for agents to attach the current session (and its
   continuation chain) to an SDLC work item, to DECLARE that work item's
   structure — its breakdown (parent -> parts) and dependencies (blocks /
-  blocked-by) — and to record the loose ends a session leaves unfinished.
-  Breakdown and relations are declared, never inferred, so an item whose
-  structure nobody declares has an empty topology. Requires `kcap login`.
+  blocked-by) — to record the loose ends a session leaves unfinished, and to
+  dismiss or restore next-work suggestions. Breakdown and relations are
+  declared, never inferred, so an item whose structure nobody declares has an
+  empty topology. Requires `kcap login`.
 
     Tools:
       declare_work_item        Attach the current session to a work item by
@@ -139,6 +140,13 @@ mcp workitems:
                                 survives (work_item_id, into_work_item_id).
       detach_work_item         Durably detach a session from a work item it
                                 was wrongly attached to.
+      dismiss_next_work        Record that the user turned down a presented
+                                next-work suggestion (target_key, optional
+                                repo_hash), so it stops being offered.
+      restore_next_work        Undo a dismissal so the suggestion can be
+                                offered again.
+      list_dismissed_next_work List the suggestions the user has dismissed,
+                                most recent first.
 
   Registered for every supported harness by `kcap setup` / `kcap plugin
   install` (Claude Code reads it from the plugin's `.mcp.json`).

@@ -710,9 +710,9 @@ At SessionStart (Claude Code), `kcap` also injects a compact **index** of the me
 kcap mcp workitems
 ```
 
-Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, **declare that work item's structure** — its breakdown into parts and its blocks/blocked-by dependencies — and read that structure back. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
+Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, **declare that work item's structure** — its breakdown into parts and its blocks/blocked-by dependencies — read that structure back, and dismiss or restore next-work suggestions. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
 
-It provides ten tools:
+It provides thirteen tools:
 
 - **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (a tracker key such as `"AI-1234"`, an issue number in the session's repository such as `"#123"`, a qualified `"owner/repo#123"`, or a GitHub issue URL), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
 - **`get_session_work_items`** — list the work items the current session is attached to.
@@ -724,6 +724,9 @@ It provides ten tools:
 - **`get_work_item_topology`** — read a work item's parent, parts, and dependencies (scoped to what the caller can see).
 - **`merge_work_item`** — merge a duplicate item into another (`work_item_id` → `into_work_item_id`): its sessions and links move to the survivor. Refused when a user marked either item standalone, rejected the pairing, or the items sit in different tracker hierarchies.
 - **`detach_work_item`** — detach a session from a work item it was wrongly attached to; durable against automated re-attach, and unable to remove a user-pinned attachment.
+- **`dismiss_next_work`** — record that the user turned down a presented next-work suggestion (`target_key`, optional `repo_hash`), so it stops being offered. Call it only after the user has said they won't do it; the response's `page_one` is what to offer next, and a `not_presented` refusal means the item is no longer a current suggestion.
+- **`restore_next_work`** — undo a dismissal so the suggestion can be offered again; restoring something not dismissed succeeds and changes nothing.
+- **`list_dismissed_next_work`** — list the suggestions the user has dismissed, most recent first, with when and why each was dismissed.
 
 `declare_work_item` / `get_session_work_items` / `declare_loose_end` / `detach_work_item` default `session_id` to the session the MCP server runs in (Claude Code's `CLAUDE_CODE_SESSION_ID`, else `KCAP_SESSION_ID` or Codex's `CODEX_THREAD_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
 

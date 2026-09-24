@@ -147,7 +147,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         "work — a title-only item you created and the issue/PR-keyed item the server minted — are a " +
         "duplicate: merge yours into the keyed one with merge_work_item. A wrong attach is undone with " +
         "detach_work_item, never papered over with a breakdown. Work you leave unfinished goes in with " +
-        "declare_loose_end — one call per concrete item, and never a 'none'.";
+        "declare_loose_end — one call per concrete item, and never a 'none'. When the user turns a presented " +
+        "next-work suggestion down, record it with dismiss_next_work; restore_next_work undoes it.";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -178,6 +179,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "declare_work_item"      => await client.PostAsync($"{baseUrl}/api/work-items/declare", ToJsonContent(BuildDeclareBody(arguments))),
                 "get_session_work_items" => await client.GetAsync(BuildSessionUrl(baseUrl, arguments)),
                 "declare_loose_end"      => await client.PostAsync($"{baseUrl}/api/loose-ends/declare", ToJsonContent(BuildDeclareLooseEndBody(arguments))),
+
+                "dismiss_next_work"        => await client.PostAsync($"{baseUrl}/api/next-work/dismissals", ToJsonContent(BuildNextWorkTargetBody(arguments))),
+                "restore_next_work"        => await client.PostAsync($"{baseUrl}/api/next-work/dismissals/restore", ToJsonContent(BuildNextWorkTargetBody(arguments))),
+                "list_dismissed_next_work" => await client.GetAsync($"{baseUrl}/api/next-work/dismissals"),
 
                 // The declared breakdown/relation surface. Every id is a
                 // REQUIRED argument here, unlike session_id: there is no ambient "current work item"
@@ -315,6 +320,14 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     // Text bounds and the none-class rule stay the server's, so its 400 names the real reason.
     internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) =>
         new() { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
+
+    internal static JsonObject BuildNextWorkTargetBody(JsonObject? args) {
+        var body = new JsonObject { ["target_key"] = McpToolArguments.RequireString(args, "target_key") };
+
+        if (McpToolArguments.OptionalString(args, "repo_hash") is { } repoHash) body["repo_hash"] = repoHash;
+
+        return body;
+    }
 
     static void CopySuppliedString(JsonObject? args, string key, JsonObject body) {
         if (args is null || !args.TryGetPropertyValue(key, out var node)) return;
@@ -474,6 +487,26 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["work_item_id"] = new("string", "The work item to detach the session from."),
                 ["session_id"]   = new("string", "Session id to detach. Defaults to the session this server runs in when omitted.")
-            }, ["work_item_id"]), McpToolAnnotations.Destructive)
+            }, ["work_item_id"]), McpToolAnnotations.Destructive),
+
+        new("dismiss_next_work",
+            "Record that the user turned down a next-work suggestion, so it stops being offered. Call it only "
+          + "when the user has said they will not do it. The response's page_one is what to offer next. "
+          + "A not_presented refusal means the item is no longer a current suggestion.",
+            new("object", new() {
+                ["target_key"] = new("string", "The suggestion's target_key, exactly as the next-work feed returned it."),
+                ["repo_hash"]  = new("string", "The repository scope the suggestions were read under, if any.")
+            }, ["target_key"]), McpToolAnnotations.Upsert),
+
+        new("restore_next_work",
+            "Undo a dismissal so the suggestion can be offered again. Restoring something not dismissed succeeds and changes nothing.",
+            new("object", new() {
+                ["target_key"] = new("string", "The dismissed suggestion's target_key."),
+                ["repo_hash"]  = new("string", "The repository scope to return the refreshed suggestions for, if any.")
+            }, ["target_key"]), McpToolAnnotations.Upsert),
+
+        new("list_dismissed_next_work",
+            "List the suggestions the user has dismissed, most recent first, with when and why each was dismissed.",
+            new("object", new(), []), McpToolAnnotations.Read)
     ];
 }
