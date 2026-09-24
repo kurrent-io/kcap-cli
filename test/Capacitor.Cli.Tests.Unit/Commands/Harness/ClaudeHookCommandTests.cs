@@ -46,13 +46,19 @@ public class ClaudeHookCommandTests {
     static void ThrottleHarnessNudge(ConfigRoot root) =>
         new HarnessOfferStore(root, TimeProvider.System).TryClaimCheck(HarnessNudgeEmitter.CheckThrottle);
 
+    // Repo detection spawns git when the cwd is on disk, and those probes are capped at the
+    // remaining hook budget. A slow one leaves nothing for the POST, the event is spooled, and
+    // an assertion on the live request never sees it.
+    static string AbsentCwd(TempDir tmp) => tmp.PathTo("missing").Replace("\\", "\\\\");
+
     [Before(Test)]
     public void ThrottleNudgeForThisRoot() => ThrottleHarnessNudge(Config.Root);
 
     [Test]
     public async Task session_start_posts_to_session_start_route() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}""");
         await Assert.That(fx.RouteOrder).Contains("session-start");
     }
 
@@ -132,13 +138,14 @@ public class ClaudeHookCommandTests {
     /// one of them is lost — and a second object would cost the reader both.</summary>
     [Test, NotInParallel]
     public async Task session_start_merges_a_policy_degradation_into_the_401_notice() {
+        using var absent = new TempDir();
         File.WriteAllText(Config.Root.Path("approvals.yaml"), "version: 1\nenforcement: strict\n");
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
         var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
             stdout: stdout);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -229,12 +236,13 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task memory_store_initialization_failure_does_not_suppress_session_start_capture() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         MemoryStoreProbe.Poison(Config.Root);
 
         var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""));
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.RouteOrder).Contains("session-start");
@@ -242,13 +250,14 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task disabled_memory_index_does_not_construct_the_lease_store() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]"""; // decoy — must never be fetched
         var hook = new ClaudeHookCommand(Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""));
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
         // The store creates its root on construction, so an absent directory is the guard having
@@ -262,6 +271,7 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task update_check_off_suppresses_the_in_agent_nudge_even_when_server_reports_a_newer_version() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root) { RespondJson = """{"version": "999.0.0"}""" };
         var stdout = new StringWriter();
 
@@ -269,7 +279,7 @@ public class ClaudeHookCommandTests {
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
 
             stdout: stdout);
 
@@ -285,6 +295,7 @@ public class ClaudeHookCommandTests {
     /// never produces one.</summary>
     [Test, NotInParallel]
     public async Task update_check_on_still_emits_the_in_agent_nudge_for_a_newer_server_version() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root) { RespondJson = """{"version": "999.0.0"}""" };
         var stdout = new StringWriter();
 
@@ -292,7 +303,7 @@ public class ClaudeHookCommandTests {
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
 
             stdout: stdout);
 
@@ -311,6 +322,7 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task session_start_joins_lessons_nudge_and_memory_fragments_in_order() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         const string responseJson =
             """{"top_clusters":[{"text":"seal secrets","category":"safety"},{"text":"run tests first","category":"agent_guidance"}],"version":"999.999.999"}""";
@@ -319,7 +331,7 @@ public class ClaudeHookCommandTests {
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         var responseNode     = JsonNode.Parse(responseJson);
@@ -347,13 +359,14 @@ public class ClaudeHookCommandTests {
     // can't silently route Claude through the composite and double-fetch/reorder its envelope.
     [Test, NotInParallel]
     public async Task session_start_never_issues_a_guidelines_get() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = """{"top_clusters":[{"text":"seal secrets","category":"safety"}],"version":"1.0.0"}""";
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, _) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.MemoryIndexRequested).IsTrue();
@@ -364,13 +377,14 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task session_start_with_only_a_ready_memory_index_emits_just_the_memory_fragment() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}"; // no top_clusters/version — lessons and nudge fragments are both null
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         var expectedMemory   = MemoryIndexEmitter.BuildFragment(JsonNode.Parse(fx.MemoryIndexBody), disabled: false);
@@ -383,13 +397,14 @@ public class ClaudeHookCommandTests {
     public async Task session_start_with_an_empty_memory_index_array_emits_nothing() {
         // CompleteWithoutContext disposition (a successful, empty fetch) — with no lessons/nudge
         // either, BuildEnvelope collapses to null and NOTHING is written to stdout at all.
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}";
         fx.MemoryIndexBody = "[]";
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.MemoryIndexRequested).IsTrue();
         await Assert.That(stdout).IsEqualTo("");
@@ -400,13 +415,14 @@ public class ClaudeHookCommandTests {
         // End of the whole path: the CLI asks for projects, the server answers in the object shape,
         // and the lead-in reaches the harness envelope. The index is deliberately EMPTY, so the
         // projects are the only thing keeping the hook from writing nothing at all.
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}";
         fx.MemoryIndexBody = """{"entries":[],"projects":[{"slug":"capacitor","name":"Kurrent Capacitor"}]}""";
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
         var query = fx.MemoryIndexQuery;
@@ -422,6 +438,7 @@ public class ClaudeHookCommandTests {
     public async Task session_start_with_a_204_memory_index_response_emits_nothing() {
         // The provider special-cases 204 NoContent as CompleteWithoutContext without even
         // reading a body.
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}";
         fx.MemoryIndexStatus = HttpStatusCode.NoContent;
@@ -429,7 +446,7 @@ public class ClaudeHookCommandTests {
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.MemoryIndexRequested).IsTrue();
         await Assert.That(stdout).IsEqualTo("");
@@ -440,6 +457,7 @@ public class ClaudeHookCommandTests {
         // RetryableFailure disposition — fail-open: the hook still succeeds and nothing about
         // the memory fetch surfaces in the envelope (there is none, since lessons/nudge are
         // absent here too).
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}";
         fx.MemoryIndexStatus = HttpStatusCode.InternalServerError;
@@ -447,7 +465,7 @@ public class ClaudeHookCommandTests {
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.MemoryIndexRequested).IsTrue();
         await Assert.That(stdout).IsEqualTo("");
@@ -458,11 +476,12 @@ public class ClaudeHookCommandTests {
         // Once the shared lease store commits a disposition — Ready OR CompleteWithoutContext —
         // for a session_id, a later SessionStart for that SAME session never re-fetches: a
         // resolved, non-repeating lifecycle is exactly-once, not "repeat until non-empty".
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}";
         fx.MemoryIndexBody = "[]"; // CompleteWithoutContext on the first call
         var sid = Guid.NewGuid().ToString("N");
-        var payload = $$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}""";
+        var payload = $$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""";
 
         var (exit1, stdout1) = await RunCapturingStdoutAsync(() => fx.HandleAsync(payload));
         await Assert.That(exit1).IsEqualTo(0);
@@ -484,6 +503,7 @@ public class ClaudeHookCommandTests {
         // remaining hook budget: a GET that outlives that budget yields a null fragment
         // (fail-open) without delaying — or breaking — the lessons fragment the same response
         // already carries.
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.MemoryIndexDelay = TimeSpan.FromSeconds(30); // never resolves inside the session-start budget
         fx.RespondJson = """{"top_clusters":[{"text":"seal secrets","category":"safety"}]}""";
@@ -497,7 +517,7 @@ public class ClaudeHookCommandTests {
         var sw  = System.Diagnostics.Stopwatch.StartNew();
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
             fx.HandleAsync(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
@@ -530,12 +550,13 @@ public class ClaudeHookCommandTests {
         // GET-succeeds-but-POST-fails: the POST failure short-circuits BEFORE the response is
         // ever read, so no envelope is built at all — even a Ready memory fragment never
         // surfaces. The memory task may be left running in the background (abandoned).
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(stdout).IsEqualTo("");
@@ -546,11 +567,12 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task session_start_advertises_the_coordination_notices_capability_by_default() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, _) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
@@ -560,11 +582,12 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task disable_coordination_notices_omits_the_capability_from_the_post() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, profile: new Profile { DisableCoordinationNotices = true });
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, _) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
@@ -574,13 +597,14 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task session_start_renders_coordination_notices_from_the_response() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root) {
             RespondJson = """{"coordination_notices":[{"text":"Sam is also on AUTH-12"},{"text":"+2 more in the notification centre"}]}"""
         };
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
@@ -594,13 +618,14 @@ public class ClaudeHookCommandTests {
     /// the block (and the capability), not that the fixture never produced one.</summary>
     [Test, NotInParallel]
     public async Task disable_coordination_notices_suppresses_both_the_capability_and_the_render() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, profile: new Profile { DisableCoordinationNotices = true }) {
             RespondJson = """{"coordination_notices":[{"text":"Sam is also on AUTH-12"}]}"""
         };
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         // Capability never sent.
@@ -616,11 +641,12 @@ public class ClaudeHookCommandTests {
     [Test, NotInParallel]
     public async Task malformed_coordination_notices_field_does_not_fail_the_hook() {
         // Server echoes the capability token back as a bare string instead of the {text}[] array.
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root) { RespondJson = """{"coordination_notices":"v1"}""" };
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(stdout).DoesNotContain("## Coordination notices");
@@ -631,11 +657,12 @@ public class ClaudeHookCommandTests {
     /// coordination notices delivered that the replay can't render into a live agent.</summary>
     [Test, NotInParallel]
     public async Task transient_post_failure_spools_a_body_without_the_coordination_notices_capability() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError); // 5xx → transient → spooled
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, _) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         // The live POST DID advertise the capability...
@@ -678,15 +705,11 @@ public class ClaudeHookCommandTests {
         await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.Path);
     }
 
-    // The cwd must not exist. Repo detection spawns git there, and those probes are capped at
-    // the whole remaining hook budget: a slow one leaves nothing for the POST, the event is
-    // spooled, and the assertion below never sees a request.
     [Test]
     public async Task session_start_omits_workspace_root_when_cwd_has_no_git_repo() {
-        using var tmp = new TempDir();
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
-        var cwd = tmp.PathTo("missing").Replace("\\", "\\\\");
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{cwd}}"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}""");
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
@@ -731,8 +754,9 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task session_start_on_failure_is_spooled_with_minimal_body() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp","source":"startup"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""");
         var files = fx.SpoolFiles.ToList();
         await Assert.That(files.Count).IsEqualTo(1);
         var content = await File.ReadAllTextAsync(files[0]);
@@ -743,12 +767,13 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task session_start_on_401_exits_zero_and_nudges_the_user_to_log_in() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
         var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
 
             stdout: stdout);
 
@@ -765,12 +790,13 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task session_start_on_401_is_spooled_for_replay_after_login() {
+        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
         await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
-                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
             stdout: stdout);
 
         var files = fx.SpoolFiles.ToList();
