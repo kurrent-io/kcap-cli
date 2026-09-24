@@ -225,6 +225,13 @@ kcap import --antigravity       # only Antigravity
 
 Sessions are imported most-recent-first, so your latest work appears in the dashboard earliest.
 
+For an ended Claude or Codex session with omitted large file-tool records, preview
+recovery with `kcap import --session <id> --repair-capture --dry-run`, then run the
+same command without `--dry-run` to apply it. Deploy server recovery support first;
+see [targeted capture recovery](#targeted-capture-recovery) for limits and exit codes.
+
+Transcript uploads redact secrets before sending. Large records are preserved within the 4 MiB UTF-8 limit; records that cannot be safely processed produce a capture-loss warning and a numbered marker, so file totals or plans may be incomplete.
+
 > **Already-running sessions.** On a *first* `plugin install --kiro`, any Kiro session already running loaded no kcap integration, so it isn't captured live — the install names it and where it is. It is not lost: the agent writes its transcript to disk regardless, so `kcap import --kiro` backfills it once it ends. kcap deliberately does not offer to restart it, which would mean killing an interactive session on a terminal it does not own with no way to relaunch it. Nothing is printed when there is no such session, or when you re-run an install you already had — that session started *with* the integration and is being captured.
 
 > **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Because Pi also ships no built-in MCP, the same command installs an MCP-bridge extension (`~/.pi/agent/extensions/kcap-mcp.ts`, opt out `--skip-pi-mcp`) that exposes the kcap MCP servers as native Pi tools, plus a steering block in `~/.pi/agent/AGENTS.md` (opt out `--skip-pi-instructions`). Historical `kcap import --pi` works with or without any of it.
@@ -841,6 +848,43 @@ not under your home directory. Off by default.
 
 
 ### Loading historical sessions
+
+Live capture and import use the same bounded secret redaction. Each record and each batch of encoded lines is limited to 4 MiB of UTF-8 content. If a record exceeds the size or processing bounds, the CLI reports the reason and uploads a capture-loss marker at its source line number. Other records continue importing. Install server support for capture-loss markers before rolling out this CLI behavior so session details can display the warning.
+
+#### Targeted capture recovery
+
+```bash
+kcap import --session <id> --repair-capture --dry-run
+kcap import --session <id> --repair-capture
+```
+
+Recovery supports **Claude and Codex** sessions that you own and that have ended.
+It scans the local root and discovered child transcripts, redacts each line, and
+compares them with existing server streams. It restores provably missing supported
+file-tool records and refreshes turn cards, file totals and summaries. Other omitted
+records can remain as reported gaps. It creates no new sessions or child streams.
+
+Deploy the server's capture-loss and recovery support **before the CLI**. The CLI
+checks support and ownership before reading transcripts. `--dry-run` performs the
+same comparison without durable repair writes. `--claude` or `--codex` can narrow
+local discovery; normal import scope, filter and action flags such as `--all`,
+`--repo`, `--org`, `--reimport`, `--private` and `--since` are rejected in repair mode.
+A missing source or a file changing during the scan refuses the operation.
+
+Recovery uploads are capped at **100 lines and 4 MiB of serialized JSON**, including
+escaping and coordinates. A single redacted line that cannot fit is refused. Server
+staging allows **128 sources, 4,096 candidates and 64 MiB of candidate payload** per
+operation and expires after 20 minutes without activity. Interrupted scans restart
+from the beginning. Once validated, the operation survives CLI exit and server restart;
+retries are idempotent and leave ordinary import cursors unchanged.
+
+The command prints candidate/restored counts, remaining gaps and the repair phase.
+Exit **0** means complete accounting with zero gaps (or a clean dry-run preview),
+**2** means a completed recovery/preview with residual gaps, and **1** means refusal,
+failure or unfinished accounting. The CLI waits up to two minutes for a durable job,
+then prints its ID and status; follow the session's capture status while it continues.
+
+#### Normal historical import
 
 Backfill older sessions from every detected coding agent in a single run. All seven agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`, `~/.gemini/tmp/<project>/chats/`, `~/.kiro/sessions/cli/`, `~/.pi/agent/sessions/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
