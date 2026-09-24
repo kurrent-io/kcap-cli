@@ -20,9 +20,14 @@ public static partial class SecretRedactor {
     internal const string UnparsableOutputPlaceholder =
         """{"type":"redacted_unparsable_line","reason":"redacted line was no longer valid JSON"}""";
 
-    // The generated patterns carry the watcher's per-call deadline. A caller scanning a whole
-    // recording has no loop to keep responsive, so it gets the same vocabulary with none.
-    internal static readonly SecretPatterns Bounded = new() {
+    // A deadline only a super-linear pattern reaches: the env-var scan costs about 27 ns per char,
+    // so a 16M-char value takes under half a second, while the JSON-key pattern is quadratic on a
+    // quote-less run of keywords and would otherwise never return.
+    internal static readonly TimeSpan OutOfProcessMatchTimeout = TimeSpan.FromSeconds(30);
+
+    // The generated patterns carry the watcher's per-call deadline; a caller scanning a whole
+    // recording has no loop to keep responsive and gets the same vocabulary under the one above.
+    internal static readonly SecretPatterns WatcherPatterns = new() {
         SecretKeyNameRegex       = SecretKeyNameRx(),
         PemBlockRegex            = PemBlockRx(),
         AwsUniqueIdRegex         = AwsUniqueIdRx(),
@@ -37,7 +42,8 @@ public static partial class SecretRedactor {
         UrlUserinfoRegex         = UrlUserinfoRx()
     };
 
-    internal static readonly Lazy<SecretPatterns> Unbounded = new(Bounded.WithoutMatchTimeout);
+    internal static readonly Lazy<SecretPatterns> OutOfProcessPatterns =
+        new(() => WatcherPatterns.WithMatchTimeout(OutOfProcessMatchTimeout));
 
     public static string RedactLine(string rawJsonlLine) => RedactLineWithOutcome(rawJsonlLine).Line;
 
@@ -56,7 +62,7 @@ public static partial class SecretRedactor {
             } catch (JsonException) {
                 if (rawJsonlLine.Length > MaxRedactableLineChars)
                     return Lost(RedactionLossReason.MalformedInput);
-                line = Bounded.RedactSecrets(rawJsonlLine, budget);
+                line = WatcherPatterns.RedactSecrets(rawJsonlLine, budget);
                 loss = RedactionLossReason.MalformedInput;
             }
             budget.Check();
@@ -78,10 +84,10 @@ public static partial class SecretRedactor {
     }
 
     public static bool IsSecretKey(ReadOnlySpan<char> propertyName) =>
-        Unbounded.Value.IsSecretKey(propertyName, RedactionBudget.Unlimited);
+        OutOfProcessPatterns.Value.IsSecretKey(propertyName, RedactionBudget.Unlimited);
 
     public static string? RedactValue(ReadOnlySpan<char> value, bool keyIsSecret) =>
-        Unbounded.Value.Redact(value, keyIsSecret, RedactionBudget.Unlimited);
+        OutOfProcessPatterns.Value.Redact(value, keyIsSecret, RedactionBudget.Unlimited);
 
     static string? RedactJsonStringValues(string line, int byteCount, RedactionBudget budget) {
         if (line.Length == 0) return null;
@@ -121,9 +127,9 @@ public static partial class SecretRedactor {
             switch (reader.TokenType) {
                 case JsonTokenType.PropertyName:
                     var name = decoded[..reader.CopyString(decoded)];
-                    keyIsSecret = inSecret || Bounded.IsSecretKey(name, budget);
+                    keyIsSecret = inSecret || WatcherPatterns.IsSecretKey(name, budget);
 
-                    if (Bounded.IsSecretItself(name, budget)) {
+                    if (WatcherPatterns.IsSecretItself(name, budget)) {
                         writer?.WritePropertyName($"{RedactedMarker}-{++redactedKeys}");
                         redactedAny = true;
                     } else {
@@ -134,7 +140,7 @@ public static partial class SecretRedactor {
 
                 case JsonTokenType.String:
                     var value = decoded[..reader.CopyString(decoded)];
-                    if (Bounded.Redact(value, keyIsSecret || inSecret, budget) is { } clean) {
+                    if (WatcherPatterns.Redact(value, keyIsSecret || inSecret, budget) is { } clean) {
                         writer?.WriteStringValue(JsonEncodedText.Encode(clean, WriterOptions.Encoder));
                         redactedAny = true;
                     } else {

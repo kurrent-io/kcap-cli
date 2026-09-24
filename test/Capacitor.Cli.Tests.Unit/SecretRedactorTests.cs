@@ -97,7 +97,7 @@ public class SecretRedactorTests {
     }
 
     [Test]
-    public async Task RedactValue_ScansAMultiMegabyteValue_WithNoDeadline() {
+    public async Task RedactValue_ScansAMultiMegabyteValue_WithoutTheWatcherDeadline() {
         // Every delimiter gate is open, so each pattern scans the whole value before reaching the secret.
         const string secret = "DATABASE_PASSWORD=hunter2-hunter2";
         var row   = "[inventory row 000001] status=ok bytes=4096 note: none user@host\n";
@@ -111,18 +111,29 @@ public class SecretRedactorTests {
     }
 
     [Test]
-    public async Task OutOfProcessPatterns_AreTheWatcherVocabulary_WithoutItsDeadline() {
+    public async Task OutOfProcessPatterns_AreTheWatcherVocabulary_UnderALongerDeadline() {
         var slots = typeof(SecretPatterns).GetProperties().Where(p => p.PropertyType == typeof(Regex)).ToList();
         await Assert.That(slots).IsNotEmpty();
 
         foreach (var slot in slots) {
-            var watcher      = (Regex)slot.GetValue(SecretRedactor.Bounded)!;
-            var outOfProcess = (Regex)slot.GetValue(SecretRedactor.Unbounded.Value)!;
-            await Assert.That(watcher.MatchTimeout).IsNotEqualTo(Regex.InfiniteMatchTimeout);
-            await Assert.That(outOfProcess.MatchTimeout).IsEqualTo(Regex.InfiniteMatchTimeout);
+            var watcher      = (Regex)slot.GetValue(SecretRedactor.WatcherPatterns)!;
+            var outOfProcess = (Regex)slot.GetValue(SecretRedactor.OutOfProcessPatterns.Value)!;
+            await Assert.That(watcher.MatchTimeout).IsLessThan(SecretRedactor.OutOfProcessMatchTimeout);
+            await Assert.That(outOfProcess.MatchTimeout).IsEqualTo(SecretRedactor.OutOfProcessMatchTimeout);
             await Assert.That(outOfProcess.ToString()).IsEqualTo(watcher.ToString());
             await Assert.That(outOfProcess.Options & ~RegexOptions.Compiled).IsEqualTo(watcher.Options);
         }
+    }
+
+    [Test]
+    public async Task ASuperLinearScan_StillMeetsItsDeadline_OnARebuiltSet() {
+        // A quote-less run of keywords sends the JSON-key pattern into quadratic backtracking, so
+        // the deadline is the only thing that ends this scan.
+        var patterns = SecretRedactor.WatcherPatterns.WithMatchTimeout(TimeSpan.FromMilliseconds(50));
+        var value    = "\"" + string.Concat(Enumerable.Repeat("secret", 200_000)) + ":\n";
+
+        await Assert.That(() => patterns.Redact(value, keyIsSecret: false, RedactionBudget.Unlimited))
+            .Throws<RegexMatchTimeoutException>();
     }
 
     [Test]

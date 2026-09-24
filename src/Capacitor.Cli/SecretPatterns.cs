@@ -5,8 +5,8 @@ using static Capacitor.Cli.SecretRedactor;
 
 namespace Capacitor.Cli;
 
-// The value-level pipeline over one vocabulary, so the same patterns run either under the
-// watcher's per-call deadline or without one.
+// The value-level pipeline over one vocabulary, so the same patterns run under the watcher's
+// per-call deadline or a longer one.
 sealed class SecretPatterns {
     public required Regex SecretKeyNameRegex { get; init; }
     public required Regex PemBlockRegex { get; init; }
@@ -21,25 +21,25 @@ sealed class SecretPatterns {
     public required Regex UrlQuerySecretRegex { get; init; }
     public required Regex UrlUserinfoRegex { get; init; }
 
-    public SecretPatterns WithoutMatchTimeout() => new() {
-        SecretKeyNameRegex       = WithoutMatchTimeout(SecretKeyNameRegex),
-        PemBlockRegex            = WithoutMatchTimeout(PemBlockRegex),
-        AwsUniqueIdRegex         = WithoutMatchTimeout(AwsUniqueIdRegex),
-        VendorTokenRegex         = WithoutMatchTimeout(VendorTokenRegex),
-        JsonKeySecretRegex       = WithoutMatchTimeout(JsonKeySecretRegex),
-        EnvVarSecretRegex        = WithoutMatchTimeout(EnvVarSecretRegex),
-        YamlStyleSecretRegex     = WithoutMatchTimeout(YamlStyleSecretRegex),
-        ConnectionStringPwdRegex = WithoutMatchTimeout(ConnectionStringPwdRegex),
-        AuthHeaderRegex          = WithoutMatchTimeout(AuthHeaderRegex),
-        LabeledSecretRegex       = WithoutMatchTimeout(LabeledSecretRegex),
-        UrlQuerySecretRegex      = WithoutMatchTimeout(UrlQuerySecretRegex),
-        UrlUserinfoRegex         = WithoutMatchTimeout(UrlUserinfoRegex)
+    public SecretPatterns WithMatchTimeout(TimeSpan timeout) => new() {
+        SecretKeyNameRegex       = Rebuild(SecretKeyNameRegex, timeout),
+        PemBlockRegex            = Rebuild(PemBlockRegex, timeout),
+        AwsUniqueIdRegex         = Rebuild(AwsUniqueIdRegex, timeout),
+        VendorTokenRegex         = Rebuild(VendorTokenRegex, timeout),
+        JsonKeySecretRegex       = Rebuild(JsonKeySecretRegex, timeout),
+        EnvVarSecretRegex        = Rebuild(EnvVarSecretRegex, timeout),
+        YamlStyleSecretRegex     = Rebuild(YamlStyleSecretRegex, timeout),
+        ConnectionStringPwdRegex = Rebuild(ConnectionStringPwdRegex, timeout),
+        AuthHeaderRegex          = Rebuild(AuthHeaderRegex, timeout),
+        LabeledSecretRegex       = Rebuild(LabeledSecretRegex, timeout),
+        UrlQuerySecretRegex      = Rebuild(UrlQuerySecretRegex, timeout),
+        UrlUserinfoRegex         = Rebuild(UrlUserinfoRegex, timeout)
     };
 
-    // Compiled is ignored under NativeAOT, where this set is never built; elsewhere the interpreter
-    // would scan a recording several times slower than the generated code does.
-    static Regex WithoutMatchTimeout(Regex generated) =>
-        new(generated.ToString(), generated.Options | RegexOptions.Compiled, Regex.InfiniteMatchTimeout);
+    // Compiled is ignored under NativeAOT, where a rebuilt set is never made; elsewhere the
+    // interpreter would scan a recording several times slower than the generated code does.
+    static Regex Rebuild(Regex generated, TimeSpan timeout) =>
+        new(generated.ToString(), generated.Options | RegexOptions.Compiled, timeout);
 
     public bool IsSecretKey(ReadOnlySpan<char> propertyName, RedactionBudget budget) =>
         Matches(SecretKeyNameRegex, propertyName, budget);
