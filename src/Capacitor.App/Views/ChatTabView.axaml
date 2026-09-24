@@ -285,10 +285,39 @@
                 Background="{StaticResource KcapSurfaceBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">
+                <Border x:Name="UsageLimitCard" IsVisible="{Binding HasUsageLimitQuestion}"
+                        Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="12,10">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{Binding UsageLimitSummary}" FontSize="13" TextWrapping="Wrap"
+                                   Foreground="{StaticResource KcapTextBrush}" />
+                        <TextBlock Text="{Binding UsageLimitPrompt}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"
+                                   Foreground="{StaticResource KcapTextBrush}" />
+                        <ItemsControl ItemsSource="{Binding UsageLimitChoices}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:UsageLimitChoiceViewModel">
+                                    <Button Command="{Binding Choose}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                            Padding="12,8" CornerRadius="8" Background="{StaticResource KcapSurfaceBrush}"
+                                            BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1" Cursor="Hand">
+                                        <TextBlock Text="{Binding Label}" FontSize="13.5" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource KcapTextBrush}" />
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{Binding UsageLimitError}" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource KcapDangerBrush}"
+                                   IsVisible="{Binding UsageLimitError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
                 <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
                                            IsVisible="{Binding Tray.HasAttachments}" />
                 <TextBox x:Name="ComposerInput" Classes="kcapEmbedded" Text="{Binding ComposerText}" AcceptsReturn="True" TextWrapping="Wrap"
-                         MinHeight="44" MaxHeight="160" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}" />
+                         MinHeight="44" MaxHeight="160" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}"
+                         IsEnabled="{Binding !HasUsageLimitQuestion}" />
                 <!-- A flow participant is addressed through the flow protocol, never messaged
                      directly, so the banner replaces the input rather than overlaying a dead one. -->
                 <Border x:Name="ReadOnlyBanner" IsVisible="{Binding IsReadOnlyParticipant}"

@@ -1746,6 +1746,48 @@ public class ChatTabViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_usage_limit_question_is_shown_and_a_message_is_not_sent() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit · resets 3:10pm",
+                "What do you want to do?", [
+                    new(1, "Stop and wait for limit to reset"),
+                    new(2, "Wait here, then continue automatically shortly"),
+                    new(3, "Ask your admin for more usage"),
+                ]);
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+                h.Chat.ComposerText = "keep going";
+
+                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
+                await Assert.That(h.Chat.UsageLimitChoices.Select(c => c.Label).ToArray()).IsEquivalentTo(new[] {
+                    "Stop and wait for limit to reset",
+                    "Wait here, then continue automatically shortly",
+                    "Ask your admin for more usage",
+                }, CollectionOrdering.Matching);
+                await Assert.That(h.Chat.ComposerHint).Contains("usage limit");
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+                await h.Chat.UsageLimitChoices[2].Choose.Execute().ToTask();
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'3' }, CollectionOrdering.Matching);
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                await Assert.That(h.Chat.HasUsageLimitQuestion).IsFalse();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    sealed class KeyRecordingInput : AcceptingChatInput {
+        public List<byte> Keys { get; } = [];
+        public override Task<bool> SendKeyAsync(byte key, CancellationToken ct) {
+            Keys.Add(key);
+            return Task.FromResult(true);
+        }
+    }
+
     sealed class CountingProjection(ITranscriptProjection inner) : ITranscriptProjection {
         public List<int> LineNumbers { get; } = [];
         public int ContextsCreated { get; private set; }
@@ -1763,7 +1805,7 @@ public class ChatTabViewModelTests {
 
     /// A channel that takes every send, for the queue tests: the transcript, not the channel,
     /// is what retires a message.
-    sealed class AcceptingChatInput : ChatInput {
+    class AcceptingChatInput : ChatInput {
         public override SendAvailability Availability => SendAvailability.Ready;
         public override bool CanAcceptText => true;
         public override string Hint => "";

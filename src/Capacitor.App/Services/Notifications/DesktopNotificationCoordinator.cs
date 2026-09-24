@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 
 namespace Capacitor.App.Services.Notifications;
@@ -12,6 +13,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         public string Id { get; } = id;
         public PendingPermissionRequest? Request { get; set; } = request;
         public AgentRow Row { get; set; } = row;
+        public string? UsageLimitKey { get; set; }
         public bool Busy { get; set; }
     }
 
@@ -26,6 +28,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
     readonly CancellationTokenSource _lifetime = new();
     readonly Dictionary<string, Notice> _notices = new(StringComparer.Ordinal);
     readonly HashSet<string> _seenRequests = new(StringComparer.Ordinal);
+    readonly HashSet<string> _seenUsageLimits = new(StringComparer.Ordinal);
     Dictionary<string, AgentRow> _rows = new(StringComparer.Ordinal);
     IReadOnlyList<PendingPermissionRequest> _pending = [];
     NotificationPreferences _preferences = new();
@@ -68,7 +71,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         if (_disposed) return;
         _preferences = preferences;
         foreach (var notice in _notices.Values.ToArray())
-            if (!Enabled(notice.Request)) Close(notice.Id);
+            if (!Enabled(notice)) Close(notice.Id);
     }
 
     void OnRows(IReadOnlyList<AgentRow> rows) {
@@ -77,7 +80,9 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         _rows = rows.ToDictionary(r => r.Key, StringComparer.Ordinal);
         ReconcilePending();
         WithdrawIdle();
+        WithdrawUsageLimits();
         foreach (var row in rows) {
+            NoteUsageLimit(row);
             if (!previous.TryGetValue(row.Key, out var before) || before.CreatedAt != row.CreatedAt ||
                 !SessionStatusDots.IsWorking(before.Status, before.AwaitingInput, before.LiveSubagents) || !Idle(row) ||
                 HasPending(row) || !_preferences.Idle || _isForeground()) continue;
@@ -86,7 +91,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
     }
 
     void WithdrawIdle() {
-        foreach (var notice in _notices.Values.Where(n => n.Request is null).ToArray()) {
+        foreach (var notice in _notices.Values.Where(n => n.Request is null && n.UsageLimitKey is null).ToArray()) {
             if (!_rows.TryGetValue(notice.Row.Key, out var row) || !Idle(row) || HasPending(row)) Close(notice.Id);
             else notice.Row = row;
         }
@@ -144,8 +149,47 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
 
     static bool Question(PendingPermissionRequest request) => request.IsQuestion || request.ToolName == ClaudeElicitation.ToolName;
 
+    bool Enabled(Notice notice) => notice.UsageLimitKey is not null ? _preferences.Questions : Enabled(notice.Request);
+
     bool Enabled(PendingPermissionRequest? request) => request is null ? _preferences.Idle
         : Question(request) ? _preferences.Questions : _preferences.Permissions;
+
+    static string? UsageLimitKey(AgentRow row) {
+        if (row.Status != "Running" || !UsageLimitNoticeDto.IsQuestion(row.UsageLimit)) return null;
+        return row.UsageLimit!.Summary + "\n" + string.Join("\n", row.UsageLimit.Options.Select(o => $"{o.Index}:{o.Label}"));
+    }
+
+    void NoteUsageLimit(AgentRow row) {
+        var key = UsageLimitKey(row);
+        if (key is null) {
+            _seenUsageLimits.RemoveWhere(seen => seen.StartsWith(row.Key + "\0", StringComparison.Ordinal));
+            return;
+        }
+        if (!_seenUsageLimits.Add(row.Key + "\0" + key) || !_preferences.Questions || _isForeground()) return;
+        ShowUsageLimit(row, key);
+    }
+
+    void WithdrawUsageLimits() {
+        foreach (var notice in _notices.Values.Where(n => n.UsageLimitKey is not null).ToArray()) {
+            if (!_rows.TryGetValue(notice.Row.Key, out var row) || UsageLimitKey(row) != notice.UsageLimitKey) Close(notice.Id);
+            else notice.Row = row;
+        }
+    }
+
+    void ShowUsageLimit(AgentRow row, string key) {
+        var limit = row.UsageLimit!;
+        var notice = new Notice(Guid.NewGuid().ToString("N"), null, row) { UsageLimitKey = key };
+        var body = $"{AgentLabel(row)}\n{limit.Summary}\n{limit.Prompt}";
+        if (body.Length > 300) body = body[..299] + "…";
+        _notices.Add(notice.Id, notice);
+        try {
+            _sink.Show(new DesktopNotification(notice.Id, "Usage limit reached", body, [new("open", "Choose in app")]),
+                action => _scheduler.Schedule(() => { _ = ActivateAsync(notice.Id, action); }));
+        } catch (Exception ex) {
+            Close(notice.Id);
+            Console.Error.WriteLine($"kcap: could not show desktop notification: {ex.Message}");
+        }
+    }
 
     IEnumerable<string> Aliases(PendingPermissionRequest request) {
         yield return request.Key;
@@ -204,7 +248,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
             : action == "decline" || action == "allow" && request.CanAllowOnce || action == "always" && request.CanAllowAlways);
 
     async Task ActivateAsync(string id, string? action) {
-        if (_disposed || !_notices.TryGetValue(id, out var notice) || notice.Busy || !Enabled(notice.Request)) return;
+        if (_disposed || !_notices.TryGetValue(id, out var notice) || notice.Busy || !Enabled(notice)) return;
         if (!_rows.TryGetValue(notice.Row.Key, out var row)) { Close(id); return; }
         if (notice.Request is { } pending) {
             var live = _pendingCache.Lookup(pending.Key);
