@@ -5,6 +5,17 @@ namespace Capacitor.Cli.Tests.Unit.Capture;
 
 public class TranscriptCaptureTests {
     [Test]
+    [Arguments("not json")]
+    [Arguments("{\"token\":\"ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"")]
+    public async Task Small_malformed_records_become_explicit_loss_markers(string raw) {
+        var result = TranscriptCapture.Encode(raw);
+        await Assert.That(result.Loss).IsEqualTo(RedactionLossReason.MalformedInput);
+        using var marker = JsonDocument.Parse(result.Line);
+        await Assert.That(marker.RootElement.GetProperty("reason").GetString()).IsEqualTo("malformed_input");
+        await Assert.That(result.Line).DoesNotContain(raw);
+    }
+
+    [Test]
     public async Task LargeMalformedInputBecomesSafeVersionedMarker() {
         var raw = new string('x', 70_000) + " ghp_0123456789abcdef";
         var result = TranscriptCapture.Encode(raw);

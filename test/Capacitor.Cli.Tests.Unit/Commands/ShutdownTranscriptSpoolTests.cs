@@ -229,7 +229,6 @@ public class ShutdownTranscriptSpoolTests {
         await Assert.That(spool.HasBacklog(Sid)).IsTrue();
     }
 
-    /// <summary>Spool files and replayed bodies contain only redacted content.</summary>
     [Test]
     public async Task spooled_tail_is_secret_redacted() {
         using var tmp = new TempDir();

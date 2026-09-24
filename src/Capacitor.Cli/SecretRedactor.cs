@@ -31,16 +31,18 @@ public static partial class SecretRedactor {
         var budget = new RedactionBudget(time);
         try {
             string line;
+            RedactionLossReason? loss = null;
             try {
                 line = RedactJsonStringValues(rawJsonlLine, bytes, budget) ?? rawJsonlLine;
             } catch (JsonException) {
                 if (rawJsonlLine.Length > MaxRedactableLineChars)
                     return Lost(RedactionLossReason.MalformedInput);
                 line = RedactSecrets(rawJsonlLine, budget);
+                loss = RedactionLossReason.MalformedInput;
             }
             budget.Check();
             if (Encoding.UTF8.GetByteCount(line) > MaxRecordBytes) return Lost(RedactionLossReason.OutputLimit);
-            return new RedactionOutcome(line, null, rawJsonlLine.Length, bytes);
+            return new RedactionOutcome(line, loss, rawJsonlLine.Length, bytes);
         } catch (RegexMatchTimeoutException) {
             return Lost(RedactionLossReason.RegexTimeout);
         } catch (RedactionBudgetExceededException) {

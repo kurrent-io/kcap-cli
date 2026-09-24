@@ -100,7 +100,7 @@ public static class CursorTranscriptBackfill {
         var posted = 0;
         try {
             foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
-                if (budget() || markers.IsQuarantined(sessionId)
+                if ((!finalDrain || posted == 0) && budget() || markers.IsQuarantined(sessionId)
                     || markers.BarrierPending(sessionId, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound))
                     return new Stats(posted, Failed: false);
                 var json = JsonSerializer.Serialize(chunk, CapacitorJsonContext.Default.TranscriptBatch);

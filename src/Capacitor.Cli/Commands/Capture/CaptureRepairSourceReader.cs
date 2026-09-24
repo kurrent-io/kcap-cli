@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Capacitor.Cli.Capture;
 using Capacitor.Cli.Commands.Capture.Wire;
@@ -15,10 +16,12 @@ internal static class CaptureRepairSourceReader {
         ct.ThrowIfCancellationRequested();
         var snapshot = CaptureRepairFileSnapshot.Take(path);
         await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var reader = new StreamReader(input, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false);
+        using var hash = SHA256.Create();
+        using var hashed = new CryptoStream(input, hash, CryptoStreamMode.Read, leaveOpen: true);
+        using var reader = new StreamReader(hashed, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false);
         var number = 0;
         while (await reader.ReadLineAsync(ct) is { } raw) {
-            snapshot.AssertUnchanged();
+            snapshot.AssertUnchanged(verifyContent: false);
             if (number == 0 && raw.StartsWith('\uFEFF')) raw = raw[1..];
             var safe = TranscriptCapture.Encode(raw);
             if (safe.Loss is { } reason) reportLoss?.Invoke(reason);
@@ -26,7 +29,7 @@ internal static class CaptureRepairSourceReader {
         }
         ct.ThrowIfCancellationRequested();
         snapshot.AssertUnchanged();
-        if (input.Length != snapshot.Length) throw new IOException("Transcript changed during recovery; retry after the session ends.");
+        if (input.Length != snapshot.Length || Convert.ToHexStringLower(hash.Hash!) != snapshot.ContentHash) throw new IOException("Transcript changed during recovery; retry after the session ends.");
         return number - 1;
     }
 }

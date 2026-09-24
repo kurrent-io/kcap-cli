@@ -2423,7 +2423,6 @@ partial class WatchCommand(
         return [];
     }
 
-    /// <summary>Serialize a replayable transcript batch.</summary>
     internal static string BuildTranscriptSpoolBatch(
             string                sessionId,
             string?               agentId,

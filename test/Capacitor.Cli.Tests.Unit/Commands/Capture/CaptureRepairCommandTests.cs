@@ -13,6 +13,28 @@ public class CaptureRepairCommandTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     [Test]
+    [Arguments("D")]
+    [Arguments("N")]
+    public async Task Uppercase_uuid_uses_the_canonical_source_and_route(string format) {
+        using var server = WireMockServer.Start();
+        using var tmp = new TempDir();
+        var id = Guid.NewGuid();
+        var sid = id.ToString("N");
+        var rid = Guid.NewGuid().ToString("N");
+        var path = $"/api/sessions/{sid}/capture-repairs";
+        Configure(server, path, rid);
+        server.Given(Request.Create().WithPath($"{path}/{rid}/complete").UsingPost()).RespondWith(Response.Create().WithStatusCode(200)
+            .WithHeader("Content-Type", "application/json").WithBody(Report(rid, "preview", 0, false, 0)));
+        var transcript = tmp.CreateFile("root.jsonl", "{}\n");
+        var source = new RepairImportSource { Sessions = [new(sid, HarnessId.Claude, null, null,
+            new Dictionary<string, object?> { ["FilePath"] = transcript })] };
+        using var output = ConsoleOutput.StartFullCapture();
+        var command = new CaptureRepairCommand(Resolutions.At(server.Url!, Config.Root), new FixedCapacitorHttpClient(), TimeProvider.System);
+        await Assert.That(await command.HandleAsync(id.ToString(format).ToUpperInvariant(), true, [source])).IsEqualTo(0);
+        await Assert.That(server.LogEntries.Any(e => e.RequestMessage.Path == $"{path}/{rid}/batches")).IsTrue();
+    }
+
+    [Test]
     public async Task Missing_capability_stops_before_local_discovery_or_upload() {
         using var server = WireMockServer.Start();
         var sid = Guid.NewGuid().ToString("N");

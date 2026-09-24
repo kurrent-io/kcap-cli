@@ -14,7 +14,7 @@ internal sealed class CaptureRepairCommand(ProfileContext profiles, ICapacitorHt
         string? repairId = null;
         var completionRequested = false;
         try {
-            sessionId = sessionId.Replace("-", "", StringComparison.Ordinal);
+            sessionId = Normalize(sessionId);
             if (string.IsNullOrWhiteSpace(sessionId) || sessionId.Length > 128 || sessionId.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_'))
                 throw new IOException("Capture recovery requires one valid --session ID.");
             using var connection = await http.ForCommandAsync(ct);
@@ -24,7 +24,7 @@ internal sealed class CaptureRepairCommand(ProfileContext profiles, ICapacitorHt
             var candidates = new List<DiscoveredSession>();
             foreach (var source in sources.Where(s => s.IsAvailable && s.Vendor is HarnessId.Claude or HarnessId.Codex))
                 candidates.AddRange(await source.DiscoverAsync(new(null, sessionId, null, 0), ct));
-            candidates = candidates.Where(s => s.SessionId.Replace("-", "", StringComparison.Ordinal) == sessionId).ToList();
+            candidates = candidates.Where(s => Normalize(s.SessionId) == sessionId).ToList();
             if (candidates.Count != 1) throw new IOException(candidates.Count == 0
                 ? "No local Claude or Codex root transcript found for this session. Recovery supports only those vendors."
                 : "Multiple local transcripts match this session; select --claude or --codex to disambiguate.");
@@ -81,4 +81,8 @@ internal sealed class CaptureRepairCommand(ProfileContext profiles, ICapacitorHt
             return 1;
         }
     }
+
+    static string Normalize(string value) => Guid.TryParse(value, out var id)
+        ? id.ToString("N") : value.Replace("-", "", StringComparison.Ordinal);
+
 }
