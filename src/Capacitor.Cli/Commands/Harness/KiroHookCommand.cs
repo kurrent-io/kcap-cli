@@ -119,6 +119,34 @@ sealed class KiroHookCommand(
         }
     }
 
+    /// <summary>Longest the hook waits for Crew to record a sub-agent's session. Crew writes it about a
+    /// second after the child's first prompt, and a one-prompt sub-agent fires agentSpawn only once.</summary>
+    static readonly TimeSpan CrewParentWait = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>
+    /// The Kiro Crew session that spawned this one, or null. Waits only for a session that could still
+    /// turn out to be a sub-agent — never one Crew already maps to a chat — and never past half the
+    /// remaining budget, which the memory fetch and the POST still need.
+    /// </summary>
+    async Task<string?> ResolveCrewParentAsync(string dashedSessionId, HookBudget budget) {
+        var crew = harnesses.Of<KiroHarness>().Crew;
+        if (!crew.IsPresent()) return null;
+
+        if (KiroCrewParentResolver.ParentOf(crew, dashedSessionId) is { } parent) return parent;
+        if (KiroCrewParentResolver.IsChatSession(crew, dashedSessionId)) return null;
+
+        var wait     = TimeSpan.FromTicks(Math.Min(CrewParentWait.Ticks, budget.Remaining.Ticks / 2));
+        var deadline = budget.Time.GetUtcNow() + wait;
+
+        while (budget.Time.GetUtcNow() < deadline) {
+            await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Time);
+
+            if (KiroCrewParentResolver.ParentOf(crew, dashedSessionId) is { } found) return found;
+        }
+
+        return null;
+    }
+
     public async Task<int> Handle(TextReader stdin, string[] args) {
         // The installer always passes --event; default to agentSpawn so a
         // hand-rolled hook entry without it still records.
@@ -219,6 +247,10 @@ sealed class KiroHookCommand(
         // file may not exist yet — the next agentSpawn (fires every prompt) backfills.
         if (ReadKiroModel(harnesses.Of<KiroHarness>().Paths, dashedSessionId) is { } model) {
             forwarded["model"] = model;
+        }
+
+        if (await ResolveCrewParentAsync(dashedSessionId, budget) is { } parent) {
+            forwarded["parent_session_id"] = parent;
         }
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);

@@ -22,15 +22,18 @@ namespace Capacitor.Cli.Harness.Kiro;
 /// </summary>
 internal sealed class KiroImportSource : IImportSource {
     readonly string                                 _sessionsDir;
+    readonly KiroCrewPaths                          _crew;
     readonly TimeProvider                           _time;
 
     public KiroImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
+        KiroCrewPaths                           crew,
         GitProviderRouter                        router,
         TimeProvider                            time
     ) {
         _sessionsDir  = sessionsDir;
+        _crew         = crew;
         _time         = time;
     }
 
@@ -228,6 +231,7 @@ internal sealed class KiroImportSource : IImportSource {
         var lifecycleId = dashed ?? classification.SessionId;
 
         var startPayload = BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp);
+        if (KiroCrewParentResolver.ParentOf(_crew, lifecycleId) is { } parent) startPayload["parent_session_id"] = parent;
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
             startPayload["default_visibility"] = visibility;
         }

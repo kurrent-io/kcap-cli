@@ -30,6 +30,12 @@ public sealed class KiroCrewPaths {
     /// <summary>The skills root Crew reads (<c>&lt;root&gt;/skills/&lt;name&gt;/SKILL.md</c>).</summary>
     public string SkillsDir => Path.Combine(Root, "skills");
 
+    /// <summary>One directory per sub-agent, holding <c>state.json</c> and, once it finishes, <c>tombstone.json</c>.</summary>
+    public string SubagentsDir => Path.Combine(Root, "subagents");
+
+    /// <summary>Crew's chat-to-Kiro-session map: <c>{chat key: {sid, discarded_sid}}</c>.</summary>
+    public string SessionMapJson => Path.Combine(Root, "session_map.json");
+
     /// <summary>Whether Crew has run here — it creates its root on first launch.</summary>
     public bool IsPresent() => Directory.Exists(Root);
 }
