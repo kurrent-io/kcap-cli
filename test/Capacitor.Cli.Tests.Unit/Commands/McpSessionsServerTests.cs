@@ -592,6 +592,17 @@ public class McpSessionsServerTests {
         await Assert.That(ex!.Message).Contains("session_id");
     }
 
+    /// <summary>A dot segment in session_id would walk the URL path the same way it does for plan_id.</summary>
+    [Test]
+    [Arguments(".")]
+    [Arguments("..")]
+    public async Task BuildDeclaredPlansUrl_rejects_a_dot_segment_session_id(string sessionId) {
+        var ex = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["session_id"] = sessionId }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("not \".\" or \"..\"");
+    }
+
     [Test]
     public async Task Tools_list_exposes_the_two_plan_tools_with_no_required_arguments() {
         var byName = McpSessionsServer.BuildToolsList().ToDictionary(t => t.Name);

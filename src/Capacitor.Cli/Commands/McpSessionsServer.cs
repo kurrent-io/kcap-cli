@@ -284,24 +284,28 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
              ?? throw new ArgumentException("Missing required argument: session_id");
 
             var recapUrl = BuildSummaryUrl(baseUrl, sessionId);
+            var plansUrl = BuildSessionPlansUrl(baseUrl, sessionId);
 
             // The stdio loop is serial, so a stalled lookup would block every later request.
             using var plansCts  = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
-            var       plansTask = FetchDeclaredPlansAsync(client, BuildSessionPlansUrl(baseUrl, sessionId), plansCts.Token);
+            var       plansTask = FetchDeclaredPlansAsync(client, plansUrl, plansCts.Token);
+            try {
+                using var recap = await client.GetAsync(recapUrl);
+                var       body  = await recap.Content.ReadAsStringAsync();
 
-            using var recap = await client.GetAsync(recapUrl);
-            var       body  = await recap.Content.ReadAsStringAsync();
-            var       plans = await plansTask;
+                if (recap.StatusCode == HttpStatusCode.Unauthorized) {
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+                }
 
-            if (recap.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+                if (!recap.IsSuccessStatusCode) {
+                    return BuildToolResult(id, $"Error: HTTP {(int)recap.StatusCode} — {body}", isError: true);
+                }
+
+                return BuildToolResult(id, ProjectRecapToSummary(body, await plansTask));
+            } finally {
+                plansCts.Cancel();   // a no-op once the lookup finished; otherwise ends it now, before the loop's next request
+                await plansTask;     // never throws: FetchDeclaredPlansAsync catches everything, cancellation included
             }
-
-            if (!recap.IsSuccessStatusCode) {
-                return BuildToolResult(id, $"Error: HTTP {(int)recap.StatusCode} — {body}", isError: true);
-            }
-
-            return BuildToolResult(id, ProjectRecapToSummary(body, plans));
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -405,8 +409,12 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         return $"{baseUrl}/api/plans/{Uri.EscapeDataString(planId)}";
     }
 
-    internal static string BuildSessionPlansUrl(string baseUrl, string sessionId) =>
-        $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/plans";
+    internal static string BuildSessionPlansUrl(string baseUrl, string sessionId) {
+        if (sessionId is "." or "..")
+            throw new ArgumentException("\"session_id\" must be a session id, not \".\" or \"..\".");
+
+        return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/plans";
+    }
 
     // A non-string JSON value must surface as a validation error, not as the generic internal
     // error the outer guard produces for an InvalidOperationException from GetValue<string>().
@@ -862,7 +870,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "list_repo_sessions",
-            "List the sessions on a repository that you are allowed to see, running ones first, ordered by last activity. state defaults to active, so without state: \"all\" (or \"ended\") no finished session appears, and one row back on a busy repo usually means only your own session is running. There is no time filter: the tool cannot answer 'which sessions were running at instant X', and an argument it does not declare (a date range, since, until) is ignored rather than rejected, so a result that looks unfiltered is exactly that. To cover a window, pass state: \"all\" and read started_at / last_activity_at on the rows yourself. Each row carries session_id, owner, vendor, status, access_level, stale, started_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale means no activity for over an hour. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it.",
+            "List the sessions on a repository that you are allowed to see, running ones first, ordered by last activity. state defaults to active, so without state: \"all\" (or \"ended\") no finished session appears, and one row back on a busy repo usually means only your own session is running. There is no time filter: the tool cannot answer 'which sessions were running at instant X', and an argument it does not declare (a date range, since, until) is ignored rather than rejected, so a result that looks unfiltered is exactly that. To cover a window, pass state: \"all\" and read started_at / last_activity_at on the rows yourself. Each row carries session_id, owner, vendor, status, access_level, stale, started_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale is set only on an active session with no activity for over an hour; an ended session is never stale. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it.",
             new(
                 "object",
                 new() {
@@ -879,7 +887,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "list_repo_plans",
-            "List the declared plans on a repository that you are allowed to see, most recently touched first. Reach for this to find unfinished work: a plan a session left behind when it ended. Each row carries plan_id, documents (kind, path, content_hash, commit_sha — no bodies), progress {completed, total, total_known, finished}, next_task (the first task neither completed nor skipped, or null), sessions, work_item_id, last_touched_at, is_complete and withheld_contributions; read the full task list with get_declared_plans(plan_id). progress.finished is whether the work is done. is_complete is NOT that: it only says nothing was withheld from your view, and a half-done plan usually has is_complete true. A non-zero withheld_contributions means other people's tasks exist that you cannot see, so never call such a plan complete. On sessions, status and stale describe the session as a whole — stale means no activity for over an hour — and only last_touched_at is about this plan: a session stays attached after moving to other work, so an active session is not proof anyone is executing the plan.",
+            "List the declared plans on a repository that you are allowed to see, most recently touched first. Reach for this to find unfinished work: a plan a session left behind when it ended. Each row carries plan_id, documents (kind, path, content_hash, commit_sha — no bodies), progress {completed, total, total_known, finished}, next_task (the first task neither completed nor skipped, or null), sessions, work_item_id, last_touched_at, is_complete and withheld_contributions; read the full task list with get_declared_plans(plan_id). progress.finished is whether the work is done. is_complete is NOT that: it only says nothing was withheld from your view, and a half-done plan usually has is_complete true. A non-zero withheld_contributions means contributions you cannot see exist — hidden sessions, documents, tasks or the work-item link — so never call such a plan complete. On sessions, status and stale describe the session as a whole — stale is set only on an active session with no activity for over an hour; an ended session is never stale, so read status and last_touched_at for those — and only last_touched_at is about this plan: a session stays attached after moving to other work, so an active session is not proof anyone is executing the plan.",
             new(
                 "object",
                 new() {

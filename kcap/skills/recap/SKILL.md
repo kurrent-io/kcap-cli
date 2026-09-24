@@ -106,7 +106,7 @@ For a plain metadata index instead of the outline (turn #, prompt excerpt, tool 
 A session that works from a plan declares it to Capacitor: the documents, an ordered task list, and each task's status. That record outlives the session, so it is how you tell where earlier work stopped. It is reachable only through the `kcap-sessions` MCP tools — `kcap recap` does not print it, and the `## Plan` block above is the plan *text* a session captured, not its task list.
 
 **Finding one.**
-- `list_repo_plans` — the unfinished plans in this repository, most recently touched first. Start here when you have no session id: "what was left unfinished", "is there a plan to continue".
+- `list_repo_plans` — the unfinished plans in this repository, most recently touched first. Start here when you have no session id: "what was left unfinished", "is there a plan to continue". The default `state: "open"` lists plans with a visible unfinished task; a plan whose visible tasks are done but whose withheld tasks are not is absent from it. When the plan you expect is missing, call `list_repo_plans(state: "all")` and look for rows with `is_complete: false`.
 - `get_session_summary` — carries `declared_plans`, one pointer per plan that session or its continuation chain declared, when it declared any.
 - `get_declared_plans` — the full task list, by `plan_id` (from either of the above) or by `session_id`.
 
@@ -115,7 +115,7 @@ A session that works from a plan declares it to Capacitor: the documents, an ord
 1. `progress.finished` is `true` — the plan is done.
 2. `progress.completed` is less than `progress.total` — the plan is open. What remains is every entry of `tasks` whose status is neither `completed` nor `skipped`; a `list_repo_plans` row has no `tasks`, and gives the first of them as `next_task`.
 3. `is_complete` is `false` — nothing visible remains — possibly nothing visible was declared — but the view is partial; say so and do not call the plan complete.
-4. Otherwise `progress.total_known` is `false` — the session declared documents but never a task list, so completion is unknown. That is not withheld data; do not report it as a partial view.
+4. Otherwise `progress.total_known` is `false` — the session declared documents but never a task list, so completion is unknown. That is not withheld data; do not report it as a partial view. If instead `total_known` is `true`, the server itself reports the plan unfinished — treat it as open and do not infer completion from the totals.
 
 **`is_complete` does not mean the work is done.** It means nothing was withheld from your view, and a half-finished plan usually has `is_complete: true`. `finished` is the field that answers "is it done". If `progress` has no `finished` field, the server predates it: the plan is finished only when `total_known` is true **and** `completed` equals `total` **and** `is_complete` is true.
 

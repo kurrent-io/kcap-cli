@@ -390,6 +390,43 @@ public class McpSessionsServerTests : IDisposable {
         }
     }
 
+    /// <summary>A failed recap must return immediately, not wait out the plans lookup's 10s
+    /// bound; a stalled lookup left running would then block the next stdio request too.</summary>
+    [Test]
+    public async Task Get_session_summary_returns_a_failed_recap_without_waiting_for_a_stalled_plans_lookup() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("boom"));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                    """[{"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true}]""")
+                .WithDelay(TimeSpan.FromSeconds(20)));
+        _server.Given(Request.Create().WithPath("/api/sessions/def/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("[]"));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var firstSw  = Stopwatch.StartNew();
+            var response = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            firstSw.Stop();
+            var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).IsEqualTo("Error: HTTP 500 — boom");
+            await Assert.That(text).DoesNotContain("declared_plans");
+            await Assert.That(firstSw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+
+            // Pins that the stalled lookup no longer holds the serial stdio loop.
+            var secondSw       = Stopwatch.StartNew();
+            var secondResponse = await SendRequest(proc, ToolsCallRequest(5, "get_declared_plans", new JsonObject { ["session_id"] = "def" }));
+            secondSw.Stop();
+
+            await Assert.That(secondResponse["result"]?["isError"]).IsNull();
+            await Assert.That(secondSw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
     [Test]
     public async Task Get_session_transcript_passes_around_event_and_agent_id_through() {
         const string stubbedBody = """{"events":[{"index":42,"speaker":"user","text":"hi"}]}""";
