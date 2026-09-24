@@ -38,7 +38,8 @@
         </Border>
     </DataTemplate>
     <DataTemplate x:Key="QuestionCardTemplate" x:DataType="vm:QuestionCardViewModel">
-        <Border x:Name="QuestionCard" Classes="chatPromptCard">
+        <Border x:Name="QuestionCard" Classes="chatPromptCard"
+                KeyboardNavigation.TabNavigation="Continue" views:QuestionCardKeyboard.IsActive="True">
             <Border.Styles>
                 <Style Selector="TextBlock.prompt">
                     <Setter Property="FontWeight" Value="SemiBold" />
@@ -59,6 +60,7 @@
                     <Setter Property="HorizontalAlignment" Value="Stretch" />
                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                     <Setter Property="Cursor" Value="Hand" />
+                    <Setter Property="FocusAdorner" Value="{x:Null}" />
                 </Style>
                 <Style Selector="Button.option:pointerover /template/ ContentPresenter#PART_ContentPresenter">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
@@ -71,6 +73,15 @@
                 <Style Selector="Button.option.selected /template/ ContentPresenter#PART_ContentPresenter">
                     <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+                </Style>
+                <Style Selector="Button.option:focus-visible /template/ ContentPresenter#PART_ContentPresenter,
+                                 Button.step:focus-visible /template/ ContentPresenter#PART_ContentPresenter,
+                                 Button.reviewRow:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+                </Style>
+                <Style Selector="Button.option.selected:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
                 </Style>
                 <Style Selector="Border.indicator">
                     <Setter Property="Width" Value="16" />
@@ -94,6 +105,7 @@
                     <Setter Property="FontSize" Value="11.5" />
                     <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
                     <Setter Property="Cursor" Value="Hand" />
+                    <Setter Property="FocusAdorner" Value="{x:Null}" />
                 </Style>
                 <Style Selector="Button.step.answered">
                     <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
@@ -119,6 +131,7 @@
                     <Setter Property="HorizontalAlignment" Value="Stretch" />
                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                     <Setter Property="Cursor" Value="Hand" />
+                    <Setter Property="FocusAdorner" Value="{x:Null}" />
                 </Style>
             </Border.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
@@ -234,7 +247,8 @@
         </Border>
     </DataTemplate>
     <DataTemplate x:Key="AcpQuestionCardTemplate" x:DataType="vm:AcpQuestionCardViewModel">
-        <Border x:Name="AcpQuestionCard" Classes="chatPromptCard">
+        <Border x:Name="AcpQuestionCard" Classes="chatPromptCard"
+                KeyboardNavigation.TabNavigation="Continue" views:QuestionCardKeyboard.IsActive="True">
             <Border.Styles>
                 <Style Selector="Button.acpOption, ToggleButton.acpOption">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
@@ -245,6 +259,7 @@
                     <Setter Property="HorizontalAlignment" Value="Stretch" />
                     <Setter Property="HorizontalContentAlignment" Value="Left" />
                     <Setter Property="Cursor" Value="Hand" />
+                    <Setter Property="FocusAdorner" Value="{x:Null}" />
                 </Style>
                 <Style Selector="ToggleButton.acpOption:checked">
                     <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
@@ -253,6 +268,14 @@
                 <Style Selector="ToggleButton.acpOption:checked /template/ ContentPresenter#PART_ContentPresenter">
                     <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+                </Style>
+                <Style Selector="Button.acpOption:focus-visible /template/ ContentPresenter#PART_ContentPresenter,
+                                 ToggleButton.acpOption:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+                </Style>
+                <Style Selector="ToggleButton.acpOption:checked:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
                 </Style>
             </Border.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">

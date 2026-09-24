@@ -7,6 +7,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -1176,6 +1177,114 @@ public class ChatTabViewSmokeTests {
         .Single(b => b.Classes.Contains("option") && b.DataContext is QuestionOptionViewModel { Label: var l } && l == label);
     static List<Button> Steps(Host host) => host.View.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("step")).ToList();
     static bool Shows(Host host, string text) => host.View.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text && t.IsEffectivelyVisible);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_card_takes_focus_and_tabs_out() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Composer.Focus();
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"Pick","options":[{"label":"Ship it (Recommended)","description":"do it"},{"label":"Wait"},{"label":"Later"}]}]}"""));
+            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 1, what: "the card");
+            host.Settle();
+
+            await WaitUntilAsync(() => host.Window.FocusManager?.GetFocusedElement() is Button b
+                && b.Classes.Contains("option") && b.Classes.Contains(":focus-visible")
+                && b.DataContext is QuestionOptionViewModel { Label: "Ship it (Recommended)" }, what: "focus on the first option");
+            var first = (Button)host.Window.FocusManager!.GetFocusedElement()!;
+            var second = Option(host, "Wait");
+            await Assert.That(first.Classes.Contains(":focus-visible")).IsTrue();
+            await Assert.That(first.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Ship it (Recommended)" && t.IsEffectivelyVisible)).IsTrue();
+
+            var presenter = first.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
+            await Assert.That(presenter.BorderBrush).IsSameReferenceAs(host.View.FindResource("KcapPurpleBrush"));
+
+            host.Window.KeyPressQwerty(PhysicalKey.Tab, RawInputModifiers.Shift);
+            var shifted = host.Window.FocusManager!.GetFocusedElement();
+            await Assert.That(shifted is Button { Classes: var classes } && classes.Contains("option")).IsFalse();
+            await Assert.That(shifted is TextBox { PlaceholderText: "Other…" }).IsFalse();
+            first.Focus();
+
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Window.FocusManager!.GetFocusedElement()).IsSameReferenceAs(second);
+            await Assert.That(((QuestionOptionViewModel)second.DataContext!).IsSelected).IsFalse();
+            await Assert.That(host.Chat.PendingCards.Count).IsEqualTo(1);
+
+            host.Press(PhysicalKey.Digit1);
+            await Assert.That(host.Window.FocusManager.GetFocusedElement()).IsSameReferenceAs(first);
+            await Assert.That(((QuestionOptionViewModel)first.DataContext!).IsSelected).IsFalse();
+
+            host.Press(PhysicalKey.Tab);
+            await Assert.That(host.Window.FocusManager.GetFocusedElement()).IsSameReferenceAs(second);
+            host.Press(PhysicalKey.Tab);
+            host.Press(PhysicalKey.Tab);
+            var other = host.View.GetVisualDescendants().OfType<TextBox>().Single(t => t.PlaceholderText == "Other…");
+            await Assert.That(host.Window.FocusManager.GetFocusedElement()).IsSameReferenceAs(other);
+
+            var focused = host.Window.FocusManager.GetFocusedElement();
+            for (var i = 0; i < 8 && !ReferenceEquals(focused, host.Composer); i++) {
+                host.Press(PhysicalKey.Tab);
+                focused = host.Window.FocusManager.GetFocusedElement();
+            }
+            await Assert.That(focused).IsSameReferenceAs(host.Composer);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Next_and_back_move_focus_with_the_question() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"Tags","multiSelect":true,"options":[{"label":"X"},{"label":"Y"}]},{"question":"Pick","options":[{"label":"A"},{"label":"B"}]}]}"""));
+            host.Settle();
+            var first = Option(host, "X");
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), first), what: "the first option");
+            Click(host, first);
+            await WaitUntilAsync(() => ((QuestionOptionViewModel)first.DataContext!).IsSelected, what: "selected");
+
+            var card = (QuestionCardViewModel)host.Chat.PendingCards.Single();
+            var next = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "Next");
+            // Headless pointer events do not focus, so the focus a real activation gives the button is applied by hand.
+            next.Focus(NavigationMethod.Tab);
+            host.Press(PhysicalKey.Enter);
+            await WaitUntilAsync(() => card.CurrentIndex == 1, what: "the next question");
+            host.Settle();
+            var second = Option(host, "A");
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), second), what: "focus on the next question");
+
+            var back = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "Back");
+            back.Focus(NavigationMethod.Tab);
+            host.Press(PhysicalKey.Enter);
+            await WaitUntilAsync(() => card.CurrentIndex == 0, what: "the previous question");
+            host.Settle();
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), Option(host, "X")), what: "focus on the previous question");
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Advancing_a_series_moves_focus_to_the_next_question() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]},{"question":"Tags","multiSelect":true,"options":[{"label":"X"},{"label":"Y"}]}]}"""));
+            host.Settle();
+            var first = Option(host, "A");
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), first), what: "the first option");
+
+            Click(host, first);
+            await WaitUntilAsync(() => ((QuestionCardViewModel)host.Chat.PendingCards.Single()).CurrentIndex == 1, what: "the next question");
+            host.Settle();
+            var next = Option(host, "X");
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), next), what: "focus on the next question");
+            await Assert.That(((QuestionOptionViewModel)next.DataContext!).IsSelected).IsFalse();
+            await host.CloseAsync();
+        });
+    }
 
     /// A multi-select question toggles the selected class in place rather than advancing or submitting.
     [Test]
