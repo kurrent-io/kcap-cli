@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.Globalization;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
@@ -212,6 +213,44 @@ public class ChatTabViewSmokeTests {
             await Chat.TeardownAsync();
             await Terminal.TeardownAsync();
         }
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_usage_limit_question_renders_its_choices_and_a_choice_sends_the_digit() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("limit.jsonl", [UserLine]);
+            var client = await host.AttachAsync(path);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit · resets 3:10pm",
+                "What do you want to do?", [
+                    new(1, "Stop and wait for limit to reset"),
+                    new(2, "Wait here, then continue automatically shortly"),
+                    new(3, "Ask your admin for more usage"),
+                ]);
+            try {
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", UsageLimit = notice,
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                host.Settle();
+
+                var card = host.View.FindControl<Border>("UsageLimitCard");
+                await Assert.That(card!.IsVisible).IsTrue();
+                await Assert.That(host.Composer.IsEnabled).IsFalse();
+                var labels = host.View.GetVisualDescendants().OfType<TextBlock>()
+                    .Select(t => t.Text)
+                    .Where(t => t?.StartsWith("Stop", StringComparison.Ordinal) == true
+                        || t?.StartsWith("Wait here", StringComparison.Ordinal) == true
+                        || t?.StartsWith("Ask your admin", StringComparison.Ordinal) == true)
+                    .ToArray();
+                await Assert.That(labels).Count().IsEqualTo(3);
+
+                await host.Chat.UsageLimitChoices[2].Choose.Execute().ToTask();
+                host.Settle();
+                await Assert.That(client.SentInput.Any(bytes => bytes is [(byte)'3'])).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
     }
 
     /// Pins the two costs a long transcript could impose on the UI thread: one collection

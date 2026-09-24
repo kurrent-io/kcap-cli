@@ -62,12 +62,12 @@ public class ChatTabViewModelTests {
         public ChatTabViewModel Chat { get; }
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
-                       ChatInput? input = null, string? unavailableNote = null) {
+                       ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null) {
             seed?.Invoke(Permissions);
             Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote, planActivity: Plan);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote, planActivity: Plan);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -1746,6 +1746,147 @@ public class ChatTabViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_usage_limit_question_is_shown_and_a_message_is_not_sent() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit · resets 3:10pm",
+                "What do you want to do?", [
+                    new(1, "Stop and wait for limit to reset"),
+                    new(2, "Wait here, then continue automatically shortly"),
+                    new(3, "Ask your admin for more usage"),
+                ]);
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+                h.Chat.ComposerText = "keep going";
+
+                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
+                await Assert.That(h.Chat.UsageLimitChoices.Select(c => c.Label).ToArray()).IsEquivalentTo(new[] {
+                    "Stop and wait for limit to reset",
+                    "Wait here, then continue automatically shortly",
+                    "Ask your admin for more usage",
+                }, CollectionOrdering.Matching);
+                await Assert.That(h.Chat.ComposerHint).Contains("usage limit");
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+                await h.Chat.UsageLimitChoices[2].Choose.Execute().ToTask();
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'3' }, CollectionOrdering.Matching);
+                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(input.Keys.Count).IsEqualTo(1);
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                await Assert.That(h.Chat.HasUsageLimitQuestion).IsFalse();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_usage_limit_choice_sends_one_digit_and_a_failed_send_can_be_retried() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit",
+                "What do you want to do?", [
+                    new(1, "Stop and wait for limit to reset"),
+                    new(2, "Wait here, then continue automatically shortly"),
+                ]);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            input.Gate = release.Task;
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+
+                var running = h.Chat.UsageLimitChoices[0].Choose.Execute().ToTask();
+                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+                release.SetResult();
+                await running;
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1' }, CollectionOrdering.Matching);
+
+                input.Accept = false;
+                input.Gate = null;
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with {
+                    Status = "Running",
+                    UsageLimit = new UsageLimitNoticeDto(notice.Kind, "limit still held", notice.Prompt, notice.Options),
+                });
+                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
+                await Assert.That(h.Chat.UsageLimitError).Contains("not attached");
+                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
+                await Assert.That(input.Keys.Count).IsEqualTo(1);
+
+                input.Accept = true;
+                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1', (byte)'2' }, CollectionOrdering.Matching);
+                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_send_still_uploading_when_the_usage_limit_appears_is_not_pasted_into_the_menu() {
+        await RunOnUiAsync(async () => {
+            var input = new RecordingChatInput();
+            var uploader = new HoldingUploader();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, uploader: uploader);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit",
+                "What do you want to do?", [
+                    new(1, "Stop and wait for limit to reset"),
+                    new(2, "Wait here, then continue automatically shortly"),
+                ]);
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                h.Chat.ComposerText = "keep going";
+                h.Chat.Tray.AddAll([new StagedAttachment("note.txt", "text/plain", "hi"u8.ToArray())]);
+
+                var sending = h.Chat.SendCommand.Execute().ToTask();
+                await uploader.Started.Task;
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+                uploader.Release.SetResult(new UploadOutcome(UploadKind.Uploaded, ["file-1"], null));
+                await sending;
+
+                await Assert.That(input.Sent).IsEmpty();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("keep going");
+                await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    sealed class HoldingUploader : IAttachmentUploader {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<UploadOutcome> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<UploadOutcome> UploadAsync(IReadOnlyList<StagedAttachment> files, CancellationToken ct) {
+            Started.TrySetResult();
+            return Release.Task;
+        }
+    }
+
+    sealed class RecordingChatInput : AcceptingChatInput {
+        public List<string> Sent { get; } = [];
+        public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
+            Sent.Add(text);
+            return Task.FromResult(ChatSendOutcome.Accepted);
+        }
+    }
+
+    sealed class KeyRecordingInput : AcceptingChatInput {
+        public List<byte> Keys { get; } = [];
+        public bool Accept { get; set; } = true;
+        public Task? Gate { get; set; }
+        public override async Task<bool> SendKeyAsync(byte key, CancellationToken ct) {
+            if (Gate is { } gate) await gate;
+            if (!Accept) return false;
+            Keys.Add(key);
+            return true;
+        }
+    }
+
     sealed class CountingProjection(ITranscriptProjection inner) : ITranscriptProjection {
         public List<int> LineNumbers { get; } = [];
         public int ContextsCreated { get; private set; }
@@ -1763,7 +1904,7 @@ public class ChatTabViewModelTests {
 
     /// A channel that takes every send, for the queue tests: the transcript, not the channel,
     /// is what retires a message.
-    sealed class AcceptingChatInput : ChatInput {
+    class AcceptingChatInput : ChatInput {
         public override SendAvailability Availability => SendAvailability.Ready;
         public override bool CanAcceptText => true;
         public override string Hint => "";

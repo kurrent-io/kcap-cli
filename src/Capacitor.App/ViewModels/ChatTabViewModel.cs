@@ -231,6 +231,42 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly ObservableAsPropertyHelper<string> _composerHint;
     public string ComposerHint => _composerHint.Value;
 
+    UsageLimitNoticeDto? _usageLimit;
+    bool _hasUsageLimitQuestion;
+    string _usageLimitSummary = "";
+    string _usageLimitPrompt = "";
+    string _usageLimitError = "";
+    IReadOnlyList<UsageLimitChoiceViewModel> _usageLimitChoices = [];
+    bool _usageLimitChoiceTaken;
+
+    public bool HasUsageLimitQuestion {
+        get => _hasUsageLimitQuestion;
+        private set => this.RaiseAndSetIfChanged(ref _hasUsageLimitQuestion, value);
+    }
+
+    public string UsageLimitSummary {
+        get => _usageLimitSummary;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitSummary, value);
+    }
+
+    public string UsageLimitPrompt {
+        get => _usageLimitPrompt;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitPrompt, value);
+    }
+
+    public string UsageLimitError {
+        get => _usageLimitError;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitError, value);
+    }
+
+    public IReadOnlyList<UsageLimitChoiceViewModel> UsageLimitChoices {
+        get => _usageLimitChoices;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitChoices, value);
+    }
+
+    /// False once a choice has been sent, until this notice changes. A failed send turns it back on.
+    public bool UsageLimitChoicesOpen => !_usageLimitChoiceTaken;
+
     readonly ObservableAsPropertyHelper<bool> _showsComposer;
     /// Input + Send stay in the tree only while messaging is still possible. An ended session
     /// hides them and leaves the hint — a greyed empty box is the wrong affordance.
@@ -333,7 +369,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 foreach (var change in changes) {
                     if (change.Key != agentId) continue;
                     if (change.Reason == ChangeReason.Remove)
-                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true };
+                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true, UsageLimit = null };
                     else if (change.Reason is ChangeReason.Add or ChangeReason.Update)
                         info = ChatSessionInfo.FromLocal(change.Current, ended: false);
                 }
@@ -442,10 +478,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _input.WhenAnyValue(i => i.Hint),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
                 this.WhenAnyValue(x => x.UploadingFiles),
+                this.WhenAnyValue(x => x.HasUsageLimitQuestion),
                 _intakeNotice,
-                (hint, readOnly, uploading, notice) =>
+                (hint, readOnly, uploading, limit, notice) =>
                     uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
-                        : notice ?? (readOnly ? "" : hint))
+                        : notice ?? (readOnly ? ""
+                            : limit ? "Choose how to handle the usage limit. A message here would be typed into that menu."
+                            : hint))
             .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);
 
@@ -477,7 +516,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             this.WhenAnyValue(x => x.ComposerText),
             _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-            (text, can, readOnly) => can && !readOnly && !string.IsNullOrWhiteSpace(text));
+            this.WhenAnyValue(x => x.HasUsageLimitQuestion),
+            (text, can, readOnly, limit) => can && !readOnly && !limit && !string.IsNullOrWhiteSpace(text));
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
@@ -511,6 +551,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     return;
                 }
             }
+            // The upload can finish after the menu is on screen. The text would be typed into
+            // that menu, so the draft and the chips stay where they are.
+            if (HasUsageLimitQuestion) return;
             var chipIds = files.Select(f => f.Id).ToList();
             var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
             _lastSent = queued;
@@ -594,7 +637,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         StatusText = info.StatusLabel;
-        StatusDot = SessionStatusDots.For(info.Status, info.WaitsOnUser);
+        StatusDot = SessionStatusDots.For(info.Status, info.WaitsOnUser || UsageLimitNoticeDto.IsQuestion(info.UsageLimit));
+        ApplyUsageLimit(info.UsageLimit);
         _status = info.Status;
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
@@ -612,6 +656,43 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (_openFeed is { } open && info.FeedKey is { } key && key != _feedKey) SwitchFeed(key, open);
         RefreshActivityNote();
         RefreshQueue();
+    }
+
+    void ApplyUsageLimit(UsageLimitNoticeDto? notice) {
+        if (Equals(_usageLimit, notice)) return;
+        _usageLimit = notice;
+        foreach (var old in _usageLimitChoices) old.Choose.Dispose();
+        SetUsageLimitChoiceTaken(false);
+        var question = UsageLimitNoticeDto.IsQuestion(notice);
+        HasUsageLimitQuestion = question;
+        UsageLimitSummary = question ? notice!.Summary : "";
+        UsageLimitPrompt = question ? notice!.Prompt : "";
+        UsageLimitError = "";
+        UsageLimitChoices = question
+            ? notice!.Options.Select(option => new UsageLimitChoiceViewModel(
+                option.Index, option.Label,
+                ReactiveCommand.CreateFromTask(
+                    () => ChooseUsageLimitAsync(option.Index),
+                    this.WhenAnyValue(x => x.UsageLimitChoicesOpen)))).ToList()
+            : [];
+    }
+
+    void SetUsageLimitChoiceTaken(bool taken) {
+        if (_usageLimitChoiceTaken == taken) return;
+        _usageLimitChoiceTaken = taken;
+        this.RaisePropertyChanged(nameof(UsageLimitChoicesOpen));
+    }
+
+    // The digit is written before the menu leaves the screen, so another click would land on
+    // the next prompt. A failed send is the only reason to try the same menu again.
+    async Task ChooseUsageLimitAsync(int index) {
+        if (index is < 1 or > 9 || _usageLimitChoiceTaken) return;
+        SetUsageLimitChoiceTaken(true);
+        UsageLimitError = "";
+        var sent = await _input.SendKeyAsync((byte)('0' + index), _lifetimeToken);
+        if (sent || _lifetimeToken.IsCancellationRequested) return;
+        UsageLimitError = "The terminal is not attached, so that choice was not sent.";
+        SetUsageLimitChoiceTaken(false);
     }
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
@@ -986,6 +1067,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _subagents.Changed -= RefreshSubagents;
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
         // the cancellation before the channel it is sending through goes away.
+        foreach (var choice in _usageLimitChoices) choice.Choose.Dispose();
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         Cards.Dispose();

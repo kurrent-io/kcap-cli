@@ -10,7 +10,9 @@ public sealed record ChatSessionInfo(
         string Status, string StatusLabel, string Vendor, string? Model, string? Root, bool? AwaitingInput, bool Ended,
         string ReadOnlyNotice, string? FeedKey,
         // The daemon's count of running subagents; null on the remote lane and from an older daemon.
-        int? LiveSubagents = null) {
+        int? LiveSubagents = null,
+        // The local daemon's usage-limit notice. Null on the remote lane and from an older daemon.
+        UsageLimitNoticeDto? UsageLimit = null) {
     public bool WaitsOnUser => StatusLabel == "Waiting for input";
 
     /// The daemon dropped the agent before this pane ever saw it.
@@ -22,7 +24,8 @@ public sealed record ChatSessionInfo(
         // RepoPath: the repository for a primary, whose worktree beneath it ToolDetail strips, or
         // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
-        ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath, dto.LiveSubagents);
+        ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath,
+        dto.LiveSubagents, dto.UsageLimit);
 
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended) => new(
         row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,

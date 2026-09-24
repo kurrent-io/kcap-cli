@@ -66,6 +66,10 @@ internal record AgentInstance(
     public bool                 HasReceivedOutput { get; set; }
     public TerminalOutputBuffer OutputBuffer      { get; } = new();
 
+    /// The usage-limit menu last matched on this agent's screen, or null when the screen does
+    /// not show one. Read by the status snapshot; written only from the PTY read loop.
+    public UsageLimitNoticeDto? UsageLimit { get; set; }
+
     /// The agent's own transcript — Claude's project .jsonl or Codex's rollout — resolved once
     /// by discovery and cached: the status payload and the Codex send-path probe both read it,
     /// and neither may scan a directory to do so. Null until discovery lands, and forever for a
@@ -3036,6 +3040,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var dialogDetector = agent is { Kind: LaunchKind.ReviewFlow, Runtime.EmitsTerminalOutput: true }
             ? new ConsentDialogDetector()
             : null;
+        var usageLimit = agent is { Vendor: "claude", Runtime.EmitsTerminalOutput: true }
+            ? new ClaudeUsageLimitDetector()
+            : null;
 
         try {
             await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
@@ -3054,6 +3061,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // by DetectSessionIdAsync) the dialog phase is over — stop scanning so ordinary
                 // reviewer/tool output that merely quotes a banner phrase (e.g. a reviewer reading the
                 // detector's own source) can't latch a false wedge and kill a healthy reviewer.
+                if (usageLimit is not null) NoteUsageLimit(agent, usageLimit, data);
+
                 if (dialogDetector is not null) {
                     if (agent.SessionId is not null) {
                         dialogDetector = null; // session live — release the detector + its window
@@ -3097,6 +3106,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 await FinalizeAgentRunAsync(agent);
             }
         }
+    }
+
+    /// <summary>Publishes a change in the live usage-limit menu. The scrape runs on the PTY read
+    /// and must not wait: a miss leaves the previous notice, and only a real change pulses status.</summary>
+    void NoteUsageLimit(AgentInstance agent, ClaudeUsageLimitDetector detector, byte[] data) {
+        var notice = detector.Observe(data);
+        if (Equals(agent.UsageLimit, notice)) return;
+        agent.UsageLimit = notice;
+        _statusNotifier.Pulse();
     }
 
     /// <summary>

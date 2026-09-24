@@ -213,6 +213,25 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     /// A control key bypasses bracketed paste and submit. The same attach gate protects it from
     /// reaching a retired or read-only client, and an in-flight paste must finish before Escape.
+    /// A single key, with no bracketed paste and no trailing submit. Used to answer a menu the
+    /// TUI is already showing.
+    public async Task<bool> SendRawAsync(byte key, CancellationToken ct) {
+        var token = Volatile.Read(ref _openingToken);
+        if (!CanInterrupt || _client is not { } client || ct.IsCancellationRequested) return false;
+        if (Volatile.Read(ref _openingToken) != token) return false;
+        try {
+            while (_delivery is { IsCompleted: false } delivery) await delivery.WaitAsync(ct);
+            if (!CanInterrupt || Volatile.Read(ref _openingToken) != token || ct.IsCancellationRequested) return false;
+            await client.SendInputAsync([key]);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return false; }
+        catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: usage-limit choice failed: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task SendEscapeAsync(CancellationToken ct) {
         var token = Volatile.Read(ref _openingToken);
         if (!CanInterrupt || _client is not { } client || ct.IsCancellationRequested) return;
