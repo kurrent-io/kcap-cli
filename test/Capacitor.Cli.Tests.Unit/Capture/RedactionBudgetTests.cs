@@ -15,6 +15,14 @@ public class RedactionBudgetTests {
     }
 
     [Test]
+    public async Task UnlimitedBudgetNeverExpires() {
+        var time = new FakeTimeProvider();
+        var budget = new RedactionBudget(time, TimeSpan.MaxValue);
+        time.Advance(TimeSpan.FromDays(365));
+        await Assert.That(budget.Check).ThrowsNothing();
+    }
+
+    [Test]
     public async Task RecordDoesNotRenewBudgetForEachValue() {
         var time = new AdvancingRedactionTimeProvider();
         var line = "[" + string.Join(",", Enumerable.Repeat("\"plain\"", 200)) + "]";
