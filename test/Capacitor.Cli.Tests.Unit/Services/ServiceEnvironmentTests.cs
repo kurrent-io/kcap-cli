@@ -32,6 +32,24 @@ public class ServiceEnvironmentTests {
         await Assert.That(env[Core.ConfigRoot.ConfigDirEnvVar]).IsEqualTo(Config.Directory);
     }
 
+    /// A scheduled task starts without the installing shell's HOME, and a rooted HOME decides the
+    /// fixed daemons directory: without it the daemon and its CLI resolve two different stores.
+    [Test]
+    public async Task Build_bakes_a_rooted_home_on_windows_only() {
+        var home = Config.Directory;
+        var src = new Dictionary<string, string> { ["HOME"] = home };
+
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: true)["HOME"]).IsEqualTo(home);
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: false).ContainsKey("HOME")).IsFalse();
+    }
+
+    [Test]
+    public async Task Build_skips_a_relative_home() {
+        var src = new Dictionary<string, string> { ["HOME"] = "relative/home" };
+
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: true).ContainsKey("HOME")).IsFalse();
+    }
+
     [Test]
     public async Task Build_omits_profile_when_null_and_keeps_kcap_url() {
         var src = new Dictionary<string, string> { ["KCAP_URL"] = "https://x" };
