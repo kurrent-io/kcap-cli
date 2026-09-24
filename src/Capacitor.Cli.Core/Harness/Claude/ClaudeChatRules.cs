@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Models.Transcripts.Harness.Claude;
 using Google.Protobuf.WellKnownTypes;
 
@@ -23,6 +24,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             || IsTaskNotification(slug, raw)) return null;
 
         var text = raw.Text ?? "";
+        if (BashCommand(text) is { } command) return "!" + command;
         var name = CommandName().Match(text).Groups[1].Value.Trim();
         if (name.StartsWith('/')) {
             var args = CommandArgs().Match(text).Groups[1].Value.Trim();
@@ -38,7 +40,14 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         switch (envelope.Kind) {
             case AcpEventKind.UserMessage: {
                 if (IsTaskNotification(slug, envelope)) return TaskNotificationNote(envelope);
-                var text = StripWrappers(envelope.Text ?? "");
+                var raw = envelope.Text ?? "";
+                // A bang command is its own user record: the command in bash-input, the output in
+                // bash-stdout/stderr. A message that only quotes those tags is left as written.
+                if (BashCommand(raw) is { } command)
+                    return envelope with { Text = "! " + WithoutAttachmentTrailer(command), ToolKind = ChatDisplayKind.Shell };
+                if (BashOutput(raw) is { } output)
+                    return output.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = output, ToolKind = ChatDisplayKind.Shell };
+                var text = StripWrappers(raw);
                 return text.Length == 0 ? null : envelope with { Text = text };
             }
             case AcpEventKind.ToolCall:
@@ -126,6 +135,37 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     /// echoes.
     internal static string StripWrappers(string text) => Wrappers().Replace(text, "").Trim();
 
+    /// The command when the whole message is a bash-input tag; null when the tag is quoted
+    /// inside other text or the command is blank.
+    static string? BashCommand(string text) {
+        var tag = BashInput().Match(text);
+        if (!tag.Success || BashInput().Replace(text, "").Trim().Length > 0) return null;
+        var command = tag.Groups[1].Value.Trim();
+        return command.Length == 0 ? null : command;
+    }
+
+    /// The queue matches the daemon's attachment trailer. The chat shows the command that was typed.
+    static string WithoutAttachmentTrailer(string command) {
+        var split = command.LastIndexOf("\n\n", StringComparison.Ordinal);
+        if (split <= 0) return command;
+        if (!command.AsSpan(split + 2).StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal)) return command;
+        var typed = command[..split].TrimEnd();
+        return typed.Length == 0 ? command : typed;
+    }
+
+    /// Combined stdout and stderr when the whole message is those tags; empty when they are
+    /// blank, null when other text remains. Close tags may be missing on a truncated record.
+    static string? BashOutput(string text) {
+        var stdout = BashStdout().Match(text);
+        var stderr = BashStderr().Match(text);
+        if (!stdout.Success && !stderr.Success) return null;
+        if (BashStderr().Replace(BashStdout().Replace(text, ""), "").Trim().Length > 0) return null;
+        var parts = new List<string>(2);
+        if (stdout.Success && stdout.Groups[1].Value.Trim() is { Length: > 0 } o) parts.Add(o);
+        if (stderr.Success && stderr.Groups[1].Value.Trim() is { Length: > 0 } e) parts.Add(e);
+        return string.Join("\n", parts);
+    }
+
     [GeneratedRegex(@"<command-name>(.*?)</command-name>", RegexOptions.Singleline)]
     private static partial Regex CommandName();
 
@@ -153,4 +193,14 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     [GeneratedRegex(@"<(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>.*?</\1>", RegexOptions.Singleline)]
     private static partial Regex Wrappers();
+
+    [GeneratedRegex(@"<bash-input>(.*?)</bash-input>", RegexOptions.Singleline)]
+    private static partial Regex BashInput();
+
+    // A stored record can end before its closing tag, so the close stays optional.
+    [GeneratedRegex(@"<bash-stdout>(.*?)(?:</bash-stdout>|$)", RegexOptions.Singleline)]
+    private static partial Regex BashStdout();
+
+    [GeneratedRegex(@"<bash-stderr>(.*?)(?:</bash-stderr>|$)", RegexOptions.Singleline)]
+    private static partial Regex BashStderr();
 }

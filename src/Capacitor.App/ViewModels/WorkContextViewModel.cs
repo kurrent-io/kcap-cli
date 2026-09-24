@@ -35,11 +35,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 OfferFallbacks();
             }
             this.RaisePropertyChanged(nameof(PullRequests));
-            this.RaisePropertyChanged(nameof(HasPullRequestContext));
             RaiseRelated();
         }
     }
-    public bool HasPullRequestContext => PullRequests is not null;
     public bool ShowsLegacyLinks => PullRequests is null;
     public PullRequestRepository? PrimaryRepository { get; private set; }
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);

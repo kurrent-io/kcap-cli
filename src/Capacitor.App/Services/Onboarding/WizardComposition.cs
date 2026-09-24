@@ -25,11 +25,12 @@ internal sealed record WizardFacadeSpec(
     CliTelemetry                                               Telemetry,
     AuthEndpoints                                              Endpoints,
     TimeProvider                                               Time,
-    Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit);
+    Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit,
+    CommitPrecondition?                                        Precondition = null);
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
 /// (including ones the shell filtered out as inapplicable — the summary still names them), and the
-/// Import step by name — the close path must cancel its in-flight run directly (spec §7), which
+/// Import step by name — the close path must cancel its in-flight run directly, which
 /// CanLeaveAsync alone does not cover since closing the window never navigates away from a step.
 internal sealed record WizardGraph(
     OnboardingViewModel ViewModel, WizardAuthService Auth, IReadOnlyList<IWizardStep> Steps,
@@ -70,7 +71,7 @@ internal sealed record WizardGraphOptions(
     TimeProvider                                                                 Time,
     CancellationToken                                                            ShutdownToken);
 
-/// The wizard half of the composition root (spec decision 2), split out of App so it can be driven
+/// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
     internal const string CliMissingNote     = "kcap isn't on this machine";
@@ -90,20 +91,21 @@ internal static class WizardComposition {
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
             SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
-            spec.Time, spec.BeforeCommit), spec.Profile);
+            spec.Time, spec.BeforeCommit), spec.Profile, spec.Precondition);
 
     /// The ONE façade a wizard run signs in through — provisioner armed (a provisioner-less façade
-    /// dead-ends "Create a workspace" at "ask your admin") and the decision-7 arming hook wired as
+    /// dead-ends "Create a workspace" at "ask your admin") and the consent-flip claim arming hook wired as
     /// before-commit, so a claim exists before anything durable is published.
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> BuildOperation(
             ConfigRoot root, TokenStore tokenStore, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
             GitHubOAuthClient github, WorkOSClient workos,
             string profile, WizardBridges bridges, ConsentFlipClaims claims, TimeProvider time,
-            Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation) =>
+            Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation,
+            CommitPrecondition? precondition = null) =>
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
             bridges.Provisioner, bridges.Telemetry, bridges.Endpoints, time,
-            WizardAuthService.ArmingHook(claims)));
+            WizardAuthService.ArmingHook(claims), precondition));
 
     internal static WizardGraph BuildGraph(WizardGraphOptions options) {
         var claims = options.Claims;
@@ -142,8 +144,20 @@ internal static class WizardComposition {
         // A WorkOS "I already have a workspace" prefills the Connect step; without the navigation
         // the prefill would sit on a page the user is not looking at.
         signIn.RetargetRequested += _ => wizard.TryGoTo(WizardStepId.Connect);
+        signIn.Completed += () => _ = AdvanceAfterHoldAsync(wizard, wizard.Visit, options.Time, options.ShutdownToken);
 
         return new WizardGraph(wizard, auth, steps, import);
+    }
+
+    static async Task AdvanceAfterHoldAsync(
+            OnboardingViewModel wizard, int visit, TimeProvider time, CancellationToken ct) {
+        try {
+            await Task.Delay(SignInStepViewModel.SuccessHold, time, ct).ConfigureAwait(true);
+        } catch (OperationCanceledException) {
+            return;
+        }
+
+        wizard.TryAdvanceFrom(WizardStepId.SignIn, visit);
     }
 
     /// The Done step's rows: outcome labels, not the in-wizard step titles. Connect picks a
@@ -174,11 +188,10 @@ internal static class WizardComposition {
     };
 
     static string ConnectNote(ConnectStepViewModel step) => step.Intent switch {
-        ConnectIntent.Discover { Provider: AuthProvider.GitHubApp } => "Find workspaces with GitHub",
-        ConnectIntent.Discover                                      => "Find workspaces with single sign-on",
-        ConnectIntent.Paste paste                                   => paste.ServerInput,
-        ConnectIntent.Create                                        => "Create a new workspace",
-        _                                                           => "Workspace chosen",
+        ConnectIntent.Discover    => "Find workspaces with single sign-on",
+        ConnectIntent.Paste paste => paste.ServerInput,
+        ConnectIntent.Create      => "Create a new workspace",
+        _                         => "Workspace chosen",
     };
 
     static string DefaultsNote(DefaultsStepViewModel step) {

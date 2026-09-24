@@ -4,8 +4,8 @@ using Avalonia.Interactivity;
 
 namespace Capacitor.App.Views;
 
-/// The Sessions surface's rail. DataContext is the window's own MainWindowViewModel, inherited —
-/// this view never builds or assigns one, same contract as HomeView.
+/// The session rail. DataContext is the window's own MainWindowViewModel, inherited — this view
+/// never builds or assigns one.
 public partial class SessionRailView : UserControl {
     public SessionRailView() => InitializeComponent();
 

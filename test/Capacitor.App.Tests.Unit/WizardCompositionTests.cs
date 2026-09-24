@@ -47,7 +47,7 @@ static class WizardCompositionFixtures {
 /// (a) Fresh-machine happy path: a None-provider Paste sign-in through the REAL façade (the only
 /// scripted external is the /auth/config HTTP call), driven through the REAL step VMs and the
 /// REAL OnboardingViewModel all the way to the Done summary — with no kcap CLI resolved anywhere
-/// in the composition, the fresh-machine shape spec §9 documents.
+/// in the composition, the fresh-machine shape.
 ///
 /// [NotInParallel]: the process-global headless session, since composing the wizard constructs
 /// ReactiveUI VMs.
@@ -151,6 +151,34 @@ public class WizardCompositionHappyPathTests {
         await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0);
         await Assert.That(harness.Cli.PluginInstallCallCount).IsEqualTo(0);
         await Assert.That(harness.Cli.ImportCallCount).IsEqualTo(0);
+    }
+}
+
+/// The Paste arm is the one the re-auth dialog runs, and it is the only arm that can carry a
+/// precondition: a mismatch can only be refused if the operation forwarded it to LoginAsync.
+public class WizardSignInOperationPreconditionTests {
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
+    const string ProfileName = "acme";
+    const string ServerUrl   = "https://acme.kcap.ai";
+
+    [Test]
+    public async Task A_paste_sign_in_is_refused_when_the_profile_does_not_name_the_expected_server() {
+        WizardCompositionFixtures.WriteConfig(Config.Root,
+            new ProfileConfig {
+                ActiveProfile = ProfileName,
+                Profiles      = new() { [ProfileName] = new Profile { ServerUrl = ServerUrl } }
+            });
+
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var operation = WizardSignInOperation.For(
+            AuthFixtures.NewFacade(Config.Root, new RecordingAuthProgress(), handler), ProfileName,
+            new CommitPrecondition.ExpectServer("https://elsewhere.example"));
+
+        var result = await operation(new ConnectIntent.Paste(ServerUrl), CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Failed>();
+        await Assert.That(File.Exists(Config.PathTo("tokens", $"{ProfileName}.json"))).IsFalse();
     }
 }
 

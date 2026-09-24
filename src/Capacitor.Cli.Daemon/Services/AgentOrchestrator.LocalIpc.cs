@@ -336,7 +336,6 @@ internal partial class AgentOrchestrator {
                 // missing the day this path grows an ACP runtime.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
-                IsLocalSpawned = true,
                 Work           = work,
                 McpConfigPath  = built.McpConfigPath,
                 CurrentCols    = cols,

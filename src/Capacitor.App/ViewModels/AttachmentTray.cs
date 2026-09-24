@@ -23,7 +23,6 @@ public sealed class AttachmentTray : ReactiveObject {
     public int Count => _items.Count;
     public int FreeSlots => Math.Max(0, InputWire.MaxAttachmentsPerPrompt - _items.Count);
     public bool HasAttachments => _items.Count > 0;
-    public long TotalBytes => _items.Sum(f => (long)f.Bytes.Length);
     public int Generation => _generation;
 
     public IReadOnlyList<IntakeRefusal> AddAll(IReadOnlyList<StagedAttachment> files) {
@@ -73,7 +72,6 @@ public sealed class AttachmentTray : ReactiveObject {
         _generation++;
         this.RaisePropertyChanged(nameof(Count));
         this.RaisePropertyChanged(nameof(HasAttachments));
-        this.RaisePropertyChanged(nameof(TotalBytes));
         this.RaisePropertyChanged(nameof(Generation));
     }
 }

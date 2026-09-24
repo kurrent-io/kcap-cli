@@ -36,8 +36,7 @@
                         </StackPanel>
                     </Border>
                     <Button x:Name="OpenInWebButton" Content="Open in web" Command="{Binding OpenInWebCommand}" IsVisible="{Binding HasAgent}"
-                            Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
-                            Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="13.5" />
+                            Classes="kcapGhost" Padding="10,5" FontSize="13.5" />
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
                             IsVisible="{Binding HasAgent}" Padding="10,5" FontSize="13.5" />
                 </StackPanel>

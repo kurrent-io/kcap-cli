@@ -77,7 +77,7 @@ public class RemoteSessionViewModelTests {
             card.AgentId = "a1";
             h.Permissions.Add(card);
 
-            await WaitUntilAsync(() => vm.Cards.HasPendingCards, what: "the card");
+            await WaitUntilAsync(() => vm.Chat.Cards.HasPendingCards, what: "the card");
             await Assert.That(vm.RepoLabelText).Contains("work-mac");
             await vm.TeardownAsync();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "released on teardown");
@@ -195,9 +195,9 @@ public class RemoteSessionViewModelTests {
         });
     }
 
-    /// A same-id local row is not proof of a twin: the dedup fails open, so an unrelated local
-    /// agent can carry this id. Calling that an origin change would tell the user the agent moved
-    /// and point them at a process that has nothing to do with it.
+    /// A proven twin is not enough on its own: the dedup fails open, so an unrelated local agent
+    /// can carry this id. Only a matching session id makes it a move; calling anything else an
+    /// origin change would point the user at a process that has nothing to do with it.
     [Test]
     public async Task A_same_id_local_row_for_another_session_is_not_an_origin_change() {
         await RunOnUiAsync(async () => {
@@ -205,6 +205,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
 
+            h.Directory.ProvenTwins.Add("a1");
             h.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
                 Agent("a1", "gemini", hasTerminal: true, "/repos/kcap-cli", sessionId: "a-different-session"),
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));

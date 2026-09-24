@@ -374,12 +374,12 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             new("object", new() {
                 ["query"] = new("string", "What to search for."),
                 ["limit"] = new("number", "Max results (default 10, max 50).")
-            }, ["query"])),
+            }, ["query"]), McpToolAnnotations.Read),
         new("get_memory",
             "Fetch a memory's full content by id or slug. Slug resolution precedence: your memories, then your teams', then org-wide; repo-scoped before global.",
             new("object", new() {
                 ["id_or_slug"] = new("string", "Memory id (32 hex) or slug.")
-            }, ["id_or_slug"])),
+            }, ["id_or_slug"]), McpToolAnnotations.Read),
         new("save_memory",
             "Save a durable learning to the server. Two orthogonal axes. PEOPLE (audience — who can see + edit): 'user' (private), 'team', 'org' (everyone), or 'project' (that project's members — pass audience_project). PLACE (where it surfaces): the cwd's repo by default; a project with project: '<slug>' (surfaces across that project's repos — use it for learnings that span repos instead of saving them org-wide); or the whole org with global: true. project wins over the repo. If the current repo can't be resolved, pass project or global: true, or the save fails. Prefer update_memory when the result reports a nearDuplicate.",
             new("object", new() {
@@ -393,7 +393,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["project"]          = new("string", "Project slug — the PLACE axis: homes the memory at that project so it surfaces across the project's repos (wins over the cwd repo; no membership needed). Distinct from 'audience_project' above"),
                 ["global"]           = new("boolean", "true = org-wide, not tied to the current repo (required if not run from a git checkout and no project is given; default: scoped to cwd repo)"),
                 ["machine_specific"] = new("boolean", "true = only relevant on this machine (user audience only)")
-            }, ["audience", "slug", "description", "content", "kind"])),
+            }, ["audience", "slug", "description", "content", "kind"]), McpToolAnnotations.Additive),
         new("update_memory",
             "Update an existing memory's description/content/kind (any subset).",
             new("object", new() {
@@ -401,7 +401,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["description"] = new("string", "New one-line summary"),
                 ["content"]     = new("string", "New body"),
                 ["kind"]        = new("string", "preference | feedback | project | reference")
-            }, ["id"])),
+            }, ["id"]), McpToolAnnotations.Destructive),
         new("rescope_memory",
             "Change a memory's audience — who can see + edit it (promote your user memory to team, org, or a project's members) — or move its home context to a project (where it surfaces). Two orthogonal axes: audience_project sets the PEOPLE (audience 'project'); project sets the PLACE (context move — takes precedence and is independent of audience).",
             new("object", new() {
@@ -410,9 +410,9 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["team"]             = new("string", "Target team when audience is 'team'"),
                 ["audience_project"] = new("string", "Target project slug when audience is 'project' — the PEOPLE axis (its members become editors; you must be a member). Distinct from 'project' below"),
                 ["project"]          = new("string", "Target project slug — the PLACE axis: moves the memory's home context to that project (takes precedence over audience)")
-            }, ["id"])),
+            }, ["id"]), McpToolAnnotations.Destructive),
         new("archive_memory",
             "Archive (soft-delete) a memory.",
-            new("object", new() { ["id"] = new("string", "Memory id") }, ["id"]))
+            new("object", new() { ["id"] = new("string", "Memory id") }, ["id"]), McpToolAnnotations.Destructive)
     ];
 }

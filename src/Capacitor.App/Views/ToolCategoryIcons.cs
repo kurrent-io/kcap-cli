@@ -18,8 +18,7 @@ public static class ToolCategoryIcons {
         ToolCategory.Agent     => "M9,8 V6.5 A3,3 0 0 1 15,6.5 V8 H18 V19 H6 V8 Z M11,8 V7 A1,1 0 0 1 13,7 V8",
         ToolCategory.Plan      => "M6,6 H18 M6,11 H18 M6,16 H14 M5,5 H7 V7 H5 Z M5,10 H7 V12 H5 Z M5,15 H7 V17 H5 Z",
         ToolCategory.Question  => "M7,7 H17 V15 H13 L10,19 V15 H7 Z M12,10 V11 M12,14 H12.01",
-        // Extension / puzzle — generic MCP and unknown tools; distinct from Edit and Agent at 12px.
-        ToolCategory.Other     => "M8,4 H16 V8 H20 V12 H16 V16 H8 V12 H12 V8 H8 V4 Z",
+        // Extension / puzzle — Other, generic MCP and unknown tools; distinct from Edit and Agent at 12px.
         _                      => "M8,4 H16 V8 H20 V12 H16 V16 H8 V12 H12 V8 H8 V4 Z",
     };
 
@@ -30,6 +29,7 @@ public static class ToolCategoryIcons {
         _            => "",
     };
 
+    public static string CommandIcon => ForCategory(ToolCategory.Command);
     public static string NoteIcon => ForFixedLabel("Note");
     public static string PermissionIcon => ForFixedLabel("Permission");
     public static string QuestionIcon => ForFixedLabel("Question");

@@ -322,9 +322,10 @@ public class McpFlowsServerTests : IDisposable {
     /// Pins the four review-tool schemas byte-stably: definition_id/participant/message must
     /// NEVER leak into these schemas — old clients (and old skills) depend on the exact
     /// property/required sets that shipped before the generic tools were added. The one deliberate
-    /// exception is `get_review_flow_status`'s additive, optional `wait` (the liveness-supervision
-    /// status-wait argument) — pinned explicitly below rather than silently allowed, so a future
-    /// accidental property change still fails loudly.
+    /// exception is `get_review_flow_status`: `wait` and `session_id` are additive and optional, and
+    /// `flow_run_id` is optional there, since a driver whose start the harness aborted never got one.
+    /// Pinned explicitly below rather than silently allowed, so a future accidental property change
+    /// still fails loudly.
     /// </summary>
     [Test]
     public async Task Review_tool_schemas_are_unchanged() {
@@ -350,12 +351,13 @@ public class McpFlowsServerTests : IDisposable {
 
             await AssertSchema(
                 byName["get_review_flow_status"],
-                // Liveness-supervision status wait: additive optional `wait` — blocks until the
-                // round is terminal instead of a single snapshot GET. Backwards-compatible by
-                // construction (optional, not in `required`), so pinning it here is deliberate, not a
-                // relaxation of the byte-stable contract this test otherwise enforces.
-                properties: ["flow_run_id", "wait"],
-                required:   ["flow_run_id"]
+                // Every argument optional: `wait` blocks until the round is terminal instead of a
+                // single snapshot GET, and an omitted `flow_run_id` resolves the calling session's
+                // open flow (`session_id` names another session). Backwards-compatible by
+                // construction, so pinning it here is deliberate, not a relaxation of the byte-stable
+                // contract this test otherwise enforces.
+                properties: ["flow_run_id", "session_id", "wait"],
+                required:   []
             );
 
             await AssertSchema(

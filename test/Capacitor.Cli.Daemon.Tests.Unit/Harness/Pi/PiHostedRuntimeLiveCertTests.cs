@@ -38,6 +38,10 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 public class PiHostedRuntimeLiveCertTests {
     const string LiveGateEnvVar = "KCAP_PI_HOSTED_LIVE";
 
+    /// <summary>The lowest <c>pi</c> build this cert has passed on, or "pending" before its first live
+    /// run. A minimum, never an exact version: a pass on a newer build changes nothing.</summary>
+    internal const string VerifiedFloor = "pending";
+
     static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(30);
     static readonly TimeSpan TurnTimeout  = TimeSpan.FromSeconds(60);
     static readonly TimeSpan StopTimeout  = TimeSpan.FromSeconds(15);
@@ -74,7 +78,8 @@ public class PiHostedRuntimeLiveCertTests {
         // Logged for the record — mirrors the memory-injection cert's RecordCertEnvironment spirit: a
         // cert passing (or failing) against an unknown build is how earlier live-cert failures got
         // misdiagnosed as code defects when the real cause was a stale/mismatched installed binary.
-        await LogPiVersionAsync(config.PiPath);
+        var installedVersion = await LogPiVersionAsync(config.PiPath);
+        await ReviewerCertFloor.RequireAtOrAboveFloorAsync(installedVersion, VerifiedFloor);
 
         var factory = new PiRpcHostedAgentRuntimeFactory(
             config: config,
@@ -182,10 +187,11 @@ public class PiHostedRuntimeLiveCertTests {
         return (false, null, collected);
     }
 
-    /// <summary>Best-effort <c>pi --version</c> capture for the test log — never asserted on, purely
-    /// diagnostic (see the memory-injection cert's <c>RecordCertEnvironmentAsync</c> for the same
-    /// spirit: a cert result is meaningless without knowing which build it ran against).</summary>
-    static async Task LogPiVersionAsync(string piPath) {
+    /// <summary>Best-effort <c>pi --version</c> capture for the test log — the return value feeds only
+    /// <see cref="ReviewerCertFloor.RequireAtOrAboveFloorAsync"/> (see the memory-injection cert's
+    /// <c>RecordCertEnvironmentAsync</c> for the same logging spirit: a cert result is meaningless
+    /// without knowing which build it ran against).</summary>
+    static async Task<string> LogPiVersionAsync(string piPath) {
         try {
             using var process = Process.Start(new ProcessStartInfo(piPath, ["--version"]) {
                 RedirectStandardOutput = true,
@@ -195,16 +201,19 @@ public class PiHostedRuntimeLiveCertTests {
 
             if (process is null) {
                 Console.WriteLine("[pi-hosted-live] pi --version: could not start process");
-                return;
+                return "";
             }
 
             var stdout = await process.StandardOutput.ReadToEndAsync();
             var stderr = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            Console.WriteLine($"[pi-hosted-live] pi --version: {stdout.Trim()}{stderr.Trim()}");
+            var installed = stdout.Trim();
+            Console.WriteLine($"[pi-hosted-live] pi --version: {installed}{stderr.Trim()}");
+            return installed;
         } catch (Exception ex) {
             Console.WriteLine($"[pi-hosted-live] pi --version failed: {ex.Message}");
+            return "";
         }
     }
 

@@ -351,13 +351,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.Reconnecting += OnReconnecting;
         _hub.Reconnected  += OnReconnected;
         _hub.Closed       += OnClosed;
-
-        _terminalSender = new TerminalOutputSender(
-            (agentId, base64, ct) => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64), ct),
-            isConnected: () => _hub.State == HubConnectionState.Connected,
-            logger,
-            _time
-        );
     }
 
     /// <summary>
@@ -413,20 +406,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     internal int DisposeBodyRuns => Volatile.Read(ref _disposeBodyRuns);
 
-    /// <summary>Test seam: the terminal-sender CTS, so tests can assert it ends cancelled AND
-    /// disposed after the first dispose pass (removal of the Dispose call fails the suite).</summary>
-    internal CancellationTokenSource? TerminalSenderCtsForTests => _terminalSenderCts;
-
     /// <summary>Test seam: lets a test swap in a faulting awaited task and assert the failure is
     /// contained + logged while the mandatory resource release still runs.</summary>
     internal Task? EventProcessorTaskForTests {
         get => _eventProcessorTask;
         set => _eventProcessorTask = value;
     }
-
-    readonly TerminalOutputSender    _terminalSender;
-    Task?                            _terminalSenderTask;
-    CancellationTokenSource?         _terminalSenderCts;
 
     /// <summary>
     /// A monotonic timestamp taken each time the hub reaches a
@@ -463,11 +448,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public async Task ConnectAsync(CancellationToken ct) {
         _ct                 = ct;
         _eventProcessorTask = ProcessEventQueueAsync(ct);
-        // Linked to ct but separately cancellable so DisposeAsync can stop the
-        // sender even if the caller's token never fires — otherwise a chunk held
-        // through an outage could block disposal.
-        _terminalSenderCts  = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _terminalSenderTask = _terminalSender.RunAsync(_terminalSenderCts.Token);
         await ConnectWithRetryAsync(ct);
     }
 
@@ -710,6 +690,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // wire-compatible with old servers (ignored).
                     AcpPresetVendors: _config.AcpPresetVendors,
                     PermissionModeVendors: _config.PermissionModeVendors,
+                    PrReviewVendors: _config.PrReviewVendors,
                     // Read off the handler, never asserted: an unwired connection (early startup,
                     // a test, a second ServerConnection) would otherwise invite RequestStatusReport2
                     // frames that its null-conditional invoke answers with silence.
@@ -1606,30 +1587,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         ) => _hub.InvokeAsync<ParkParticipantOutcome>("ReportParticipantParked", agentId, canonicalSessionId, reason, cancellationToken: ct);
 
     /// <summary>
-    /// Queues a base64 PTY chunk for the hosted-agent terminal mirror:
-    /// chunks are drained by <see cref="TerminalOutputSender"/>'s single ordered loop
-    /// instead of being fired at <c>SendAsync</c> fire-and-forget, so they reach the
-    /// server in PTY order. The enqueue awaits when the queue is full — the caller
-    /// (the PTY read loop) awaits this, so a stalled transport back-pressures the PTY
-    /// rather than dropping bytes mid-escape-sequence.
+    /// One terminal chunk, straight to the hub. Throws when the send fails and honours
+    /// <paramref name="ct"/> while a write is blocked in the transport; the caller owns ordering
+    /// and retry. Cancelling ends the wait, not necessarily the delivery — the bytes may already
+    /// be in the transport pipe.
     /// </summary>
-    /// <param name="ct">
-    /// Cancels a blocked (back-pressured) enqueue. The read loop passes a token tied
-    /// to BOTH the per-agent stop (<c>ReadCts</c>) and daemon shutdown, so stopping a
-    /// single agent releases its read loop even mid-outage — otherwise the loop's
-    /// finally-block finalization/cleanup would stall until daemon shutdown.
-    /// </param>
     public virtual Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) =>
-        _terminalSender.EnqueueAsync(agentId, base64Data, ct).AsTask();
-
-    /// <summary>
-    /// Non-blocking terminal-output enqueue for local-first agents (see
-    /// <see cref="TerminalOutputSender.TryEnqueue"/>): never back-pressures the caller, so a
-    /// registered local agent's PTY read loop and live terminal stay responsive through a tunnel
-    /// stall. Returns false if the chunk was dropped (backlog full).
-    /// </summary>
-    public virtual bool TrySendTerminalOutput(string agentId, string base64Data) =>
-        _terminalSender.TryEnqueue(agentId, base64Data);
+        _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64Data), ct);
 
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
 
@@ -1741,15 +1705,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         _disposed = true; // live-path flag read by OnClosed — separate from the run-once guard
 
-        var cts = _terminalSenderCts;
-
         try {
             // Faultable awaits — each contained + logged individually so one faulted pipeline
             // task can't skip its sibling or the mandatory resource release in the finally below.
             // A disposal path must never throw into DI teardown (NativeAOT: unhandled → abort()).
             try {
                 _eventChannel.Writer.TryComplete();
-                _terminalSender.Complete();
 
                 if (_eventProcessorTask is not null) {
                     await _eventProcessorTask;
@@ -1757,33 +1718,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             } catch (Exception ex) {
                 LogDisposeStepFailed(ex, "event-processor");
             }
-
-            try {
-                // Cancel the sender's own token so a chunk being held through an outage
-                // can't block disposal regardless of the caller's token state.
-                if (cts is not null) {
-                    try {
-                        await cts.CancelAsync();
-                    } catch (ObjectDisposedException) {
-                        // Already torn down elsewhere — nothing left to cancel.
-                    }
-                }
-
-                if (_terminalSenderTask is not null) {
-                    await _terminalSenderTask;
-                }
-            } catch (Exception ex) {
-                LogDisposeStepFailed(ex, "terminal-sender");
-            }
         } finally {
             // Mandatory release — each step individually guarded so one failure can't skip the
             // rest, and nothing here can throw into DI teardown.
-            try {
-                cts?.Dispose();
-            } catch (Exception ex) {
-                LogDisposeStepFailed(ex, "terminal-sender-cts");
-            }
-
             try {
                 _httpClient?.Dispose();
             } catch (Exception ex) {

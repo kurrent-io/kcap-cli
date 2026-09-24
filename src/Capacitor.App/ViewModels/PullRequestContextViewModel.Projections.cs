@@ -8,14 +8,9 @@ namespace Capacitor.App.ViewModels;
 public sealed partial class PullRequestContextViewModel {
     public string Title => CanDisplay && _overview?.Title is { } title ? title
         : _selected is { IsAvailable: true } choice ? choice.Link.Title ?? choice.Label : _selected?.Label ?? "";
-    public string Lifecycle => CanDisplay ? _overview?.Lifecycle switch { "draft" => "Draft", "open" => "Open", "merged" => "Merged", "closed" => "Closed", _ => "Unknown" } : "";
     public string Branches => CanDisplay ? (_overview?.HeadRef ?? "?") + " → " + (_overview?.BaseRef ?? "?") : "";
     public string FetchedLabel => CanDisplay && _overviewRead?.FetchedAt is { } at ? "Fetched " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
     public string AccessLabel => CanDisplay ? (_grace ? "Access refresh paused" : "Access checked for " + (_overview?.AccessCheckedFor ?? "linked GitHub account")) : "";
-    public string ReviewSummary => CanDisplay ? _overview?.ReviewDecision switch {
-        "approved" => "Approved", "changes_requested" => "Changes requested", "review_required" => "Review required", _ => "Review decision unknown"
-    } : "";
-    public string CheckSummary => ChecksStatus.Detail ?? ChecksStatus.Text;
     public string? Description => CanDisplayReader && _section == "overview" ? _overview?.Description : null;
     public bool DescriptionTruncated => CanDisplayReader && _overview?.DescriptionTruncated == true;
     public string DescriptionNote => !CanDisplayReader ? "Refresh access to open PR content." : _overview?.Description is null ? "Description unavailable." : _overview.Description.Length == 0 ? "No description." : "";
@@ -50,6 +45,15 @@ public sealed partial class PullRequestContextViewModel {
     public string SectionTitle => _section switch { "checks" => "Checks", "reviewers" => "Reviewers", "reviews" => "Published reviews",
         "threads" => "Inline threads", "thread_comments" => "Thread replies", "conversation" => "Conversation", _ => "Description" };
 
+    static readonly string[] NotifiedProperties = [
+        nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
+        nameof(Title), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel),
+        nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
+        nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
+        nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(SectionTitle),
+        nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel),
+    ];
+
     void Notify() {
         _readerNote = _readers is null ? null
             : _selected?.Subject is { } subject ? _readers.NoteFor(subject.Provider, subject.Host)
@@ -57,12 +61,7 @@ public sealed partial class PullRequestContextViewModel {
         var rows = CanDisplayReader ? CurrentSection?.Pages.SelectMany(page => page.Rows).ToArray() ?? [] : [];
         ReconcileRows(rows);
         if (!_disposed && _hasPullRequest.Value != HasPullRequest) _hasPullRequest.OnNext(HasPullRequest);
-        foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
-            nameof(Title), nameof(Lifecycle), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel), nameof(ReviewSummary), nameof(CheckSummary),
-            nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
-            nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
-            nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(SectionTitle),
-            nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel) }) this.RaisePropertyChanged(property);
+        foreach (var property in NotifiedProperties) this.RaisePropertyChanged(property);
         NotifyPresentation();
     }
 

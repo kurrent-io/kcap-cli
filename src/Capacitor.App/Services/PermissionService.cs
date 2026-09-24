@@ -40,7 +40,7 @@ public sealed class PermissionService : IPermissionService {
     readonly PermissionResponder _respond;
     readonly IDisposable _statusSub;
     readonly IDisposable? _agentsSub;
-    IReadOnlyDictionary<string, string> _sessionAgents = new Dictionary<string, string>();
+    IReadOnlyDictionary<string, string> _sessionAgents = FrozenDictionary<string, string>.Empty;
     CancellationTokenSource? _loopCts;
     long _liveSequence;
     long _laneEpoch;
@@ -130,10 +130,16 @@ public sealed class PermissionService : IPermissionService {
         kind is not null && (kind.Contains("reject", StringComparison.OrdinalIgnoreCase) || kind.Contains("deny", StringComparison.OrdinalIgnoreCase) || kind.Contains("cancel", StringComparison.OrdinalIgnoreCase))
             ? PermissionBehaviors.Deny : PermissionBehaviors.Allow;
 
-    public Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) =>
-        target.Lane == PermissionLane.Local
-            ? SendResolveAsync(target, new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Withdraw, null, null), ct)
-            : Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.TransportFailure, "withdraw_unsupported"));
+    public Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) {
+        if (target.Lane == PermissionLane.Local)
+            return SendResolveAsync(target, new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Withdraw, null, null), ct);
+        // The server lane has no withdraw frame. The transcript already showed the tool finished,
+        // so the card is dropped here and a later replay of the same id stays dropped.
+        lock (_lock) {
+            if (!_disposed) ConcludeServerKey(target.RequestId);
+        }
+        return Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.Applied, null));
+    }
 
     async Task<PermissionResolveOutcome> SendResolveAsync(PendingPermissionRequest target, PermissionResolveDto dto, CancellationToken ct) {
         PermissionAckDto ack;

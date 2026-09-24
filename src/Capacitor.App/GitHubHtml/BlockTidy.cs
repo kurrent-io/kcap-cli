@@ -12,7 +12,7 @@ public static class BlockTidy {
     public static void Run(ContainerBlock container) {
         foreach (var child in container) if (child is ContainerBlock nested) Run(nested);
         for (var i = 0; i < container.Count; i++) {
-            if (container[i] is not (QuoteBlock or HtmlIndentBlock) || container[i] is not ContainerBlock wrapper) continue;
+            if (container[i] is not ContainerBlock wrapper || wrapper is not (QuoteBlock or HtmlIndentBlock)) continue;
             if (wrapper.Count == 0 || !wrapper.All(child => child is DetailsBlock)) continue;
             Lift(wrapper, container, ref i);
         }

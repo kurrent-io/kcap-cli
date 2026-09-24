@@ -82,9 +82,8 @@ internal static class AvaloniaSession {
     /// Pins RxSchedulers.MainThreadScheduler to an immediate System.Reactive IScheduler for
     /// the body and RESTORES the prior scheduler in finally (it is process-global). This is
     /// also the flavor pin: it only compiles if the scheduler IS a System.Reactive IScheduler
-    /// consumed by ObserveOn — the spec's scheduler-identity acceptance. (ReactiveUI 23.2.28
-    /// moved the ambient scheduler off the classic static `RxApp` type onto `RxSchedulers`;
-    /// `RxApp` scheduler properties no longer exist in this ReactiveUI line.)
+    /// consumed by ObserveOn. (The ambient scheduler lives on `RxSchedulers`; this ReactiveUI line
+    /// has no `RxApp` scheduler properties.)
     public static async Task WithImmediateRxScheduler(Func<Task> body) {
         // Start the process-wide session before snapshotting "prior": outside a dispatch nothing
         // has configured MainThreadScheduler yet, and the finally below would restore that

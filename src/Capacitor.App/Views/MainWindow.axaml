@@ -19,8 +19,7 @@
         <KeyBinding Gesture="Meta+N" Command="{Binding CloseWorkspaceCommand}" />
         <KeyBinding Gesture="Ctrl+N" Command="{Binding CloseWorkspaceCommand}" />
     </Window.KeyBindings>
-    <!-- Sessions is the home surface: rail | launcher-or-workspace. The right pane's empty state
-         IS the launcher. Home stays in the tree but hidden (ShowHomeCommand still exists).
+    <!-- Rail | launcher-or-workspace. The right pane's empty state IS the launcher.
          Workspace content is a template so the terminal is only built once a session opens.
          ExtendClientAreaToDecorationsHint paints into the title bar; the transparent strip below
          only receives presses where no surface content is hit-testable — rail and workspace
@@ -29,15 +28,7 @@
         <Border Height="40" VerticalAlignment="Top" Background="Transparent"
                 PointerPressed="OnChromePointerPressed" />
 
-        <Grid x:Name="HomeSurface" Margin="24,40,24,0"
-              IsVisible="{Binding IsHomeView}">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <views:HomeView DataContext="{Binding Home}" />
-            </ScrollViewer>
-        </Grid>
-
-        <Grid x:Name="SessionsSurface" ColumnDefinitions="310,*"
-              IsVisible="{Binding IsSessionsView}">
+        <Grid x:Name="SessionsSurface" ColumnDefinitions="310,*">
             <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
             <Panel Grid.Column="1">
                 <!-- The launcher pane: daemon status top-left, Activity top-right, the composer

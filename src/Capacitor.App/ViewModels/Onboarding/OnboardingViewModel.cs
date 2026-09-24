@@ -14,7 +14,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public IReadOnlyList<IWizardStep> Steps { get; }
 
     /// Wizard-first mode builds no tray and no main window, so the outcome consumer's Status/
-    /// Attention lines are rendered here (spec decision 2). Null in tests that don't need them.
+    /// Attention lines are rendered here. Null in tests that don't need them.
     public WizardLifecycleSurface? Surface { get; }
 
     int _index;
@@ -100,6 +100,19 @@ public sealed class OnboardingViewModel : ReactiveObject {
         return true;
     }
 
+    /// Bumped on every transition, so a callback armed during one visit to a step can tell a
+    /// later visit to the same step apart.
+    internal int Visit { get; private set; }
+
+    /// Move on from a step that finished by itself during <paramref name="visit"/>. Refused once
+    /// the user has navigated since — a late call must not pull them off the page they chose, even
+    /// when that page is the same step again — and once the wizard has closed.
+    internal bool TryAdvanceFrom(WizardStepId id, int visit) {
+        if (_closed || Visit != visit || Current.Id != id || _index >= Steps.Count - 1) return false;
+
+        return TryGoTo(Steps[_index + 1].Id);
+    }
+
     async Task NavigateAsync(WizardNavigation direction) {
         if (_navigating) return; // defense in depth — canExecute already blocks a bound button
         Navigating = true;
@@ -134,6 +147,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     // Caller holds the Navigating gate and the leaving step has already released it.
     async Task MoveToAsync(int index) {
         _index = index;
+        Visit++;
         Current = Steps[_index];
         await SafeEnterAsync(Current);
     }

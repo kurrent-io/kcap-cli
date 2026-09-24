@@ -43,6 +43,16 @@ public class DaemonConnectProtocolVersionTests {
     }
 
     [Test]
+    public async Task Serialized_DaemonConnect_carries_the_pr_review_vendors() {
+        var json = JsonSerializer.Serialize(
+            BuildConnect(2) with { PrReviewVendors = ["claude", "codex"] }, CapacitorJsonContext.Default.DaemonConnect);
+
+        using var doc = JsonDocument.Parse(json);
+        await Assert.That(doc.RootElement.GetProperty("pr_review_vendors").EnumerateArray().Select(v => v.GetString()!))
+            .IsEquivalentTo(["claude", "codex"]);
+    }
+
+    [Test]
     public async Task Golden_fixture_round_trips_into_DaemonConnect_at_protocol_2() {
         var fixtureJson = await File.ReadAllTextAsync(FixturePath);
 

@@ -22,6 +22,28 @@ public sealed class SystemNoteItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;
 }
 
+/// A bang command the user ran, and the output record that follows it. The output arrives later,
+/// so it is filled in on the same item.
+public sealed class ShellCommandItem : ChatItemViewModel {
+    public ShellCommandItem(string command) { Command = command; }
+
+    public string Command { get; }
+    public bool HasCommand => Command.Length > 0;
+
+    string? _output;
+    public string? Output {
+        get => _output;
+        internal set {
+            if (_output == value) return;
+            _output = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HasOutput));
+        }
+    }
+
+    public bool HasOutput => !string.IsNullOrEmpty(_output);
+}
+
 public enum ToolOutcome { Running, Done, Error }
 
 public sealed class ToolCallItem(string name, string detail, ToolCategory category) : ChatItemViewModel {
@@ -47,7 +69,6 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
             if (_outcome == value) return;
             _outcome = value;
             this.RaisePropertyChanged();
-            this.RaisePropertyChanged(nameof(OutcomeGlyph));
             this.RaisePropertyChanged(nameof(IsError));
             this.RaisePropertyChanged(nameof(IsSettled));
             this.RaisePropertyChanged(nameof(IsRunning));
@@ -62,7 +83,6 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
             if (_isAwaitingPermission == value) return;
             _isAwaitingPermission = value;
             this.RaisePropertyChanged();
-            this.RaisePropertyChanged(nameof(OutcomeGlyph));
             this.RaisePropertyChanged(nameof(IsRunning));
         }
     }
@@ -72,11 +92,6 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// True while the call is in flight and not waiting on a permission prompt — drives the
     /// pulsing status pill so a live row is never blank.
     public bool IsRunning => _outcome == ToolOutcome.Running && !_isAwaitingPermission;
-    public string OutcomeGlyph => _outcome switch {
-        ToolOutcome.Done  => "✓",
-        ToolOutcome.Error => "✕",
-        _                 => _isAwaitingPermission ? "?" : "",
-    };
 
 }
 
@@ -143,9 +158,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         }
     }
 
-    /// The single call on a lone card — header status binds here.
-    public ToolCallItem? LoneCall => _calls.Count == 1 ? _calls[0] : null;
-
     bool _hasFailure;
     public bool HasFailure { get => _hasFailure; private set => this.RaiseAndSetIfChanged(ref _hasFailure, value); }
 
@@ -186,7 +198,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         this.RaisePropertyChanged(nameof(ShowsKindChip));
         this.RaisePropertyChanged(nameof(KindChip));
         this.RaisePropertyChanged(nameof(HeaderIconData));
-        this.RaisePropertyChanged(nameof(LoneCall));
     }
 
     void OnCallChanged(object? sender, PropertyChangedEventArgs e) {

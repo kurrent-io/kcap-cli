@@ -84,12 +84,15 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
+    static readonly string[] PresentationProperties = [
+        nameof(HasMultipleChoices), nameof(SectionEyebrow), nameof(SectionMeta), nameof(RepositoryLabel), nameof(NumberLabel), nameof(HasNumberLabel), nameof(ProviderLabel),
+        nameof(CanOpenSource), nameof(ShowsOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
+        nameof(HasStaleOverview), nameof(OverviewFreshnessLabel),
+        nameof(SelectedTabIndex), nameof(SelectedReviewTabIndex), nameof(LifecycleStatus), nameof(ReviewStatus), nameof(ChecksStatus),
+        nameof(ReviewerRows), nameof(CheckRows), nameof(DiscussionRows),
+    ];
+
     void NotifyPresentation() {
-        foreach (var property in new[] { nameof(HasMultipleChoices), nameof(SectionEyebrow), nameof(SectionMeta), nameof(RepositoryLabel), nameof(NumberLabel), nameof(HasNumberLabel), nameof(ProviderLabel),
-            nameof(CanOpenSource), nameof(ShowsOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
-            nameof(HasStaleOverview), nameof(OverviewFreshnessLabel),
-            nameof(SelectedTabIndex), nameof(SelectedReviewTabIndex), nameof(LifecycleStatus), nameof(ReviewStatus), nameof(ChecksStatus),
-            nameof(ReviewerRows), nameof(CheckRows), nameof(DiscussionRows) })
-            this.RaisePropertyChanged(property);
+        foreach (var property in PresentationProperties) this.RaisePropertyChanged(property);
     }
 }

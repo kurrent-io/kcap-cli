@@ -58,17 +58,20 @@ public class JsonMcpConfigWriterTests {
     }
 
     [Test]
-    public async Task Register_gemini_shape_marks_only_read_only_servers_trusted() {
+    public async Task Register_gemini_shape_trusts_reads_and_own_record_writers_only() {
         using var tmp = new TempDir();
         var path = TempConfig(tmp);
         JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new FakeMarker());
 
         var servers = (JsonObject)Read(path)["mcpServers"]!;
-        // Read-only servers (pure reads) get trust:true; write/flow-launching servers keep prompting.
         await Assert.That((bool)servers["kcap-review"]!["trust"]!).IsTrue();
         await Assert.That((bool)servers["kcap-sessions"]!["trust"]!).IsTrue();
-        await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();   // writes (save) → still prompts
-        await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();    // spawns reviewer → still prompts
+        await Assert.That((bool)servers["kcap-analytics"]!["trust"]!).IsTrue();
+        await Assert.That((bool)servers["kcap-workitems"]!["trust"]!).IsTrue();
+        await Assert.That((bool)servers["kcap-plans"]!["trust"]!).IsTrue();
+        await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();     // launches a paid hosted reviewer
+        await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();    // can widen a memory's audience
+        await Assert.That(servers["kcap-artefacts"]!["trust"]).IsNull(); // can widen a page's audience
     }
 
     [Test]

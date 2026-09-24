@@ -332,22 +332,13 @@ public sealed partial class WatcherManager(
 
             // Don't let this detached child inherit the agent's pipe descriptors —
             // same pipe-leak hazard as the watcher spawn above.
-            ProcessHelpers.PreventInheritedHandles();
-
-            var process = starter.Start(psi);
-
-            if (process is null) {
+            if (starter.StartDetached(psi) is not { } pid) {
                 Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}");
 
                 return;
             }
 
-            // Close redirected streams from parent side so the child doesn't hold pipe FDs open
-            process.StandardInput.Close();
-            process.StandardOutput.Close();
-            process.StandardError.Close();
-
-            Console.Error.WriteLine($"Spawned what's-done generator for {sessionId} (PID {process.Id})");
+            Console.Error.WriteLine($"Spawned what's-done generator for {sessionId} (PID {pid})");
         } catch (Exception ex) {
             Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}: {ex.Message}");
         }
@@ -392,24 +383,15 @@ public sealed partial class WatcherManager(
             psi.ArgumentList.Add(transcriptPath);
 
             // Don't let this detached child inherit the agent's pipe descriptors —
-            // same pipe-leak hazard as the spawns above.
-            ProcessHelpers.PreventInheritedHandles();
-
-            var process = starter.Start(psi);
-
-            if (process is null) {
+            // same pipe-leak hazard as the spawns above. The child writes its own output to a
+            // log file, so it needs no streams from here.
+            if (starter.StartDetached(psi) is not { } pid) {
                 Console.Error.WriteLine($"Failed to spawn copilot finalize drain for {sessionId}");
 
                 return;
             }
 
-            // Close redirected streams from the parent side so the child doesn't
-            // hold pipe FDs open (the child redirects its own output to a log file).
-            process.StandardInput.Close();
-            process.StandardOutput.Close();
-            process.StandardError.Close();
-
-            Console.Error.WriteLine($"Spawned copilot finalize drain for {sessionId} (PID {process.Id})");
+            Console.Error.WriteLine($"Spawned copilot finalize drain for {sessionId} (PID {pid})");
         } catch (Exception ex) {
             Console.Error.WriteLine($"Failed to spawn copilot finalize drain for {sessionId}: {ex.Message}");
         }

@@ -6,7 +6,7 @@ namespace Capacitor.App.Services;
 
 /// Serializes ALL consent-policy IPC — passive refreshes and user toggles alike — through one
 /// lane, so results apply in start order and an older read can never overwrite a newer write's
-/// outcome (spec §6). ONE lock guards every lane/slot/state transition; the IPC calls
+/// outcome. ONE lock guards every lane/slot/state transition; the IPC calls
 /// themselves run unlocked on the thread pool from the void request methods, which never throw.
 public sealed class PauseController : IPauseController, IDisposable {
     static readonly ConsentRuleDto PauseRule = new("deny", null, null, null, null);
@@ -39,7 +39,7 @@ public sealed class PauseController : IPauseController, IDisposable {
 
     public void RequestRefresh() {
         lock (_lock) {
-            if (_disposed || _lane != Lane.Idle) return; // busy lane: dropped silently, no push (spec §6)
+            if (_disposed || _lane != Lane.Idle) return; // busy lane: dropped silently, no push
             _lane = Lane.Passive;
         }
         _ = Task.Run(RunPassiveAsync);
@@ -182,7 +182,7 @@ public sealed class PauseController : IPauseController, IDisposable {
     }
 
     // Caller must hold _lock. Busy is toggle-running OR toggle-queued; a passive-only lane
-    // occupancy never counts (spec §6 — the item stays enabled and a click queues).
+    // occupancy never counts (the item stays enabled and a click queues).
     // OnNext under _lock is deliberate, not incidental: it is what makes OnNext-after-Dispose
     // impossible (Dispose also sets _disposed under _lock) — do not move it outside the lock.
     void PushLocked() => _state.OnNext(new PauseState(_checked, _verified, _lane == Lane.Toggle || _queuedDesired.HasValue));

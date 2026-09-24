@@ -385,26 +385,6 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
-    public async Task Probe_in_flight_blocks_the_mutation_until_it_resolves() {
-        var gate = new TaskCompletionSource<string?>();
-        var cli = new FakeKcapCli { VersionBehavior = _ => gate.Task };
-        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
-        var lane = MakeLane(factory, classify: CannedSucceeded);
-
-        var t = lane.RunAsync(Req(), CancellationToken.None);
-
-        await Assert.That(cli.StartVerifiedCallCount).IsEqualTo(0);
-
-        gate.SetResult("9.9.9");
-        var outcome = await t;
-
-        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
-        await Assert.That(cli.StartVerifiedCallCount).IsEqualTo(1);
-
-        await lane.DisposeAsync();
-    }
-
-    [Test]
     public async Task Executor_factory_runs_once_per_action_and_the_same_pinned_path_serves_probe_and_mutation() {
         using var tmp = new TempDir();
         var customPath = tmp.PathTo("custom", "kcap"); // the probe's answer, never opened

@@ -374,12 +374,16 @@ causation, and never a savings figure.
 
 **`What did I leave unfinished in my last session?`** — `search_sessions` with `author: <user>`
 for their most recent session, then `get_session_summary`: the answer lives in the summary's
-Unfinished/Risks section. Quote it with the session id; if the summary has no such section, say
-so plainly rather than inferring one from the transcript.
+Unfinished section. Quote it with the session id. An older summary has a combined Unfinished/Risks
+section instead, which mixes risks and status notes in with the work: report only the concrete
+actions still to do from it and leave the rest out. If there is no such section, or it holds no
+action still to do, say so plainly rather than inferring one from the transcript.
 
 **`Pick up where my last session left off`** — same lookup, then actually resume: load the
-summary's context and unfinished items, restate in two sentences where the work stopped, and ask
-which item to continue with. This one is an action, not a report — end by doing, not describing.
+summary's context and its unfinished actions (found as above), restate in two sentences where the
+work stopped, and ask which action to continue with. If there are none, say no unfinished action
+was recorded and ask what they want to work on next. This one is an action, not a report — end by
+doing, not describing.
 
 **Prompt suggestions you compose** — anywhere you offer a `Prompt ❯` line of your own (rule 5
 next steps, variations, follow-ups), two rules:

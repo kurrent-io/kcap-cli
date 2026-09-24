@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Harness.Pi;
+
 namespace Capacitor.Cli.Daemon.Harness.Pi;
 
 /// <summary>
@@ -32,5 +34,18 @@ internal static class PiLaunchEnvironment {
     /// <summary>Applies the one setting every hosted Pi launch needs.</summary>
     internal static void Apply(IDictionary<string, string?> environment) {
         environment[PureVariable] = "1";
+    }
+
+    /// <summary>The reviewer child's additions. The removed variables each repoint Pi or the transpiler
+    /// that loads the extension; the agent directory and proxy settings are the operator's and stay.</summary>
+    internal static void ApplyReviewer(IDictionary<string, string?> env, string manifestPath) {
+        env[PiReviewerExtension.ManifestEnvVar] = manifestPath;
+
+        foreach (var name in env.Keys.Where(k => k.StartsWith("JITI_", StringComparison.Ordinal)).ToArray())
+            env.Remove(name);
+
+        env.Remove("PI_PACKAGE_DIR");
+        env.Remove("PI_EXPERIMENTAL");
+        env.Remove("PI_CODING_AGENT_SESSION_DIR");
     }
 }
