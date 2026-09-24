@@ -677,10 +677,11 @@ partial class WatchCommand(
             cts.Cancel();
         }
 
-        // Resumed past a tool that opened before the cursor: rebuild the in-flight set so idle-end
-        // doesn't mistake a running agent for an idle one. Only reachable on a resume — at line 0
-        // the drain delivers the whole file and folds it itself.
+        // Resumed past a tool call that opened before the cursor: rebuild what its line would have
+        // taught the drain. At line 0 the drain delivers the whole file itself.
         if (state.LinesProcessed > 0) {
+            if (state.Commits is { } commits) ObservedCommits.Recall(commits, transcriptPath, state.LinesProcessed);
+
             if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {
                 await BackfillClaudePendingToolCallsAsync(
                     state.PendingClaudeToolCalls, transcriptPath, state.LinesProcessed, cts.Token, time);

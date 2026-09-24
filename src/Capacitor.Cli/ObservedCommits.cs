@@ -1,3 +1,4 @@
+using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
 using Capacitor.Models.Transcripts.Harness.Claude;
@@ -26,6 +27,17 @@ static class ObservedCommits {
             if (ClaudeShellSteps.Read(line) is { } steps)
                 foreach (var commit in await observer.ObserveAsync(steps))
                     if (Redacted(commit) is var redacted && !into.Contains(redacted)) into.Add(redacted);
+    }
+
+    public static void Recall(CommitObserver observer, string rawLine) {
+        if (ClaudeShellSteps.Read(rawLine) is { } steps) observer.Recall(steps);
+    }
+
+    public static void Recall(CommitObserver observer, string transcriptPath, int upToLine) {
+        try {
+            foreach (var line in File.ReadLinesShared(transcriptPath).Take(upToLine).Skip(upToLine - WatchCommand.ToolBackfillWindowLines))
+                Recall(observer, line);
+        } catch (IOException) { }
     }
 
     static ObservedCommit Redacted(ObservedCommit commit) =>

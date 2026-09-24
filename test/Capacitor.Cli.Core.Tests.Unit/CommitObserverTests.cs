@@ -112,8 +112,8 @@ public class CommitObserverTests {
         await Assert.That(commits.Single().RepoName).IsNull();
     }
 
-    /// <summary>After a restart, or for a background run read back later, the call is unknown: git's
-    /// confirmation places the commit, and an unconfirmed summary is dropped.</summary>
+    /// <summary>For a background run read back later the call is unknown: git's confirmation places
+    /// the commit, and an unconfirmed summary is dropped.</summary>
     [Test]
     public async Task A_result_whose_call_was_never_seen_counts_only_when_git_confirms_it() {
         var confirmed = await Observe(Observer(Root), ToolResults(("t9", $"[main {Short}] Fix watcher crash, fixes #45")));
@@ -133,6 +133,14 @@ public class CommitObserverTests {
         await Assert.That(during.Single().Sha).IsEqualTo(Full);
         await Assert.That(during.Single().Branch).IsEqualTo("main");
         await Assert.That(before).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_quiet_commit_whose_call_was_only_recalled_is_observed() {
+        var observer = Observer(Root, headAt: CalledAt.AddSeconds(1));
+        observer.Recall(ToolUse("t1", "git commit -q -m 'Fix watcher crash'"));
+
+        await Assert.That((await Observe(observer, ToolResults(("t1", "")))).Single().Sha).IsEqualTo(Full);
     }
 
     [Test]

@@ -39,7 +39,7 @@ public sealed class CommitObserver(
     /// <summary>Every commit these steps' results show landing. A step git cannot answer for yields
     /// nothing, so it never stalls the batch carrying it.</summary>
     public async Task<IReadOnlyList<ObservedCommit>> ObserveAsync(ShellSteps steps) {
-        foreach (var call in steps.Calls) Remember(call.Id, new Call(call.Command, steps.At));
+        Recall(steps);
         if (steps.Cwd is not { } cwd || steps.Results.Count == 0) return [];
 
         try {
@@ -49,12 +49,17 @@ public sealed class CommitObserver(
         }
     }
 
+    /// <summary>For steps before the resume point: a quiet commit is seen only when its call is known.</summary>
+    public void Recall(ShellSteps steps) {
+        foreach (var call in steps.Calls) Remember(call.Id, new Call(call.Command, steps.At));
+    }
+
     async Task<List<ObservedCommit>> ObserveResultsAsync(string cwd, ShellSteps steps) {
         List<ObservedCommit> found = [];
 
         foreach (var result in steps.Results) {
-            // A result whose call this observer never saw (a watcher restart, a background run read back
-            // through BashOutput) still counts, but only once git confirms the commit.
+            // A result whose call this observer never saw (a background run read back through
+            // BashOutput) still counts, but only once git confirms the commit.
             var call = _calls.GetValueOrDefault(result.CallId);
             if (call is not null && !CommitCommandRegex.IsMatch(call.Command)) continue;
 

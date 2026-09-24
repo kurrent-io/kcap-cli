@@ -468,6 +468,8 @@ public sealed partial class WatcherManager(
 
             while (await reader.ReadLineAsync() is { } line) {
                 if (lineIndex < startLine) {
+                    if (commits is not null && lineIndex >= startLine - WatchCommand.ToolBackfillWindowLines)
+                        ObservedCommits.Recall(commits, line);
                     lineIndex++;
 
                     continue;
