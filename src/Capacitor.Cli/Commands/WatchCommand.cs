@@ -514,7 +514,7 @@ partial class WatchCommand(
             state.LastRepoDetection = time.GetUtcNow();
         }
 
-        if (vendor == "claude") state.Commits = ObservedCommits.NewObserver(router, config, time);
+        state.Commits = ObservedCommits.For(vendor, router, config, time);
 
         if (vendor == "claude" && agentId is null) {
             state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
@@ -680,7 +680,7 @@ partial class WatchCommand(
         // Resumed past a tool call that opened before the cursor: rebuild what its line would have
         // taught the drain. At line 0 the drain delivers the whole file itself.
         if (state.LinesProcessed > 0) {
-            if (state.Commits is { } commits) ObservedCommits.Recall(commits, transcriptPath, state.LinesProcessed);
+            ObservedCommits.RecallBefore(state.Commits, transcriptPath, state.LinesProcessed);
 
             if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {
                 await BackfillClaudePendingToolCallsAsync(
@@ -1988,9 +1988,7 @@ partial class WatchCommand(
             var newLines       = drainRead.Lines.Select(SecretRedactor.RedactLine).ToList();
             var linesRead      = drainRead.NextPosition;
 
-            // Held until the batch carrying these lines lands; a failed send re-reads and re-finds them.
-            if (state.Commits is { } commits)
-                await ObservedCommits.CollectAsync(commits, drainRead.Lines, state.ObservedCommits);
+            await state.Commits.ObserveAsync(drainRead.Lines);
 
             // Track Antigravity in-flight tool calls + the latest step timestamp from this
             // drain's transcript lines (BEFORE appending USAGE lines, which aren't transcript
@@ -2314,7 +2312,7 @@ partial class WatchCommand(
                     LineNumbers     = newLineNumbers.ToArray(),
                     Repository      = repoToSend,
                     Vendor          = vendor,
-                    ObservedCommits = state.Commits is null ? null : [.. state.ObservedCommits],
+                    ObservedCommits = state.Commits.Pending,
                 };
 
                 int? cursorAckNextLine = null;
@@ -2354,7 +2352,7 @@ partial class WatchCommand(
                 // frontier, not the raw line count sent — a retry-blocked or persist-blocked
                 // line re-delivers next poll and an ignored (no-event) line still advances past.
                 state.LinesProcessed = cursorAckNextLine ?? linesRead;
-                state.ObservedCommits.Clear();
+                state.Commits.Delivered();
 
                 if (cursorAckNextLine is not null) {
                     // checkpoint only the bytes the ack actually covers.
@@ -2459,7 +2457,7 @@ partial class WatchCommand(
             string                vendor,
             IReadOnlyList<string> lines,
             IReadOnlyList<int>    lineNumbers,
-            IReadOnlyList<ObservedCommit>? observedCommits = null
+            ObservedCommit[]?     observedCommits = null
         ) => JsonSerializer.Serialize(
             new TranscriptBatch {
                 SessionId       = sessionId,
@@ -2467,7 +2465,7 @@ partial class WatchCommand(
                 Lines           = lines.ToArray(),
                 LineNumbers     = lineNumbers.ToArray(),
                 Vendor          = vendor,
-                ObservedCommits = observedCommits?.ToArray(),
+                ObservedCommits = observedCommits,
             },
             CapacitorJsonContext.Default.TranscriptBatch);
 
@@ -2491,7 +2489,7 @@ partial class WatchCommand(
             string?           agentId,
             string            vendor,
             int               linesProcessed,
-            CommitObserver?   commits,
+            CommitObservation commits,
             CancellationToken ct
         ) {
         if (!File.Exists(transcriptPath)) return null;
@@ -2530,13 +2528,9 @@ partial class WatchCommand(
         // unredacted on replay, leaking secrets the live path would have stripped.
         var redacted = tail.Lines.Select(SecretRedactor.RedactLine).ToList();
 
-        List<ObservedCommit>? observed = null;
-        if (commits is not null) {
-            observed = [];
-            await ObservedCommits.CollectAsync(commits, tail.Lines, observed);
-        }
+        await commits.ObserveAsync(tail.Lines);
 
-        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, redacted, tail.LineNumbers, observed);
+        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, redacted, tail.LineNumbers, commits.Pending);
         var result = transcriptSpool.Append(sessionId, batch);
 
         switch (result) {

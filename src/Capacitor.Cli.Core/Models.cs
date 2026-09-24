@@ -161,13 +161,11 @@ class WatchState {
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
     public List<string> BufferedLines       { get; } = [];
-
-    // Claude watchers: places the commits each batch shows landing, held until that batch lands.
-    public CommitObserver?      Commits         { get; set; }
-    public List<ObservedCommit> ObservedCommits { get; } = [];
     public List<int>    BufferedLineNumbers { get; } = [];
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
+
+    public CommitObservation Commits { get; set; } = CommitObservation.None;
 
     // Set by the shutdown final drain when it held back an unterminated/unparseable final line
     // rather than consuming it, so RunWatch can flag the session needs-import and never drop a

@@ -5,11 +5,22 @@ using Capacitor.Models.Transcripts.Harness.Claude;
 
 namespace Capacitor.Cli;
 
-/// <summary>The watcher side of <see cref="CommitObserver"/>: git placement through the repository
-/// detector, and every message redacted before it leaves the host, since git supplies text the
-/// transcript may never have held.</summary>
+/// <summary>Claude watchers observe commits through local git; every other vendor observes none.</summary>
 static class ObservedCommits {
-    public static CommitObserver NewObserver(GitProviderRouter router, ConfigRoot config, TimeProvider time) {
+    public static CommitObservation For(string vendor, GitProviderRouter router, ConfigRoot config, TimeProvider time) =>
+        vendor == "claude" ? Claude(Observer(router, config, time)) : CommitObservation.None;
+
+    // git supplies message text the transcript may never have held.
+    internal static CommitObservation Claude(CommitObserver observer) =>
+        CommitObservation.Of(ClaudeShellSteps.Read, observer, message => SecretRedactor.RedactValue(message, keyIsSecret: false) ?? message);
+
+    public static void RecallBefore(CommitObservation commits, string transcriptPath, int upToLine) {
+        try {
+            commits.Recall(File.ReadLinesShared(transcriptPath).Take(upToLine).Skip(upToLine - WatchCommand.ToolBackfillWindowLines));
+        } catch (IOException) { }
+    }
+
+    static CommitObserver Observer(GitProviderRouter router, ConfigRoot config, TimeProvider time) {
         var runGit = RepositoryDetection.DefaultRunner(time);
 
         return new CommitObserver(
@@ -18,28 +29,4 @@ static class ObservedCommits {
                 ? (repo.Owner, repo.RepoName)
                 : (null, null));
     }
-
-    /// <summary>Adds the commits <paramref name="rawLines"/> show landing. Reads the lines before
-    /// redaction, which swaps an oversized one, such as a noisy pre-commit hook's result, for a
-    /// placeholder.</summary>
-    public static async Task CollectAsync(CommitObserver observer, IEnumerable<string> rawLines, List<ObservedCommit> into) {
-        foreach (var line in rawLines)
-            if (ClaudeShellSteps.Read(line) is { } steps)
-                foreach (var commit in await observer.ObserveAsync(steps))
-                    if (Redacted(commit) is var redacted && !into.Contains(redacted)) into.Add(redacted);
-    }
-
-    public static void Recall(CommitObserver observer, string rawLine) {
-        if (ClaudeShellSteps.Read(rawLine) is { } steps) observer.Recall(steps);
-    }
-
-    public static void Recall(CommitObserver observer, string transcriptPath, int upToLine) {
-        try {
-            foreach (var line in File.ReadLinesShared(transcriptPath).Take(upToLine).Skip(upToLine - WatchCommand.ToolBackfillWindowLines))
-                Recall(observer, line);
-        } catch (IOException) { }
-    }
-
-    static ObservedCommit Redacted(ObservedCommit commit) =>
-        commit with { Message = SecretRedactor.RedactValue(commit.Message, keyIsSecret: false) ?? commit.Message };
 }

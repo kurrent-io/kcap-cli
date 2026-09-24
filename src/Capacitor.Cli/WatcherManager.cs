@@ -459,7 +459,7 @@ public sealed partial class WatcherManager(
             var newLines       = new List<string>();
             var newLineNumbers = new List<int>();
             var rawLines       = new List<string>();
-            var commits        = vendor == "claude" ? ObservedCommits.NewObserver(router, config, time) : null;
+            var commits        = ObservedCommits.For(vendor, router, config, time);
 
             await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var       reader = new StreamReader(stream);
@@ -468,8 +468,7 @@ public sealed partial class WatcherManager(
 
             while (await reader.ReadLineAsync() is { } line) {
                 if (lineIndex < startLine) {
-                    if (commits is not null && lineIndex >= startLine - WatchCommand.ToolBackfillWindowLines)
-                        ObservedCommits.Recall(commits, line);
+                    if (lineIndex >= startLine - WatchCommand.ToolBackfillWindowLines) commits.Recall([line]);
                     lineIndex++;
 
                     continue;
@@ -494,13 +493,7 @@ public sealed partial class WatcherManager(
                 return;
             }
 
-            // A live batch already told the server this session's commits are observed, so these
-            // lines must carry theirs too.
-            List<ObservedCommit>? observed = null;
-            if (commits is not null) {
-                observed = [];
-                await ObservedCommits.CollectAsync(commits, rawLines, observed);
-            }
+            await commits.ObserveAsync(rawLines);
 
             var batch = new TranscriptBatch {
                 SessionId       = sessionId,
@@ -508,7 +501,7 @@ public sealed partial class WatcherManager(
                 Lines           = [..newLines],
                 LineNumbers     = [..newLineNumbers],
                 Vendor          = vendor == "claude" ? null : vendor,
-                ObservedCommits = observed?.ToArray(),
+                ObservedCommits = commits.Pending,
             };
 
             var       batchJson = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);

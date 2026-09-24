@@ -28,10 +28,9 @@ public class ObservedCommitsTests {
                 ["type"] = "tool_result", ["tool_use_id"] = "t1", ["content"] = "[main abc1234] Fix watcher" }) }
         }.ToJsonString();
 
-        var found = new List<ObservedCommit>();
-        await ObservedCommits.CollectAsync(observer, [result, result], found);
+        var observation = ObservedCommits.Claude(observer);
+        await observation.ObserveAsync([result]);
 
-        await Assert.That(found).HasSingleItem();
-        await Assert.That(found[0].Message).DoesNotContain("sk-live-1234567890abcdef");
+        await Assert.That(observation.Pending!.Single().Message).DoesNotContain("sk-live-1234567890abcdef");
     }
 }

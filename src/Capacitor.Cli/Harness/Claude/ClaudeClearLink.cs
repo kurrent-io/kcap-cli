@@ -48,7 +48,7 @@ static class ClaudeClearLink {
 
     static string NotePath(ConfigRoot config, int pid) => config.Path("clear-links", pid.ToString(CultureInfo.InvariantCulture));
 
-    internal static void Record(ConfigRoot config, int pid, string sessionId) {
+    static void Record(ConfigRoot config, int pid, string sessionId) {
         var path = NotePath(config, pid);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, $"{sessionId}\n{ProcessStartToken.ForPid(pid)}");
@@ -56,7 +56,7 @@ static class ClaudeClearLink {
 
     /// <summary>Reads and removes the note. It is refused unless it carries the start token of the
     /// process holding the pid now, so a note left by an earlier holder never links.</summary>
-    internal static string? Take(ConfigRoot config, int pid) {
+    static string? Take(ConfigRoot config, int pid) {
         var path = NotePath(config, pid);
         if (!File.Exists(path)) return null;
 

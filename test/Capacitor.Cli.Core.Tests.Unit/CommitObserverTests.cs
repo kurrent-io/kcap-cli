@@ -26,7 +26,7 @@ public class CommitObserverTests {
                     $"rev-parse --verify --quiet {Short}^{{commit}}" => Full,
                     $"log -1 --format=%s {Full}"                    => subject,
                     $"log -1 --format=%B {Full}"                    => $"{subject}\n\nBody line",
-                    "log -1 --format=%H%x20%ct HEAD"                => headAt is { } h ? $"{Full} {h.ToUnixTimeSeconds()}" : null,
+                    "log -1 --format=%H%x20%ct%x20%s HEAD"          => headAt is { } h ? $"{Full} {h.ToUnixTimeSeconds()} {subject}" : null,
                     "rev-parse --abbrev-ref HEAD"                   => "main",
                     "rev-parse --show-toplevel"                     => dir,
                     _                                               => null
@@ -125,9 +125,9 @@ public class CommitObserverTests {
 
     [Test]
     public async Task A_quiet_commit_is_the_head_committed_during_the_call() {
-        var during = await Observe(Observer(Root, headAt: CalledAt.AddSeconds(1)),
+        var during = await Observe(Observer(Root, subject: "Fix watcher crash", headAt: CalledAt.AddSeconds(1)),
             ToolUse("t1", "git commit -q -m 'Fix watcher crash'"), ToolResults(("t1", "")));
-        var before = await Observe(Observer(Root, headAt: CalledAt.AddMinutes(-5)),
+        var before = await Observe(Observer(Root, subject: "Fix watcher crash", headAt: CalledAt.AddMinutes(-5)),
             ToolUse("t1", "git commit -q -m 'Fix watcher crash'"), ToolResults(("t1", "")));
 
         await Assert.That(during.Single().Sha).IsEqualTo(Full);
@@ -137,7 +137,7 @@ public class CommitObserverTests {
 
     [Test]
     public async Task A_quiet_commit_whose_call_was_only_recalled_is_observed() {
-        var observer = Observer(Root, headAt: CalledAt.AddSeconds(1));
+        var observer = Observer(Root, subject: "Fix watcher crash", headAt: CalledAt.AddSeconds(1));
         observer.Recall(ToolUse("t1", "git commit -q -m 'Fix watcher crash'"));
 
         await Assert.That((await Observe(observer, ToolResults(("t1", "")))).Single().Sha).IsEqualTo(Full);
