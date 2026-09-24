@@ -4,9 +4,9 @@ using Capacitor.Cli.Daemon.Pty;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// Reads Claude Code's usage-limit menu off the live PTY screen. The menu is terminal chrome:
-/// the option set depends on the account, and the transcript never records it. A match is the
-/// title plus at least two of the choices the CLI actually offers, so a sentence that merely
-/// quotes one of them does not raise a question.
+/// the option set depends on the account, and the transcript never records it. A match is a
+/// limit line, the title, and at least two of the choices the CLI actually offers. The title
+/// and the choices alone are what a session prints when someone asks it to show the menu.
 internal sealed class ClaudeUsageLimitDetector {
     public const string Prompt = "What do you want to do?";
 
@@ -50,7 +50,8 @@ internal sealed class ClaudeUsageLimitDetector {
             }
         }
 
-        return new UsageLimitNoticeDto(UsageLimitKinds.Blocked, summary ?? "Usage limit reached", Prompt, options);
+        if (summary is null) return null;
+        return new UsageLimitNoticeDto(UsageLimitKinds.Blocked, summary, Prompt, options);
     }
 
     static bool TryOption(string line, out int index, out string label) {

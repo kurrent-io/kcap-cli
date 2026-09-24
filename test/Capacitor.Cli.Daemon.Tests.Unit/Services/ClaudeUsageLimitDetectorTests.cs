@@ -5,8 +5,8 @@ using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
-/// Pins the live-screen match for Claude's usage-limit menu: the title plus two known choices,
-/// cleared when that screen is erased, and quiet for prose that only quotes a choice.
+/// Pins the live-screen match for Claude's usage-limit menu: a limit line, the title, and two
+/// known choices, cleared when that screen is erased, and quiet when the limit line is absent.
 public class ClaudeUsageLimitDetectorTests {
     const string Menu =
         "You've hit your session limit · resets 3:10pm\n\n" +
@@ -72,7 +72,17 @@ public class ClaudeUsageLimitDetectorTests {
 
     [Test]
     public async Task A_title_with_only_one_known_choice_is_not_a_question() {
-        var screen = "What do you want to do?\n1. Stop and wait for limit to reset\n";
+        var screen = "You've hit your session limit\nWhat do you want to do?\n1. Stop and wait for limit to reset\n";
+
+        await Assert.That(ClaudeUsageLimitDetector.Parse(screen)).IsNull();
+    }
+
+    [Test]
+    public async Task A_title_and_two_choices_without_a_limit_line_is_not_a_question() {
+        var screen =
+            "What do you want to do?\n" +
+            "1. Stop and wait for limit to reset\n" +
+            "2. Wait here, then continue automatically shortly\n";
 
         await Assert.That(ClaudeUsageLimitDetector.Parse(screen)).IsNull();
     }
