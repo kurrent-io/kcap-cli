@@ -4391,7 +4391,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     Task<string[]> HandleFindRepoForRemote(FindRepoForRemoteRequest req)
-        => _repoMatcher.FindAsync(req.Owner, req.Repo, req.CandidatePaths ?? [], _shutdownCts.Token);
+        => _repoMatcher.FindAsync(req.Owner, req.Repo, req.CandidatePaths ?? [], _shutdownCts.Token, req.ResolveWorktrees);
 
     /// <summary>
     /// Handles the server's <c>ProbeBorrowSource</c> client-result invocation (Phase A, task

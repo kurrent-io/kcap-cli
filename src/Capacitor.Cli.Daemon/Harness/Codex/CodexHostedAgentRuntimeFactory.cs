@@ -63,6 +63,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public string           CliPath                                    => _pty.CliPath;
     public bool             IsAvailable()                              => _pty.IsAvailable();
     public bool             SupportsUnattended                          => _pty.SupportsUnattended;
+    public bool             SupportsPrReview                            => _pty.SupportsPrReview;
     public UnattendedSupport DescribeUnattendedSupport()               => _pty.DescribeUnattendedSupport();
     public bool             SupportsBorrowedReviewFlow                  => _pty.SupportsBorrowedReviewFlow;
     public bool             BorrowedReviewRequiresIndependentSnapshot   => _pty.BorrowedReviewRequiresIndependentSnapshot;

@@ -133,6 +133,10 @@ public class DaemonConfig {
     public string[]? UnattendedVendors { get; set; }
     public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities { get; set; }
 
+    /// <summary>Installed vendors whose runtime can host a single-pass PR review — the server offers and
+    /// admits only these for one. <c>null</c> before the runner has probed.</summary>
+    public string[]? PrReviewVendors { get; set; }
+
     /// <summary>Per-vendor fingerprint of the binary <see cref="UnattendedVendorCapabilities"/> was
     /// probed from, taken before that probe; the vendor CLI watcher's starting point.</summary>
     public IReadOnlyDictionary<string, Services.CliBinaryStat?>? UnattendedVendorBaselines { get; set; }

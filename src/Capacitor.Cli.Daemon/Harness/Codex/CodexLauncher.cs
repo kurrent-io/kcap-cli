@@ -20,6 +20,7 @@ internal sealed partial class CodexLauncher(
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
     public bool   SupportsUnattended => true;
+    public bool   SupportsPrReview   => true;
     public bool   SupportsBorrowedReviewFlow => true;
 
     // Approval prompts are off for review-flow launches (always `never`, any worktree) and for an

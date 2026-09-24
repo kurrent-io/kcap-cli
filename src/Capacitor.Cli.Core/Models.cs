@@ -2023,10 +2023,14 @@ public readonly record struct ReviewLaunchInfo(
 /// own knowledge, walks each up to a git root, validates origin, and returns
 /// the confirmed roots.
 /// </summary>
+/// <param name="ResolveWorktrees">Report a linked worktree as its main checkout. Set only by a
+/// picker that lists repositories; flow discovery needs the worktree itself, because a reviewer
+/// branches from the checkout it is given. A server predating the field never sends it.</param>
 public readonly record struct FindRepoForRemoteRequest(
         string   Owner,
         string   Repo,
-        string[] CandidatePaths
+        string[] CandidatePaths,
+        bool     ResolveWorktrees = false
     );
 
 /// <summary>
@@ -2135,7 +2139,10 @@ public readonly record struct DaemonConnect(
         // 1 = verdict-only RunQuestion/FinalizeEval; 2 = RunQuestionV2/FinalizeEvalV2 with outcomes
         // and coded failures. A daemon predating this field sends nothing, which the server reads
         // as 1.
-        int                                         EvalProtocolVersion = 1
+        int                                         EvalProtocolVersion = 1,
+        // Vendor tokens this daemon can host a single-pass PR review on. A daemon predating this
+        // field sends nothing, which the server reads as Claude only.
+        string[]?                                   PrReviewVendors = null
     );
 
 public sealed record UnattendedVendorCapability(
