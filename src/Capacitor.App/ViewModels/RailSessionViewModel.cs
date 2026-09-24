@@ -82,7 +82,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         StatusDot = SessionStatusDots.For(row);
         Tooltip = IsStarting
             ? Join(row.Id, "Starting", LaunchStages.Label(row.LaunchStage))
-            : Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
+            : Join(row.Id, row.Status,
+                UsageLimitNoticeDto.IsQuestion(row.UsageLimit) ? row.UsageLimit!.Summary : null,
+                SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
                 subagents is null ? null : $"{subagents} running",
                 row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
         MachineBadge = row.MachineBadge;

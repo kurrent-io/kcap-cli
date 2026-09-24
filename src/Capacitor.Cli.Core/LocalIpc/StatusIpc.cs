@@ -86,7 +86,11 @@ public sealed record AgentStatusDto(
     // How many subagents the daemon believes are running: null until the agent's first subagent
     // report (an older daemon, a vendor whose hooks report none, or a session that has spawned
     // none yet), then a number — the clock's count while Running, zero in any other status.
-    int? LiveSubagents = null);
+    int? LiveSubagents = null,
+    // A vendor usage limit matched for this live agent. Null from an older daemon, and whenever
+    // nothing is matched. A blocked notice that carries options is a question the user answers;
+    // it is not AwaitingInput, which means the turn ended and a prompt will be read.
+    UsageLimitNoticeDto? UsageLimit = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.
@@ -99,6 +103,56 @@ public static class WorkLocationText {
 public static class TranscriptFormats {
     public const string Vendor    = "vendor";
     public const string Envelopes = "envelopes";
+}
+
+/// Wire tokens for <see cref="UsageLimitNoticeDto.Kind"/>.
+public static class UsageLimitKinds {
+    /// The vendor is waiting on a choice before the turn can continue. Chat send is refused.
+    public const string Blocked  = "blocked";
+    /// The vendor is retrying on its own. The composer stays usable.
+    public const string Retrying = "retrying";
+    /// The turn already stopped. The composer stays usable.
+    public const string Failed   = "failed";
+}
+
+/// One numbered choice on a blocking usage-limit menu. <see cref="Index"/> is the digit the
+/// vendor's own menu shows, which is what an answer sends.
+public sealed record UsageLimitOptionDto(int Index, string Label);
+
+/// Vendor-neutral usage-limit notice. Options are empty when the vendor is not asking a question.
+/// Equality is by value: a status pulse rebuilds this object, and a surface must not treat an
+/// unchanged menu as a new one.
+public sealed class UsageLimitNoticeDto : IEquatable<UsageLimitNoticeDto> {
+    public UsageLimitNoticeDto(string kind, string summary, string prompt, List<UsageLimitOptionDto>? options) {
+        Kind    = kind;
+        Summary = summary;
+        Prompt  = prompt;
+        Options = options ?? [];
+    }
+
+    public string Kind { get; }
+    public string Summary { get; }
+    public string Prompt { get; }
+    public List<UsageLimitOptionDto> Options { get; }
+
+    public static bool IsQuestion(UsageLimitNoticeDto? notice) =>
+        notice is { Kind: UsageLimitKinds.Blocked, Options.Count: > 0 };
+
+    public bool Equals(UsageLimitNoticeDto? other) {
+        if (other is null || Kind != other.Kind || Summary != other.Summary || Prompt != other.Prompt
+            || Options.Count != other.Options.Count) return false;
+        for (var i = 0; i < Options.Count; i++)
+            if (Options[i] != other.Options[i]) return false;
+        return true;
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as UsageLimitNoticeDto);
+
+    public override int GetHashCode() {
+        var hash = HashCode.Combine(Kind, Summary, Prompt);
+        foreach (var option in Options) hash = HashCode.Combine(hash, option);
+        return hash;
+    }
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]

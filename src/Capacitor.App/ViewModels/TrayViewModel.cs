@@ -221,7 +221,10 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         // can never make this fire retroactively; connection-trouble rows above already left
         // baseState non-Idle/Running and keep precedence for free, and the running-count badge
         // (count) keeps the agent count regardless.
-        var pendingAttention = ((status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.LocalCount > 0))
+        var usageLimits = status.State == AttachState.Connected && snap is not null
+            ? snap.Agents.Count(a => a.Status == "Running" && UsageLimitNoticeDto.IsQuestion(a.UsageLimit))
+            : 0;
+        var pendingAttention = ((status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.LocalCount > 0 || usageLimits > 0))
             || (remote.LaneConnected && (pendingSummary.ServerCount > 0 || remote.SessionsNeedingAttention > 0)))
             && baseState is TrayState.Idle or TrayState.Running;
         if (pendingAttention) state = TrayState.Attention;
@@ -240,7 +243,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return new TrayMenuModel(
             state, count,
             HeaderText(daemonName, status, snap, state, count, pendingAttention, pendingConsent,
-                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary, remote.SessionsNeedingAttention),
+                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary, remote.SessionsNeedingAttention, usageLimits),
             BuildEntries(status, snap, stopsInFlight, remote), BuildPause(status, pauseState), pendingConsent);
     }
 
@@ -315,7 +318,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     static string HeaderText(
             string daemonName, AttachStatus status, DaemonStatusDto? snap, TrayState state, int count,
             bool pendingAttention, int pendingConsent, string? lifecycleAttentionText, PendingSummary pendingSummary,
-            int remoteSessionsNeedingAttention) {
+            int remoteSessionsNeedingAttention, int usageLimits) {
         if (state == TrayState.Attention && status.State == AttachState.Unreachable && status.Reason == IncompatibleReason)
             return SkewMessage; // no daemon-name prefix
 
@@ -326,7 +329,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         // lane) — "not running" stays true of THIS machine, so the header says so instead of
         // claiming a local connection that isn't there.
         var body = pendingAttention
-            ? PendingBody(pendingSummary, pendingConsent, remoteSessionsNeedingAttention)
+            ? PendingBody(pendingSummary, pendingConsent, remoteSessionsNeedingAttention, usageLimits)
             : state switch {
                 TrayState.Stopped    => "not running",
                 TrayState.Connecting => "connecting…",
@@ -340,8 +343,9 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return $"{daemonName}: {body}";
     }
 
-    static string PendingBody(PendingSummary summary, int consent, int remoteSessionsNeedingAttention) {
-        var parts = new List<string>(4);
+    static string PendingBody(PendingSummary summary, int consent, int remoteSessionsNeedingAttention, int usageLimits) {
+        var parts = new List<string>(5);
+        if (usageLimits > 0) parts.Add($"{usageLimits} usage limit{(usageLimits == 1 ? "" : "s")}");
         if (summary.Questions > 0) parts.Add($"{summary.Questions} question{(summary.Questions == 1 ? "" : "s")} waiting");
         if (summary.Permissions > 0) parts.Add($"{summary.Permissions} permission request{(summary.Permissions == 1 ? "" : "s")} waiting");
         if (consent > 0) parts.Add($"{consent} launch{(consent == 1 ? "" : "es")} awaiting approval");
@@ -389,6 +393,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
 
     static string Label(AgentStatusDto agent) {
         var line = $"{agent.Kind} · {agent.Vendor} · {RepoLabel.Leaf(agent.RepoPath)}";
+        if (UsageLimitNoticeDto.IsQuestion(agent.UsageLimit)) line = $"{line} · usage limit";
 
         // A native menu row cannot ellipsize itself, so the title is cut before the separator.
         return agent.Title is null ? line

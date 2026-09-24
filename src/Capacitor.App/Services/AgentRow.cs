@@ -20,7 +20,9 @@ public sealed record AgentRow(
         // The runtime's latest handshake stage on a pending row; null on every published row.
         string? LaunchStage = null,
         // The daemon's count of running subagents; null on a remote or pending row.
-        int? LiveSubagents = null) {
+        int? LiveSubagents = null,
+        // A usage-limit question or notice from the local daemon. Null on a remote or pending row.
+        UsageLimitNoticeDto? UsageLimit = null) {
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
@@ -29,7 +31,7 @@ public sealed record AgentRow(
         WorktreePath: dto.WorktreePath, WorkLocation: dto.WorkLocation, BorrowedFrom: dto.BorrowedFrom,
         MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
         CheckoutKey: ViewModels.SessionRailViewModel.WorktreeKeyFor(dto), CheckoutLabel: "",
-        AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents);
+        AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents, UsageLimit: dto.UsageLimit);
 
     public static AgentRow FromRemote(AgentInstanceDto dto) {
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";
