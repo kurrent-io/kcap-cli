@@ -62,8 +62,12 @@ public sealed class QuestionCardKeyboard {
         }
 
         if (focused is not null && card.IsVisualAncestorOf(focused)) {
-            if (BelongsToStep(card, focused, step)) claim.Step = step;
-            else wiring.ArmRetry();
+            if (BelongsToStep(card, focused, step)) {
+                claim.Step = step;
+                return;
+            }
+            claim.Step = step;
+            target.Focus(NavigationMethod.Tab);
             return;
         }
 
@@ -85,10 +89,10 @@ public sealed class QuestionCardKeyboard {
     static bool BelongsToStep(Control card, Visual focused, int step) {
         if (focused is not InputElement { IsEffectivelyVisible: true } element) return false;
         if (element is StyledElement { DataContext: QuestionStepViewModel chip }) return chip.Index == step;
-        if (card.DataContext is QuestionCardViewModel { IsOnReview: true })
-            return GroupOf(element) is null || element.Classes.Contains("reviewRow");
+        if (element.Classes.Contains("reviewRow"))
+            return card.DataContext is QuestionCardViewModel { IsOnReview: true };
         var group = GroupOf(element);
-        return group is null || group.Index == step;
+        return group is not null && group.Index == step;
     }
 
     static QuestionGroupViewModel? GroupOf(StyledElement? node) {

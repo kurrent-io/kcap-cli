@@ -1139,8 +1139,6 @@ public class ChatTabViewSmokeTests {
     static List<Button> Steps(Host host) => host.View.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("step")).ToList();
     static bool Shows(Host host, string text) => host.View.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text && t.IsEffectivelyVisible);
 
-    /// The card takes the keyboard when it appears, options move with arrows and number keys without
-    /// activating, and Tab leaves the card for the composer.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_question_card_takes_focus_and_tabs_out() {
@@ -1191,6 +1189,39 @@ public class ChatTabViewSmokeTests {
                 focused = host.Window.FocusManager.GetFocusedElement();
             }
             await Assert.That(focused).IsSameReferenceAs(host.Composer);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Next_and_back_move_focus_with_the_question() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"Tags","multiSelect":true,"options":[{"label":"X"},{"label":"Y"}]},{"question":"Pick","options":[{"label":"A"},{"label":"B"}]}]}"""));
+            host.Settle();
+            var first = Option(host, "X");
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), first), what: "the first option");
+            Click(host, first);
+            await WaitUntilAsync(() => ((QuestionOptionViewModel)first.DataContext!).IsSelected, what: "selected");
+
+            var card = (QuestionCardViewModel)host.Chat.PendingCards.Single();
+            var next = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "Next");
+            // Headless pointer events do not focus, so the focus a real activation gives the button is applied by hand.
+            next.Focus(NavigationMethod.Tab);
+            host.Press(PhysicalKey.Enter);
+            await WaitUntilAsync(() => card.CurrentIndex == 1, what: "the next question");
+            host.Settle();
+            var second = Option(host, "A");
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), second), what: "focus on the next question");
+
+            var back = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "Back");
+            back.Focus(NavigationMethod.Tab);
+            host.Press(PhysicalKey.Enter);
+            await WaitUntilAsync(() => card.CurrentIndex == 0, what: "the previous question");
+            host.Settle();
+            await WaitUntilAsync(() => ReferenceEquals(host.Window.FocusManager?.GetFocusedElement(), Option(host, "X")), what: "focus on the previous question");
             await host.CloseAsync();
         });
     }
