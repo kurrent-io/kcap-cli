@@ -47,6 +47,11 @@ public sealed class EvidenceRunContext : IAsyncDisposable {
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    public void WriteRunFile(int ordinal, EvidenceRunFile runFile) {
+        using var stream = OwnerOnlyFile.CreateNew(RunFilePath(ordinal));
+        runFile.WriteTo(stream);
+    }
+
     public void BufferRetainedFact(string category, EvalService.RetainedFact fact) { lock (_gate) _retained.Add((category, fact)); }
 
     public int BufferedFactCount { get { lock (_gate) return _retained.Count; } }
