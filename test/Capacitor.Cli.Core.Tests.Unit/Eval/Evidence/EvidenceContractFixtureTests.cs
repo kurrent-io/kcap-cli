@@ -8,7 +8,7 @@ using Capacitor.Cli.Core.Eval.Evidence;
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
 /// <summary>The CLI's coverage vocabulary, failure codes, cite grammar and canonical-content table equal the golden fixture the
-/// server asserts S5 against, so the two producers cannot drift apart silently.</summary>
+/// server's coverage measure asserts against, so the two producers cannot drift apart silently.</summary>
 public class EvidenceContractFixtureTests {
     static readonly JsonElement Fixture =
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "eval-evidence", "contract.json"))).RootElement;
