@@ -58,6 +58,17 @@ public class EvidenceWireMirrorTests {
     }
 
     [Test]
+    public async Task A_legacy_shaped_hub_record_omits_the_new_trailing_keys() {
+        var prepare = JsonSerializer.Serialize(new PrepareResult(true, null, "s", 1, 2, 0, 0, 0), CapacitorJsonContext.Default.PrepareResult);
+        await Assert.That(prepare).IsEqualTo(
+            """{"success":true,"error":null,"canonical_session_id":"s","trace_entries":1,"trace_chars":2,"tool_results_total":0,"tool_results_truncated":0,"bytes_saved":0}""");
+
+        var result = JsonSerializer.Serialize(new QuestionResultV2(null, null, "moved", 0, 0), CapacitorJsonContext.Default.QuestionResultV2);
+        await Assert.That(result).IsEqualTo(
+            """{"assessment":null,"failure":null,"error":"moved","input_tokens":0,"output_tokens":0}""");
+    }
+
+    [Test]
     public async Task An_assessment_without_the_new_fields_serializes_as_it_always_has() {
         var a = new EvalQuestionAssessment { Category = "c", QuestionId = "q", Outcome = "assessed", Score = 5, Verdict = "pass", Finding = "f" };
         var json = JsonSerializer.Serialize(a, CapacitorJsonContext.Default.EvalQuestionAssessment);

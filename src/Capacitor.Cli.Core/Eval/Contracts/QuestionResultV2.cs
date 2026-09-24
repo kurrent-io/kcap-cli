@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Capacitor.Cli.Core.Eval.Contracts;
 
 /// <summary>Daemon → server: per-question judge result on eval protocol 2. Mirrors the server's
@@ -12,5 +14,6 @@ public readonly record struct QuestionResultV2(
         string?                 Error,
         long                    InputTokens,
         long                    OutputTokens,
-        string?                 RunFailure = null
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                                string?  RunFailure = null
     );

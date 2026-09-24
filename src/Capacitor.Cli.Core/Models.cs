@@ -2285,10 +2285,14 @@ public readonly record struct PrepareResult(
         int             ToolResultsTotal,
         int             ToolResultsTruncated,
         long            BytesSaved,
-        string?         EvidenceScopeVersion = null,
-        string?         Route                = null,
-        int?            SourceCount          = null,
-        DateTimeOffset? ExpiresAt            = null
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         EvidenceScopeVersion = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         Route                = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        int?            SourceCount          = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        DateTimeOffset? ExpiresAt            = null
     );
 
 /// <summary>Daemon → server: per-question judge result.</summary>
