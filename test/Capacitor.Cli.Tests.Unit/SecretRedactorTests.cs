@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Capture;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -93,6 +94,35 @@ public class SecretRedactorTests {
         await Assert.That(SecretRedactor.RedactValue("hello", keyIsSecret: true)).IsNotNull();
         await Assert.That(SecretRedactor.RedactValue("hello", keyIsSecret: false)).IsNull();
         await Assert.That(SecretRedactor.RedactValue("ghp_ABCDEFghijklmnop1234567890abcdef12345678", keyIsSecret: false)).IsNotNull();
+    }
+
+    [Test]
+    public async Task RedactValue_ScansAMultiMegabyteValue_WithNoDeadline() {
+        // Every delimiter gate is open, so each pattern scans the whole value before reaching the secret.
+        const string secret = "DATABASE_PASSWORD=hunter2-hunter2";
+        var row   = "[inventory row 000001] status=ok bytes=4096 note: none user@host\n";
+        var value = string.Concat(Enumerable.Repeat(row, 8_000_000 / row.Length)) + secret;
+
+        var redacted = SecretRedactor.RedactValue(value, keyIsSecret: false);
+
+        await Assert.That(redacted).IsNotNull();
+        await Assert.That(redacted!).DoesNotContain("hunter2-hunter2");
+        await Assert.That(redacted!).Contains("DATABASE_PASSWORD=[REDACTED]");
+    }
+
+    [Test]
+    public async Task OutOfProcessPatterns_AreTheWatcherVocabulary_WithoutItsDeadline() {
+        var slots = typeof(SecretPatterns).GetProperties().Where(p => p.PropertyType == typeof(Regex)).ToList();
+        await Assert.That(slots).IsNotEmpty();
+
+        foreach (var slot in slots) {
+            var watcher      = (Regex)slot.GetValue(SecretRedactor.Bounded)!;
+            var outOfProcess = (Regex)slot.GetValue(SecretRedactor.Unbounded.Value)!;
+            await Assert.That(watcher.MatchTimeout).IsNotEqualTo(Regex.InfiniteMatchTimeout);
+            await Assert.That(outOfProcess.MatchTimeout).IsEqualTo(Regex.InfiniteMatchTimeout);
+            await Assert.That(outOfProcess.ToString()).IsEqualTo(watcher.ToString());
+            await Assert.That(outOfProcess.Options & ~RegexOptions.Compiled).IsEqualTo(watcher.Options);
+        }
     }
 
     [Test]
