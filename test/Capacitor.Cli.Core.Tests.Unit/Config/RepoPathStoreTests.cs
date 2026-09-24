@@ -331,4 +331,97 @@ public class RepoPathStoreTests {
 
         await Assert.That(Repos.Fingerprint()).IsEqualTo(before);
     }
+
+    // ── an unreadable repos.json is never overwritten ────────────────────────
+
+    string BackupPath => Config.PathTo("repos.json.bak");
+
+    static string[] Leaves(string[] paths) => [.. paths.Select(p => Path.GetFileName(p))];
+
+    // What NTFS can leave after a power loss between an unflushed write and the rename that follows it.
+    async Task WriteZeroFilledStoreAsync() => await File.WriteAllBytesAsync(ReposJsonPath, new byte[64]);
+
+    [Test]
+    public async Task TryLoad_is_null_for_a_zero_filled_file_and_empty_only_when_absent() {
+        await Assert.That(await Repos.TryLoadAsync()).IsEmpty();
+
+        await WriteZeroFilledStoreAsync();
+
+        await Assert.That(await Repos.TryLoadAsync()).IsNull();
+        await Assert.That(await Repos.TryGetSortedPathsAsync()).IsNull();
+        await Assert.That(await Repos.GetSortedPathsAsync()).IsEmpty();
+    }
+
+    /// The loss the daemon reported as "repositories gone after a restart": the next launch's AddAsync
+    /// read the unreadable file as empty and saved that, plus one entry, over it.
+    [Test]
+    public async Task Add_refuses_to_overwrite_an_unreadable_file_without_a_backup() {
+        await WriteZeroFilledStoreAsync();
+
+        await Assert.That(async () => await Repos.AddAsync("/tmp/new")).Throws<IOException>();
+
+        await Assert.That(await File.ReadAllBytesAsync(ReposJsonPath)).IsEquivalentTo(new byte[64]);
+    }
+
+    [Test]
+    public async Task Each_save_keeps_the_previous_list_as_a_backup() {
+        await Repos.AddAsync("/tmp/project-a");
+        await Repos.AddAsync("/tmp/project-b");
+
+        var backup = await File.ReadAllTextAsync(BackupPath);
+
+        await Assert.That(backup).Contains("project-a");
+        await Assert.That(backup).DoesNotContain("project-b");
+    }
+
+    [Test]
+    public async Task An_unreadable_file_falls_back_to_its_backup_and_the_next_write_keeps_those_repos() {
+        await Repos.AddAsync("/tmp/project-a");
+        await Repos.AddAsync("/tmp/project-b");
+        await WriteZeroFilledStoreAsync();
+
+        var recovered = await Repos.GetSortedPathsAsync();
+        await Repos.AddAsync("/tmp/project-c");
+
+        await Assert.That(Leaves(recovered)).IsEquivalentTo(["project-a"]);
+        await Assert.That(Leaves(await Repos.GetSortedPathsAsync()))
+            .IsEquivalentTo(["project-a", "project-c"], TUnit.Assertions.Enums.CollectionOrdering.Any);
+    }
+
+    /// On Windows a handle opened without delete sharing blocks the rename that saves the list. A reader
+    /// that lets go shortly is waited out rather than turned into a lost save.
+    [Test]
+    public async Task A_briefly_held_file_is_saved_once_the_holder_lets_go() {
+        await Repos.AddAsync("/tmp/project-a");
+        var holder = new FileStream(ReposJsonPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var release = Task.Run(async () => {
+            await Task.Delay(150);
+            await holder.DisposeAsync();
+        });
+
+        await Repos.AddAsync("/tmp/project-b");
+        await release;
+
+        await Assert.That(Leaves(await Repos.GetSortedPathsAsync()))
+            .IsEquivalentTo(["project-a", "project-b"], TUnit.Assertions.Enums.CollectionOrdering.Any);
+    }
+
+    [Test]
+    public async Task A_root_keeps_its_separator_and_other_paths_lose_theirs() {
+        var root = Path.GetPathRoot(Path.GetFullPath("/"))!;
+
+        await Assert.That(RepoPathStore.NormalizePath(root)).IsEqualTo(root);
+        await Assert.That(RepoPathStore.NormalizePath(Path.Combine(root, "src") + Path.DirectorySeparatorChar))
+            .IsEqualTo(Path.Combine(root, "src"));
+    }
+
+    [Test]
+    public async Task Reading_does_not_block_a_concurrent_save() {
+        await Repos.AddAsync("/tmp/project-a");
+        await using var reader = new FileStream(ReposJsonPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+        await Repos.AddAsync("/tmp/project-b");
+
+        await Assert.That((await Repos.GetSortedPathsAsync()).Length).IsEqualTo(2);
+    }
 }

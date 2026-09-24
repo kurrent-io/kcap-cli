@@ -644,7 +644,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoStore = FingerprintRepoStore();
-        var repoPaths = await MergeRepoPathsAsync();
+        var (repoPaths, reposComplete) = await MergeRepoPathsCoreAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
         var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
 
@@ -702,7 +702,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 ),
                 cancellationToken: _ct
             );
-            _advertisedRepoStore = repoStore;
+            _advertisedRepoStore = reposComplete ? repoStore : null;
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -744,11 +744,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     // change afterwards.
     RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot, _time).Fingerprint();
 
-    async Task<string[]> MergeRepoPathsAsync() {
-        var persisted = await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync();
+    /// Complete is false when repos.json could not be read, so the list lacks every persisted
+    /// repository. The caller must not record the file's fingerprint as advertised then: the watcher would
+    /// see nothing to resend and the server would keep the short list until the file next changed.
+    async Task<(string[] Paths, bool Complete)> MergeRepoPathsCoreAsync() {
+        var read      = await new RepoPathStore(_config.ConfigRoot, _time).TryGetSortedPathsAsync();
+        var persisted = read ?? [];
 
         if (_config.AllowedRepoPaths.Length == 0)
-            return persisted;
+            return (persisted, read is not null);
 
         // Union: persisted paths first (sorted by last_used desc), then config-only paths
         var comparer = RepoPathStore.PathComparison == StringComparison.Ordinal
@@ -758,7 +762,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var merged = new List<string>(persisted);
         merged.AddRange(_config.AllowedRepoPaths.Select(p => p.TrimEnd('/', '*')).Where(seen.Add));
 
-        return [..merged];
+        return ([..merged], read is not null);
     }
 
     /// <summary>
@@ -854,7 +858,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         try {
             var repoStore = FingerprintRepoStore();
-            var repoPaths = await MergeRepoPathsAsync();
+            var (repoPaths, complete) = await MergeRepoPathsCoreAsync();
+            if (!complete) throw new IOException("repos.json cannot be read; the advertised repo list is left as it was.");
             await SendRepoPathsAsync(repoPaths);
             _advertisedRepoStore = repoStore;
         } catch (Exception ex) {
