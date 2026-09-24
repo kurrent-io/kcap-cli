@@ -25,6 +25,8 @@ internal sealed class KiroImportSource : IImportSource {
     readonly KiroCrewPaths                          _crew;
     readonly TimeProvider                           _time;
 
+    IReadOnlyDictionary<Guid, string>?              _crewParents;
+
     public KiroImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
@@ -231,7 +233,8 @@ internal sealed class KiroImportSource : IImportSource {
         var lifecycleId = dashed ?? classification.SessionId;
 
         var startPayload = BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp);
-        if (KiroCrewParentResolver.ParentOf(_crew, lifecycleId) is { } parent) startPayload["parent_session_id"] = parent;
+        _crewParents ??= KiroCrewParentResolver.AllParents(_crew, _sessionsDir);
+        if (Guid.TryParse(lifecycleId, out var child) && _crewParents.TryGetValue(child, out var parent)) startPayload["parent_session_id"] = parent;
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
             startPayload["default_visibility"] = visibility;
         }

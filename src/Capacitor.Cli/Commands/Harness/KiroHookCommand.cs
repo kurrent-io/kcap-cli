@@ -126,22 +126,38 @@ sealed class KiroHookCommand(
     /// <summary>
     /// The Kiro Crew session that spawned this one, or null. Waits only for a session that could still
     /// turn out to be a sub-agent — never one Crew already maps to a chat — and never past half the
-    /// remaining budget, which the memory fetch and the POST still need.
+    /// remaining budget, which the memory fetch and the POST still need. The file reads run behind that
+    /// same deadline, so a slow or oversized Crew tree is abandoned rather than awaited.
     /// </summary>
     async Task<string?> ResolveCrewParentAsync(string dashedSessionId, HookBudget budget) {
-        var crew = harnesses.Of<KiroHarness>().Crew;
-        if (!crew.IsPresent()) return null;
-
-        if (KiroCrewParentResolver.ParentOf(crew, dashedSessionId) is { } parent) return parent;
-        if (KiroCrewParentResolver.IsChatSession(crew, dashedSessionId)) return null;
+        var kiro = harnesses.Of<KiroHarness>();
+        if (!kiro.Crew.IsPresent()) return null;
 
         var wait     = TimeSpan.FromTicks(Math.Min(CrewParentWait.Ticks, budget.Remaining.Ticks / 2));
         var deadline = budget.Time.GetUtcNow() + wait;
 
+        async Task<(string? Parent, bool IsChat)> LookUp() {
+            var remaining = deadline - budget.Time.GetUtcNow();
+            if (remaining <= TimeSpan.Zero) return (null, false);
+
+            var lookup = Task.Run(() => (
+                KiroCrewParentResolver.ParentOf(kiro.Crew, kiro.Paths.SessionsDir, dashedSessionId),
+                KiroCrewParentResolver.IsChatSession(kiro.Crew, dashedSessionId)));
+
+            try {
+                return await lookup.WaitAsync(remaining, budget.Time);
+            } catch (TimeoutException) {
+                return (null, false);
+            }
+        }
+
+        var (parent, isChat) = await LookUp();
+        if (parent is not null || isChat) return parent;
+
         while (budget.Time.GetUtcNow() < deadline) {
             await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Time);
 
-            if (KiroCrewParentResolver.ParentOf(crew, dashedSessionId) is { } found) return found;
+            if ((await LookUp()).Parent is { } found) return found;
         }
 
         return null;

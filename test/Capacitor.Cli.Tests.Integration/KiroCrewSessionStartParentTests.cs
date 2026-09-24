@@ -32,10 +32,15 @@ public class KiroCrewSessionStartParentTests : IDisposable {
     void SeedSessionMap() {
         Directory.CreateDirectory(Crew.Root);
         File.WriteAllText(Crew.SessionMapJson, $"{{\"{Chat}\": {{\"sid\": \"{Parent}\", \"provider\": \"acp\"}}}}");
+
+        var sessions = TestHarnesses.Under(Home).Of<KiroHarness>().Paths.SessionsDir;
+        Directory.CreateDirectory(sessions);
+        File.WriteAllText(Path.Combine(sessions, $"{Parent}.json"), $"{{\"session_id\": \"{Parent}\", \"created_at\": \"2026-09-24T16:14:35.000000Z\"}}");
     }
 
+    /// <summary>Spawned a few minutes after the parent session was created.</summary>
     static string SubagentState(bool withSessionId) =>
-        $"{{\"id\": \"65eed35b\", \"parent_session\": \"{Chat}\", \"status\": \"running\""
+        $"{{\"id\": \"65eed35b\", \"parent_session\": \"{Chat}\", \"started\": 1790266768.153635, \"status\": \"running\""
       + (withSessionId ? $", \"session_id\": \"{Child}\"}}" : "}");
 
     void SeedSubagent(bool withSessionId) {
