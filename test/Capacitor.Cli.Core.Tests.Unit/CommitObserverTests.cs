@@ -100,12 +100,12 @@ public class CommitObserverTests {
     [Test]
     public async Task A_commit_git_cannot_place_keeps_only_its_subject() {
         var commits = await Observe(Observer(commitDir: "/nowhere"),
-            ToolUse("t1", "git commit -m '[AI-12] Fix watcher crash'"),
-            ToolResults(("t1", $"[main {Short}] [AI-12] Fix watcher crash")));
+            ToolUse("t1", "git commit -m '[WIP] Fix watcher crash'"),
+            ToolResults(("t1", $"[main {Short}] [WIP] Fix watcher crash")));
 
         await Assert.That(commits.Single().RepoName).IsNull();
         await Assert.That(commits.Single().Sha).IsEqualTo(Short);
-        await Assert.That(commits.Single().Message).IsEqualTo("[AI-12] Fix watcher crash");
+        await Assert.That(commits.Single().Message).IsEqualTo("[WIP] Fix watcher crash");
     }
 
     [Test]
