@@ -36,6 +36,16 @@ public class WindowsTaskUnitTests {
         await Assert.That(bin).IsEqualTo(@"C:\kcap\kcap-daemon.exe");
     }
 
+    /// A windowless console shows stderr to nobody, so the wrapper appends it beside the daemon log
+    /// and the binary is still the exec line's first quoted token.
+    [Test]
+    public async Task Wrapper_keeps_the_daemons_stderr_beside_its_log() {
+        var cmd = WindowsTaskUnit.Wrapper(Spec());
+
+        await Assert.That(cmd).Contains(@"""8"" 2>>""C:\Users\u\.config\kcap\daemon-laptop.stderr.log""");
+        await Assert.That(WindowsTaskUnit.BinaryFromWrapper(cmd)).IsEqualTo(@"C:\kcap\kcap-daemon.exe");
+    }
+
     [Test]
     public async Task EnvFromWrapper_reads_back_what_the_wrapper_sets() {
         var spec = Spec() with { Environment = new Dictionary<string, string> { ["KCAP_PROFILE"] = "work", ["X"] = "50%done" } };

@@ -94,7 +94,9 @@ static class WindowsTaskUnit {
         // crash, a negative NTSTATUS) runs it again after systemd's RestartSec, and exit 0 is a deliberate stop.
         // `if errorlevel N` means ">= N", so a negative code needs its own test.
         sb.Append(":run\r\n");
-        sb.Append($"{ExecValue("the daemon binary path", spec.DaemonBinaryPath)} {string.Join(' ', args)}\r\n");
+        // The headless console has nowhere to show stderr, so a crash's last words go beside the log.
+        var stderrPath = ExecValue("the stderr log path", StderrPath(spec.LogPath));
+        sb.Append($"{ExecValue("the daemon binary path", spec.DaemonBinaryPath)} {string.Join(' ', args)} 2>>{stderrPath}\r\n");
         sb.Append("if not errorlevel 0 goto restart\r\n");
         sb.Append("if errorlevel 1 goto restart\r\n");
         sb.Append("exit /b 0\r\n");
@@ -250,6 +252,8 @@ static class WindowsTaskUnit {
     /// </summary>
     /// The environment the wrapper sets, read back from its <c>set "K=V"</c> lines with the
     /// <c>%%</c> escaping reversed — the Windows counterpart of the launchd plist's EnvironmentVariables.
+    public static string StderrPath(string logPath) => Path.ChangeExtension(logPath, ".stderr.log");
+
     public static Dictionary<string, string> EnvFromWrapper(string wrapperText) {
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var raw in wrapperText.Split('\n')) {
