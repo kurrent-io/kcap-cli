@@ -8,7 +8,7 @@
 # 43 with daemon_start_reason=package_inconsistent. A copy beside a foreign daemon must be refused
 # and the bundled pair must get past the gate; the empty seed makes a daemon that does spawn refuse
 # to boot, and a stop follows either way.
-# Usage: assert-bundle-digest.sh <bundle.app> <daemon.sha256-file>
+# Usage: assert-bundle-digest.sh <bundle.app | extracted Windows portable dir> <daemon.sha256-file>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/hash.sh
@@ -19,8 +19,10 @@ digest_file="${2:?usage: assert-bundle-digest.sh <bundle.app> <daemon.sha256-fil
 expected="$(tr -d '[:space:]' < "$digest_file")"
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "recorded digest is not 64 hex chars: '$expected'" >&2; exit 1; }
 
-daemon="$bundle/Contents/MacOS/kcap-daemon"
-cli="$bundle/Contents/MacOS/kcap"
+# A macOS .app keeps the binaries in Contents/MacOS; an extracted Velopack Windows package in current/.
+if [ -d "$bundle/Contents/MacOS" ]; then bin="$bundle/Contents/MacOS"; exe=""; else bin="$bundle/current"; exe=".exe"; fi
+daemon="$bin/kcap-daemon$exe"
+cli="$bin/kcap$exe"
 [ -f "$daemon" ] || { echo "missing $daemon" >&2; exit 1; }
 [ -f "$cli" ] || { echo "missing $cli" >&2; exit 1; }
 
@@ -42,9 +44,9 @@ gate() {
 }
 
 mkdir -p "$work/foreign"
-cp "$cli" "$work/foreign/kcap"
-printf 'not the bundled daemon' > "$work/foreign/kcap-daemon"
-rc="$(gate "$work/foreign/kcap" "$work/foreign.log")"
+cp "$cli" "$work/foreign/kcap$exe"
+printf 'not the bundled daemon' > "$work/foreign/kcap-daemon$exe"
+rc="$(gate "$work/foreign/kcap$exe" "$work/foreign.log")"
 if [ "$rc" != 43 ] || ! grep -qx 'daemon_start_reason=package_inconsistent' "$work/foreign.log"; then
   echo "packed kcap did not refuse a foreign daemon (exit $rc):" >&2; cat "$work/foreign.log" >&2; exit 1
 fi

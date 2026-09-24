@@ -20,7 +20,8 @@ source "$here/lib/hash.sh"
 [ "\$2" = stop ] && exit 0
 [ "$mode" = locked ] && { echo "Another kcap daemon start is already in progress" >&2; exit 1; }
 if [ "$mode" = gated ] && [ -n "\${KCAP_CONSENT_SEED_DEFAULT+x}" ]; then
-  actual="\$(sha256_of "\$(dirname "\$0")/kcap-daemon")"
+  sibling="\$(dirname "\$0")/kcap-daemon"; [[ "\$0" == *.exe ]] && sibling="\$sibling.exe"
+  actual="\$(sha256_of "\$sibling")"
   if [ "$3" = "$(printf '0%.0s' $(seq 1 64))" ] || [ "\$actual" != "$3" ]; then
     echo "daemon_start_reason=package_inconsistent" >&2; exit 43
   fi
@@ -59,5 +60,15 @@ assert "cli that never refuses" 1 "$tmp/ungated.app" "$tmp/daemon.sha256"
 
 make_bundle "$tmp/locked.app" "daemon-bytes" "$digest" locked
 assert "cli that fails before the gate" 1 "$tmp/locked.app" "$tmp/daemon.sha256"
+
+# An extracted Velopack Windows package: the binaries sit in current/ with .exe names.
+make_win_bundle() { # <dir> <daemon-content> <embedded-digest>
+  make_bundle "$1.src" "$2" "$3"; mkdir -p "$1/current"
+  mv "$1.src/Contents/MacOS/kcap" "$1/current/kcap.exe"; mv "$1.src/Contents/MacOS/kcap-daemon" "$1/current/kcap-daemon.exe"
+}
+make_win_bundle "$tmp/win" "daemon-bytes" "$digest"
+assert "windows matching pair" 0 "$tmp/win" "$tmp/daemon.sha256"
+make_win_bundle "$tmp/win-swapped" "different-daemon-bytes" "$digest"
+assert "windows substituted daemon" 1 "$tmp/win-swapped" "$tmp/daemon.sha256"
 
 [ "$fail" -eq 0 ] && echo "ok" || exit 1

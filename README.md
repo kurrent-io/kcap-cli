@@ -13,7 +13,7 @@
 
 - [Why Capacitor](#why-capacitor)
 - [Requirements](#requirements)
-- [Getting started](#getting-started) — [Install](#1-install-the-cli) · [Desktop app](#desktop-app-macos) · [Setup](#2-run-setup) · [Import](#3-import-existing-sessions-optional) · [Dashboard](#4-open-the-dashboard) · [MCP servers](#sessions-and-flows-mcp-servers-for-agents)
+- [Getting started](#getting-started) — [Install](#1-install-the-cli) · [Desktop app](#desktop-app-macos) ([Windows](#desktop-app-windows)) · [Setup](#2-run-setup) · [Import](#3-import-existing-sessions-optional) · [Dashboard](#4-open-the-dashboard) · [MCP servers](#sessions-and-flows-mcp-servers-for-agents)
 - [What it records](#what-it-records)
 - [CLI commands](#cli-commands)
   - Approvals: [policy](#approval-policy)
@@ -47,7 +47,7 @@
   | Linux | x64, ARM64 |
   | Linux (Alpine/musl) | x64, ARM64 |
   | Windows | x64 |
-- Desktop app: macOS 15 (Sequoia) or later on Apple silicon.
+- Desktop app: macOS 15 (Sequoia) or later on Apple silicon, or Windows 10 or later on x64.
 
 ## Getting started
 
@@ -106,6 +106,12 @@ The **Notifications** tab in Settings controls permission requests, questions, a
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
+
+### Desktop app (Windows)
+
+Download `Kurrent-Capacitor-<version>-win-x64-Setup.exe` from the [GitHub release](https://github.com/kurrent-io/kcap-cli/releases) (Windows 10 or later, x64) and run it. It installs per user into `%LocalAppData%\KurrentCapacitor` with no administrator prompt and adds a Start-menu entry. Like the macOS app it bundles its own `kcap` CLI and daemon. The first run offers to add the app's folder to your user PATH, so `kcap` works from any new terminal, and to install the daemon as a background service (a per-user Scheduled Task that starts at sign-in).
+
+Windows draws no application menu, so **Settings…**, **Changelog** and the app version sit in the help button in the session rail's footer, next to Documentation and the report items; **Ctrl+,** opens Settings. Closing the window keeps the app running in the notification area — quit from the tray icon's menu. Updates arrive through the app the same way as on macOS, from the Windows feed.
 
 ### 2. Run setup
 
