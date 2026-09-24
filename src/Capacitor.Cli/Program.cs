@@ -1,6 +1,7 @@
 using System.Reflection;
 using Capacitor.Cli;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Capture;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -625,6 +626,15 @@ switch (command) {
         return 0;
     }
     case "import": {
+        var repairCapture = args.Contains("--repair-capture");
+        if (repairCapture && CaptureRepairArgs.Validate(args) is { } repairError) {
+            Console.Error.WriteLine(repairError);
+            return 1;
+        }
+        if (!repairCapture && args.Contains("--dry-run")) {
+            Console.Error.WriteLine("--dry-run requires --repair-capture and an explicit --session ID.");
+            return 1;
+        }
         // Vendor selection first — quick exit on parse errors so we don't do other work.
         var vsel = VendorSelection.Parse(args);
         if (vsel.HasError) {
@@ -681,6 +691,9 @@ switch (command) {
         var sources = SetupCommand.BuildImportSources(
             config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(), time,
             explicitVendorSelection ? vsel.Vendors : null);
+
+        if (repairCapture)
+            return await Run<CaptureRepairCommand>().HandleAsync(filterSession!, args.Contains("--dry-run"), sources);
 
         // --- Scope resolution ---
         var profileConfig = profiles.Snapshot;

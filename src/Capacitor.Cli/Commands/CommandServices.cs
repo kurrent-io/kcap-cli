@@ -100,6 +100,7 @@ public static class CommandServices {
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
+        services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
         services.AddTransient<PluginCommand>();
