@@ -149,6 +149,18 @@ public class KiroCrewParentResolverTests {
         await Assert.That(KiroCrewParentResolver.IsChatSession(Crew, Parent)).IsFalse();
     }
 
+    [Test]
+    public async Task A_parent_names_the_children_it_spawned() {
+        SeedSessionMap();
+        SeedKiroSession(Parent, ChildStartedAt.AddMinutes(-5));
+        SeedSubagent("state.json");
+        SeedSubagent("tombstone.json", sessionId: "d0a1b2c3-d4e5-4f60-8718-293a4b5c6d7e", id: "7a8b9c0d");
+
+        await Assert.That(KiroCrewParentResolver.ChildrenOf(Crew, SessionsDir, Parent))
+            .IsEquivalentTo([Child, "d0a1b2c3-d4e5-4f60-8718-293a4b5c6d7e"]);
+        await Assert.That(KiroCrewParentResolver.ChildrenOf(Crew, SessionsDir, Child)).IsEmpty();
+    }
+
     /// <summary>An import reaches a child however many sub-agents ran after it; the live hook's scan
     /// stops at its limit.</summary>
     [Test]

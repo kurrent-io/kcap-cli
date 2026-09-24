@@ -37,6 +37,21 @@ public static class KiroCrewParentResolver {
         return null;
     }
 
+    /// <summary>The dashed ids of the recorded sub-agents this session spawned. Scans at most
+    /// <see cref="LiveScanLimit"/> sub-agents.</summary>
+    public static IReadOnlyList<string> ChildrenOf(KiroCrewPaths crew, string sessionsDir, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var parent) || !crew.IsPresent()) return [];
+
+        var map      = ReadObject(crew.SessionMapJson);
+        var children = new List<string>();
+
+        foreach (var record in SubagentRecords(crew, LiveScanLimit)) {
+            if (ParentFor(record, map, sessionsDir) is { } p && Guid.Parse(p) == parent) children.Add(record.Session.ToString("D"));
+        }
+
+        return children;
+    }
+
     /// <summary>Every recorded sub-agent's parent, keyed by the child's session, for a historical import
     /// that must reach records of any age.</summary>
     public static IReadOnlyDictionary<Guid, string> AllParents(KiroCrewPaths crew, string sessionsDir) {

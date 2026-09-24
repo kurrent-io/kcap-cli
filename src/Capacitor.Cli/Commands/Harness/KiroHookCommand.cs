@@ -129,6 +129,29 @@ sealed class KiroHookCommand(
     /// remaining budget, which the memory fetch and the POST still need. The file reads run behind that
     /// same deadline, so a slow or oversized Crew tree is abandoned rather than awaited.
     /// </summary>
+    /// <summary>Longest the hook spends naming this session's Crew sub-agents.</summary>
+    static readonly TimeSpan CrewChildrenLookup = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// The Crew sub-agents this session spawned. A one-prompt child can be recorded before its parent,
+    /// and Crew delivers each child's result to the parent as a new prompt, so naming the children
+    /// here is what links such a child. Abandoned at its deadline like the parent lookup.
+    /// </summary>
+    async Task<IReadOnlyList<string>> ResolveCrewChildrenAsync(string dashedSessionId, HookBudget budget) {
+        var kiro = harnesses.Of<KiroHarness>();
+        if (!kiro.Crew.IsPresent()) return [];
+
+        var bound = TimeSpan.FromTicks(Math.Min(CrewChildrenLookup.Ticks, budget.Remaining.Ticks / 4));
+        if (bound <= TimeSpan.Zero) return [];
+
+        try {
+            return await Task.Run(() => KiroCrewParentResolver.ChildrenOf(kiro.Crew, kiro.Paths.SessionsDir, dashedSessionId))
+                .WaitAsync(bound, budget.Time);
+        } catch (TimeoutException) {
+            return [];
+        }
+    }
+
     async Task<string?> ResolveCrewParentAsync(string dashedSessionId, HookBudget budget) {
         var kiro = harnesses.Of<KiroHarness>();
         if (!kiro.Crew.IsPresent()) return null;
@@ -267,6 +290,10 @@ sealed class KiroHookCommand(
 
         if (await ResolveCrewParentAsync(dashedSessionId, budget) is { } parent) {
             forwarded["parent_session_id"] = parent;
+        }
+
+        if (await ResolveCrewChildrenAsync(dashedSessionId, budget) is { Count: > 0 } children) {
+            forwarded["subagent_session_ids"] = new JsonArray([.. children.Select(c => (JsonNode)c)]);
         }
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);

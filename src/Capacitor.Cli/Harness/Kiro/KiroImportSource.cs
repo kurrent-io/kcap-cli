@@ -26,6 +26,7 @@ internal sealed class KiroImportSource : IImportSource {
     readonly TimeProvider                           _time;
 
     IReadOnlyDictionary<Guid, string>?              _crewParents;
+    ILookup<Guid, Guid>?                            _crewChildren;
 
     public KiroImportSource(
         ConfigRoot                              config,
@@ -233,8 +234,16 @@ internal sealed class KiroImportSource : IImportSource {
         var lifecycleId = dashed ?? classification.SessionId;
 
         var startPayload = BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp);
-        _crewParents ??= KiroCrewParentResolver.AllParents(_crew, _sessionsDir);
-        if (Guid.TryParse(lifecycleId, out var child) && _crewParents.TryGetValue(child, out var parent)) startPayload["parent_session_id"] = parent;
+        // Sessions import in parallel, so each side of a sub-agent link names the other.
+        _crewParents  ??= KiroCrewParentResolver.AllParents(_crew, _sessionsDir);
+        _crewChildren ??= _crewParents.ToLookup(kv => Guid.Parse(kv.Value), kv => kv.Key);
+
+        if (Guid.TryParse(lifecycleId, out var self)) {
+            if (_crewParents.TryGetValue(self, out var parent)) startPayload["parent_session_id"] = parent;
+
+            if (_crewChildren[self].Select(c => (JsonNode)c.ToString("D")).ToArray() is { Length: > 0 } children)
+                startPayload["subagent_session_ids"] = new JsonArray(children);
+        }
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
             startPayload["default_visibility"] = visibility;
         }

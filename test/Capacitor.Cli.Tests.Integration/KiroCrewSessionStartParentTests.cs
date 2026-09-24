@@ -108,14 +108,16 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
     }
 
+    /// <summary>The chat names its sub-agents, which links a one-prompt child recorded before it.</summary>
     [Test]
-    public async Task A_crew_chat_session_names_no_parent() {
+    public async Task A_crew_chat_session_names_its_sub_agents_and_no_parent() {
         SeedSessionMap();
         SeedSubagent(withSessionId: true);
 
         var body = await SpawnAsync(Parent);
 
         await Assert.That(body["parent_session_id"]).IsNull();
+        await Assert.That(body["subagent_session_ids"]!.AsArray().Select(n => n!.GetValue<string>())).IsEquivalentTo([Child]);
     }
 
     [Test]
@@ -123,5 +125,6 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         var body = await SpawnAsync(Child);
 
         await Assert.That(body["parent_session_id"]).IsNull();
+        await Assert.That(body["subagent_session_ids"]).IsNull();
     }
 }
