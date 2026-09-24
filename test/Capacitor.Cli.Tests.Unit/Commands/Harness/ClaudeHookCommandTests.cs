@@ -917,13 +917,15 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task create_client_within_budget_returns_null_when_factory_slower_than_cap() {
+        var time = new FakeTimeProvider();
         Func<Task<AuthAttempt>> slow = () =>
             Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
-        var sw     = System.Diagnostics.Stopwatch.StartNew();
-        var result = await BoundedAuth.CreateClientWithinAsync(slow, TimeSpan.FromMilliseconds(50), TimeProvider.System);
-        sw.Stop();
+        var pending = BoundedAuth.CreateClientWithinAsync(slow, TimeSpan.FromMilliseconds(50), time);
+        // The cap is this clock's. Advancing it is what makes the factory lose; a wall-clock
+        // bound is a race a loaded runner loses even when the cap already won.
+        time.Advance(TimeSpan.FromMilliseconds(50));
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         await Assert.That(result).IsNull();
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
     }
 
     [Test]
