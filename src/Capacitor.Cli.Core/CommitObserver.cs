@@ -176,7 +176,8 @@ public sealed class CommitObserver(
     }
 
     /// <summary>A commit command that printed no summary, such as <c>git commit -q</c>: the HEAD
-    /// committed while it ran.</summary>
+    /// committed while it ran. Another terminal can commit in the same seconds, so that HEAD counts
+    /// only when the command names its subject.</summary>
     sealed record QuietCommit(Call Call, DateTimeOffset From, DateTimeOffset To) : Sighting(Call) {
         // Committer time has one-second resolution.
         static readonly TimeSpan Slack = TimeSpan.FromSeconds(2);
@@ -188,7 +189,9 @@ public sealed class CommitObserver(
 
             var committed = DateTimeOffset.FromUnixTimeSeconds(unix);
 
-            return committed >= From - Slack && committed <= To + Slack ? (sha, subject) : null;
+            return committed >= From - Slack && committed <= To + Slack && Command.Contains(subject, StringComparison.Ordinal)
+                ? (sha, subject)
+                : null;
         }
 
         public override async Task<string?> BranchInAsync(RunGit git, string dir) => OnBranch(await git("rev-parse --abbrev-ref HEAD", dir));

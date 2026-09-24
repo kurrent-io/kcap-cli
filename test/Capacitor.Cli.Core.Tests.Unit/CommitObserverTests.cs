@@ -135,6 +135,16 @@ public class CommitObserverTests {
         await Assert.That(before).IsEmpty();
     }
 
+    /// <summary>Another terminal's commit in the same seconds is the HEAD too; only the subject the
+    /// command names tells them apart.</summary>
+    [Test]
+    public async Task A_quiet_commit_is_not_a_head_the_command_does_not_name() {
+        var commits = await Observe(Observer(Root, subject: "Another terminal's commit", headAt: CalledAt.AddSeconds(1)),
+            ToolUse("t1", "git commit -q -m 'Fix watcher crash'"), ToolResults(("t1", "")));
+
+        await Assert.That(commits).IsEmpty();
+    }
+
     [Test]
     public async Task A_quiet_commit_whose_call_was_only_recalled_is_observed() {
         var observer = Observer(Root, subject: "Fix watcher crash", headAt: CalledAt.AddSeconds(1));
