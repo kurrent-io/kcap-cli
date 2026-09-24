@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Text.Json.Nodes;
 
@@ -39,7 +40,7 @@ public static class KiroCrewParentResolver {
     /// <summary>Every recorded sub-agent's parent, keyed by the child's session, for a historical import
     /// that must reach records of any age.</summary>
     public static IReadOnlyDictionary<Guid, string> AllParents(KiroCrewPaths crew, string sessionsDir) {
-        if (!crew.IsPresent()) return new Dictionary<Guid, string>();
+        if (!crew.IsPresent()) return FrozenDictionary<Guid, string>.Empty;
 
         var map     = ReadObject(crew.SessionMapJson);
         var parents = new Dictionary<Guid, string>();
