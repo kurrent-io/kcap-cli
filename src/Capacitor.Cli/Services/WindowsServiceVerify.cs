@@ -20,7 +20,8 @@ sealed class WindowsServiceVerify(
         Func<string, TimeSpan, Task<HelloProbeResult>> hello,
         TimeProvider time,
         Func<bool>? profileViable = null,
-        TimeSpan? forwardBudget = null) {
+        TimeSpan? forwardBudget = null,
+        Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null) {
     static readonly TimeSpan LockWait     = TimeSpan.FromSeconds(10);
     static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait     = TimeSpan.FromSeconds(5);
@@ -33,6 +34,12 @@ sealed class WindowsServiceVerify(
         if (txn is null) return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
         if (profileViable is not null && !profileViable()) return Fail(VerifyExit.Viability, VerifyExit.ViabilityToken);
+
+        // A rename retires only a unit pinned to the same profile, checked before anything changes; an
+        // absent unit has nothing to retire.
+        if (retireServiceId is not null && unitEnv?.Invoke(retireServiceId) is { } retiredEnv
+         && !SameProfile(retiredEnv, spec.Environment))
+            return Fail(VerifyExit.RetireRefused, VerifyExit.RetireRefusedToken);
 
         // A rename never takes over a daemon that already answers to the new name.
         if (retireServiceId is not null && validatedDaemonPid(id) is not null)
@@ -122,6 +129,10 @@ sealed class WindowsServiceVerify(
         }
         return Fail(reasonExit, reasonToken);
     }
+
+    static bool SameProfile(IReadOnlyDictionary<string, string> retired, IReadOnlyDictionary<string, string> installing) =>
+        retired.TryGetValue(Core.Config.ProfileOverrides.ProfileVar, out var a) && !string.IsNullOrEmpty(a)
+     && installing.TryGetValue(Core.Config.ProfileOverrides.ProfileVar, out var b) && string.Equals(a, b, StringComparison.Ordinal);
 
     static int Fail(int exit, string token) {
         Say(token);

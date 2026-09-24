@@ -291,7 +291,13 @@ sealed class DaemonServiceCommands(
 
     WindowsServiceVerify NewWindowsVerify(Func<bool>? profileViable = null) =>
         new(store, manager, n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
-            profileViable);
+            profileViable, unitEnv: RetiredUnitEnv);
+
+    // The retired unit's baked environment, or null when it has no wrapper to read.
+    IReadOnlyDictionary<string, string>? RetiredUnitEnv(string serviceId) {
+        var wrapper = WindowsTaskUnit.WrapperPath(root, serviceId);
+        return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
+    }
 
     async Task<int> StartPlain() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
@@ -677,13 +683,13 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|ensure|status> [--name N]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify] [--retire ID]");
-        Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/version/ownership and rolls back on failure");
+        Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/version/ownership and rolls back on failure");
         Console.Error.WriteLine("                          --replace (requires --verify) takes over an existing label/unit/live owner");
         Console.Error.WriteLine("                          --retire ID (requires --replace --verify) also removes unit ID in the same transaction");
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
-        Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/ownership and rolls back on failure");
+        Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/ownership and rolls back on failure");
         Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
         Console.Error.WriteLine("  ensure [--name N] [--profile P] [--json]   Install-or-start from a fresh status read");
         Console.Error.WriteLine("                          (bakes the born-prompt consent seed; gate refusals emit recovery_surface=)");

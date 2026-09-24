@@ -69,13 +69,50 @@ public class WindowsServiceVerifyTests {
     static HelloProbeResult Hello(string name = Id, string? version = "1.0.0") =>
         new(true, HelloProtocol.CurrentVersion, version, name);
 
-    WindowsServiceVerify Verify(FakeManager manager, Func<HelloProbeResult>? hello = null, bool viable = true) =>
+    WindowsServiceVerify Verify(FakeManager manager, Func<HelloProbeResult>? hello = null, bool viable = true,
+            Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null) =>
         new(Daemons.Store, manager,
             _ => manager.Running ? DaemonPid : null,
             (_, _) => Task.FromResult(manager.Running ? (hello ?? (() => Hello()))() : new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System, () => viable, ShortBudget);
+            TimeProvider.System, () => viable, ShortBudget, unitEnv);
 
-    static ServiceSpec Spec() => new(Id, @"C:\kcap\kcap-daemon.exe", @"C:\kcap\daemon.log", new Dictionary<string, string>(), []);
+    static ServiceSpec Spec() => new(Id, @"C:\kcap\kcap-daemon.exe", @"C:\kcap\daemon.log",
+        new Dictionary<string, string> { ["KCAP_PROFILE"] = "work" }, []);
+
+    static Func<string, IReadOnlyDictionary<string, string>?> Retired(string? profile) =>
+        _ => profile is null ? new Dictionary<string, string>() : new Dictionary<string, string> { ["KCAP_PROFILE"] = profile };
+
+    [Test]
+    public async Task A_rename_refuses_to_retire_a_unit_pinned_to_another_profile_and_touches_nothing() {
+        var manager = new FakeManager();
+
+        var exit = await Verify(manager, unitEnv: Retired("personal"))
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_rename_refuses_to_retire_a_unit_with_no_pinned_profile() {
+        var manager = new FakeManager();
+
+        var exit = await Verify(manager, unitEnv: Retired(null))
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+    }
+
+    [Test]
+    public async Task A_rename_retires_a_unit_pinned_to_the_same_profile() {
+        var manager = new FakeManager();
+
+        var exit = await Verify(manager, unitEnv: Retired("work"))
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(manager.Calls).Contains("uninstall:old-name");
+    }
 
     [Test]
     public async Task A_fresh_install_succeeds_once_the_tasks_daemon_answers() {
