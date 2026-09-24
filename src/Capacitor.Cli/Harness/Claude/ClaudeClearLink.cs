@@ -54,8 +54,8 @@ static class ClaudeClearLink {
         File.WriteAllText(path, $"{sessionId}\n{ProcessStartToken.ForPid(pid)}");
     }
 
-    /// <summary>Reads and removes the note. A note left by an earlier process that held the same
-    /// pid carries a different start token and is refused.</summary>
+    /// <summary>Reads and removes the note. It is refused unless it carries the start token of the
+    /// process holding the pid now, so a note left by an earlier holder never links.</summary>
     internal static string? Take(ConfigRoot config, int pid) {
         var path = NotePath(config, pid);
         if (!File.Exists(path)) return null;
@@ -64,7 +64,7 @@ static class ClaudeClearLink {
         File.Delete(path);
 
         var recordedToken = lines.Length > 1 ? lines[1].Trim() : "";
-        if (recordedToken.Length > 0 && ProcessStartToken.ForPid(pid) is { } current && current != recordedToken) return null;
+        if (recordedToken.Length == 0 || ProcessStartToken.ForPid(pid) != recordedToken) return null;
 
         return lines[0].Trim() is { Length: > 0 } sessionId ? sessionId : null;
     }
