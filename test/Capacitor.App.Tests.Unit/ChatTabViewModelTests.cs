@@ -1772,6 +1772,11 @@ public class ChatTabViewModelTests {
                 await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
                 await h.Chat.UsageLimitChoices[2].Choose.Execute().ToTask();
                 await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'3' }, CollectionOrdering.Matching);
+                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(input.Keys.Count).IsEqualTo(1);
 
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
                 await Assert.That(h.Chat.HasUsageLimitQuestion).IsFalse();
@@ -1780,11 +1785,56 @@ public class ChatTabViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_usage_limit_choice_sends_one_digit_and_a_failed_send_can_be_retried() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit",
+                "What do you want to do?", [
+                    new(1, "Stop and wait for limit to reset"),
+                    new(2, "Wait here, then continue automatically shortly"),
+                ]);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            input.Gate = release.Task;
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
+
+                var running = h.Chat.UsageLimitChoices[0].Choose.Execute().ToTask();
+                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+                release.SetResult();
+                await running;
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1' }, CollectionOrdering.Matching);
+
+                input.Accept = false;
+                input.Gate = null;
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with {
+                    Status = "Running",
+                    UsageLimit = new UsageLimitNoticeDto(notice.Kind, "limit still held", notice.Prompt, notice.Options),
+                });
+                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
+                await Assert.That(h.Chat.UsageLimitError).Contains("not attached");
+                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
+                await Assert.That(input.Keys.Count).IsEqualTo(1);
+
+                input.Accept = true;
+                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1', (byte)'2' }, CollectionOrdering.Matching);
+                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     sealed class KeyRecordingInput : AcceptingChatInput {
         public List<byte> Keys { get; } = [];
-        public override Task<bool> SendKeyAsync(byte key, CancellationToken ct) {
+        public bool Accept { get; set; } = true;
+        public Task? Gate { get; set; }
+        public override async Task<bool> SendKeyAsync(byte key, CancellationToken ct) {
+            if (Gate is { } gate) await gate;
+            if (!Accept) return false;
             Keys.Add(key);
-            return Task.FromResult(true);
+            return true;
         }
     }
 

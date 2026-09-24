@@ -237,6 +237,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     string _usageLimitPrompt = "";
     string _usageLimitError = "";
     IReadOnlyList<UsageLimitChoiceViewModel> _usageLimitChoices = [];
+    bool _usageLimitChoiceTaken;
 
     public bool HasUsageLimitQuestion {
         get => _hasUsageLimitQuestion;
@@ -262,6 +263,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         get => _usageLimitChoices;
         private set => this.RaiseAndSetIfChanged(ref _usageLimitChoices, value);
     }
+
+    /// False once a choice has been sent, until this notice changes. A failed send turns it back on.
+    public bool UsageLimitChoicesOpen => !_usageLimitChoiceTaken;
 
     readonly ObservableAsPropertyHelper<bool> _showsComposer;
     /// Input + Send stay in the tree only while messaging is still possible. An ended session
@@ -655,6 +659,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (Equals(_usageLimit, notice)) return;
         _usageLimit = notice;
         foreach (var old in _usageLimitChoices) old.Choose.Dispose();
+        SetUsageLimitChoiceTaken(false);
         var question = UsageLimitNoticeDto.IsQuestion(notice);
         HasUsageLimitQuestion = question;
         UsageLimitSummary = question ? notice!.Summary : "";
@@ -662,16 +667,29 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         UsageLimitError = "";
         UsageLimitChoices = question
             ? notice!.Options.Select(option => new UsageLimitChoiceViewModel(
-                option.Index, option.Label, ReactiveCommand.CreateFromTask(() => ChooseUsageLimitAsync(option.Index)))).ToList()
+                option.Index, option.Label,
+                ReactiveCommand.CreateFromTask(
+                    () => ChooseUsageLimitAsync(option.Index),
+                    this.WhenAnyValue(x => x.UsageLimitChoicesOpen)))).ToList()
             : [];
     }
 
+    void SetUsageLimitChoiceTaken(bool taken) {
+        if (_usageLimitChoiceTaken == taken) return;
+        _usageLimitChoiceTaken = taken;
+        this.RaisePropertyChanged(nameof(UsageLimitChoicesOpen));
+    }
+
+    // The digit is written before the menu leaves the screen, so another click would land on
+    // the next prompt. A failed send is the only reason to try the same menu again.
     async Task ChooseUsageLimitAsync(int index) {
-        if (index is < 1 or > 9) return;
+        if (index is < 1 or > 9 || _usageLimitChoiceTaken) return;
+        SetUsageLimitChoiceTaken(true);
         UsageLimitError = "";
         var sent = await _input.SendKeyAsync((byte)('0' + index), _lifetimeToken);
-        if (!sent && !_lifetimeToken.IsCancellationRequested)
-            UsageLimitError = "The terminal is not attached, so that choice was not sent.";
+        if (sent || _lifetimeToken.IsCancellationRequested) return;
+        UsageLimitError = "The terminal is not attached, so that choice was not sent.";
+        SetUsageLimitChoiceTaken(false);
     }
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
