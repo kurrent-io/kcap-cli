@@ -26,15 +26,13 @@ public class PluginCommandKiroCrewTests {
         ) {
             Harnesses            = TestHarnesses.Under(new(Home.Path), binaries),
             Binaries             = binaries,
-            ResolveMcpBinaryPath = () => Path.Combine(BinDir.Path, "kcap")
+            ResolveMcpBinaryPath = () => BinDir.PathTo("kcap")
         };
     }
 
-    static void SeedAgent(PluginEnvironment env) {
-        var agent = env.Harnesses.Of<KiroHarness>().Paths.KcapAgentJson;
-        Directory.CreateDirectory(Path.GetDirectoryName(agent)!);
-        File.WriteAllText(agent, """{"name":"kcap","hooks":{}}""");
-        KiroHooksInstaller.WriteMarker(agent, "kiro_default");
+    void SeedAgent(PluginEnvironment env) {
+        Home.CreateFile([".kiro", "agents", "kcap.json"], """{"name":"kcap","hooks":{}}""");
+        KiroHooksInstaller.WriteMarker(env.Harnesses.Of<KiroHarness>().Paths.KcapAgentJson, "kiro_default");
     }
 
     static Task<int> Run(PluginEnvironment env, params string[] args) =>
@@ -47,7 +45,7 @@ public class PluginCommandKiroCrewTests {
         var env  = Env();
         var crew = env.Harnesses.Of<KiroHarness>().Crew;
         SeedAgent(env);
-        Directory.CreateDirectory(crew.Root);
+        Home.CreateDir(".kiro", "crew");
 
         await Assert.That(await Run(env, "plugin", "install", "--kiro")).IsEqualTo(0);
 
@@ -78,7 +76,7 @@ public class PluginCommandKiroCrewTests {
         var crew = env.Harnesses.Of<KiroHarness>().Crew;
         SeedAgent(env);
         await Run(env, "plugin", "install", "--kiro");
-        Directory.CreateDirectory(crew.Root);
+        Home.CreateDir(".kiro", "crew");
 
         await Assert.That(await Run(env, "plugin", "install", "--kiro", "--if-installed")).IsEqualTo(0);
 
@@ -93,7 +91,7 @@ public class PluginCommandKiroCrewTests {
         var env  = Env();
         var kiro = env.Harnesses.Of<KiroHarness>();
         SeedAgent(env);
-        Directory.CreateDirectory(kiro.Crew.Root);
+        Home.CreateDir(".kiro", "crew");
 
         await Assert.That(await Run(env, "plugin", "install", "--kiro", "--if-installed")).IsEqualTo(0);
 
@@ -108,7 +106,7 @@ public class PluginCommandKiroCrewTests {
         var env  = Env();
         var crew = env.Harnesses.Of<KiroHarness>().Crew;
         SeedAgent(env);
-        Directory.CreateDirectory(crew.Root);
+        Home.CreateDir(".kiro", "crew");
         await Run(env, "plugin", "install", "--kiro");
 
         await Assert.That(await Run(env, "plugin", "remove", "--kiro")).IsEqualTo(0);
@@ -126,7 +124,7 @@ public class PluginCommandKiroCrewTests {
         var env  = Env();
         var crew = env.Harnesses.Of<KiroHarness>().Crew;
         SeedAgent(env);
-        Directory.CreateDirectory(crew.Root);
+        Home.CreateDir(".kiro", "crew");
         await Run(env, "plugin", "install", "--kiro");
 
         File.Delete(crew.SpawnHookScript);
@@ -145,9 +143,8 @@ public class PluginCommandKiroCrewTests {
         var env  = Env();
         var crew = env.Harnesses.Of<KiroHarness>().Crew;
         SeedAgent(env);
-        Directory.CreateDirectory(crew.Root);
-        Directory.CreateDirectory(crew.HooksDir);
-        await File.WriteAllTextAsync(crew.SpawnHookScript, "#!/bin/sh\necho mine\n");
+        Home.CreateDir(".kiro", "crew");
+        Home.CreateFile([".kiro", "hooks", "kcap-spawn.sh"], "#!/bin/sh\necho mine\n");
 
         await Assert.That(await Run(env, "plugin", "install", "--kiro")).IsEqualTo(0);
         await Assert.That(await Run(env, "plugin", "remove", "--kiro")).IsEqualTo(0);

@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.Kiro;
 
+[ParallelLimiter<SubprocessLimit>]
 public class KiroCrewHookInstallerTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
@@ -32,8 +33,7 @@ public class KiroCrewHookInstallerTests {
 
     [Test]
     public async Task Remove_leaves_a_script_kcap_did_not_write() {
-        Directory.CreateDirectory(Path.GetDirectoryName(Script)!);
-        await File.WriteAllTextAsync(Script, "#!/bin/sh\n# event: agentSpawn\necho mine\n");
+        Tmp.CreateFile(["hooks", "kcap-spawn.sh"], "#!/bin/sh\n# event: agentSpawn\necho mine\n");
 
         await Assert.That(KiroCrewHookInstaller.IsInstalled(Script)).IsFalse();
         await Assert.That(KiroCrewHookInstaller.Remove(Script)).IsEqualTo(KiroCrewHookInstaller.Outcome.Unchanged);
@@ -58,10 +58,7 @@ public class KiroCrewHookInstallerTests {
 
         var bin      = Tmp.PathTo("bin");
         var captured = Tmp.PathTo("captured.txt");
-        Directory.CreateDirectory(bin);
-        var fake = Path.Combine(bin, "kcap");
-        await File.WriteAllTextAsync(fake, $"#!/bin/sh\n{{ echo \"$@\"; cat; }} > '{captured}'\n");
-        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Tmp.CreateExecutable(Path.Combine("bin", "kcap"), $"#!/bin/sh\n{{ echo \"$@\"; cat; }} > '{captured}'\n");
 
         KiroCrewHookInstaller.Install(Script, bin);
 
@@ -81,8 +78,7 @@ public class KiroCrewHookInstallerTests {
 
     [Test]
     public async Task Install_leaves_a_script_kcap_did_not_write() {
-        Directory.CreateDirectory(Path.GetDirectoryName(Script)!);
-        await File.WriteAllTextAsync(Script, "#!/bin/sh\necho mine\n");
+        Tmp.CreateFile(["hooks", "kcap-spawn.sh"], "#!/bin/sh\necho mine\n");
 
         await Assert.That(KiroCrewHookInstaller.Install(Script, "/opt/kcap/bin")).IsEqualTo(KiroCrewHookInstaller.Outcome.Unowned);
         await Assert.That(await File.ReadAllTextAsync(Script)).IsEqualTo("#!/bin/sh\necho mine\n");
@@ -111,10 +107,7 @@ public class KiroCrewHookInstallerTests {
 
         var bin      = Tmp.PathTo("it's $(touch pwned) `x`");
         var captured = Tmp.PathTo("captured.txt");
-        Directory.CreateDirectory(bin);
-        var fake = Path.Combine(bin, "kcap");
-        await File.WriteAllTextAsync(fake, $"#!/bin/sh\necho ran > '{captured}'\n");
-        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Tmp.CreateExecutable(Path.Combine("it's $(touch pwned) `x`", "kcap"), $"#!/bin/sh\necho ran > '{captured}'\n");
 
         KiroCrewHookInstaller.Install(Script, bin);
 

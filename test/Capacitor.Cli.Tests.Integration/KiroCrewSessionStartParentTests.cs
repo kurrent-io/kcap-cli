@@ -3,7 +3,6 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.PrDetection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -27,15 +26,9 @@ public class KiroCrewSessionStartParentTests : IDisposable {
     const string Parent = "ebc247c2-22b7-4f08-bbcf-f7053162d361";
     const string Child  = "c9996655-c526-4524-86f9-4ebd14dba13a";
 
-    KiroCrewPaths Crew => TestHarnesses.Under(Home).Of<KiroHarness>().Crew;
-
     void SeedSessionMap() {
-        Directory.CreateDirectory(Crew.Root);
-        File.WriteAllText(Crew.SessionMapJson, $"{{\"{Chat}\": {{\"sid\": \"{Parent}\", \"provider\": \"acp\"}}}}");
-
-        var sessions = TestHarnesses.Under(Home).Of<KiroHarness>().Paths.SessionsDir;
-        Directory.CreateDirectory(sessions);
-        File.WriteAllText(Path.Combine(sessions, $"{Parent}.json"), $"{{\"session_id\": \"{Parent}\", \"created_at\": \"2026-09-24T16:14:35.000000Z\"}}");
+        Home.CreateFile([".kiro", "crew", "session_map.json"], $"{{\"{Chat}\": {{\"sid\": \"{Parent}\", \"provider\": \"acp\"}}}}");
+        Home.CreateFile([".kiro", "sessions", "cli", $"{Parent}.json"], $"{{\"session_id\": \"{Parent}\", \"created_at\": \"2026-09-24T16:14:35.000000Z\"}}");
     }
 
     /// <summary>Spawned a few minutes after the parent session was created.</summary>
@@ -44,9 +37,7 @@ public class KiroCrewSessionStartParentTests : IDisposable {
       + (withSessionId ? $", \"session_id\": \"{Child}\"}}" : "}");
 
     void SeedSubagent(bool withSessionId) {
-        var dir = Path.Combine(Crew.SubagentsDir, "65eed35b");
-        Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, "state.json"), SubagentState(withSessionId));
+        Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId));
     }
 
     async Task<JsonNode> SpawnAsync(string sessionId) {
@@ -91,21 +82,59 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
     }
 
-    /// <summary>A one-prompt sub-agent fires agentSpawn once, possibly before Crew records its session.</summary>
+    /// <summary>Runs <paramref name="body"/> with <c>KIROCREW_SPAWNED</c> set as Crew sets it on the
+    /// <c>kiro-cli</c> it launches, or cleared as for a plain Kiro session.</summary>
+    static async Task UnderCrew(bool spawnedByCrew, Func<Task> body) {
+        var previous = Environment.GetEnvironmentVariable("KIROCREW_SPAWNED");
+        Environment.SetEnvironmentVariable("KIROCREW_SPAWNED", spawnedByCrew ? "1" : null);
+
+        try {
+            await body();
+        } finally {
+            Environment.SetEnvironmentVariable("KIROCREW_SPAWNED", previous);
+        }
+    }
+
+    /// <summary>A one-prompt sub-agent fires agentSpawn once, possibly before Crew records its session,
+    /// so under Crew the hook waits for the record.</summary>
     [Test]
+    [NotInParallel("KIROCREW_SPAWNED")]
     public async Task A_sub_agent_Crew_records_moments_later_still_names_its_parent() {
         SeedSessionMap();
         SeedSubagent(withSessionId: false);
 
-        var late = Task.Run(async () => {
-            await Task.Delay(300);
-            await File.WriteAllTextAsync(Path.Combine(Crew.SubagentsDir, "65eed35b", "state.json"), SubagentState(withSessionId: true));
+        await UnderCrew(spawnedByCrew: true, async () => {
+            var late = Task.Run(async () => {
+                await Task.Delay(300);
+                Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId: true));
+            });
+
+            var body = await SpawnAsync(Child);
+            await late;
+
+            await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
         });
+    }
 
-        var body = await SpawnAsync(Child);
-        await late;
+    /// <summary>A Kiro session Crew did not launch is never kept waiting on every prompt, even on a machine
+    /// with Crew installed: the same late record is not waited for.</summary>
+    [Test]
+    [NotInParallel("KIROCREW_SPAWNED")]
+    public async Task A_session_Crew_did_not_launch_does_not_wait_for_a_crew_record() {
+        SeedSessionMap();
+        SeedSubagent(withSessionId: false);
 
-        await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
+        await UnderCrew(spawnedByCrew: false, async () => {
+            var late = Task.Run(async () => {
+                await Task.Delay(300);
+                Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId: true));
+            });
+
+            var body = await SpawnAsync(Child);
+            await late;
+
+            await Assert.That(body["parent_session_id"]).IsNull();
+        });
     }
 
     /// <summary>The chat names its sub-agents, which links a one-prompt child recorded before it.</summary>

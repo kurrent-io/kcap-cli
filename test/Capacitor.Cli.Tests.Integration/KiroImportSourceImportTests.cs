@@ -92,16 +92,13 @@ public class KiroImportSourceImportTests : IDisposable {
         var root = WriteSession();
         var crew = new KiroCrewPaths(root, null);
 
-        Directory.CreateDirectory(crew.Root);
-        await File.WriteAllTextAsync(crew.SessionMapJson, $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}"}}""");
+        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}"}}""");
 
         var spawnedAt = new DateTimeOffset(2026, 6, 10, 21, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         var children  = Enumerable.Range(0, KiroCrewParentResolver.MaxChildrenPerStart + 1).Select(_ => Guid.NewGuid().ToString("D")).ToList();
 
         foreach (var (child, i) in children.Select((c, i) => (c, i))) {
-            var dir = Path.Combine(crew.SubagentsDir, $"s{i:D3}");
-            Directory.CreateDirectory(dir);
-            await File.WriteAllTextAsync(Path.Combine(dir, "state.json"),
+            _tmp.CreateFile(["crew", "subagents", $"s{i:D3}", "state.json"],
                 $$"""{"session_id": "{{child}}", "parent_session": "dashboard:chat-1", "started": {{spawnedAt}}}""");
         }
 

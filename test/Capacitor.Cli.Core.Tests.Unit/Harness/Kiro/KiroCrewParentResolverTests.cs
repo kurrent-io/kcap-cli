@@ -21,23 +21,19 @@ public class KiroCrewParentResolverTests {
     string        SessionsDir => Tmp.PathTo("sessions", "cli");
 
     void SeedSessionMap(string sid = Parent, string? discarded = null) {
-        Directory.CreateDirectory(Crew.Root);
         var discardedField = discarded is null ? "" : $", \"discarded_sid\": \"{discarded}\"";
-        File.WriteAllText(Crew.SessionMapJson,
+        Tmp.CreateFile(["crew", "session_map.json"],
             $"{{\"{Chat}\": {{\"sid\": \"{sid}\", \"provider\": \"acp\", \"cwd\": \"/Users/tony/dev/kcap-cli\"{discardedField}}}}}");
     }
 
     void SeedKiroSession(string sessionId, DateTimeOffset createdAt) {
-        Directory.CreateDirectory(SessionsDir);
-        File.WriteAllText(Path.Combine(SessionsDir, $"{sessionId}.json"),
+        Tmp.CreateFile(["sessions", "cli", $"{sessionId}.json"],
             $"{{\"session_id\": \"{sessionId}\", \"created_at\": \"{createdAt.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}");
     }
 
     void SeedSubagent(string file, string? sessionId = Child, string id = "65eed35b") {
-        var dir = Path.Combine(Crew.SubagentsDir, id);
-        Directory.CreateDirectory(dir);
         var sessionField = sessionId is null ? "" : $", \"session_id\": \"{sessionId}\"";
-        File.WriteAllText(Path.Combine(dir, file),
+        Tmp.CreateFile(["crew", "subagents", id, file],
             $"{{\"id\": \"{id}\", \"agent\": \"kirocrew-research\", \"parent_session\": \"{Chat}\", \"started\": {ChildStarted}, \"status\": \"running\"{sessionField}}}");
     }
 
@@ -68,7 +64,7 @@ public class KiroCrewParentResolverTests {
         SeedSessionMap();
         SeedKiroSession(Parent, ChildStartedAt.AddMinutes(-5));
         SeedSubagent("tombstone.json");
-        await File.WriteAllTextAsync(Path.Combine(Crew.SubagentsDir, "65eed35b", "state.json"),
+        Tmp.CreateFile(["crew", "subagents", "65eed35b", "state.json"],
             $"{{\"id\": \"65eed35b\", \"session_id\": \"{Child}\", \"status\": \"running\"}}");
 
         await Assert.That(ParentOf(Child)).IsEqualTo(Parent);
@@ -143,7 +139,7 @@ public class KiroCrewParentResolverTests {
 
         SeedSubagent("state.json");
         SeedKiroSession(Parent, ChildStartedAt.AddMinutes(-5));
-        await File.WriteAllTextAsync(Crew.SessionMapJson, "{not json");
+        Tmp.CreateFile(["crew", "session_map.json"], "{not json");
 
         await Assert.That(ParentOf(Child)).IsNull();
         await Assert.That(KiroCrewParentResolver.IsChatSession(Crew, Parent)).IsFalse();
@@ -168,7 +164,7 @@ public class KiroCrewParentResolverTests {
         SeedSessionMap();
         SeedKiroSession(Parent, ChildStartedAt.AddMinutes(-5));
         SeedSubagent("state.json");
-        Directory.SetLastWriteTimeUtc(Path.Combine(Crew.SubagentsDir, "65eed35b"), DateTime.UtcNow.AddDays(-30));
+        Directory.SetLastWriteTimeUtc(Tmp.PathTo("crew", "subagents", "65eed35b"), DateTime.UtcNow.AddDays(-30));
 
         for (var i = 0; i < KiroCrewParentResolver.LiveScanLimit; i++)
             SeedSubagent("state.json", sessionId: Guid.NewGuid().ToString("D"), id: $"n{i:D6}");

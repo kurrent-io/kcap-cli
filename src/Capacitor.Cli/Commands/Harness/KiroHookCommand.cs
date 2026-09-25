@@ -119,6 +119,10 @@ sealed class KiroHookCommand(
         }
     }
 
+    /// <summary>Crew sets this to "1" on every <c>kiro-cli</c> it launches, so it marks a session worth
+    /// waiting on; a plain Kiro session never pays the wait, even on a machine with Crew installed.</summary>
+    const string CrewSpawnedVariable = "KIROCREW_SPAWNED";
+
     /// <summary>Longest the hook waits for Crew to record a sub-agent's session. Crew writes it about a
     /// second after the child's first prompt, and a one-prompt sub-agent fires agentSpawn only once.</summary>
     static readonly TimeSpan CrewParentWait = TimeSpan.FromMilliseconds(1500);
@@ -176,6 +180,7 @@ sealed class KiroHookCommand(
 
         var (parent, isChat) = await LookUp();
         if (parent is not null || isChat) return parent;
+        if (Environment.GetEnvironmentVariable(CrewSpawnedVariable) != "1") return null;
 
         while (budget.Time.GetUtcNow() < deadline) {
             await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Time);
