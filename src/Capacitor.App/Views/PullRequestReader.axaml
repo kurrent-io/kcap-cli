@@ -14,7 +14,7 @@
                            ToolTip.Tip="{Binding RepositoryLabel}">
                     <Run Text="{Binding RepositoryLabel}" /><Run Text=" " /><Run Text="{Binding NumberLabel}" />
                 </TextBlock>
-                <Button Grid.Column="2" Command="{Binding OpenGitHubCommand}" Classes="prButton" IsEnabled="{Binding CanOpenSource}"
+                <Button Grid.Column="2" Command="{Binding OpenGitHubCommand}" Classes="kcapGhost kcapQuiet prFlushRight" IsEnabled="{Binding CanOpenSource}"
                         AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
@@ -75,7 +75,7 @@
             </Grid>
         </StackPanel>
         <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" BringIntoViewOnFocusChange="False">
-            <StackPanel Margin="24,18,24,24" Spacing="10">
+            <StackPanel Margin="24,16,24,24" Spacing="10">
                 <StackPanel IsVisible="{Binding IsOverview}" Spacing="10">
                     <TextBlock Text="{Binding DescriptionNote}" Classes="prNote" IsVisible="{Binding DescriptionNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <views:MarkdownView Text="{Binding Description}" OpenLink="{Binding OpenBodyLinkCommand}" Flavor="GitHub" />
@@ -88,7 +88,7 @@
                           StrokeLineCap="Round" StrokeJoin="Round" Data="M2,9 L5,3 H15 L18,9 V16 Q18,17 17,17 H3 Q2,17 2,16 Z M2,9 H7 L8,11 H12 L13,9 H18" />
                     <TextBlock Text="{Binding EmptyNote}" Classes="prNote" TextAlignment="Center" />
                 </StackPanel>
-                <Button Content="Reload earlier" Command="{Binding ReloadEarlierCommand}" IsVisible="{Binding CanReloadEarlier}" HorizontalAlignment="Left" Classes="prButton" />
+                <Button Content="Reload earlier" Command="{Binding ReloadEarlierCommand}" IsVisible="{Binding CanReloadEarlier}" HorizontalAlignment="Left" Classes="kcapGhost kcapQuiet prFlushLeft" />
                 <ItemsControl x:Name="ReviewerRows" ItemsSource="{Binding ReviewerRows}" IsVisible="{Binding IsReviewers}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:PullRequestRow">
@@ -109,7 +109,7 @@
                                         <TextBlock Text="Review re-requested" Classes="prNote" IsVisible="{Binding ReRequested}" />
                                     </StackPanel>
                                     <views:PullRequestStatusLabel Grid.Column="2" DataContext="{Binding Status}" VerticalAlignment="Center" />
-                                    <Button Grid.Column="3" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
+                                    <Button Grid.Column="3" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                             CommandParameter="{Binding}" AutomationProperties.Name="Open review in browser" ToolTip.Tip="Open review in browser">
                                         <Path Classes="prExternal" />
@@ -131,7 +131,7 @@
                                         <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
                                     </StackPanel>
                                     <views:PullRequestStatusLabel Grid.Column="1" DataContext="{Binding Status}" VerticalAlignment="Center" />
-                                    <Button Grid.Column="2" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
+                                    <Button Grid.Column="2" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                             CommandParameter="{Binding}" AutomationProperties.Name="Open check in browser" ToolTip.Tip="Open check in browser">
                                         <Path Classes="prExternal" />
@@ -151,7 +151,7 @@
                                             <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" />
                                             <TextBlock Text="{Binding Detail}" Classes="prNote" IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                         </StackPanel>
-                                        <Button Grid.Column="1" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Top"
+                                        <Button Grid.Column="1" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Top"
                                                 Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                                 CommandParameter="{Binding}" AutomationProperties.Name="Open comment in browser" ToolTip.Tip="Open in browser">
                                             <Path Classes="prExternal" />
@@ -164,7 +164,7 @@
                                     <views:MarkdownView Text="{Binding Body}" IsVisible="{Binding HasBody}" Flavor="GitHub"
                                         OpenLink="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenBodyLinkCommand}" />
                                     <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
-                                    <Button Content="View replies" IsVisible="{Binding IsThread}" Classes="prButton" HorizontalAlignment="Left"
+                                    <Button Content="View replies" IsVisible="{Binding IsThread}" Classes="kcapGhost kcapQuiet prFlushLeft" HorizontalAlignment="Left"
                                             IsEnabled="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).CanReveal}"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).ExpandThreadCommand}"
                                             CommandParameter="{Binding}" />
@@ -173,31 +173,38 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <Button Content="Load more" Command="{Binding LoadMoreCommand}" IsVisible="{Binding HasMore}" HorizontalAlignment="Left" Classes="prButton" />
+                <Button Content="Load more" Command="{Binding LoadMoreCommand}" IsVisible="{Binding HasMore}" HorizontalAlignment="Left" Classes="kcapGhost kcapQuiet prFlushLeft" />
             </StackPanel>
         </ScrollViewer>
-        <Border Grid.Row="3" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="16,6">
+        <!-- Left inset 17 + the icon target's 7 puts the glyph on the page's 24px content edge. -->
+        <Border Grid.Row="3" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="17,4,24,4">
             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="4">
-                <Button Classes="prButton" Command="{Binding RefreshCommand}" ToolTip.Tip="Refresh pull request" AutomationProperties.Name="Refresh pull request">
+                <Button x:Name="ReaderRefreshButton" Classes="kcapGhost kcapIcon" Command="{Binding RefreshCommand}"
+                        AutomationProperties.Name="Refresh pull request">
+                    <ToolTip.Tip>
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Reloads this pull request's overview, checks, reviews and activity" TextWrapping="Wrap" MaxWidth="260" />
+                            <TextBlock Text="Refresh pull request" Classes="kcapTipCaption" />
+                        </StackPanel>
+                    </ToolTip.Tip>
                     <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4" StrokeLineCap="Round"
-                          Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
+                          Classes.kcapSpinning="{Binding IsReading}" Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
                 </Button>
                 <Grid Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock Text="{Binding FreshnessLabel}" Classes="prNote" IsVisible="{Binding !IsReading}" />
                     <TextBlock Text="Refreshing…" Classes="prNote" IsVisible="{Binding IsReading}" />
                 </Grid>
-                <Button Grid.Column="2" Classes="prButton" AutomationProperties.Name="Pull request access details" ToolTip.Tip="Access and reading details">
+                <Border Grid.Column="2" Background="Transparent" Padding="4" VerticalAlignment="Center"
+                        AutomationProperties.Name="Pull request access" AutomationProperties.HelpText="{Binding AccessLabel}">
+                    <ToolTip.Tip>
+                        <StackPanel Spacing="2" MaxWidth="280">
+                            <TextBlock Text="{Binding AccessLabel}" TextWrapping="Wrap" />
+                            <TextBlock Text="Read here; reply, resolve, review and see the full diff on GitHub" Classes="kcapTipCaption" />
+                        </StackPanel>
+                    </ToolTip.Tip>
                     <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4"
                           Data="M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M8,7 V12 M8,4 V5" />
-                    <Button.Flyout>
-                        <Flyout>
-                            <StackPanel Spacing="8" MaxWidth="280">
-                                <TextBlock Text="{Binding AccessLabel}" Classes="prNote" />
-                                <TextBlock Text="Read descriptions, reviews and threads here. Reply, resolve, review, or view the full diff in your browser." Classes="prNote" />
-                            </StackPanel>
-                        </Flyout>
-                    </Button.Flyout>
-                </Button>
+                </Border>
             </Grid>
         </Border>
     </Grid>

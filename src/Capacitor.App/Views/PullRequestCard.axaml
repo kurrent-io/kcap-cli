@@ -28,7 +28,7 @@
                                ToolTip.Tip="{Binding RepositoryLabel}" />
                 </StackPanel>
                 <Button x:Name="OpenGitHubButton" Grid.Column="1" Command="{Binding OpenGitHubCommand}" IsEnabled="{Binding CanOpenSource}"
-                        IsVisible="{Binding ShowsOpenSource}" Classes="prButton" VerticalAlignment="Center"
+                        IsVisible="{Binding ShowsOpenSource}" Classes="kcapGhost kcapQuiet" VerticalAlignment="Center"
                         AutomationProperties.Name="Open pull request in browser">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
@@ -65,10 +65,10 @@
             <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" Classes="prNote" />
             <TextBlock Text="{Binding ReaderNote}" IsVisible="{Binding HasReaderNote}" Classes="prNote" />
             <WrapPanel IsVisible="{Binding HasReaderNote}">
-                <Button Content="{Binding InstallToolLabel}" Command="{Binding InstallToolCommand}" IsVisible="{Binding ShowsInstallTool}" Classes="prButton prPrimary" Margin="0,0,8,0" />
-                <Button Content="Recheck" Command="{Binding RefreshCommand}" Classes="prButton" />
+                <Button Content="{Binding InstallToolLabel}" Command="{Binding InstallToolCommand}" IsVisible="{Binding ShowsInstallTool}" Classes="kcapPrimary" Margin="0,0,8,0" />
+                <Button Content="Recheck" Command="{Binding RefreshCommand}" Classes="kcapGhost kcapQuiet" />
             </WrapPanel>
-            <Button Content="Sign in" Command="{Binding SignInCommand}" IsVisible="{Binding ShowsSignIn}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
-            <Button Content="Link GitHub" Command="{Binding LinkGitHubCommand}" IsVisible="{Binding ShowsLinkGitHub}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
+            <Button Content="Sign in" Command="{Binding SignInCommand}" IsVisible="{Binding ShowsSignIn}" Classes="kcapPrimary" HorizontalAlignment="Left" />
+            <Button Content="Link GitHub" Command="{Binding LinkGitHubCommand}" IsVisible="{Binding ShowsLinkGitHub}" Classes="kcapPrimary" HorizontalAlignment="Left" />
     </StackPanel>
 </UserControl>

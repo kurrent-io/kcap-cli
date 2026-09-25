@@ -295,11 +295,16 @@
                             <Path Classes="prExternal" Width="14" Height="14" />
                         </Button>
                         <Button x:Name="RefreshButton" Command="{Binding RefreshCommand}" Classes="iconButton"
-                                VerticalAlignment="Center"
-                                ToolTip.Tip="{Binding RefreshTip}" ToolTip.ShowOnDisabled="True">
+                                VerticalAlignment="Center" ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Refresh this work">
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="2" MaxWidth="260">
+                                    <TextBlock Text="{Binding RefreshTip}" TextWrapping="Wrap" />
+                                    <TextBlock Text="Refresh this work" Classes="kcapTipCaption" />
+                                </StackPanel>
+                            </ToolTip.Tip>
                             <Path Width="14" Height="14" Stretch="Uniform"
                                   Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
-                                  Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
+                                  Classes.kcapSpinning="{Binding IsReading}" Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
                         </Button>
                     </StackPanel>
                 </Grid>
