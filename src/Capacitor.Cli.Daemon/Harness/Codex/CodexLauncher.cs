@@ -516,11 +516,6 @@ internal sealed partial class CodexLauncher(
             "--ask-for-approval", "on-request",
             "--no-alt-screen"
         };
-        // Same reason as the hosted launch: after kcap rewrites its hooks, Codex parks on a "Hooks need
-        // review" dialog, and a detached agent has nobody attached to answer it. Skipped when the user
-        // passed it themselves, since Codex rejects the flag given twice.
-        const string bypassHookTrust = "--dangerously-bypass-hook-trust";
-        if (!userArgs.Contains(bypassHookTrust)) args.Add(bypassHookTrust);
         args.AddRange(userArgs);
 
         return new([.. args], McpConfigPath: null);

@@ -612,49 +612,4 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(activeCwd)).IsTrue()
             .Because("an active snapshot must survive regardless of what its name happens to end with");
     }
-
-    /// The checkout is most of a launch's wait; one worker per core cut it from 9.1 s to 2.4 s on a
-    /// 7.5k-file repo, so the guarded reset must keep asking git for it.
-    [Test]
-    public async Task The_checkout_asks_git_for_a_worker_per_core() {
-        await Assert.That(WorktreeManager.ParallelCheckout).IsEquivalentTo([new GitConfigOverride("checkout.workers", "0")]);
-    }
-
-    /// A teardown that never ran — a daemon killed mid-cleanup, a crash — leaves the worktree in the repo the
-    /// agent was launched in, which the allowlist sweep never visits. The repo-list sweep removes it and prunes
-    /// git's registration, but keeps its branch: that is where anything the agent committed lives.
-    [Test]
-    public async Task CleanupOrphaned_sweeps_known_repos_and_keeps_their_branches() {
-        using var repo = GitRepo.CreateWithCommit();
-        var root = Path.Combine(repo.Path, ".capacitor", "worktrees");
-        var orphan = Path.Combine(root, "agent-orphan");
-        var live = Path.Combine(root, "agent-live");
-        var empty = Path.Combine(root, "agent-empty");
-        repo.Do("worktree", "add", "-q", orphan, "-b", "capacitor/agent-orphan");
-        repo.Do("worktree", "add", "-q", live, "-b", "capacitor/agent-live");
-        Directory.CreateDirectory(empty);
-        var manager = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
-
-        await manager.CleanupOrphanedAsync([live], knownRepoPaths: [repo.Path]);
-
-        await Assert.That(Directory.Exists(orphan)).IsFalse();
-        await Assert.That(Directory.Exists(empty)).IsFalse();
-        await Assert.That(Directory.Exists(live)).IsTrue();
-        var registered = repo.Do("worktree", "list", "--porcelain").Text;
-        await Assert.That(registered).DoesNotContain("agent-orphan");
-        await Assert.That(registered).Contains("agent-live");
-        await Assert.That(repo.Do("branch", "--list", "capacitor/agent-orphan").Text).Contains("agent-orphan");
-    }
-
-    [Test]
-    public async Task CleanupOrphaned_leaves_known_repos_alone_when_none_are_passed() {
-        using var repo = GitRepo.CreateWithCommit();
-        var orphan = Path.Combine(repo.Path, ".capacitor", "worktrees", "agent-orphan");
-        repo.Do("worktree", "add", "-q", orphan, "-b", "capacitor/agent-orphan");
-        var manager = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
-
-        await manager.CleanupOrphanedAsync();
-
-        await Assert.That(Directory.Exists(orphan)).IsTrue();
-    }
 }

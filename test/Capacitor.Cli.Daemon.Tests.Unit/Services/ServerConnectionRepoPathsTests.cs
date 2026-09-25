@@ -54,20 +54,6 @@ public class ServerConnectionRepoPathsTests {
         await Assert.That(conn.AdvertisedRepoStore).IsNull();
     }
 
-    /// An unreadable repos.json must not reach the server as an empty list stamped with the file's
-    /// fingerprint: the watcher would then see nothing to resend, and the server would show no
-    /// repositories until the file next changed.
-    [Test]
-    public async Task An_unreadable_list_is_not_sent_and_not_recorded() {
-        await File.WriteAllBytesAsync(Config.PathTo("repos.json"), new byte[64]);
-        await using var conn = new RepoPathsServerConnection(NewConfig());
-
-        await conn.UpdateRepoPathsAsync();
-
-        await Assert.That(conn.Sent).IsEmpty();
-        await Assert.That(conn.AdvertisedRepoStore).IsNull();
-    }
-
     /// The daemon's own launch path and the watcher can send at the same time, and the server runs
     /// one client's invocations in parallel: an older list processed after a newer one, with the
     /// newer fingerprint recorded last, would leave the server stale with nothing left to repair it.

@@ -111,7 +111,7 @@ Help → Report a Bug… / Send Feedback… (or the help button in the session r
 
 Download `Kurrent-Capacitor-<version>-win-x64-Setup.exe` from the [GitHub release](https://github.com/kurrent-io/kcap-cli/releases) (Windows 10 or later, x64) and run it. It installs per user into `%LocalAppData%\KurrentCapacitor` with no administrator prompt and adds a Start-menu entry. Like the macOS app it bundles its own `kcap` CLI and daemon. The first run offers to add the app's folder to your user PATH, so `kcap` works from any new terminal, and to install the daemon as a background service (a per-user Scheduled Task that starts at sign-in).
 
-Windows draws no application menu, so **Settings…**, **Changelog** and the app version sit in the help button in the session rail's footer, next to Documentation and the report items; **Ctrl+,** opens Settings. Closing the window keeps the app running in the notification area — quit from the tray icon's menu. Updates arrive through the app the same way as on macOS, from the Windows feed.
+Windows draws no application menu, so **Settings…**, **Changelog** and the app version sit in the help button in the session rail's footer, next to Documentation and the report items. Closing the window keeps the app running in the notification area — quit from the tray icon's menu. Updates arrive through the app the same way as on macOS, from the Windows feed.
 
 ### 2. Run setup
 

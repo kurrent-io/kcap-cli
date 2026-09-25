@@ -416,12 +416,10 @@ public partial class WorktreeManager(
         // user.email fails with "Author identity unknown". Found while the broken copy was temporarily
         // repaired and this line became reachable for the first time; that repair was reverted then and has
         // landed now, so this is live rather than speculative.
-        // --allow-empty: a folder with nothing to copy — new, or holding only the daemon's own
-        // .capacitor directory — is a valid place to start an agent, and git refuses an empty commit.
         await RunGit(worktreePath, GitTimeout,
             time,
             [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
-            "commit", "--allow-empty", "-m", "Initial snapshot");
+            "commit", "-m", "Initial snapshot");
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
     }
@@ -506,13 +504,8 @@ public partial class WorktreeManager(
         // `reset --hard HEAD`, not `checkout -- .`: --no-checkout leaves the INDEX unpopulated too, so a
         // pathspec matches nothing. This is the step that materialises the tree, and therefore the step
         // the overrides have to guard.
-        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. overrides, .. ParallelCheckout], "reset", "--hard", "HEAD");
+        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. overrides], "reset", "--hard", "HEAD");
     }
-
-    /// Writing the tree is most of a launch's wait, and git checks files out one at a time unless told
-    /// otherwise: 0 means a worker per core. Measured on a 7.5k-file repo on Windows, 9.1 s serial,
-    /// 2.4 s parallel. Git older than 2.32 ignores the keys.
-    internal static readonly GitConfigOverride[] ParallelCheckout = [new("checkout.workers", "0")];
 
     /// <summary>
     /// The filter overrides for a context, LOGGED as a side effect.
@@ -1390,33 +1383,7 @@ public partial class WorktreeManager(
         return false;
     }
 
-    /// <param name="knownRepoPaths">Repositories agents were launched in (the repo list), swept like the
-    /// allowlist: an agent whose teardown never ran — a daemon killed mid-cleanup, a crash — leaves its
-    /// worktree there, and nothing else ever removes it. The caller passes these only when no other
-    /// daemon is running, since another daemon's live worktrees can sit in the same repository. Only the
-    /// worktree directories go: their <c>capacitor/agent-*</c> branches keep whatever the agent committed.</param>
-    public async Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null, IEnumerable<string>? knownRepoPaths = null) {
-        await CleanupAllowedOrphansAsync(activeWorktreePaths);
-
-        var active = activeWorktreePaths as string[] ?? [..activeWorktreePaths ?? []];
-        var allowed = config.AllowedRepoPaths.Select(p => p.TrimEnd('/', '*')).ToArray();
-        foreach (var repoPath in allowed.Where(p => Directory.Exists(Path.Combine(p, ".capacitor", "worktrees"))))
-            await RunGitBestEffort(repoPath, time, "-c", "maintenance.auto=false", "-c", "gc.auto=0", "worktree", "prune");
-
-        foreach (var repoPath in knownRepoPaths ?? []) {
-            if (allowed.Any(a => string.Equals(Path.GetFullPath(a), Path.GetFullPath(repoPath), StringComparison.OrdinalIgnoreCase))) continue;
-
-            var perRepoRoot = Path.Combine(repoPath, ".capacitor", "worktrees");
-            if (!Directory.Exists(perRepoRoot)) continue;
-
-            CleanupDirectory(perRepoRoot, active);
-            // Deleting a linked worktree's directory leaves git's registration behind; prune drops
-            // the ones whose directory is gone, and nothing else.
-            await RunGitBestEffort(repoPath, time, "-c", "maintenance.auto=false", "-c", "gc.auto=0", "worktree", "prune");
-        }
-    }
-
-    Task CleanupAllowedOrphansAsync(IEnumerable<string>? activeWorktreePaths) {
+    public Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null) {
         // Legacy global root — clean up any leftover worktrees from before the per-repo change
         var worktreePaths = activeWorktreePaths as string[] ?? [..activeWorktreePaths ?? []];
         CleanupDirectory(config.WorktreeRoot, worktreePaths, "borrowed-snapshots");

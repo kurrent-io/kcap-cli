@@ -9,10 +9,6 @@ namespace Capacitor.Cli.Core.Config;
 public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
     string StorePath { get; } = config.Path("repos.json");
 
-    // The file each save replaces, kept so a repos.json that reads back unparseable — a crash or power
-    // loss between rename and flush can leave one zero-filled — still has a last good copy.
-    string BackupPath { get; } = config.Path("repos.json.bak");
-
     // Static: serialises the read-modify-write for the whole process however many instances exist.
     static readonly SemaphoreSlim Lock = new(1, 1);
 
@@ -21,42 +17,18 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
             ? StringComparison.Ordinal
             : StringComparison.OrdinalIgnoreCase;
 
-    // A root keeps its separator: `C:` names the current directory on drive C, not its root.
-    internal static string NormalizePath(string path) {
-        var full = Path.GetFullPath(path);
-        return full == Path.GetPathRoot(full) ? full : full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
+    static string NormalizePath(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-    /// Empty when the list cannot be read. For display and matching only — a write must never start
-    /// from this, since saving it would wipe every repository the unreadable file still holds.
-    public async Task<RepoEntry[]> LoadAsync() => await TryLoadAsync() ?? [];
-
-    /// Null when repos.json exists but neither it nor its backup can be read; empty only when there is
-    /// genuinely no list yet.
-    public async Task<RepoEntry[]?> TryLoadAsync() {
+    public async Task<RepoEntry[]> LoadAsync() {
         if (!File.Exists(StorePath))
             return [];
 
-        return await TryReadAsync(StorePath) ?? await TryReadAsync(BackupPath);
-    }
-
-    async Task<RepoEntry[]?> TryReadAsync(string path) {
-        for (var attempt = 0; ; attempt++) {
-            try {
-                // Shares write and delete: on Windows a reader holding the file without them makes
-                // another process's save fail at the rename.
-                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                var entries = await JsonSerializer.DeserializeAsync(stream, CapacitorJsonContext.Default.RepoEntryArray);
-                return entries is null ? null : Collapse(entries);
-            } catch (FileNotFoundException) {
-                return null;
-            } catch (DirectoryNotFoundException) {
-                return null;
-            } catch (IOException) when (attempt < 4) {
-                await Task.Delay(TimeSpan.FromMilliseconds(50), time);
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) {
-                return null;
-            }
+        try {
+            var json = await File.ReadAllTextAsync(StorePath);
+            return Collapse(JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? []);
+        } catch {
+            return [];
         }
     }
 
@@ -88,7 +60,7 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
         await Lock.WaitAsync();
 
         try {
-            var entries  = (await LoadForWriteAsync()).ToList();
+            var entries  = (await LoadAsync()).ToList();
             var existing = entries.FindIndex(e => string.Equals(e.Path, normalized, PathComparison));
 
             if (existing >= 0) {
@@ -109,7 +81,7 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
         await Lock.WaitAsync();
 
         try {
-            var entries = (await LoadForWriteAsync()).ToList();
+            var entries = (await LoadAsync()).ToList();
             var removed = entries.RemoveAll(e => string.Equals(e.Path, normalized, PathComparison));
 
             if (removed == 0) return false;
@@ -121,43 +93,22 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
         }
     }
 
-    async Task<RepoEntry[]> LoadForWriteAsync() =>
-        await TryLoadAsync()
-     ?? throw new IOException($"{StorePath} cannot be read and has no readable backup; it is left untouched rather than overwritten.");
-
     async Task SaveAsync(List<RepoEntry> entries) {
         var dir = Path.GetDirectoryName(StorePath)!;
         Directory.CreateDirectory(dir);
         var tempPath = Path.Combine(dir, $"repos.{Environment.ProcessId}.tmp");
         var sorted   = entries.OrderByDescending(e => e.LastUsed).ToArray();
-
-        // Flushed to disk before the swap: NTFS can persist the rename ahead of the data, so a power
-        // loss right after an unflushed save leaves repos.json zero-filled.
-        await using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None)) {
-            await JsonSerializer.SerializeAsync(stream, sorted, CapacitorJsonContext.Default.RepoEntryArray);
-            stream.Flush(flushToDisk: true);
-        }
-
-        for (var attempt = 0; ; attempt++) {
-            try {
-                if (File.Exists(StorePath)) File.Replace(tempPath, StorePath, BackupPath, ignoreMetadataErrors: true);
-                else File.Move(tempPath, StorePath);
-                return;
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 9) {
-                // Windows refuses the swap while another process holds repos.json without delete sharing.
-                await Task.Delay(TimeSpan.FromMilliseconds(50), time);
-            }
-        }
+        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(sorted, CapacitorJsonContext.Default.RepoEntryArray));
+        File.Move(tempPath, StorePath, overwrite: true);
     }
 
     /// <summary>
     /// Returns all persisted repo paths sorted by last_used descending.
     /// </summary>
-    public async Task<string[]> GetSortedPathsAsync() => await TryGetSortedPathsAsync() ?? [];
-
-    /// Null when the list cannot be read — see <see cref="TryLoadAsync"/>.
-    public async Task<string[]?> TryGetSortedPathsAsync() =>
-        (await TryLoadAsync())?.OrderByDescending(e => e.LastUsed).Select(e => e.Path).ToArray();
+    public async Task<string[]> GetSortedPathsAsync() {
+        var entries = await LoadAsync();
+        return entries.OrderByDescending(e => e.LastUsed).Select(e => e.Path).ToArray();
+    }
 
     /// <summary>Null when the file does not exist. Content rather than size and mtime: re-adding a
     /// known path rewrites the file at the same length, and two such writes inside the filesystem's

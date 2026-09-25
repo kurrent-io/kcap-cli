@@ -229,7 +229,7 @@
                                             <Button x:Name="RailHelpSettingsButton" Classes="kcapGhost" Content="Settings…"
                                                     Command="{Binding OpenSettingsCommand}" Click="OnHelpFlyoutItemClick"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                    Padding="10,8" FontSize="13.5" ToolTip.Tip="Ctrl+," />
+                                                    Padding="10,8" FontSize="13.5" />
                                             <Button x:Name="RailHelpChangelogButton" Classes="kcapGhost" Content="Changelog"
                                                     Command="{Binding OpenChangelogCommand}" Click="OnHelpFlyoutItemClick"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
