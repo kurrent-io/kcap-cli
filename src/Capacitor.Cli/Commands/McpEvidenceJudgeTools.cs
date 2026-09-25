@@ -48,9 +48,9 @@ sealed class McpEvidenceJudgeTools : IDisposable {
         return new(run, new EvidenceReadClient(http, baseUrl, run.RootSessionId), JudgeLedgerWriter.OpenAppend(run.LedgerPath), time);
     }
 
-    public async Task<(string Text, bool IsError)> CallAsync(string tool, JsonObject? arguments, CancellationToken ct) {
+    public async Task<(string Text, bool IsError)> CallAsync(string tool, JsonNode? argumentsNode, CancellationToken ct) {
         var seq  = ++_seq;
-        var args = arguments?.ToJsonString() ?? "{}";
+        var args = argumentsNode?.ToJsonString() ?? "{}";
 
         if (_stop == ScopeMoved) return Finish(new(seq, tool, args, JudgeLedgerOutcomes.Refused, ScopeMoved, "scope moved", 0), "Error: scope moved", true);
         if (_stop is { } spent) return Finish(new(seq, tool, args, JudgeLedgerOutcomes.NotExecuted, spent, null, 0), NotExecuted + spent, false);
@@ -59,6 +59,11 @@ sealed class McpEvidenceJudgeTools : IDisposable {
         _charged++;
 
         try {
+            var arguments = argumentsNode switch {
+                null           => null,
+                JsonObject obj => obj,
+                _              => throw new ArgumentException("arguments must be a JSON object")
+            };
             return tool switch {
                 "list_sources"        => await ListSourcesAsync(seq, args, arguments, ct),
                 "open_page"           => await OpenPageAsync(seq, args, arguments, ct),
@@ -72,8 +77,13 @@ sealed class McpEvidenceJudgeTools : IDisposable {
             };
         } catch (ArgumentException e) {
             return Finish(new(seq, tool, args, JudgeLedgerOutcomes.Error, null, e.Message, 0), $"Error: {e.Message}", true);
+        } catch (Exception e) when (!IsFatal(e) && !(e is OperationCanceledException && ct.IsCancellationRequested)) {
+            // An exception that escapes here ends the judge's MCP server, and with it every later call of the question.
+            return Finish(new(seq, tool, args, JudgeLedgerOutcomes.Error, null, e.GetType().Name, 0), $"Error: the call failed ({e.GetType().Name}: {e.Message}); retry", true);
         }
     }
+
+    static bool IsFatal(Exception e) => e is OutOfMemoryException or InsufficientExecutionStackException or AccessViolationException;
 
     public static McpTool[] ToolsList() {
         static McpSchemaProperty S(string description) => new("string", description);
@@ -131,6 +141,7 @@ sealed class McpEvidenceJudgeTools : IDisposable {
         var pageArgs = "{\"page\":\"" + JsonEncodedText.Encode(handle) + "\",\"next\":true}";
         EvidenceHttpResult result;
         if (page.Tool == "read_body") {
+            if (page.Bodies.Count == 0) throw new ArgumentException($"page '{handle}' names no body to continue");
             var (bodyRef, field, ordinal) = page.Bodies[0];
             List<(string Key, string Value)> query = [("token", _run.Token), ("ref", bodyRef), ("field", field), ("offset", next), ("max_bytes", PageBudget)];
             if (ordinal is { } o) query.Add(("ordinal", o.ToString(Inv)));
@@ -187,7 +198,7 @@ sealed class McpEvidenceJudgeTools : IDisposable {
             case >= 200 and < 300:
                 JudgeLedgerPage page;
                 try { page = EvidencePageRenderer.Render(seq, JudgeCiteHandles.Page(_pageNumber + 1), pageTool, pageArgs, result.Body); }
-                catch (JsonException) { return Finish(new(seq, callTool, callArgs, JudgeLedgerOutcomes.Error, null, "unreadable page", 0), "Error: the server returned an unreadable page", true); }
+                catch (Exception e) when (e is JsonException or InvalidOperationException) { return Finish(new(seq, callTool, callArgs, JudgeLedgerOutcomes.Error, null, "unreadable page", 0), "Error: the server returned an unreadable page", true); }
                 return Accept(page, seq, callTool, callArgs);
             case 400:
                 var (code, detail) = ReadError(result.Body);

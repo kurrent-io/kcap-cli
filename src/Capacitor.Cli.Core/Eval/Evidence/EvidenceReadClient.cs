@@ -8,6 +8,8 @@ public sealed class EvidenceReadClient(HttpClient http, string baseUrl, string s
             return new((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
         } catch (HttpRequestException e) {
             return new(0, e.Message);
+        } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+            return new(0, "the request timed out");
         }
     }
 

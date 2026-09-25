@@ -23,7 +23,7 @@ public class McpEvidenceJudgeToolsTests : IDisposable {
 
     string LedgerPath => _tmp.PathTo("q1.ledger.jsonl");
 
-    McpEvidenceJudgeTools Tools(int maxToolCalls = 48, long byteBudget = 600_000, IReadOnlyList<JudgeLedgerPage>? seeded = null) {
+    McpEvidenceJudgeTools Tools(int maxToolCalls = 48, long byteBudget = 600_000, IReadOnlyList<JudgeLedgerPage>? seeded = null, HttpClient? http = null) {
         var soft   = _time.GetUtcNow().AddMinutes(8);
         var header = new JudgeLedgerHeader("run", "safety/q1", "v1", new EvidenceRunBudgets(maxToolCalls, byteBudget, 65_536), soft, _time.GetUtcNow());
         using (var writer = JudgeLedgerWriter.Create(LedgerPath, header))
@@ -34,7 +34,27 @@ public class McpEvidenceJudgeToolsTests : IDisposable {
         var runPath = _tmp.PathTo("q1.run.json");
         using (var stream = File.Create(runPath)) run.WriteTo(stream);
         _stub.CursorPage("tok", EvidenceServerStub.Manifest("v1", "tok", null, null, null));
-        return McpEvidenceJudgeTools.Open(runPath, _http, _stub.Url, _time);
+        return McpEvidenceJudgeTools.Open(runPath, http ?? _http, _stub.Url, _time);
+    }
+
+    // The failed call is charged and ledgered, and the question goes on: the next call is served.
+    async Task AssertFailedThenServed(McpEvidenceJudgeTools tools, bool isError, string failedTool) {
+        var (next, nextError) = await tools.CallAsync("list_sources", Args("{}"), CancellationToken.None);
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(nextError).IsFalse();
+        await Assert.That(next.StartsWith("{\"page\"", StringComparison.Ordinal)).IsTrue();
+        var ledger = Ledger();
+        await Assert.That(ledger.Calls[0].Tool).IsEqualTo(failedTool);
+        await Assert.That(ledger.Calls[0].Outcome).IsEqualTo(JudgeLedgerOutcomes.Error);
+        await Assert.That(ledger.Calls[1].Outcome).IsEqualTo(JudgeLedgerOutcomes.Executed);
+        await Assert.That(ledger.Footer!.ToolCalls).IsEqualTo(2);
+        await Assert.That(ledger.Footer.StopReason).IsNull();
+    }
+
+    sealed class ThrowingOn(string pathPart, Exception exception) : DelegatingHandler(new HttpClientHandler()) {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            request.RequestUri!.AbsolutePath.Contains(pathPart, StringComparison.Ordinal) ? throw exception : base.SendAsync(request, ct);
     }
 
     JudgeLedger Ledger() => JudgeLedgerReader.Read(LedgerPath);
@@ -269,6 +289,94 @@ public class McpEvidenceJudgeToolsTests : IDisposable {
 
         await Assert.That(isError).IsFalse();
         await Assert.That(QueryOf(_stub.Requests("evidence-events").Single())["ref"].Single()).IsEqualTo($"{Root}@0-4");
+    }
+
+    [Test]
+    public async Task An_http_timeout_is_a_retryable_unreachable_error() {
+        _stub.Route("GET", "evidence-turns", 200, EvidenceServerStub.TurnsPage(Root, [(0, 0, 4)]), delay: TimeSpan.FromSeconds(10));
+        using var http  = new HttpClient { Timeout = TimeSpan.FromMilliseconds(500) };
+        using var tools = Tools(http: http);
+
+        var (text, isError) = await tools.CallAsync("list_turns", Args($$"""{"source":"{{Root}}"}"""), CancellationToken.None);
+
+        await Assert.That(text).IsEqualTo("Error: server unreachable: the request timed out");
+        await Assert.That(Ledger().Calls[0].Error).IsEqualTo("unreachable");
+        await AssertFailedThenServed(tools, isError, "list_turns");
+    }
+
+    [Test]
+    public async Task A_success_body_that_is_not_an_object_is_an_unreadable_page() {
+        _stub.Route("GET", "evidence-turns", 200, "[1,2]");
+        using var tools = Tools();
+
+        var (text, isError) = await tools.CallAsync("list_turns", Args($$"""{"source":"{{Root}}"}"""), CancellationToken.None);
+
+        await Assert.That(text).IsEqualTo("Error: the server returned an unreadable page");
+        await AssertFailedThenServed(tools, isError, "list_turns");
+    }
+
+    [Test]
+    public async Task Arguments_that_are_not_an_object_are_a_charged_correctable_error() {
+        using var tools = Tools();
+
+        var (text, isError) = await tools.CallAsync("list_turns", JsonValue.Create(5), CancellationToken.None);
+
+        await Assert.That(text).IsEqualTo("Error: arguments must be a JSON object");
+        await Assert.That(Ledger().Calls[0].ArgsJson).IsEqualTo("5");
+        await AssertFailedThenServed(tools, isError, "list_turns");
+    }
+
+    [Test]
+    public async Task A_body_page_with_a_continuation_but_no_reference_is_a_correctable_error() {
+        var orphan = EvidencePageRenderer.Render(0, "o1", "read_body", "{}", """{"field":"text","content":"x","next_offset":10}""");
+        using var tools = Tools(seeded: [orphan]);
+
+        var (text, isError) = await tools.CallAsync("open_page", Args("""{"page":"o1","next":true}"""), CancellationToken.None);
+
+        await Assert.That(orphan.HasNext).IsTrue();
+        await Assert.That(text).IsEqualTo("Error: page 'o1' names no body to continue");
+        await Assert.That(_stub.Requests("evidence-body")).IsEmpty();
+        await AssertFailedThenServed(tools, isError, "open_page");
+    }
+
+    [Test]
+    public async Task Any_other_exception_is_a_retryable_error() {
+        using var http  = new HttpClient(new ThrowingOn("evidence-turns", new InvalidOperationException("boom")));
+        using var tools = Tools(http: http);
+
+        var (text, isError) = await tools.CallAsync("list_turns", Args($$"""{"source":"{{Root}}"}"""), CancellationToken.None);
+
+        await Assert.That(text).IsEqualTo("Error: the call failed (InvalidOperationException: boom); retry");
+        await Assert.That(Ledger().Calls[0].Error).IsEqualTo("InvalidOperationException");
+        await AssertFailedThenServed(tools, isError, "list_turns");
+    }
+
+    [Test]
+    public async Task Caller_cancellation_is_never_swallowed() {
+        _stub.Route("GET", "evidence-turns", 200, EvidenceServerStub.TurnsPage(Root, [(0, 0, 4)]), delay: TimeSpan.FromSeconds(10));
+        using var tools = Tools();
+        using var cts   = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        await Assert.That(async () => await tools.CallAsync("list_turns", Args($$"""{"source":"{{Root}}"}"""), cts.Token)).Throws<OperationCanceledException>();
+    }
+
+    [Test]
+    public async Task A_malformed_envelope_is_answered_and_the_next_call_is_served() {
+        using var tools = Tools();
+        JsonNode id = 1;
+
+        var badName = await McpJudgeServer.DispatchEvidenceCallAsync(id, Args("""{"params":{"name":5}}"""), tools);
+        var badArgs = await McpJudgeServer.DispatchEvidenceCallAsync(id, Args("""{"params":{"name":"list_turns","arguments":"x"}}"""), tools);
+        var noParams = await McpJudgeServer.DispatchEvidenceCallAsync(id, Args("""{"params":[1]}"""), tools);
+        var served  = await McpJudgeServer.DispatchEvidenceCallAsync(id, Args("""{"params":{"name":"list_sources","arguments":{}}}"""), tools);
+
+        await Assert.That(JsonNode.Parse(badName)!["error"]!["code"]!.GetValue<int>()).IsEqualTo(-32602);
+        await Assert.That(JsonNode.Parse(noParams)!["error"]!["code"]!.GetValue<int>()).IsEqualTo(-32602);
+        await Assert.That(JsonNode.Parse(badArgs)!["result"]!["isError"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(JsonNode.Parse(served)!["result"]!["isError"]).IsNull();
+        var ledger = Ledger();
+        await Assert.That(ledger.Calls.Select(c => (c.Tool, c.Outcome)))
+            .IsEquivalentTo([("list_turns", JudgeLedgerOutcomes.Error), ("list_sources", JudgeLedgerOutcomes.Executed)], TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]

@@ -62,7 +62,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             JsonObject? request;
 
             try {
-                request = JsonNode.Parse(line)?.AsObject();
+                request = JsonNode.Parse(line) as JsonObject;
             } catch {
                 continue; // skip malformed JSON
             }
@@ -70,7 +70,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             if (request is null) continue;
 
             var id     = request["id"];
-            var method = request["method"]?.GetValue<string>();
+            var method = StringOf(request["method"]);
 
             // Notifications have no id — don't send a response
             if (id is null) continue;
@@ -108,10 +108,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 return BuildToolResult(callId, $"Error: the evidence run could not be opened: {e.Message}", isError: true);
             }
 
-            var parameters = callRequest["params"]?.AsObject();
-            if (parameters?["name"]?.GetValue<string>() is not { } name) return BuildErrorResponse(callId, -32602, "Missing params.name");
-            var (text, isError) = await evidence.CallAsync(name, parameters["arguments"]?.AsObject(), CancellationToken.None);
-            return BuildToolResult(callId, text, isError);
+            return await DispatchEvidenceCallAsync(callId, callRequest, evidence);
         }
 
         // Records which MCP tools agents actually reach for. Never touches the response path:
@@ -130,6 +127,15 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             }
         }
     }
+
+    internal static async Task<string> DispatchEvidenceCallAsync(JsonNode callId, JsonObject callRequest, McpEvidenceJudgeTools evidence) {
+        var parameters = callRequest["params"] as JsonObject;
+        if (StringOf(parameters?["name"]) is not { } name) return BuildErrorResponse(callId, -32602, "Missing params.name");
+        var (text, isError) = await evidence.CallAsync(name, parameters!["arguments"], CancellationToken.None);
+        return BuildToolResult(callId, text, isError);
+    }
+
+    static string? StringOf(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var s) ? s : null;
 
     /// <summary>Test hook: execute a tool-call handler and return the JSON-RPC envelope.</summary>
     internal static async Task<string> HandleToolCallForTests(
@@ -161,9 +167,9 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             string     baseUrl,
             string     expectedSessionId
         ) {
-        var paramsNode = request["params"]?.AsObject();
-        var toolName   = paramsNode?["name"]?.GetValue<string>();
-        var arguments  = paramsNode?["arguments"]?.AsObject();
+        var paramsNode = request["params"] as JsonObject;
+        var toolName   = StringOf(paramsNode?["name"]);
+        var arguments  = paramsNode?["arguments"] as JsonObject;
 
         if (toolName is null) {
             return BuildErrorResponse(id, -32602, "Missing params.name");
