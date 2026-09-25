@@ -83,6 +83,7 @@ public sealed partial class PullRequestContextViewModel {
                     var rollupMoved = _overview?.Checks?.Rollup != read.Data.Checks?.Rollup;
                     _overview = read.Data; _overviewRead = read;
                     SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier snapshot while GitHub is unavailable." : "");
+                    if (Learn(choice.Subject, read.Data.Lifecycle) && ReconsiderDefault()) return;
                     // Check rows are a snapshot while the summary tracks the overview: reload them while
                     // any is still running, or the summary goes green beside rows that still say pending.
                     var checksLive = _section == "checks" && CurrentSection is { } checks
@@ -192,28 +193,17 @@ public sealed partial class PullRequestContextViewModel {
         else if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
             || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") EnterGrace();
         else ClearProtected();
-        SetNotice(read.Kind == PullRequestReadKind.SubjectUnavailable && _selected is { IsListed: false } ? UnlistedNotice : Reason(read));
+        SetNotice(Reason(read));
     }
-    /// The server reader's refusal of a work-item PR the session was not credited with, which is
-    /// what a read falls to without a local reader; the header's GitHub button still opens it.
-    public const string UnlistedNotice = "This pull request is linked to the work item, not this session. Open it on GitHub.";
     void ApplyChoices(bool listed) {
         var incoming = _sessionItems.Select(link => new PullRequestChoice(link)).ToList();
-        foreach (var fallback in _fallbackItems) {
-            if (incoming.TrueForAll(existing => !SamePullRequest(existing.Link, fallback)))
-                incoming.Add(new PullRequestChoice(fallback, IsListed: false));
-        }
         var previous = _selected?.Subject;
         var selected = _explicitSelection ? incoming.FirstOrDefault(choice => choice.Subject == previous) : null;
         if (_explicitSelection && selected is null && _selected is not null) {
             selected = _selected with { IsAvailable = false };
             incoming.Insert(0, selected);
         }
-        if (selected is null) {
-            var primary = _primaryRepo?.Invoke()?.RepoHash;
-            var matching = primary is null ? [] : incoming.Where(choice => choice.Link.RepoHash == primary && choice.Link.HeadRef == _branch && _branch is not null).ToArray();
-            selected = matching.Length == 1 ? matching[0] : incoming.FirstOrDefault();
-        }
+        selected ??= DefaultChoice(incoming);
         _updatingChoices = true;
         try {
             if (!_choices.SequenceEqual(incoming)) { _choices.Clear(); _choices.AddRange(incoming); }
@@ -230,10 +220,39 @@ public sealed partial class PullRequestContextViewModel {
         }
         Notify();
     }
-    static bool SamePullRequest(PullRequestLinkDto left, PullRequestLinkDto right) =>
-        left.Number == right.Number
-        && string.Equals(left.Owner, right.Owner, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(left.RepoName, right.RepoName, StringComparison.OrdinalIgnoreCase);
+    /// The PR a user most likely wants without asking: one not known to be merged or closed, in
+    /// the primary repository, on the checked-out branch, the newest. An unknown lifecycle ranks
+    /// as open until its overview says otherwise.
+    PullRequestChoice? DefaultChoice(IEnumerable<PullRequestChoice> choices) {
+        var primary = _primaryRepo?.Invoke()?.RepoHash;
+        return choices
+            .Where(choice => choice.IsAvailable)
+            .OrderBy(IsSettled)
+            .ThenByDescending(choice => primary is not null && choice.Link.RepoHash == primary)
+            .ThenByDescending(choice => _branch is not null && choice.Link.HeadRef == _branch)
+            .ThenByDescending(choice => choice.Link.Number)
+            .FirstOrDefault();
+    }
+    /// An overview the card has read is fresher than the list row it was chosen from, which waits
+    /// for the next list refresh.
+    bool IsSettled(PullRequestChoice choice) =>
+        (_lifecycles.GetValueOrDefault(choice.Subject) ?? choice.Link.Lifecycle) is "merged" or "closed";
+    /// True when the subject's lifecycle is new or has changed.
+    bool Learn(PullRequestSubjectDto subject, string? lifecycle) {
+        if (lifecycle is null) return false;
+        var changed = _lifecycles.GetValueOrDefault(subject) != lifecycle;
+        _lifecycles[subject] = lifecycle;
+        return changed;
+    }
+    /// A default whose overview says merged hands over to the next candidate; an explicit choice
+    /// is never moved.
+    bool ReconsiderDefault() {
+        if (_explicitSelection) return false;
+        var best = DefaultChoice(_choices);
+        if (best is null || best.Subject == _selected?.Subject) return false;
+        Select(best);
+        return true;
+    }
     void ForgetChoices() { CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null; }
     void FailProtocol() { ClearProtected(); SetNotice("The server returned an inconsistent PR response. Retry after updating the server and app."); }
 }

@@ -35,8 +35,10 @@ public static class GitHubCliMapping {
         var links = new List<PullRequestLinkDto>();
         foreach (var row in document.RootElement.EnumerateArray()) {
             if (!row.IsObject || row.Prop("number") is not { } number || !number.IsNumber || !number.TryGetInt32(out var value) || value <= 0) continue;
+            var lifecycle = Lifecycle(Text(row, "state"), row.Bool("isDraft"));
             links.Add(new() { Provider = "github", Host = repository.Host, RepoHash = repository.RepoHash, Owner = repository.Owner, RepoName = repository.RepoName,
-                Number = value, Url = PullRequestWire.SafeLink(Text(row, "url")), Title = Text(row, "title"), HeadRef = Text(row, "headRefName") });
+                Number = value, Url = PullRequestWire.SafeLink(Text(row, "url")), Title = Text(row, "title"), HeadRef = Text(row, "headRefName"),
+                Lifecycle = lifecycle == "unknown" ? null : lifecycle });
             if (links.Count == 20) break;
         }
         return links;

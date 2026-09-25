@@ -84,12 +84,12 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.SectionEyebrow).IsEqualTo("PULL REQUESTS");
         await Assert.That(h.Model.SectionMeta).IsEqualTo(count.ToString(CultureInfo.InvariantCulture));
         await Assert.That(h.Model.RepositoryLabel).IsEqualTo("example/repo");
-        await Assert.That(h.Model.NumberLabel).IsEqualTo("#1");
+        await Assert.That(h.Model.NumberLabel).IsEqualTo($"#{count}");
         if (visible) {
-            selector.SelectedIndex = 1;
+            selector.SelectedIndex = 0;
             await h.SettleAsync();
-            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(2);
-            await Assert.That(h.Model.NumberLabel).IsEqualTo("#2");
+            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(1);
+            await Assert.That(h.Model.NumberLabel).IsEqualTo("#1");
         }
     });
 
@@ -224,14 +224,15 @@ public class PullRequestPresentationTests {
     });
 
     /// The switcher is how a session moves between linked pull requests. Each one replaces the
-    /// card and the reader, and the gap shows loading rather than the previous pull request.
+    /// card and the reader, and the gap shows loading rather than the previous pull request. Only
+    /// the first is unmerged, so it is the default the switcher moves away from.
     [Test]
     public Task The_switcher_replaces_every_linked_pull_request_including_past_the_second() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();
         h.Source.Links = [
             FakePullRequestSource.Link(1),
-            FakePullRequestSource.Link(2),
-            FakePullRequestSource.Link(3),
+            FakePullRequestSource.Link(2) with { Lifecycle = "merged" },
+            FakePullRequestSource.Link(3) with { Lifecycle = "merged" },
         ];
         h.Source.TitleFor = subject => "Title " + subject.Number.ToString(CultureInfo.InvariantCulture);
         h.Source.RollupFor = subject => subject.Number switch { 2 => "pending", 3 => "failure", _ => "success" };
@@ -315,13 +316,13 @@ public class PullRequestPresentationTests {
             h.Source.RestartNextPage = "head_changed";
             await h.Model.ShowSectionCommand.Execute("checks");
             await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Overviews >= 2, what: "recovery overview started");
-            h.Model.Selected = h.Model.Choices[1];
+            h.Model.Selected = h.Model.Choices[0];
             await h.SettleAsync();
             h.Source.RestartNextPage = "head_changed";
             await h.Model.ShowSectionCommand.Execute("checks");
             await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading, what: "next pull request checks recovered");
             await Assert.That(h.Model.PageNote).IsEmpty();
-            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(2);
+            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(1);
         } finally {
             gate.TrySetResult();
         }

@@ -2,8 +2,6 @@ using System.Globalization;
 using System.Reactive;
 using Avalonia.Collections;
 using Capacitor.App.Services;
-using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
@@ -20,7 +18,6 @@ public sealed partial class WorkContextViewModel {
     readonly AvaloniaList<WorkContextLinkViewModel> _links = new();
     readonly AvaloniaList<WorkContextLinkViewModel> _issues = new();
     readonly List<WorkContextLinkViewModel> _summaryPrs = [];
-    readonly List<WorkContextLinkViewModel> _workItemPrs = [];
     readonly AvaloniaList<WorkContextPersonViewModel> _contributors = new();
     // The card's identity is the id the server served, which for an absorbed item is the survivor's
     // rather than the assignment's; the requested id stands in when a read carried no item.
@@ -247,7 +244,6 @@ public sealed partial class WorkContextViewModel {
         ClearCard();
         _summaryPrs.Clear();
         _links.Clear();
-        OfferFallbacks();
         RaiseRelated();
     }
 
@@ -269,7 +265,6 @@ public sealed partial class WorkContextViewModel {
         Issue = null;
         _contributors.Clear();
         SessionCount = 0;
-        _workItemPrs.Clear();
         RaiseCardCounts();
     }
 
@@ -348,8 +343,6 @@ public sealed partial class WorkContextViewModel {
         Replace(_parts, parts, p => (p.Title, p.Mark));
 
         ApplyIssues(item.Links.Where(l => l.Kind == "issue" && l.LinkClass == "link"));
-        _workItemPrs.Clear();
-        _workItemPrs.AddRange(ProjectWorkItemPullRequests(item.Links));
 
         var now = _time.GetUtcNow();
         var people = item.Contributors
@@ -462,69 +455,11 @@ public sealed partial class WorkContextViewModel {
         RebuildLinks();
     }
 
+    /// Link cards are the legacy stand-in for the card: the session summary's PRs, never the work
+    /// item's.
     void RebuildLinks() {
-        List<WorkContextLinkViewModel> cards;
-        if (ShowsLegacyLinks) {
-            cards = [.._summaryPrs];
-            foreach (var pr in _workItemPrs)
-                AddUnlessDuplicate(cards, pr);
-        } else {
-            cards = [.._workItemPrs];
-        }
-        Replace(_links, cards, l => (l.Key, l.Title, l.Url));
-        OfferFallbacks();
+        Replace(_links, ShowsLegacyLinks ? [.. _summaryPrs] : [], l => (l.Key, l.Title, l.Url));
         RaiseRelated();
-    }
-
-    void OfferFallbacks() {
-        if (PullRequests is null) return;
-        var links = new List<PullRequestLinkDto>();
-        foreach (var card in _links)
-            if (TryParsePullRequestLink(card) is { } link) links.Add(link);
-        PullRequests.OfferFallbackLinks(links);
-    }
-
-    static PullRequestLinkDto? TryParsePullRequestLink(WorkContextLinkViewModel card) {
-        if (card.Url is not { Length: > 0 } url || !PrRefParser.TryParse(url, out var owner, out var repo, out var number)
-            || !Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
-        return new PullRequestLinkDto {
-            Provider = ProviderOf(uri),
-            Host = uri.IdnHost,
-            RepoHash = RepoHashHelper.ComputeRepoHash(owner, repo),
-            Owner = owner,
-            RepoName = repo,
-            Number = number,
-            Url = url,
-            Title = card.Title.Length > 0 ? card.Title : null,
-        };
-    }
-
-    /// Only `link`-class entries: a `reference` is an ambient mention the server passes through
-    /// for other consumers, not a PR this work item is on.
-    List<WorkContextLinkViewModel> ProjectWorkItemPullRequests(IReadOnlyList<WorkItemLinkDto> links) {
-        var cards = new List<WorkContextLinkViewModel>();
-        foreach (var link in links) {
-            if (!IsPullRequestKind(link.Kind) || link.LinkClass != "link") continue;
-            AddUnlessDuplicate(cards, Link(PullRequestKey(link.ShortKey), FirstNonBlank(link.Title), link.Url));
-        }
-        return cards;
-    }
-
-    static bool IsPullRequestKind(string kind) => kind is "pr" or "pull_request" or "pull-request";
-
-    static string PullRequestKey(string shortKey) =>
-        shortKey.StartsWith('!') ? "#" + shortKey[1..] : shortKey;
-
-    /// A PR number is repository-local, so two cards with URLs are the same PR only by URL; the
-    /// display key decides only when one of them has no URL to compare.
-    static bool SameLink(WorkContextLinkViewModel left, WorkContextLinkViewModel right) =>
-        left.Url is { Length: > 0 } url && right.Url is { Length: > 0 } other
-            ? string.Equals(url, other, StringComparison.OrdinalIgnoreCase)
-            : left.Key == right.Key;
-
-    static void AddUnlessDuplicate(List<WorkContextLinkViewModel> cards, WorkContextLinkViewModel card) {
-        if (cards.TrueForAll(existing => !SameLink(existing, card)))
-            cards.Add(card);
     }
 
     /// A poll that returns the same rows leaves the bound list alone, so the ItemsControl keeps its
@@ -536,10 +471,7 @@ public sealed partial class WorkContextViewModel {
     }
 
     WorkContextLinkViewModel Link(int number, string? title, string? url) =>
-        Link($"#{number}", title, url);
-
-    WorkContextLinkViewModel Link(string key, string? title, string? url) =>
-        new("PULL REQUEST", key, title ?? "", url, _opener);
+        new("PULL REQUEST", $"#{number}", title ?? "", url, _opener);
 
     static (string Provider, string Host) RepositoryIdentity(SessionSummaryDto summary, string repoHash) {
         var link = summary.PullRequests.FirstOrDefault(pr => pr.RepoHash == repoHash && PullRequestWire.SafeLink(pr.Url) is not null);

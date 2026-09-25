@@ -136,6 +136,8 @@ public class GitHubCliReaderProviderTests {
         await Assert.That(links[0].RepoHash).IsEqualTo("hash");
         await Assert.That(links[0].HeadRef).IsEqualTo("feature");
         await Assert.That(links[0].Title).IsEqualTo("Add the thing");
+        await Assert.That(links[0].Lifecycle).IsEqualTo("open");
+        await Assert.That(links[1].Lifecycle).IsEqualTo("closed");
     }
 
     [Test]

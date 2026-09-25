@@ -29,7 +29,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly HashSet<string> _pageRequests = new(StringComparer.Ordinal);
     readonly AvaloniaList<PullRequestChoice> _choices = [];
     readonly List<PullRequestLinkDto> _sessionItems = [];
-    readonly List<PullRequestLinkDto> _fallbackItems = [];
+    /// Lifecycles the card has read for this session's PRs: the server's list carries none, so an
+    /// overview is what tells a merged PR from an open one.
+    readonly Dictionary<PullRequestSubjectDto, string> _lifecycles = [];
     // A subject, not WhenAnyValue: that needs ReactiveUI's global init, which a headless test run does not reliably prime first.
     readonly BehaviorSubject<bool> _hasPullRequest = new(false);
     readonly ITimer _timer;
@@ -162,13 +164,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _selected = null;
             _explicitSelection = false;
             _positions.Clear();
+            _lifecycles.Clear();
             ClearProtected();
             _stopped = false;
             _hasListed = false;
             _lastRefresh = null;
             SetNotice("Loading pull requests…");
             RequestRefresh();
-            if (_fallbackItems.Count > 0) ApplyChoices(listed: false);
         }).DisposeWith(_subscriptions);
         signInCompleted?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
             if (_session is null || _disposed) return;
@@ -213,14 +215,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     /// The selected PR on its host, in the browser.
     public void OpenSource() {
         if (_selected is { IsAvailable: true } choice) LinkPolicy.Open(_opener, PrLink(choice.Link.Url, choice.Subject));
-    }
-    /// Work-item PR links the session list has not admitted. Reads route to the local `gh` reader
-    /// first, which needs no session admission; only the server reader would refuse them.
-    public void OfferFallbackLinks(IReadOnlyList<PullRequestLinkDto> links) {
-        if (_disposed) return;
-        _fallbackItems.Clear();
-        _fallbackItems.AddRange(links);
-        if (_session is not null) ApplyChoices(listed: _hasListed);
     }
     public void SetReaderVisible(bool visible) {
         if (_readerVisible == visible) return;
