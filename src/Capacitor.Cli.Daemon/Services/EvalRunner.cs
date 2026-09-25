@@ -185,7 +185,9 @@ internal sealed class EvalRunner {
     }
 
     async Task<QuestionResultV2> HandleRunQuestionV2Async(RunQuestionCommand cmd) {
-        if (_cache.GetEvidence(cmd.EvalRunId) is { } evidence) return await RunEvidenceQuestionAsync(evidence, cmd);
+        if (_cache.LeaseEvidence(cmd.EvalRunId) is { } evidence) {
+            using (evidence) return await RunEvidenceQuestionAsync(evidence, cmd);
+        }
 
         var ctx = _cache.Get(cmd.EvalRunId);
 
@@ -219,13 +221,14 @@ internal sealed class EvalRunner {
         }
     }
 
-    async Task<QuestionResultV2> RunEvidenceQuestionAsync(EvidenceRunSetup setup, RunQuestionCommand cmd) {
+    async Task<QuestionResultV2> RunEvidenceQuestionAsync(EvidenceRunLease lease, RunQuestionCommand cmd) {
+        var setup      = lease.Setup;
         var reconciled = setup.Questions.FirstOrDefault(q => q.Id == cmd.Question.Id);
         if (reconciled is null) return QuestionFailure(cmd, EvalFailureCodes.ChatError, $"question '{cmd.Question.Id}' not in reconciled catalog");
 
         var       observer = new DaemonEvalObserver(_connection, cmd.EvalRunId, setup.SessionId, _logger, silentPerQuestion: true);
         using var budget   = new CancellationTokenSource(QuestionPhaseBudget, _time);
-        using var phase    = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token);
+        using var phase    = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token, lease.Cancelled);
 
         try {
             var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _baseUrl, reconciled, setup.Model, cmd.Index, cmd.Total, observer, _time, phase.Token);
@@ -238,17 +241,23 @@ internal sealed class EvalRunner {
                 outcome.Usage?.InputTokens ?? 0, outcome.Usage?.OutputTokens ?? 0);
         } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
             return QuestionFailure(cmd, EvalFailureCodes.JudgeTimeout, "the question phase exceeded its budget");
+        } catch (OperationCanceledException) when (lease.Cancelled.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return QuestionFailure(cmd, EvalFailureCodes.ChatError, CancelledReason);
         } catch (Exception ex) {
             _logger.LogError(ex, "RunQuestionV2 failed for {RunId}/{QuestionId}", cmd.EvalRunId, cmd.Question.Id);
             return QuestionFailure(cmd, EvalFailureCodes.ChatError, $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
+    const string CancelledReason = "the eval run was cancelled or replaced";
+
     static QuestionResultV2 QuestionFailure(RunQuestionCommand cmd, string code, string error) =>
         new(null, new EvalQuestionFailure { Category = cmd.Question.Category, QuestionId = cmd.Question.Id, Code = code }, error, 0, 0);
 
     async Task<FinalizeResult> HandleFinalizeV2Async(FinalizeEvalV2Command cmd) {
-        if (_cache.GetEvidence(cmd.EvalRunId) is { } evidence) return await FinalizeEvidenceAsync(evidence, cmd);
+        if (_cache.LeaseEvidence(cmd.EvalRunId) is { } evidence) {
+            using (evidence) return await FinalizeEvidenceAsync(evidence, cmd);
+        }
 
         var ctx = _cache.Get(cmd.EvalRunId);
 
@@ -271,17 +280,20 @@ internal sealed class EvalRunner {
         }
     }
 
-    async Task<FinalizeResult> FinalizeEvidenceAsync(EvidenceRunSetup setup, FinalizeEvalV2Command cmd) {
+    async Task<FinalizeResult> FinalizeEvidenceAsync(EvidenceRunLease lease, FinalizeEvalV2Command cmd) {
+        var       setup      = lease.Setup;
         using var httpClient = await _http.ForBackgroundAsync(_shutdownToken);
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, setup.SessionId, _logger);
         using var budget     = new CancellationTokenSource(FinalizePhaseBudget, _time);
-        using var phase      = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token);
+        using var phase      = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token, lease.Cancelled);
 
         try {
             var aggregate = await EvalService.FinalizeEvidenceAsync(setup, httpClient, _baseUrl, cmd.Assessments, cmd.Failures, cmd.Model, observer, _time, phase.Token);
             return new(aggregate is not null, aggregate is null ? "finalize failed" : null, null);
         } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
             return new(false, "the finalize phase exceeded its budget", null);
+        } catch (OperationCanceledException) when (lease.Cancelled.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return new(false, CancelledReason, null);
         } catch (Exception ex) {
             _logger.LogError(ex, "FinalizeEvalV2 failed for {RunId}", cmd.EvalRunId);
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null);

@@ -10,8 +10,9 @@ using Microsoft.Extensions.Time.Testing;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 /// <summary>Every way a prepared evidence run leaves the cache deletes its run directory: cancel, finalize, idle expiry on
-/// read, the sweep, a second prepare under the same id, and host disposal with several runs cached. No test runs a question,
-/// so no harness is reachable.</summary>
+/// read, the sweep, a second prepare under the same id, and host disposal with several runs cached. A leased run is cancelled
+/// when it leaves but disposed only when its last lease ends, and is never expired while leased. No test runs a question, so no
+/// harness is reachable.</summary>
 public class EvalContextCacheTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome]       public required TempHome       Home   { get; init; }
@@ -52,6 +53,11 @@ public class EvalContextCacheTests : IDisposable {
         return (connection, cache);
     }
 
+    static string RunDirectoryOf(EvalContextCache cache, string runId) {
+        using var lease = cache.LeaseEvidence(runId)!;
+        return lease.Setup.Context.RunDirectory;
+    }
+
     static PrepareEvalCommand Prepare(string runId) =>
         new(runId, EvidenceServerStub.SessionId, "sonnet", false, null, [new EvalQuestionDto { Category = "safety", Id = "q1", Text = "q1", Prompt = "q1" }]);
 
@@ -90,7 +96,7 @@ public class EvalContextCacheTests : IDisposable {
         _time.AdjustTime(_time.GetUtcNow() + TimeSpan.FromMinutes(31));
 
         await Assert.That(cache.Count).IsEqualTo(1);
-        await Assert.That(cache.GetEvidence("run-1")).IsNull();
+        await Assert.That(cache.LeaseEvidence("run-1")).IsNull();
         await Assert.That(cache.Count).IsEqualTo(0);
         await Assert.That(RunDirectories()).IsEqualTo(0);
     }
@@ -111,12 +117,12 @@ public class EvalContextCacheTests : IDisposable {
     public async Task A_second_prepare_under_the_same_id_disposes_the_first() {
         var (connection, cache) = Daemon();
         await connection.PrepareEvalHandler!(Prepare("run-1"));
-        var first = cache.GetEvidence("run-1")!.Context.RunDirectory;
+        var first = RunDirectoryOf(cache, "run-1");
 
         await connection.PrepareEvalHandler!(Prepare("run-1"));
 
         await Assert.That(Directory.Exists(first)).IsFalse();
-        await Assert.That(cache.GetEvidence("run-1")!.Context.RunDirectory).IsNotEqualTo(first);
+        await Assert.That(RunDirectoryOf(cache, "run-1")).IsNotEqualTo(first);
         await Assert.That(RunDirectories()).IsEqualTo(1);
     }
 
@@ -140,7 +146,7 @@ public class EvalContextCacheTests : IDisposable {
         var (connection, cache) = Daemon();
         await connection.PrepareEvalHandler!(Prepare("run-1"));
         await connection.PrepareEvalHandler!(Prepare("run-2"));
-        var stuck = cache.GetEvidence("run-1")!.Context.RunDirectory;
+        var stuck = RunDirectoryOf(cache, "run-1");
         var child = Path.Combine(stuck, "locked");
         Directory.CreateDirectory(child);
         File.WriteAllText(Path.Combine(child, "f"), "x");
@@ -154,5 +160,56 @@ public class EvalContextCacheTests : IDisposable {
         } finally {
             File.SetUnixFileMode(child, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
+    }
+
+    [Test]
+    public async Task A_leased_run_is_cancelled_when_removed_and_disposed_when_its_lease_ends() {
+        var (connection, cache) = Daemon();
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+        var lease = cache.LeaseEvidence("run-1")!;
+
+        await connection.CancelEvalHandler!(new CancelEvalCommand("run-1"));
+
+        await Assert.That(cache.Count).IsEqualTo(0);
+        await Assert.That(cache.LeaseEvidence("run-1")).IsNull();
+        await Assert.That(lease.Cancelled.IsCancellationRequested).IsTrue();
+        await Assert.That(Directory.Exists(lease.Setup.Context.RunDirectory)).IsTrue();
+
+        lease.Dispose();
+
+        await Assert.That(RunDirectories()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_second_prepare_cancels_a_leased_run_and_disposes_it_once_its_lease_ends() {
+        var (connection, cache) = Daemon();
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+        var lease = cache.LeaseEvidence("run-1")!;
+
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+
+        await Assert.That(lease.Cancelled.IsCancellationRequested).IsTrue();
+        await Assert.That(RunDirectories()).IsEqualTo(2);
+        lease.Dispose();
+        await Assert.That(Directory.Exists(lease.Setup.Context.RunDirectory)).IsFalse();
+        await Assert.That(RunDirectories()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_leased_run_is_not_expired_and_its_idle_time_starts_when_the_lease_ends() {
+        var (connection, cache) = Daemon();
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+        var lease = cache.LeaseEvidence("run-1")!;
+
+        _time.Advance(TimeSpan.FromMinutes(35));
+
+        await Assert.That(cache.Count).IsEqualTo(1);
+        await Assert.That(lease.Cancelled.IsCancellationRequested).IsFalse();
+        lease.Dispose();
+        _time.Advance(TimeSpan.FromMinutes(20));
+        await Assert.That(cache.Count).IsEqualTo(1);
+        _time.Advance(TimeSpan.FromMinutes(15));
+        await Assert.That(cache.Count).IsEqualTo(0);
+        await Assert.That(RunDirectories()).IsEqualTo(0);
     }
 }

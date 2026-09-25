@@ -122,8 +122,8 @@ public class EvalRunnerEvidenceTests : IDisposable {
         await Assert.That(result.SourceCount).IsEqualTo(1);
         await Assert.That(result.ExpiresAt).IsNotNull();
         await Assert.That(cache.Get("run-1")).IsNull();
-        var setup = cache.GetEvidence("run-1")!;
-        await Assert.That(setup.Trace.TraceJson.Length == 0).IsEqualTo(route == "evidence_retrieval");
+        using var lease = cache.LeaseEvidence("run-1")!;
+        await Assert.That(lease.Setup.Trace.TraceJson.Length == 0).IsEqualTo(route == "evidence_retrieval");
         await Assert.That(_stub.Requests("eval-context")).IsEmpty();
     }
 
@@ -339,6 +339,27 @@ public class EvalRunnerEvidenceTests : IDisposable {
         var none = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [], [cap with { QuestionId = "q1" }], "sonnet"));
         await Assert.That(none.Success).IsFalse();
         await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_cancel_during_a_question_stops_it_and_removes_the_run_only_once_it_has_ended() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        Serve(1);
+        using var claude = Claude(Verdict(), before: "sleep 20");
+        var (_, connection, cache) = Daemon(claude);
+        await connection.PrepareEvalHandler!(Prepare());
+        var running = connection.RunQuestionV2Handler!(Question());
+        for (var i = 0; i < 200 && Prompts().Length == 0; i++) await Task.Delay(50);
+
+        await connection.CancelEvalHandler!(new CancelEvalCommand("run-1"));
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(Prompts().Length).IsEqualTo(1);
+        await Assert.That(result.Assessment).IsNull();
+        await Assert.That(result.Failure?.Code).IsEqualTo(EvalFailureCodes.ChatError);
+        await Assert.That(result.Error).IsEqualTo("the eval run was cancelled or replaced");
+        await Assert.That(cache.Count).IsEqualTo(0);
+        await Assert.That(NoRunDirectory()).IsTrue();
     }
 
     [Test]
