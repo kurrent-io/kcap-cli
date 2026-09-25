@@ -158,4 +158,24 @@ public class EvidenceScopeClientTests : IDisposable {
         await Assert.That(client.Reopens).IsEqualTo(1);
         await Assert.That(_stub.Requests("evidence-citations").Count).IsEqualTo(3);
     }
+
+    [Test]
+    public async Task A_timed_out_scope_read_is_a_failure_not_a_cancellation() {
+        _stub.Route("GET", "evidence-scope", 200, EvidenceServerStub.Manifest("v1", "tok-1", null, S0, S0.AddMinutes(30)), delay: TimeSpan.FromSeconds(10));
+        using var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(500) };
+        var client = new EvidenceScopeClient(http, _stub.Url, EvidenceServerStub.SessionId, new FakeTimeProvider(S0));
+
+        var status = await client.ResolveAsync(CancellationToken.None);
+
+        await Assert.That(status).IsEqualTo(EvidenceScopeStatus.Failed);
+        await Assert.That(client.LastError).IsEqualTo("the evidence scope request timed out");
+    }
+
+    [Test]
+    public async Task A_cancelled_scope_read_is_still_a_cancellation() {
+        _stub.Route("GET", "evidence-scope", 200, EvidenceServerStub.Manifest("v1", "tok-1", null, S0, S0.AddMinutes(30)), delay: TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        await Assert.That(async () => await Client(new FakeTimeProvider(S0)).ResolveAsync(cts.Token)).Throws<OperationCanceledException>();
+    }
 }

@@ -133,10 +133,8 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, ctx.SessionId, _logger);
 
         try {
-            // Phase 3 — the SignalR-supplied cmd.Question carries raw text
-            // and a null prompt version; the RECONCILED question from the cached
-            // context (matched by id) carries the catalog's rendered Prompt, RawText,
-            // and PromptVersion. Judge the reconciled item, not the wire DTO.
+            // The wire question carries raw text and no prompt version; judge the cached, reconciled
+            // question, which carries the catalog's rendered prompt and its version.
             var reconciled = ctx.Questions.FirstOrDefault(q => q.Id == cmd.Question.Id);
             if (reconciled is null)
                 return new(false, null, $"question '{cmd.Question.Id}' not in reconciled catalog", 0, 0);
@@ -225,13 +223,12 @@ internal sealed class EvalRunner {
         var reconciled = setup.Questions.FirstOrDefault(q => q.Id == cmd.Question.Id);
         if (reconciled is null) return QuestionFailure(cmd, EvalFailureCodes.ChatError, $"question '{cmd.Question.Id}' not in reconciled catalog");
 
-        using var httpClient = await _http.ForBackgroundAsync(_shutdownToken);
-        var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, setup.SessionId, _logger, silentPerQuestion: true);
-        using var budget     = new CancellationTokenSource(QuestionPhaseBudget, _time);
-        using var phase      = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token);
+        var       observer = new DaemonEvalObserver(_connection, cmd.EvalRunId, setup.SessionId, _logger, silentPerQuestion: true);
+        using var budget   = new CancellationTokenSource(QuestionPhaseBudget, _time);
+        using var phase    = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token);
 
         try {
-            var outcome = await EvalService.RunEvidenceQuestionAsync(setup, httpClient, _baseUrl, reconciled, setup.Model, cmd.Index, cmd.Total, observer, _time, phase.Token);
+            var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _baseUrl, reconciled, setup.Model, cmd.Index, cmd.Total, observer, _time, phase.Token);
             if (outcome.ScopeMoved) {
                 _cache.Remove(cmd.EvalRunId);
                 // The server reads a run failure as run-fatal only in exactly this shape, with both branches null.
@@ -239,7 +236,7 @@ internal sealed class EvalRunner {
             }
             return new QuestionResultV2(outcome.Assessment, outcome.Failure, outcome.Failure is null ? null : "judge did not produce a verdict",
                 outcome.Usage?.InputTokens ?? 0, outcome.Usage?.OutputTokens ?? 0);
-        } catch (OperationCanceledException) when (!_shutdownToken.IsCancellationRequested) {
+        } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
             return QuestionFailure(cmd, EvalFailureCodes.JudgeTimeout, "the question phase exceeded its budget");
         } catch (Exception ex) {
             _logger.LogError(ex, "RunQuestionV2 failed for {RunId}/{QuestionId}", cmd.EvalRunId, cmd.Question.Id);
@@ -283,7 +280,7 @@ internal sealed class EvalRunner {
         try {
             var aggregate = await EvalService.FinalizeEvidenceAsync(setup, httpClient, _baseUrl, cmd.Assessments, cmd.Failures, cmd.Model, observer, _time, phase.Token);
             return new(aggregate is not null, aggregate is null ? "finalize failed" : null, null);
-        } catch (OperationCanceledException) when (!_shutdownToken.IsCancellationRequested) {
+        } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
             return new(false, "the finalize phase exceeded its budget", null);
         } catch (Exception ex) {
             _logger.LogError(ex, "FinalizeEvalV2 failed for {RunId}", cmd.EvalRunId);
@@ -302,13 +299,8 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, ctx.SessionId, _logger);
 
         try {
-            // FinalizeAsync signature was updated in Task 6.5 — the taxonomy is
-            // carried on ctx.Questions, not passed separately.
-            // Phase 3: FinalizeAsync now returns SessionEvalCompletedPayloadV3;
-            // FinalizeResult.Aggregate is the V1 wire DTO held by the server
-            // orchestrator, which only inspects Success on this result so we
-            // pass null for Aggregate. The V3 payload is already persisted to
-            // /api/sessions/{id}/evals/v3 inside FinalizeAsync.
+            // FinalizeAsync persists the payload itself; the orchestrator reads only Success, so
+            // FinalizeResult.Aggregate stays null.
             var aggregate = await EvalService.FinalizeAsync(
                 ctx,
                 httpClient,

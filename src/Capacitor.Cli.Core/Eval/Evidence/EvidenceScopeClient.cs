@@ -100,6 +100,9 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
         } catch (HttpRequestException e) {
             LastError = $"server unreachable: {e.Message}";
             return (EvidenceScopeStatus.Failed, null);
+        } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+            LastError = "the evidence scope request timed out";
+            return (EvidenceScopeStatus.Failed, null);
         } catch (JsonException e) {
             LastError = $"the evidence scope response was not valid JSON: {e.Message}";
             return (EvidenceScopeStatus.Failed, null);

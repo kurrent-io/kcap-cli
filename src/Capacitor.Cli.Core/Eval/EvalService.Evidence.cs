@@ -40,7 +40,7 @@ public static partial class EvalService {
             var assessments = new List<EvalQuestionAssessment>();
             var failures    = new List<EvalQuestionFailure>();
             for (var i = 0; i < setup.Questions.Count; i++) {
-                var outcome = await RunEvidenceQuestionAsync(setup, httpClient, baseUrl, setup.Questions[i], model, i + 1, setup.Questions.Count, observer, time, ct);
+                var outcome = await RunEvidenceQuestionAsync(setup, baseUrl, setup.Questions[i], model, i + 1, setup.Questions.Count, observer, time, ct);
                 if (outcome.ScopeMoved) return ScopeMoved(setup, observer);
                 if (outcome.Assessment is { } assessment) assessments.Add(assessment);
                 else if (outcome.Failure is { } failure) failures.Add(failure);
@@ -143,7 +143,7 @@ public static partial class EvalService {
     }
 
     public static async Task<EvidenceQuestionOutcome> RunEvidenceQuestionAsync(
-            EvidenceRunSetup setup, HttpClient httpClient, string baseUrl, EvalQuestionDto question, string model,
+            EvidenceRunSetup setup, string baseUrl, EvalQuestionDto question, string model,
             int index, int total, IEvalObserver observer, TimeProvider time, CancellationToken ct) {
         ct.ThrowIfCancellationRequested();
         observer.OnQuestionStarted(index, total, question.Category, question.Id);

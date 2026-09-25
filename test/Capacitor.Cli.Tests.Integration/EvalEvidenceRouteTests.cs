@@ -98,8 +98,8 @@ public class EvalEvidenceRouteTests : IDisposable {
 
     static IReadOnlyList<EvalQuestionDto> Questions(params string[] ids) => [.. ids.Select(id => new EvalQuestionDto { Category = "safety", Id = id, Text = id, Prompt = id })];
 
-    Task<SessionEvalCompletedPayloadV4?> Run(FakeClaudeOnPath claude, string[] ids, IEvalObserver observer, bool chain = false, int? threshold = null, TimeProvider? time = null, CancellationToken ct = default) =>
-        EvalService.RunAsync(_stub.Url, _http, null, TestHarnesses.Under(Home, BinaryProbe.Searching(claude.BinDirectory)), Sid, "sonnet", chain, threshold, observer,
+    Task<SessionEvalCompletedPayloadV4?> Run(FakeClaudeOnPath claude, string[] ids, IEvalObserver observer, bool chain = false, int? threshold = null, TimeProvider? time = null, CancellationToken ct = default, HttpClient? http = null) =>
+        EvalService.RunAsync(_stub.Url, http ?? _http, null, TestHarnesses.Under(Home, BinaryProbe.Searching(claude.BinDirectory)), Sid, "sonnet", chain, threshold, observer,
             time ?? TimeProvider.System, ct, "run-fixed", Questions(ids));
 
     Task<EvidenceRunSetup?> Prepare(FakeClaudeOnPath claude, IEvalObserver observer, TimeProvider time, string tempRoot, params string[] ids) {
@@ -154,6 +154,22 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(prompt.Contains(EvidencePromptBlocks.TasksReadFromEvidence)).IsTrue();
         await Assert.That(ArgsOf(dir, 0).Contains("--mcp-config")).IsFalse();
         await Assert.That(NoRunDirectory(root)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_timed_out_read_degrades_its_page_and_the_run_is_not_cancelled() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world"); Certify($"{Root}@0");
+        _stub.Route("GET", "evidence-calls/summary", 200, EvidenceServerStub.Summary(), delay: TimeSpan.FromSeconds(10), priority: 1);
+        using var http   = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        using var claude = Claude(Dir("c-timeout"), Verdict("q1", "e0"));
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q1"], observer, http: http);
+
+        await Assert.That(observer.Failures).IsEmpty();
+        await Assert.That(result).IsNotNull();
+        await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(1);
     }
 
     [Test]
@@ -240,7 +256,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         await using var setup = (await Prepare(claude, observer, TimeProvider.System, Dir("root-6"), "q1"))!;
         setup.RetrievalTimeout = TimeSpan.FromSeconds(1);
 
-        var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, TimeProvider.System, CancellationToken.None);
+        var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(File.Exists(Path.Combine(Dir("c6"), "prompt-0.txt"))).IsTrue();
         await Assert.That(outcome.Failure!.Code).IsEqualTo("judge_timeout");
@@ -258,7 +274,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         File.WriteAllText(Path.Combine(Dir("c7"), "verdict.json"), """{"type":"result","subtype":"success","is_error":false,"num_turns":5,"result":"I could not decide."}""");
         await using var setup = (await Prepare(claude, observer, TimeProvider.System, Dir("root-7"), "q1"))!;
 
-        var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, TimeProvider.System, CancellationToken.None);
+        var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(File.Exists(Path.Combine(Dir("c7"), "prompt-0.txt"))).IsTrue();
         var a = outcome.Assessment!;
@@ -288,7 +304,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         await using var setup = (await Prepare(claude, observer, time, Dir("root-8"), "q1"))!;
         time.Advance(TimeSpan.FromSeconds(1_100));
 
-        var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, time, CancellationToken.None);
+        var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, time, CancellationToken.None);
 
         await Assert.That(File.Exists(Path.Combine(Dir("c8"), "prompt-0.txt"))).IsTrue();
         await Assert.That(outcome.ScopeMoved).IsFalse();
@@ -329,7 +345,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(Dir("c-loss"), loss == "handle" ? Verdict("q1", "o1.1", "p99.1") : Verdict("q1", "o1.1"));
         await using var setup = (await Prepare(claude, observer, time, Dir("root-loss"), "q1"))!;
 
-        var question = EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, time, CancellationToken.None);
+        var question = EvalService.RunEvidenceQuestionAsync(setup, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, time, CancellationToken.None);
         if (loss == "elapsed") {
             while (_stub.Requests("evidence-scope").Count(e => e.RequestMessage.Query?.ContainsKey("cursor") == true) < 2) await Task.Delay(20);
             while (!question.IsCompleted) { time.Advance(EvidenceCitationClient.CertificationBudget + TimeSpan.FromSeconds(1)); await Task.Delay(50); }

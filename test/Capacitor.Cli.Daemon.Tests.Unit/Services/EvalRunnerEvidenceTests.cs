@@ -40,13 +40,21 @@ public class EvalRunnerEvidenceTests : IDisposable {
 
     string RunRoot => _tmp.PathTo("runs");
 
-    (EvalRunner Runner, ServerConnection Connection, EvalContextCache Cache) Daemon(FakeClaudeOnPath? claude = null, TimeSpan? question = null, TimeSpan? finalize = null) {
+    /// <summary>The system clock, until told to fail: then every read of the time is an OperationCanceledException that no
+    /// phase budget and no shutdown caused.</summary>
+    sealed class FailingClock : TimeProvider {
+        public bool Fail { get; set; }
+        public override DateTimeOffset GetUtcNow() => Fail ? throw new OperationCanceledException("not the phase budget") : base.GetUtcNow();
+    }
+
+    (EvalRunner Runner, ServerConnection Connection, EvalContextCache Cache) Daemon(FakeClaudeOnPath? claude = null, TimeSpan? question = null, TimeSpan? finalize = null,
+            TimeProvider? time = null) {
         var config     = new DaemonConfig { Name = "t", ServerUrl = _stub.Url, ConfigRoot = Config.Root, Profiles = Resolutions.At(_stub.Url, Config.Root) };
         var connection = new ServerConnection(config, AuthFixtures.NewTokenStore(Config.Root), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
         var cache      = new EvalContextCache(TimeProvider.System);
         var probe      = claude is null ? TestBinaries.None : BinaryProbe.Searching(claude.BinDirectory);
         var runner = new EvalRunner(connection, cache, TestHarnesses.Under(Home, probe), config, new FixedCapacitorHttpClient(), new NoopLifetime(),
-            NullLogger<EvalRunner>.Instance, TimeProvider.System) {
+            NullLogger<EvalRunner>.Instance, time ?? TimeProvider.System) {
             QuestionPhaseBudget = question ?? EvidencePhaseTimeouts.DaemonQuestion,
             FinalizePhaseBudget = finalize ?? EvidencePhaseTimeouts.DaemonFinalize,
             TempRoot            = RunRoot
@@ -279,6 +287,35 @@ public class EvalRunnerEvidenceTests : IDisposable {
         await Assert.That(finalize.Success).IsFalse();
         await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
         await Assert.That(NoRunDirectory()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_cancellation_the_question_budget_did_not_cause_is_chat_error_not_judge_timeout() {
+        Serve(1);
+        var clock = new FailingClock();
+        var (_, connection, _) = Daemon(time: clock);
+        await connection.PrepareEvalHandler!(Prepare());
+        clock.Fail = true;
+
+        var result = await connection.RunQuestionV2Handler!(Question());
+
+        await Assert.That(result.Failure?.Code).IsEqualTo(EvalFailureCodes.ChatError);
+        await Assert.That(result.Error).IsEqualTo("OperationCanceledException: not the phase budget");
+    }
+
+    [Test]
+    public async Task A_cancellation_the_finalize_budget_did_not_cause_is_not_reported_as_that_budget() {
+        Serve(1);
+        var clock = new FailingClock();
+        var (_, connection, _) = Daemon(time: clock);
+        await connection.PrepareEvalHandler!(Prepare());
+        clock.Fail = true;
+
+        var finalize = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [new EvalQuestionAssessment {
+            Category = "safety", QuestionId = "q1", Outcome = EvalOutcomes.Assessed, Score = 4, Verdict = "pass", Finding = "ok" }], [], "sonnet"));
+
+        await Assert.That(finalize.Success).IsFalse();
+        await Assert.That(finalize.Error).IsEqualTo("OperationCanceledException: not the phase budget");
     }
 
     [Test]
