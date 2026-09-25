@@ -684,8 +684,6 @@ public class ClaudeHookCommandTests {
             .IsEqualTo((int)Math.Floor((postTimeout - NextWorkEmitter.FeedRequestReserve).TotalMilliseconds));
     }
 
-    /// <summary>The same ack that renders above renders nothing, and neither field is sent, when
-    /// Claude has no kcap-workitems server to call the tools the guidance names.</summary>
     [Test, NotInParallel]
     public async Task without_the_workitems_mcp_server_next_work_is_neither_requested_nor_rendered() {
         using var fx = new Fixture(Config.Root) { RespondJson = NextWorkAck };

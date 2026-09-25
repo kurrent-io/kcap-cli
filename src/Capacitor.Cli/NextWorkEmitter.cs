@@ -154,7 +154,6 @@ static partial class NextWorkEmitter {
         return (m.Groups["arm"].Value, m.Groups["state"].Value, m.Groups["code"].Success ? m.Groups["code"].Value : null);
     }
 
-    /// <summary>The value re-formatted as ISO 8601 UTC, or null when it is not a timestamp.</summary>
     static string? Timestamp(string? value) =>
         value is not null && DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)
             ? parsed.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture)
