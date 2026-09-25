@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Eval.Evidence;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 
@@ -512,7 +513,9 @@ public static class EvalService {
         // observers log OnInfo at Debug level where they vanish.
         var               diagnostics = new List<string>();
         ClaudeCliOutcome  outcome;
-        var               route       = question.NeedsTools || ctx.ForceTools ? "tools" : "text";
+        var               route       = question.NeedsTools || ctx.ForceTools
+            ? EvidenceRouteExtensions.LegacyToolsObserverRoute
+            : EvidenceRouteExtensions.LegacyTextObserverRoute;
         var               started     = time.GetTimestamp();
 
         if (question.NeedsTools || ctx.ForceTools) {
@@ -1773,7 +1776,7 @@ public static class EvalService {
     /// outside CI sandboxes), we swallow that too rather than risk
     /// corrupting eval state for a logging side effect.
     /// </summary>
-    sealed class SafeObserver(IEvalObserver inner) : IEvalObserver {
+    internal sealed class SafeObserver(IEvalObserver inner) : IEvalObserver {
         public void OnInfo(string message) => Safe(() => inner.OnInfo(message), nameof(OnInfo));
 
         public void OnStarted(string evalRunId, string judgeModel, int totalQuestions) =>
@@ -1808,6 +1811,12 @@ public static class EvalService {
 
         public void OnFailed(string reason) =>
             Safe(() => inner.OnFailed(reason), nameof(OnFailed));
+
+        public void OnTreatment(EvalTreatment treatment) =>
+            Safe(() => inner.OnTreatment(treatment), nameof(OnTreatment));
+
+        public void OnQuestionLedger(int index, string questionId, string tempLedgerPath) =>
+            Safe(() => inner.OnQuestionLedger(index, questionId, tempLedgerPath), nameof(OnQuestionLedger));
 
         static void Safe(Action notify, string callbackName) {
             try {

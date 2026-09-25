@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Eval;
 
@@ -40,8 +41,9 @@ public interface IEvalObserver {
     void OnQuestionStarted(int index, int total, string category, string questionId);
 
     /// <summary>Fired after a judge question completed and its verdict was parsed — including an
-    /// unassessed outcome, which carries no score. <paramref name="route"/> is <c>text</c> or
-    /// <c>tools</c>; <paramref name="runnerInvocations"/> is how many times the runner was called to
+    /// unassessed outcome, which carries no score. <paramref name="route"/> is <c>legacy_text</c>,
+    /// <c>legacy_tools</c>, <c>evidence_one_shot</c> or <c>evidence_retrieval</c>;
+    /// <paramref name="runnerInvocations"/> is how many times the runner was called to
     /// produce this result.</summary>
     void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations);
 
@@ -65,4 +67,12 @@ public interface IEvalObserver {
 
     /// <summary>Fired when the eval failed before producing an aggregate (e.g. context fetch failed, all judges failed, persist failed).</summary>
     void OnFailed(string reason);
+
+    /// <summary>Fired once after the catalog fetch with what the run is configured with: whether the server advertised the
+    /// evidence route, its budgets and the prompt-resource hashes.</summary>
+    void OnTreatment(EvalTreatment treatment) { }
+
+    /// <summary>Fired after every evidence-route <see cref="OnQuestionCompleted"/> with the question's ledger, which exists
+    /// until the run ends; copy it inside the callback to keep it.</summary>
+    void OnQuestionLedger(int index, string questionId, string tempLedgerPath) { }
 }
