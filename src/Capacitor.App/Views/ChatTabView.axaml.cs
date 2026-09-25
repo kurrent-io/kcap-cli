@@ -86,9 +86,10 @@ public partial class ChatTabView : UserControl {
         // A TextBox in the list (Other…, free-text) is editing, not reading: arming follow-tail
         // would ScrollToEnd and recycle its virtualizing row, which drops the caret.
         if (OriginatesFromTextBox(e)) return;
-        // A press or key inside a pending card is answering it — an option, Next, a step chip — and
-        // the card then changes its own height in this layout pass. Read as the reader scrolling up,
-        // that would stop following exactly when the next question lands below the fold.
+        // A press, or Enter or Space, inside a pending card is answering it — an option, Next, a step
+        // chip — and the card then changes its own height in this layout pass. Read as the reader
+        // scrolling up, that would stop following exactly when the next question lands below the
+        // fold. Any other key stays the reader's: Page Up from a focused option pages the list.
         if (IsActivation(e) && OriginatesFromPendingCard(e)) return;
         if (e.RoutedEvent == PointerPressedEvent) CaptureToggleAnchor(e.Source);
         if (_readerGesture) return;
@@ -211,7 +212,8 @@ public partial class ChatTabView : UserControl {
         e.Source is Visual visual && (visual is TextBox || visual.GetVisualAncestors().OfType<TextBox>().Any());
 
     static bool IsActivation(RoutedEventArgs e) =>
-        e.RoutedEvent == PointerPressedEvent || e.RoutedEvent == PointerReleasedEvent || e.RoutedEvent == KeyDownEvent;
+        e.RoutedEvent == PointerPressedEvent || e.RoutedEvent == PointerReleasedEvent
+        || e is KeyEventArgs { Key: Key.Enter or Key.Space };
 
     static bool OriginatesFromPendingCard(RoutedEventArgs e) =>
         e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<StyledElement>().Any(s => s.Classes.Contains("pendingCard"));
