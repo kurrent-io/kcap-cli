@@ -208,6 +208,32 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.PageNote).IsEmpty();
     });
 
+    /// The once-only recovery is for that pull request. Left set, the next one's checks stop.
+    [Test]
+    public Task Switching_pull_request_during_a_head_change_lets_the_next_one_recover() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try {
+            await h.ShowAsync();
+            h.Source.OverviewResponses.Enqueue(async (subject, ct) => {
+                await gate.Task.WaitAsync(ct).ConfigureAwait(false);
+                return h.Source.Overview(subject);
+            });
+            h.Source.RestartNextPage = "head_changed";
+            await h.Model.ShowSectionCommand.Execute("checks");
+            await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Overviews >= 2, what: "recovery overview started");
+            h.Model.Selected = h.Model.Choices[1];
+            await h.SettleAsync();
+            h.Source.RestartNextPage = "head_changed";
+            await h.Model.ShowSectionCommand.Execute("checks");
+            await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading, what: "next pull request checks recovered");
+            await Assert.That(h.Model.PageNote).IsEmpty();
+            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(2);
+        } finally {
+            gate.TrySetResult();
+        }
+    });
+
     /// A click inside the poll's gap used to wait it out with nothing on screen.
     [Test]
     public Task A_refresh_click_shows_progress_at_once_and_runs_within_seconds() => RunOnUiAsync(async () => {

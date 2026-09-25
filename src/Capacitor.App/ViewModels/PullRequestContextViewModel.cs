@@ -299,6 +299,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         else _retired.Add(_cancel);
         _cancel = new();
         _refreshing = false; _overviewPending = false; _pageRequests.Clear(); _lastOverview = null;
+        // The once-only head recovery belongs to the read just cancelled. A later subject
+        // has to be allowed its own, or its checks stop instead of reloading.
+        _headRestarted = false;
     }
     void Start(Func<CancellationToken, Task<Action>> operation, Action settled) {
         var generation = _generation;
