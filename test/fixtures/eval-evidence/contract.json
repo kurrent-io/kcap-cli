@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "coverage_policy_version": "coverage-v2",
+  "omission_kinds": ["bodies_not_fetched", "entries_elided", "field_elided", "pages_not_fetched", "plan_artifact_dropped", "plan_artifact_truncated", "plan_artifact_unavailable", "scope_incomplete", "sources_not_consulted", "tool_result_truncated", "trace_tail_trimmed", "turn_index_elided", "turns_not_fetched"],
+  "stop_reasons": ["byte_budget", "iteration_cap", "judge_stopped", "no_tool_calling", "time_budget", "token_budget", "tool_call_budget"],
+  "cli_failure_codes": ["chat_error", "iteration_cap", "judge_timeout", "spend_budget", "verdict_parse_failed"],
+  "cite": {
+    "page_handle": "^[op](0|[1-9][0-9]*)$",
+    "row_handle": "^[op](0|[1-9][0-9]*)\\.[1-9][0-9]*$",
+    "one_shot_handle": "^e(0|[1-9][0-9]*)$",
+    "max_handle_bytes": 16
+  },
+  "max_citations": 200,
+  "canonical_bodies": {
+    "user_message": ["text"],
+    "assistant_text": ["text"],
+    "assistant_thinking": ["text"],
+    "tool_call": ["arguments", "call"],
+    "tool_result": ["output"],
+    "subagent_started": ["payload"],
+    "subagent_completed": ["payload"],
+    "interrupt_issued": ["payload"],
+    "interrupt_resolved": ["payload"],
+    "other": ["payload"]
+  },
+  "shared_body_key_fields": ["arguments", "call"],
+  "row_ref_fields": {
+    "list_turns": "turns[].turn_ref",
+    "read_events": "entries[].ref",
+    "read_body": "reference",
+    "list_calls": "calls[].locator.ref",
+    "summarize_calls": null,
+    "list_authorizations": "authorizations[].authorization_ref"
+  }
+}

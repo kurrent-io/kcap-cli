@@ -810,6 +810,9 @@ sealed class SetupCommand(
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
+        if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
+            WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
+
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
         // A vendor skipped by its own --skip-<vendor> flag was not meaningfully offered, so it is

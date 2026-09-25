@@ -3,31 +3,21 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Eval.Evidence;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 
 namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
-/// Core orchestration for an LLM-as-judge eval run. Consumed by the CLI
-/// (<c>kcap eval</c>) and — per DEV-1440 milestone 2 — by the daemon
-/// when the dashboard dispatches an evaluation. All progress is reported
-/// through <see cref="IEvalObserver"/> so the two host environments can
-/// render it differently (stderr logs vs SignalR events) without the
-/// service caring.
+/// Core orchestration for an LLM-as-judge eval run, shared by <c>kcap eval</c> and the daemon. All progress is reported
+/// through <see cref="IEvalObserver"/> so each host renders it its own way.
 /// </summary>
-public static class EvalService {
-    // DEV-1476: every judge invocation is pinned to a JSON Schema via
-    // `claude -p --json-schema`. Without this, judges occasionally emitted
-    // free-form text (including harmony-style `<function_calls>` XML as
-    // prose) which is unparseable as a verdict. The CLI fulfils the schema
-    // through a synthetic `StructuredOutput` tool that costs one extra turn
-    // — callers here pass `maxTurns: 2` to accommodate it.
-    //
-    // Both schemas accept `null` for optional string fields (rather than
-    // omitting them) because `--json-schema` enforces `required` — the
-    // per-question prompt already instructs the judge to emit explicit
-    // nulls, so this matches existing expectations.
+public static partial class EvalService {
+    // Every judge invocation is pinned to a JSON Schema via `claude -p --json-schema`: without one a judge can answer in
+    // free-form text that is unparseable as a verdict. The CLI fulfils the schema through a synthetic StructuredOutput
+    // tool that costs one extra turn. Optional string fields accept null rather than being omitted, because
+    // `--json-schema` enforces `required` and the prompts ask for explicit nulls.
     const string VerdictJsonSchema = """
         {"type":"object","properties":{"category":{"type":"string"},"question_id":{"type":"string"},"outcome":{"type":"string","enum":["assessed","insufficient_evidence","not_applicable"]},"score":{"type":["integer","null"],"minimum":1,"maximum":5},"verdict":{"type":["string","null"],"enum":["pass","warn","fail",null]},"finding":{"type":"string","minLength":1},"evidence":{"type":["string","null"]},"recommendation":{"type":["string","null"]},"retain_fact":{"type":["string","object","null"],"properties":{"fact":{"type":"string"},"applies_to_vendors":{"type":"array","items":{"type":"string"},"maxItems":16},"applies_to_session_kinds":{"type":"array","items":{"type":"string"},"maxItems":16}},"required":["fact"],"additionalProperties":false}},"required":["category","question_id","outcome","score","verdict","finding","evidence","recommendation","retain_fact"],"additionalProperties":false}
         """;
@@ -37,11 +27,8 @@ public static class EvalService {
     // level keeps retrospectives cheap and prevents the model from padding
     // lists with low-signal bullets just because the schema would let it.
     //
-    // suggestions.items is an object with {text, audience} — NOT a
-    // bare string. The previous string-items schema forced the model to
-    // ignore the prompt's {text, audience} instruction, which meant every
-    // suggestion landed as audience="human" and no agent_guidance was ever
-    // produced by CLI-driven evals.
+    // suggestions.items is a {text, audience} object, not a bare string: a string item makes the model drop the
+    // audience, and every suggestion then lands as audience="human" with no agent guidance.
     const string RetrospectiveJsonSchema = """
         {"type":"object","properties":{"overall":{"type":"string"},"strengths":{"type":"array","maxItems":3,"items":{"type":"string"}},"issues":{"type":"array","maxItems":3,"items":{"type":"string"}},"suggestions":{"type":"array","maxItems":5,"items":{"type":"object","properties":{"text":{"type":"string"},"audience":{"type":"string","enum":["agent","human"]}},"required":["text","audience"],"additionalProperties":false}}},"required":["overall","strengths","issues","suggestions"],"additionalProperties":false}
         """;
@@ -63,32 +50,25 @@ public static class EvalService {
     // unpopulated and the call would surface as a null result.
     const int JudgeMaxTurns = 3;
 
-    // DEV-1484: the retrospective judge now pulls session details via MCP
-    // tools (recap/errors/transcript) instead of reading them from the
-    // embedded trace. Each tool call costs a turn, plus one for the final
-    // StructuredOutput reply and one end-of-turn. The prompt's "at most 6
-    // tool calls" budget collides with reasoning-block turns: assistant
-    // tool_use turns and reasoning turns both count, so 6 tool calls can
-    // already burn 8-10 turns before StructuredOutput. DEV-1576 raised
-    // this from 10 → 15 after real runs were hitting error_max_turns
-    // mid-tool-use and producing null results.
+    // The retrospective judge reads session details through MCP tools, and tool-use turns and reasoning turns both count:
+    // the prompt's six tool calls alone can burn 8-10 turns before StructuredOutput. At 10, real runs hit
+    // error_max_turns mid-tool-use and produced null results.
     const int RetrospectiveMaxTurns = 15;
 
     // 15-min wallclock pairs with RetrospectiveMaxTurns=15: gives the judge
     // room for the prompt's 6 MCP tool calls plus structured-output and
     // reasoning headroom even under cold-start claude CLI latency.
-    static readonly TimeSpan RetrospectiveTimeout = TimeSpan.FromMinutes(15);
+    internal static readonly TimeSpan RetrospectiveTimeout = TimeSpan.FromMinutes(15);
 
-    // DEV-1486: tools-enabled per-question judges reuse the retrospective's
-    // MCP tool surface. DEV-1576: original 10 turns / $0.50 was too tight —
-    // judges hit error_max_turns mid-investigation and produced null
-    // verdicts because StructuredOutput never ran. Bumped to 15 turns /
-    // $1.00 to match the retrospective ceiling; the prompt's "at most 6
-    // tool calls" still bounds investigation depth.
-    const int    ToolsPerQuestionMaxTurns     = 15;
-    const double ToolsPerQuestionMaxBudgetUsd = 1.00;
+    // 15 turns and a $1.00 budget bound investigation depth alongside the prompt's own
+    // at-most-6-tool-calls cap.
+    const int             ToolsPerQuestionMaxTurns     = 15;
+    internal const double ToolsPerQuestionMaxBudgetUsd = 1.00;
 
-    static readonly TimeSpan ToolsPerQuestionTimeout = TimeSpan.FromMinutes(10);
+    internal static readonly TimeSpan ToolsPerQuestionTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>The text-only per-question judge's wallclock budget.</summary>
+    internal static readonly TimeSpan OneShotQuestionTimeout = TimeSpan.FromMinutes(5);
 
     // The inline judge MCP server is registered under this key in the
     // --mcp-config we pass to claude; the key becomes the `mcp__<key>__<tool>`
@@ -101,6 +81,9 @@ public static class EvalService {
     /// on every <see cref="SessionEvalCompletedPayloadV4.CoveragePolicyVersion"/> and on every
     /// <see cref="EvalEvidenceCoverage.PolicyVersion"/> the CLI attaches.</summary>
     public const string CoveragePolicyVersion = "coverage-v1";
+
+    /// <summary>The evidence-retrieval route's coverage policy version.</summary>
+    public const string EvidenceCoveragePolicyVersion = "coverage-v2";
 
     // Shared between RunRetrospectiveAsync and the tools-enabled per-question
     // branch of RunQuestionAsync. Built from JudgeMcpServerName so the
@@ -299,10 +282,13 @@ public static class EvalService {
                 return null;
             }
 
-            // Phase 3 — fetch the full catalog (rendered prompts + raw text +
-            // versions) so PrepareAsync can reconcile the run question list from it.
             var catalog = await EvalCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, ct);
             if (catalog is null) return null;   // FetchAsync already emitted OnFailed
+
+            observer.OnTreatment(EvalTreatment.For(catalog));
+            // The advertisement is the only oracle; a chain request stays on the legacy path whatever the server offers.
+            if (catalog.EvidenceRetrieval is not null && !chain)
+                return await RunEvidenceAsync(baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, model, observer, time, ct, evalRunId);
 
             var ctx = await PrepareAsync(
                 baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, chain, thresholdBytes,
@@ -510,21 +496,16 @@ public static class EvalService {
         // observers log OnInfo at Debug level where they vanish.
         var               diagnostics = new List<string>();
         ClaudeCliOutcome  outcome;
-        var               route       = question.NeedsTools || ctx.ForceTools ? "tools" : "text";
+        var               route       = question.NeedsTools || ctx.ForceTools
+            ? EvidenceRouteExtensions.LegacyToolsObserverRoute
+            : EvidenceRouteExtensions.LegacyTextObserverRoute;
         var               started     = time.GetTimestamp();
 
         if (question.NeedsTools || ctx.ForceTools) {
-            // DEV-1486 tools-enabled path. Session-scoped MCP tool surface
-            // (same as retrospective) on a per-question budget: 15 turns,
-            // 10-min timeout, $1.00 cap (raised from 10/$0.50 in DEV-1576
-            // after real runs hit error_max_turns mid-tool-use). Prompt
-            // omits the compacted trace — the judge fetches session details
-            // on demand. ctx.ForceTools additionally routes EVERY question
-            // here (not just the NeedsTools four) when the session's trace is
-            // too large to embed — see PrepareAsync's size gate.
-            // Phase 3 — the reconciled question's Prompt is the RENDERED
-            // text-path prompt; the tools template substitutes {QUESTION_TEXT}
-            // from question.Prompt, so feed it the RAW catalog text instead.
+            // The session-scoped MCP tools on a per-question budget; the prompt omits the trace and the judge fetches
+            // what it needs. ForceTools routes every question here when PrepareAsync's size gate finds the trace too
+            // large to embed. The reconciled Prompt is the rendered text-path prompt, so the tools template gets the
+            // raw catalog text.
             var prompt = BuildToolsQuestionPrompt(
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId,
                 question with { Prompt = question.RawText ?? question.Prompt }, patterns);
@@ -549,14 +530,12 @@ public static class EvalService {
                 ct:             ct
             );
         } else {
-            // Text-only path (default). Phase 3: the prompt is the catalog's
-            // server-RENDERED prompt carried on the reconciled question — fill the
-            // runtime placeholders and strip any residual {CACHE_BOUNDARY}.
+            // The catalog's server-rendered prompt, with the runtime placeholders filled and any {CACHE_BOUNDARY} stripped.
             var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson);
 
             outcome = await ClaudeCliRunner.RunDetailedAsync(
                 prompt,
-                TimeSpan.FromMinutes(5),
+                OneShotQuestionTimeout,
                 time,
                 msg => { diagnostics.Add(msg); observer.OnInfo($"  {msg}"); },
                 ctx.Profile,
@@ -572,11 +551,7 @@ public static class EvalService {
         }
 
         if (outcome.Failure is { } failureKind) {
-            var code = failureKind switch {
-                ClaudeCliFailure.Timeout           => EvalFailureCodes.JudgeTimeout,
-                ClaudeCliFailure.OutputUnparseable => EvalFailureCodes.VerdictParseFailed,
-                _                                   => EvalFailureCodes.ChatError
-            };
+            var code = LegacyFailureCode(failureKind);
             var reason = diagnostics.Count == 0
                 ? $"claude {code}"
                 : $"claude {code}; {string.Join(" | ", diagnostics.Select(d => Truncate(d, 300)))}";
@@ -602,13 +577,8 @@ public static class EvalService {
             });
         }
 
-        // DEV-1486: record tool-call count for tools-routed questions.
-        // Derived as num_turns - 1 (the final StructuredOutput turn doesn't
-        // count as investigation). Clamped at 0 for the defensive case
-        // where the CLI reports 0 turns. Null for text-only questions so
-        // the server can distinguish "didn't measure" from "measured zero".
-        // Mirrors the branch condition above so size-gate-forced questions
-        // record their tool usage too.
+        // Tool calls are num_turns - 1, the final StructuredOutput turn being no investigation. A text-only question
+        // leaves the count null, so the server can tell "not measured" from "measured zero".
         if (question.NeedsTools || ctx.ForceTools) {
             assessment = assessment with { ToolsUsed = Math.Max(0, result.NumTurns - 1) };
         }
@@ -628,8 +598,23 @@ public static class EvalService {
             }
         }
 
-        return new QuestionRunResult(assessment, null);
+        return new QuestionRunResult(assessment, null, EvalUsage.FromResult(result));
     }
+
+    // The legacy routes keep reading every harness failure but a timeout or an unparseable reply as chat_error.
+    internal static string LegacyFailureCode(ClaudeCliFailure failure) => failure switch {
+        ClaudeCliFailure.Timeout           => EvalFailureCodes.JudgeTimeout,
+        ClaudeCliFailure.OutputUnparseable => EvalFailureCodes.VerdictParseFailed,
+        _                                  => EvalFailureCodes.ChatError
+    };
+
+    internal static string EvidenceFailureCode(ClaudeCliOutcome outcome) => outcome switch {
+        { Failure: ClaudeCliFailure.Timeout }           => EvalFailureCodes.JudgeTimeout,
+        { Failure: ClaudeCliFailure.SpendBudget }       => EvalFailureCodes.SpendBudget,
+        { Subtype: "error_max_turns" }                  => EvalFailureCodes.IterationCap,
+        { Failure: ClaudeCliFailure.OutputUnparseable } => EvalFailureCodes.VerdictParseFailed,
+        _                                               => EvalFailureCodes.ChatError
+    };
 
     /// <summary>Measures retrieval loss for the text path — the trace embeds the whole compacted
     /// session, so what the run set out to deliver is exactly what <see cref="EvalContext.Compaction"/>
@@ -943,7 +928,7 @@ public static class EvalService {
     // ── Prompt construction ────────────────────────────────────────────────
 
     /// <summary>
-    /// Phase 3 — build the run question list FROM the catalog, preserving the
+    /// Builds the run question list from the catalog, preserving the
     /// order of <paramref name="selectedIds"/>. Each result carries the catalog's
     /// rendered <see cref="EvalQuestionDto.Prompt"/> (text path), raw
     /// <see cref="EvalQuestionDto.RawText"/> (tools path), <see cref="EvalQuestionDto.PromptVersion"/>,
@@ -966,7 +951,10 @@ public static class EvalService {
                 Prompt        = c.Prompt,        // RENDERED — text path uses directly
                 RawText       = c.QuestionText,  // RAW — tools path substitutes this
                 NeedsTools    = c.NeedsTools,
-                PromptVersion = c.PromptVersion
+                PromptVersion = c.PromptVersion,
+                Strategy           = c.Strategy,
+                StrategyVersion    = c.StrategyVersion,
+                ReportsObligations = c.ReportsObligations == true
             });
         }
         return result;
@@ -1096,6 +1084,7 @@ public static class EvalService {
         try {
             using var doc = JsonDocument.Parse(json);
             outcomeExplicitlyNull = doc.RootElement.Prop("outcome") is { IsNull: true };
+            if (doc.RootElement.IsObject && ProducerOwned.Any(name => doc.RootElement.TryGetProperty(name, out _))) json = WithoutMembers(doc.RootElement, ProducerOwned);
 
             parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionAssessment);
         } catch (JsonException) {
@@ -1337,6 +1326,21 @@ public static class EvalService {
         }
 
         return text.Trim();
+    }
+
+    // Stamped or reconciled by the producer, never taken from the judge: a reported obligations array is not the persisted
+    // shape and would fail the whole verdict's deserialization.
+    static readonly string[] ProducerOwned = ["strategy", "strategy_version", "obligations"];
+
+    static string WithoutMembers(JsonElement root, IReadOnlyCollection<string> names) {
+        using var buffer = new MemoryStream();
+        using (var w = new Utf8JsonWriter(buffer)) {
+            w.WriteStartObject();
+            foreach (var property in root.EnumerateObject())
+                if (!names.Contains(property.Name)) property.WriteTo(w);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     // ── Facts-used snapshot ────────────────────────────────────────────────
@@ -1760,7 +1764,7 @@ public static class EvalService {
     /// outside CI sandboxes), we swallow that too rather than risk
     /// corrupting eval state for a logging side effect.
     /// </summary>
-    sealed class SafeObserver(IEvalObserver inner) : IEvalObserver {
+    internal sealed class SafeObserver(IEvalObserver inner) : IEvalObserver {
         public void OnInfo(string message) => Safe(() => inner.OnInfo(message), nameof(OnInfo));
 
         public void OnStarted(string evalRunId, string judgeModel, int totalQuestions) =>
@@ -1795,6 +1799,12 @@ public static class EvalService {
 
         public void OnFailed(string reason) =>
             Safe(() => inner.OnFailed(reason), nameof(OnFailed));
+
+        public void OnTreatment(EvalTreatment treatment) =>
+            Safe(() => inner.OnTreatment(treatment), nameof(OnTreatment));
+
+        public void OnQuestionLedger(int index, string questionId, string tempLedgerPath) =>
+            Safe(() => inner.OnQuestionLedger(index, questionId, tempLedgerPath), nameof(OnQuestionLedger));
 
         static void Safe(Action notify, string callbackName) {
             try {

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.PullRequests;
 using ReactiveUI.Reactive;
 
@@ -6,14 +7,17 @@ namespace Capacitor.App.ViewModels;
 public sealed partial class PullRequestContextViewModel {
     bool _refreshDiscovery;
     bool _refreshPage;
+    string? _headRestartSection;
     PullRequestSectionState? CurrentSection => _sections.GetValueOrDefault(SectionKey);
 
     void RequestRefresh(bool manual = false) {
         if (_disposed || !_foreground || _session is not { } session) return;
-        if (manual) { _source.ResetSession(session); _stopped = false; _refreshDiscovery = true; _refreshPage = true; }
+        if (manual) { _source.ResetSession(session); _stopped = false; _refreshDiscovery = true; _refreshPage = true; _lastOverview = null; }
         if (_stopped || _retryAt > _time.GetUtcNow().UtcDateTime) return;
-        if (_refreshing || _lastRefresh is { } last && _time.GetElapsedTime(last).TotalSeconds < 15) {
+        // A click waits out a short gap only; the poll keeps the longer one.
+        if (_refreshing || _lastRefresh is { } last && _time.GetElapsedTime(last).TotalSeconds < (manual || _queuedRefresh ? 3 : 15)) {
             _queuedRefresh |= manual;
+            if (manual) Notify();
             return;
         }
         var refresh = _refreshDiscovery;
@@ -23,7 +27,9 @@ public sealed partial class PullRequestContextViewModel {
         _lastRefresh = _time.GetTimestamp();
         Notify();
         var repository = _primaryRepo?.Invoke();
-        var branch = _branch;
+        // The daemon reports the branch the worktree was cut on; a session that switched since
+        // opens its PR on the new one, which only the checkout's HEAD knows.
+        var branch = _branch = GitRepository.CurrentBranch(_worktree) ?? _branch;
         Start(async ct => {
             _readers?.DescribeSession(session, repository, branch);
             var capability = await _source.DiscoverAsync(refresh, ct).ConfigureAwait(false);
@@ -72,13 +78,22 @@ public sealed partial class PullRequestContextViewModel {
             var read = await _source.OverviewAsync(session, choice.Subject, ct).ConfigureAwait(false);
             return () => {
                 if (read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale && read.Data is not null && AcceptAccess(read)) {
-                    if (_overview?.HeadSha is { } old && old != read.Data.HeadSha) {
-                        foreach (var state in _sections.Values.Where(state => state.Key == "checks")) { state.Pages.Clear(); state.Stopped = true; state.Error = "The PR head changed. Refresh checks."; }
-                    }
+                    // Checks belong to a commit: a new head drops the old rows, and the open tab reloads below.
+                    if (_overview?.HeadSha is { } old && old != read.Data.HeadSha) _sections.Remove("checks");
+                    var rollupMoved = _overview?.Checks?.Rollup != read.Data.Checks?.Rollup;
                     _overview = read.Data; _overviewRead = read;
                     SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier snapshot while GitHub is unavailable." : "");
                     if (Learn(choice.Subject, read.Data.Lifecycle) && ReconsiderDefault()) return;
-                    if (_readerVisible && _section != "overview" && (CurrentSection is null || _refreshPage)) RequestPage(null, refresh: _refreshPage);
+                    // Check rows are a snapshot while the summary tracks the overview: reload them while
+                    // any is still running, or the summary goes green beside rows that still say pending.
+                    var checksLive = _section == "checks" && CurrentSection is { } checks
+                        && (rollupMoved || checks.Pages.Any(page => page.Rows.Any(row => row.Outcome == "pending")));
+                    // The open tab follows the poll too, unless the reader paged past the first page:
+                    // a reload restarts at page one and would pull the rows they were reading away.
+                    var onePage = CurrentSection is { Pages.Count: 1, Earlier.Count: 0 };
+                    var stoppedChecks = _section == "checks" && CurrentSection is { Stopped: true };
+                    var reload = _refreshPage || checksLive || onePage || stoppedChecks;
+                    if (_readerVisible && _section != "overview" && (CurrentSection is null || reload)) RequestPage(null, refresh: reload);
                     _refreshPage = false;
                 } else Fail(read);
             };
@@ -96,6 +111,9 @@ public sealed partial class PullRequestContextViewModel {
         var thread = _thread;
         _pageRequests.Add(key);
         Notify();
+        // Set by a head_changed restart; the overview it asks for goes out once this read has settled,
+        // or its apply would find this request still in flight and skip the reload.
+        var restartOverview = false;
         switch (section) {
             case "checks": Page<PullRequestCheckDto>(ToRow); break;
             case "reviewers": Page<PullRequestReviewerDto>(ToRow); break;
@@ -120,6 +138,7 @@ public sealed partial class PullRequestContextViewModel {
                         if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(); return; }
                         state.Pages.Add(saved);
                     }
+                    if (_headRestartSection == key) _headRestartSection = null;
                     state.Snapshot = page.SnapshotId; state.Completed = page.SnapshotCompletedAt;
                     state.Head = page.HeadSha; state.Coverage = page.Coverage;
                     state.Total = page.Total; state.Excluded = page.ExcludedByFilter; state.Stopped = false; state.Error = null;
@@ -127,15 +146,22 @@ public sealed partial class PullRequestContextViewModel {
                     EnforcePageBudget(state, saved, earlier);
                     state.Next = state.Pages.LastOrDefault()?.Next;
                     SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier page while GitHub is unavailable." : "");
+                } else if (read.Kind == PullRequestReadKind.Restart && read.Reason == "head_changed" && _headRestartSection is null) {
+                    // Learn the new head from a fresh overview, whose apply reloads this section. Once
+                    // only for that section: an overview still on the old head would bounce straight back here.
+                    _headRestartSection = key;
+                    _sections.Remove(key);
+                    _lastOverview = null;
+                    restartOverview = true;
                 } else if (read.Kind == PullRequestReadKind.Restart && read.Reason is not ("identity_changed" or "integration_changed")) {
                     var state = _sections.GetValueOrDefault(key) ?? new PullRequestSectionState(key);
-                    state.Stopped = true; state.Error = read.Reason == "head_changed" ? "The PR head changed. Refresh checks." : "This snapshot can no longer load pages. Refresh to start again.";
+                    state.Stopped = true; state.Error = read.Reason == "head_changed" ? "Catching up with a new commit." : "This snapshot can no longer load pages. Refresh to start again.";
                     if (read.Reason == "head_changed") state.Pages.Clear();
                     _sections[key] = state;
                     Notify();
                 } else Fail(read);
             };
-        }, () => _pageRequests.Remove(key));
+        }, () => { _pageRequests.Remove(key); if (restartOverview) RequestOverview(); });
     }
     void EnforcePageBudget(PullRequestSectionState state, PullRequestSectionState.Page newest, bool earlier) {
         while (state.Pages.Count > 8) {

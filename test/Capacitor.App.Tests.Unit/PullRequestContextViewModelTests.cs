@@ -361,6 +361,26 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    /// A borrowed reviewer's snapshot is detached. Discovery has to read the checkout being reviewed.
+    [Test]
+    public Task A_borrowed_reviewer_opens_the_pull_request_on_the_reviewed_checkout() => RunOnUiAsync(async () => {
+        using var tmp = new TempDir();
+        var reviewed = tmp.CreateDir("reviewed");
+        var snapshot = tmp.CreateDir("snapshot");
+        tmp.CreateFile(["reviewed", ".git", "HEAD"], "ref: refs/heads/reviewed\n");
+        tmp.CreateFile(["snapshot", ".git", "HEAD"], new string('a', 40) + "\n");
+        var h = new Harness(() => new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        h.Source.Links = [
+            FakePullRequestSource.Link(1) with { HeadRef = "other" },
+            FakePullRequestSource.Link(2) with { HeadRef = "reviewed" },
+        ];
+        h.Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session",
+            worktreePath: snapshot, workLocation: "borrowed", borrowedFrom: reviewed));
+        await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
     static PullRequestLinkDto Link(int number, string? lifecycle = null) => FakePullRequestSource.Link(number) with { Lifecycle = lifecycle };
 
     sealed class Harness {

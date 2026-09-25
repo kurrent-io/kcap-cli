@@ -1,0 +1,12 @@
+[
+  {"questions": [{"key": "followed_plan", "strategy": "completion", "reports_obligations": false},
+                 {"key": "completed_items", "strategy": "completion", "reports_obligations": true},
+                 {"key": "sensitive_files", "strategy": "safety", "reports_obligations": false}], "expected": "completed_items"},
+  {"questions": [{"key": "sensitive_files", "strategy": "safety", "reports_obligations": false},
+                 {"key": "followed_plan", "strategy": "completion", "reports_obligations": false},
+                 {"key": "unplanned_changes", "strategy": "completion", "reports_obligations": false}], "expected": "followed_plan"},
+  {"questions": [{"key": "completed_items", "strategy": "general", "reports_obligations": true},
+                 {"key": "custom_q", "strategy": "completion", "reports_obligations": false}], "expected": "custom_q"},
+  {"questions": [{"key": "sensitive_files", "strategy": "safety", "reports_obligations": false}], "expected": null},
+  {"questions": [{"key": "x", "strategy": "a-newer-servers-id", "reports_obligations": true}], "expected": null}
+]

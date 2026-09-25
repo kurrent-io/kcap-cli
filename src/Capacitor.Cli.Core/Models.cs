@@ -40,6 +40,11 @@ record TranscriptBatch {
     [JsonPropertyName("strict")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Strict { get; init; }
+
+    // Non-null, even empty, and the server reads no commits from the lines' shell commands.
+    [JsonPropertyName("observed_commits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ObservedCommit[]? ObservedCommits { get; init; }
 }
 
 public record ErrorEntry(
@@ -158,6 +163,9 @@ class WatchState {
     public List<int>    BufferedLineNumbers { get; } = [];
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
+
+    public CommitObservation Commits           { get; set; } = new CommitObservation.Uncovered();
+    public DateTimeOffset    LastCoverageCheck { get; set; }
 
     // Set by the shutdown final drain when it held back an unterminated/unparseable final line
     // rather than consuming it, so RunWatch can flag the session needs-import and never drop a
@@ -433,24 +441,27 @@ public record EvalQuestionDto {
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
 
-    // DEV-1486: server-owned flag that opts this question into tools-enabled
-    // judging. Defaults to false so older servers that don't send the field
-    // keep producing text-only judge runs.
+    // Server-owned opt-in to tools-enabled judging; false when an older server omits it, keeping those runs text-only.
     [JsonPropertyName("needs_tools")]
     public bool NeedsTools { get; init; }
 
-    // Phase 3 — the catalog prompt version this question's rendered prompt
-    // ran against. Null on the back-compat /api/eval/questions alias (which does
-    // not emit it) and on older servers; populated only by /api/eval/catalog.
+    // The catalog prompt version the rendered prompt ran against. Only /api/eval/catalog sends it; the
+    // /api/eval/questions alias and older servers leave it null.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
 
-    // Phase 3 — RAW question text from the catalog, used by the tools path
-    // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
-    // the alias / older servers. Distinct from Prompt, which on a reconciled
-    // text-path question holds the server-RENDERED prompt.
+    // The raw catalog question text the tools template substitutes into {QUESTION_TEXT}; null from the alias and older
+    // servers. On a reconciled text-path question Prompt holds the server-rendered prompt instead.
     [JsonPropertyName("raw_text")]
     public string? RawText { get; init; }
+
+    // The daemon wire carries only the strategy id; the version and the reporting mark come from the reconciled catalog.
+    [JsonPropertyName("strategy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Strategy { get; init; }
+
+    [JsonIgnore] public string? StrategyVersion    { get; init; }
+    [JsonIgnore] public bool    ReportsObligations { get; init; }
 }
 
 /// <summary>
@@ -472,6 +483,10 @@ public record EvalCatalogDto {
 
     [JsonPropertyName("questions")]
     public List<EvalCatalogQuestionDto> Questions { get; init; } = [];
+
+    // Present only when the server enables the CLI evidence route; absent on every older server and with the gate off.
+    [JsonPropertyName("evidence_retrieval")]
+    public Eval.Evidence.EvalEvidenceAdvertisementDto? EvidenceRetrieval { get; init; }
 }
 
 /// <summary>A single active question from <c>GET /api/eval/catalog</c>.</summary>
@@ -500,6 +515,12 @@ public record EvalCatalogQuestionDto {
     // members — a missing `needs_tools` throws JsonException. See the missing-field test.
     [JsonPropertyName("needs_tools")]
     public required bool NeedsTools { get; init; }
+
+    // Absent from a server without question strategies; an id this build does not know behaves as general.
+    [JsonPropertyName("strategy")]            public string? Strategy           { get; init; }
+    [JsonPropertyName("strategy_version")]    public string? StrategyVersion    { get; init; }
+    [JsonPropertyName("strategy_guidance")]   public string? StrategyGuidance   { get; init; }
+    [JsonPropertyName("reports_obligations")] public bool?   ReportsObligations { get; init; }
 }
 
 // Per-question verdict returned by each judge invocation. Matches the server
@@ -1019,6 +1040,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCategoryAssessment))]
 [JsonSerializable(typeof(EvalEvidenceCoverage))]
 [JsonSerializable(typeof(EvalEvidenceCitation))]
+[JsonSerializable(typeof(EvalObligationResult))]
 [JsonSerializable(typeof(EvalEvidenceOmission))]
 [JsonSerializable(typeof(EvalQuestionFailure))]
 [JsonSerializable(typeof(List<EvalQuestionFailure>))]
@@ -1030,6 +1052,16 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineOutput))]
 [JsonSerializable(typeof(QuestionResultV2))]
 [JsonSerializable(typeof(FinalizeEvalV2Command))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeManifestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceReadErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsResponseDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceEventPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceTurnPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceBodyChunkDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvalTreatment))]
+[JsonSerializable(typeof(EvalTraceCoverage))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(List<CliProjectSummary>))]
 [JsonSerializable(typeof(CliProjectDetail))]
@@ -2226,7 +2258,7 @@ public readonly record struct TerminalOutput(
         string Base64Data
     );
 
-// ── Per-question eval dispatch (DEV-1463 PR 2) ────────────────────────────
+// ── Per-question eval dispatch ───────────────────────────────────────────────
 // Plain PascalCase records — no [JsonPropertyName] attrs — so they round-trip
 // via SignalR's default JSON protocol with the matching server-side records.
 // Inner DTOs (EvalQuestionDto, EvalQuestionVerdict) carry their own snake_case
@@ -2261,16 +2293,25 @@ public readonly record struct FinalizeEvalCommand(
 /// <summary>Server → daemon: discard any cached context for this run (e.g. dashboard aborted).</summary>
 public readonly record struct CancelEvalCommand(string EvalRunId);
 
-/// <summary>Daemon → server: prepare-phase result.</summary>
+/// <summary>Daemon → server: prepare-phase result. The trailing fields are set on the evidence route;
+/// Route is legacy, evidence_one_shot or evidence_retrieval.</summary>
 public readonly record struct PrepareResult(
-        bool    Success,
-        string? Error,
-        string? CanonicalSessionId,
-        int     TraceEntries,
-        int     TraceChars,
-        int     ToolResultsTotal,
-        int     ToolResultsTruncated,
-        long    BytesSaved
+        bool            Success,
+        string?         Error,
+        string?         CanonicalSessionId,
+        int             TraceEntries,
+        int             TraceChars,
+        int             ToolResultsTotal,
+        int             ToolResultsTruncated,
+        long            BytesSaved,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         EvidenceScopeVersion = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         Route                = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        int?            SourceCount          = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        DateTimeOffset? ExpiresAt            = null
     );
 
 /// <summary>Daemon → server: per-question judge result.</summary>

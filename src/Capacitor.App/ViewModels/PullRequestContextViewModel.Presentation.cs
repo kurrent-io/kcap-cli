@@ -58,7 +58,7 @@ public sealed partial class PullRequestContextViewModel {
             if (!CanDisplay) return new("");
             var checks = _sections.GetValueOrDefault("checks");
             if (checks is { Coverage: "complete", Stopped: false, Total.Kind: "exact", Completed: { } completed }
-                && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < TimeSpan.FromSeconds(30)
+                && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < RowsFreshFor
                 && completed >= _overview?.Checks?.Availability.FetchedAt && checks.Pages.Sum(page => page.Rows.Length) == checks.Total.Value) {
                 var rows = checks.Pages.SelectMany(page => page.Rows).ToArray();
                 if (rows.Length == 0) return new("No checks reported", Detail: "No checks were reported for this commit.");
