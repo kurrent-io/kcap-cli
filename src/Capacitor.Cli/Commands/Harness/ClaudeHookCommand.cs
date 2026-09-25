@@ -688,20 +688,15 @@ public sealed class ClaudeHookCommand(
             var coordinationNoticesDisabled = activeProfile?.DisableCoordinationNotices is true;
             var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true
                                            || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses);
-            var postBody = body;
+            JsonNode? capabilityNode = null;
             if (!coordinationNoticesDisabled || !nextWorkDisabled) {
                 try {
-                    var node = JsonNode.Parse(body);
-                    if (node is not null) {
-                        if (!coordinationNoticesDisabled) node["coordination_notices"] = AotJsonString(CoordinationNoticesEmitter.CapabilityVersion);
-                        if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(budget.Remaining) is { } feedBudgetMs) {
-                            node["next_work"]           = AotJsonString(NextWorkEmitter.CapabilityVersion);
-                            node["next_work_budget_ms"] = feedBudgetMs;
-                        }
-                        postBody = node.ToJsonString();
-                    }
+                    capabilityNode = JsonNode.Parse(body);
+                    if (capabilityNode is not null && !coordinationNoticesDisabled)
+                        capabilityNode["coordination_notices"] = AotJsonString(CoordinationNoticesEmitter.CapabilityVersion);
                 } catch {
                     // Best effort — never fail the hook building the capability field.
+                    capabilityNode = null;
                 }
             }
 
@@ -723,6 +718,22 @@ public sealed class ClaudeHookCommand(
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
             var remaining = budget.Remaining;
+
+            // The feed budget comes from the same snapshot the POST is bounded by, so it can never
+            // promise the server more time than the POST will wait.
+            var postBody = body;
+            if (capabilityNode is not null) {
+                try {
+                    if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(remaining) is { } feedBudgetMs) {
+                        capabilityNode["next_work"]           = AotJsonString(NextWorkEmitter.CapabilityVersion);
+                        capabilityNode["next_work_budget_ms"] = feedBudgetMs;
+                    }
+                    postBody = capabilityNode.ToJsonString();
+                } catch {
+                    // Best effort — never fail the hook building the capability field.
+                }
+            }
+
             HttpResponseMessage? resp = null;
             try {
                 if (remaining > TimeSpan.Zero) {

@@ -577,13 +577,14 @@ public class ClaudeHookCommandTests {
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
+                clock: new HookClock(new FakeTimeProvider())));
         await Assert.That(exit).IsEqualTo(0);
 
         var posted     = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var postedBody = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
         await Assert.That(postedBody["next_work"]?.GetValue<string>()).IsEqualTo("v1");
-        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsBetween(NextWorkEmitter.ServerDefaultFeedBudgetMs, 2500);
+        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2500);
 
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("1. Review PR #42 — Priya is waiting");
@@ -663,6 +664,24 @@ public class ClaudeHookCommandTests {
         await Assert.That(body["next_work"]).IsNull();
         await Assert.That(body["next_work_budget_ms"]).IsNull();
         await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
+    }
+
+    /// <summary>Every clock read moves time on, so a budget taken from an earlier read than the
+    /// POST's own would come out larger than the POST's timeout less the reserve.</summary>
+    [Test, NotInParallel]
+    public async Task the_next_work_budget_is_the_post_timeout_less_the_reserve() {
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var time = new TickingTimeProvider(TimeSpan.FromMilliseconds(3));
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
+            clock: new HookClock(time));
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        var postTimeout = time.TimerAtSend!.Value;
+        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>())
+            .IsEqualTo((int)Math.Floor((postTimeout - NextWorkEmitter.FeedRequestReserve).TotalMilliseconds));
     }
 
     /// <summary>The same ack that renders above renders nothing, and neither field is sent, when
@@ -1341,6 +1360,7 @@ public class ClaudeHookCommandTests {
         public   TimeSpan       HoldOnPost  { get; set; } = TimeSpan.Zero;
         public   string?        RespondJson { get; set; }
         readonly HttpStatusCode _postStatus;
+        HookClock?              _clock;
 
         // The memory-index endpoint is served over real HTTP, not by the stub handler above: the
         // memory lane builds its own authenticated client rather than borrowing the hook's, so a
@@ -1385,6 +1405,7 @@ public class ClaudeHookCommandTests {
                 : Resolutions.Of(profile, serverUrl: _memoryServer.Url);
             Spool = new HookSpool(_spoolPath, time: TimeProvider.System);
             Client = new HttpClient(new StubHandler(async (req, ct) => {
+                if (req.Method == HttpMethod.Post) (_clock?.Time as TickingTimeProvider)?.MarkSend();
                 var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync(ct);
                 var path = req.RequestUri!.AbsolutePath;
                 Sent.Add($"{path}|{body}");
@@ -1401,10 +1422,11 @@ public class ClaudeHookCommandTests {
         /// bounded by the same clock a test measures elapsed time on; <paramref name="elapsed"/>
         /// freezes the budget partway into its ceiling instead, for the paths that give up on the
         /// arithmetic alone.</summary>
-        public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default) {
+        public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default, HookClock? clock = null) {
             StubMemoryServer();
 
-            var clock = elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
+            clock ??= elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
+            _clock = clock;
 
             return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin));
@@ -1454,6 +1476,38 @@ public class ClaudeHookCommandTests {
             Client.Dispose();
             _memoryServer.Stop();
             _home.Dispose();
+        }
+    }
+
+    /// <summary>A fake clock that moves on by <paramref name="tick"/> at every read, and records the
+    /// due time of the last timer created on the thread that sends the POST — the POST's own
+    /// timeout, since nothing yields between creating it and calling the handler.</summary>
+    sealed class TickingTimeProvider(TimeSpan tick) : TimeProvider {
+        readonly FakeTimeProvider _inner = new();
+
+        [ThreadStatic] static TimeSpan? t_lastTimer;
+
+        public TimeSpan? TimerAtSend { get; private set; }
+
+        public void MarkSend() => TimerAtSend = t_lastTimer;
+
+        public override long TimestampFrequency => _inner.TimestampFrequency;
+
+        public override long GetTimestamp() {
+            var now = _inner.GetTimestamp();
+            _inner.Advance(tick);
+            return now;
+        }
+
+        public override DateTimeOffset GetUtcNow() {
+            var now = _inner.GetUtcNow();
+            _inner.Advance(tick);
+            return now;
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) {
+            t_lastTimer = dueTime;
+            return _inner.CreateTimer(callback, state, dueTime, period);
         }
     }
 
