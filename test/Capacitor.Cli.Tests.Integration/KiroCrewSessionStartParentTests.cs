@@ -125,8 +125,10 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         SeedSubagent(withSessionId: false);
 
         await UnderCrew(spawnedByCrew: false, async () => {
+            // Late enough that a slow runner's first lookup still precedes it, and inside the Crew wait,
+            // so a hook that wrongly waited would find the record.
             var late = Task.Run(async () => {
-                await Task.Delay(300);
+                await Task.Delay(1200);
                 Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId: true));
             });
 
