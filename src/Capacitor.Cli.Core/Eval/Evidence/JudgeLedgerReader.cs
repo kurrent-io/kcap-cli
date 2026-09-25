@@ -3,12 +3,14 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
 public static class JudgeLedgerReader {
-    /// <summary>Reads a ledger another process may still be appending to; a final line torn by a kill is ignored.</summary>
+    /// <summary>Reads a ledger another process may still be appending to; a final line torn by a kill is ignored. A call is
+    /// written before the footer that counts it, so calls a kill left after the last footer are added to its totals.</summary>
     public static JudgeLedger Read(string path) {
         JudgeLedgerHeader? header = null;
         JudgeLedgerFooter? footer = null;
         var pages = new List<JudgeLedgerPage>();
         var calls = new List<JudgeLedgerCall>();
+        var after = 0;
 
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
@@ -21,13 +23,20 @@ public static class JudgeLedgerReader {
                 switch (e.Str("kind")) {
                     case "header": header = ReadHeader(e); break;
                     case "page":   pages.Add(ReadPage(e)); break;
-                    case "call":   calls.Add(ReadCall(e)); break;
-                    case "footer": footer = ReadFooter(e); break;
+                    case "call":   calls.Add(ReadCall(e)); after++; break;
+                    case "footer": footer = ReadFooter(e); after = 0; break;
                 }
             }
         }
+        if (footer is not null && after > 0) footer = Extend(footer, calls[^after..]);
         return new JudgeLedger(header, pages, calls, footer);
     }
+
+    static JudgeLedgerFooter Extend(JudgeLedgerFooter footer, IReadOnlyList<JudgeLedgerCall> uncounted) => footer with {
+        ToolCalls      = footer.ToolCalls + uncounted.Count(c => c.Outcome != JudgeLedgerOutcomes.NotExecuted),
+        DeliveredBytes = footer.DeliveredBytes + uncounted.Sum(c => (long)c.Bytes),
+        StopReason     = uncounted.LastOrDefault(c => c.StopReason is not null)?.StopReason ?? footer.StopReason
+    };
 
     public static JudgeLedgerPage ReadPage(JsonElement e) => new(
         (int)e.GetProperty("seq").GetInt64(), e.GetProperty("handle").GetString()!, e.GetProperty("tool").GetString()!,

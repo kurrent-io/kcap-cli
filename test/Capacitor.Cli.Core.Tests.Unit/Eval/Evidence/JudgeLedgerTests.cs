@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>The ledger and run file round-trip every field; the last footer wins; a torn final line is ignored; and the
+/// <summary>The ledger and run file round-trip every field; the last footer wins; calls a kill left after it extend its totals; a torn final line is ignored; and the
 /// derived delivery sets are what coverage and cite expansion read.</summary>
 public class JudgeLedgerTests {
     [TempDir] public required TempDir Tmp { get; init; }
@@ -87,5 +87,24 @@ public class JudgeLedgerTests {
         if (!OperatingSystem.IsWindows())
             await Assert.That(File.GetUnixFileMode(ctx.RunFilePath(1))).IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
         await Assert.That(() => ctx.WriteRunFile(1, file)).Throws<IOException>();
+    }
+
+    [Test]
+    public async Task Calls_after_the_last_footer_extend_its_totals() {
+        var path = Tmp.PathTo("q1.ledger.jsonl");
+        using (var w = JudgeLedgerWriter.Create(path, new JudgeLedgerHeader("run", "q", "v1", Budgets, null, T0))) {
+            w.Append(Page(1, "p1"));
+            w.Append(new JudgeLedgerCall(1, "read_events", "{}", JudgeLedgerOutcomes.Executed, null, null, 100));
+            w.Append(new JudgeLedgerFooter(1, 100, null, [], T0.AddMinutes(1)));
+            w.Append(Page(2, "p2"));
+            w.Append(new JudgeLedgerCall(2, "read_events", "{}", JudgeLedgerOutcomes.Executed, null, null, 40));
+            w.Append(new JudgeLedgerCall(3, "read_events", "{}", JudgeLedgerOutcomes.Refused, "scope_moved", "scope moved", 0));
+        }
+
+        var ledger = JudgeLedgerReader.Read(path);
+
+        await Assert.That(ledger.ToolCalls).IsEqualTo(3);
+        await Assert.That(ledger.DeliveredBytes).IsEqualTo(140);
+        await Assert.That(ledger.StopReason).IsEqualTo("scope_moved");
     }
 }
