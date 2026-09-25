@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -80,6 +81,10 @@ public sealed class ClaudeHookCommand(
             source         = node?["source"]?.GetValue<string>();
             agentId        = node?["agent_id"]?.GetValue<string>();
             toolUseId      = node?["tool_use_id"]?.GetValue<string>();
+
+            // Ahead of both arms below, since each claims the new session before it posts.
+            if (node is JsonObject hook && PreviousSession.Stamp(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
+                body = hook.ToJsonString();
         } catch { }
 
         var budget = clock.Budget(Ceiling(command));
@@ -675,26 +680,23 @@ public sealed class ClaudeHookCommand(
                 return 0;
             }
 
-            // Advertise the coordination-notices capability so the server MAY return work-overlap
-            // notices to render below (next to the memory index). Injected into a SEPARATE postBody,
-            // never `body`: `body` is what the transient-failure and ordering-guard paths spool, and a
-            // replay is a catch-up, not a live render — a spooled capability would let the server mark
-            // notices delivered that the replay can never inject (they stay in the bell/Slack and reach
-            // the next LIVE session-start instead). Live-only by construction: `kcap import` posts
-            // /hooks/session-start/{vendor} with origin=historical and never reaches here. Suppressed by
-            // the disable_coordination_notices opt-out, read from the EFFECTIVE profile (honoured for
-            // KCAP_URL users too, unlike the memory read above). Fail-open.
+            // The coordination-notices and next-work capabilities go on postBody only, never on the
+            // spooled `body`: a replay renders nothing, so a spooled capability would let the server
+            // mark notices delivered, or run the feed, for output no agent ever sees. Each opt-out is
+            // read from the effective profile, which also covers KCAP_URL users. The feed's guidance
+            // names kcap-workitems tools, so without them it is neither requested nor rendered.
             var coordinationNoticesDisabled = activeProfile?.DisableCoordinationNotices is true;
-            var postBody = body;
-            if (!coordinationNoticesDisabled) {
+            var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true
+                                           || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses);
+            JsonNode? capabilityNode = null;
+            if (!coordinationNoticesDisabled || !nextWorkDisabled) {
                 try {
-                    var node = JsonNode.Parse(body);
-                    if (node is not null) {
-                        node["coordination_notices"] = CoordinationNoticesEmitter.CapabilityVersion;
-                        postBody                      = node.ToJsonString();
-                    }
+                    capabilityNode = JsonNode.Parse(body);
+                    if (capabilityNode is not null && !coordinationNoticesDisabled)
+                        capabilityNode["coordination_notices"] = AotJsonString(CoordinationNoticesEmitter.CapabilityVersion);
                 } catch {
                     // Best effort — never fail the hook building the capability field.
+                    capabilityNode = null;
                 }
             }
 
@@ -716,11 +718,27 @@ public sealed class ClaudeHookCommand(
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
             var remaining = budget.Remaining;
+
+            // The feed budget comes from the same snapshot the POST is bounded by, so it can never
+            // promise the server more time than the POST will wait.
+            var postBody = body;
+            if (capabilityNode is not null) {
+                try {
+                    if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(remaining) is { } feedBudgetMs) {
+                        capabilityNode["next_work"]           = AotJsonString(NextWorkEmitter.CapabilityVersion);
+                        capabilityNode["next_work_budget_ms"] = feedBudgetMs;
+                    }
+                    postBody = capabilityNode.ToJsonString();
+                } catch {
+                    // Best effort — never fail the hook building the capability field.
+                }
+            }
+
             HttpResponseMessage? resp = null;
             try {
                 if (remaining > TimeSpan.Zero) {
-                    // postBody carries the coordination-notices capability; the spool below uses the
-                    // capability-free `body` so a replay never claims notices it cannot render.
+                    // postBody carries the live-only capabilities; the spool below uses the
+                    // capability-free `body` so a replay never claims what it cannot render.
                     using var content = new StringContent(postBody, Encoding.UTF8, "application/json");
                     resp = await client.PostOnceAsync($"{Url}/hooks/session-start", content, clock.Time, remaining, CancellationToken.None);
                 }
@@ -776,13 +794,11 @@ public sealed class ClaudeHookCommand(
 
             if (responseNode is not null) {
                 try {
-                    // The EFFECTIVE profile (the `activeProfile` resolved above), not
-                    // profiles.Resolution.Profile, which is null whenever --server-url or KCAP_URL
-                    // wins — so the resolution-only read silently ignored disable_session_guidelines
-                    // for every KCAP_URL user (the same defect the memory adapters already fixed).
-                    // Scoped to guidelines here; the memory read above keeps its existing behaviour.
+                    // The effective profile, not profiles.Resolution.Profile: the latter is null
+                    // whenever --server-url or KCAP_URL wins, which would ignore the opt-out.
                     var disabled        = activeProfile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
+                    var nextWorkFragment = NextWorkEmitter.BuildFragment(responseNode, nextWorkDisabled);
                     // update_check=false opts out of ALL kcap update nudging, including the
                     // in-agent one — skip emission entirely rather than let a server that still
                     // sends `version` sneak the fragment past a locally-disabled preference.
@@ -810,7 +826,7 @@ public sealed class ClaudeHookCommand(
                     var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Claude, harnesses);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge,
+                        lessonsFragment, nextWorkFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge,
                         firstRunNotice);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
@@ -1223,4 +1239,9 @@ public sealed class ClaudeHookCommand(
     /// </summary>
     static bool CurrentSessionHasBacklog(HookSpool spool, string? sid) =>
         sid is not null && spool.HasBacklog(sid);
+
+    // Under NativeAOT a string assigned into a JsonObject throws for want of type metadata (only
+    // bool/int/double have a reflection-free path), and the capability block's catch would then
+    // silently drop every capability; a parsed JSON string node avoids the metadata lookup.
+    static JsonNode AotJsonString(string value) => JsonNode.Parse($"\"{JsonEncodedText.Encode(value)}\"")!;
 }

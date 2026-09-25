@@ -176,6 +176,8 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
             "disable_first_run_notice" => throw new ArgumentException($"Invalid value for disable_first_run_notice: '{value}'. Must be true or false."),
             "disable_workitems_nudge" when bool.TryParse(value, out var b) => profile with { DisableWorkItemsNudge = b },
             "disable_workitems_nudge" => throw new ArgumentException($"Invalid value for disable_workitems_nudge: '{value}'. Must be true or false."),
+            "disable_nextwork_nudge" when bool.TryParse(value, out var b) => profile with { DisableNextWorkNudge = b },
+            "disable_nextwork_nudge" => throw new ArgumentException($"Invalid value for disable_nextwork_nudge: '{value}'. Must be true or false."),
             "disable_plans_nudge" when bool.TryParse(value, out var b) => profile with { DisablePlansNudge = b },
             "disable_plans_nudge" => throw new ArgumentException($"Invalid value for disable_plans_nudge: '{value}'. Must be true or false."),
             "disable_harness_nudge" when bool.TryParse(value, out var b) => profile with { DisableHarnessNudge = b },
@@ -220,6 +222,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
         Console.Error.WriteLine("  default_visibility          Default session visibility (private, project, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_workitems_nudge     Skip injecting the work-items nudge at SessionStart (true/false)");
+        Console.Error.WriteLine("  disable_nextwork_nudge      Skip injecting the next-work list at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_first_run_notice    Skip the one-shot notice in the first session after setup (true/false)");
         Console.Error.WriteLine("  disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_harness_nudge       Skip new-harness setup nudges (in-session + CLI stderr) (true/false)");

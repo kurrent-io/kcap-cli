@@ -29,7 +29,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly HashSet<string> _pageRequests = new(StringComparer.Ordinal);
     readonly AvaloniaList<PullRequestChoice> _choices = [];
     readonly List<PullRequestLinkDto> _sessionItems = [];
-    readonly List<PullRequestLinkDto> _fallbackItems = [];
+    /// Lifecycles the card has read for this session's PRs: the server's list carries none, so an
+    /// overview is what tells a merged PR from an open one.
+    readonly Dictionary<PullRequestSubjectDto, string> _lifecycles = [];
     // A subject, not WhenAnyValue: that needs ReactiveUI's global init, which a headless test run does not reliably prime first.
     readonly BehaviorSubject<bool> _hasPullRequest = new(false);
     readonly ITimer _timer;
@@ -55,6 +57,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     bool _overviewPending;
     bool _queuedRefresh;
     bool _stopped;
+    string? _worktree;
     bool _disposed;
     bool _legacy;
     bool _hasListed;
@@ -77,7 +80,10 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool HasReaderNote => _readerNote is not null;
     public bool ShowsInstallTool => _readerNote?.InstallUrl is not null;
     public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
-    public bool IsReading => _refreshing || _overviewPending || _pageRequests.Count > 0;
+    public bool IsReading => _refreshing || _queuedRefresh || _overviewPending || _pageRequests.Count > 0;
+    bool _userRefresh;
+    /// Progress for a refresh someone asked for; the background poll reads silently.
+    public bool ShowsRefreshing => _userRefresh && IsReading;
     public bool HasChoice => _selected is not null;
     public bool HasPullRequest => _choices.Any(choice => choice.IsAvailable);
     public IObservable<bool> HasPullRequestChanges => _hasPullRequest;
@@ -147,6 +153,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(dto => {
             if (_disposed || dto is null) return;
             _branch = dto.Branch;
+            // The presented checkout, not the snapshot: a borrowed reviewer's snapshot is detached,
+            // so only BorrowedFrom still has the branch live discovery matches.
+            _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
             CancelReads();
             _session = id;
@@ -155,13 +164,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _selected = null;
             _explicitSelection = false;
             _positions.Clear();
+            _lifecycles.Clear();
             ClearProtected();
             _stopped = false;
             _hasListed = false;
             _lastRefresh = null;
             SetNotice("Loading pull requests…");
             RequestRefresh();
-            if (_fallbackItems.Count > 0) ApplyChoices(listed: false);
         }).DisposeWith(_subscriptions);
         signInCompleted?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
             if (_session is null || _disposed) return;
@@ -189,7 +198,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         RequestRefresh();
     }
     /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
-    public void Refresh() => RequestRefresh(manual: true);
+    public void Refresh() { _userRefresh = true; RequestRefresh(manual: true); Notify(); }
     /// On a legacy or unsupported capability the reader would open onto a notice and nothing else,
     /// so a caller with a PR in hand opens its URL instead.
     public bool CanOpenReader => HasPullRequest && !_legacy;
@@ -207,20 +216,12 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public void OpenSource() {
         if (_selected is { IsAvailable: true } choice) LinkPolicy.Open(_opener, PrLink(choice.Link.Url, choice.Subject));
     }
-    /// Work-item PR links the session list has not admitted. Reads route to the local `gh` reader
-    /// first, which needs no session admission; only the server reader would refuse them.
-    public void OfferFallbackLinks(IReadOnlyList<PullRequestLinkDto> links) {
-        if (_disposed) return;
-        _fallbackItems.Clear();
-        _fallbackItems.AddRange(links);
-        if (_session is not null) ApplyChoices(listed: _hasListed);
-    }
     public void SetReaderVisible(bool visible) {
         if (_readerVisible == visible) return;
         _readerVisible = visible;
         if (!visible && _grace) _graceSection = null;
         Notify();
-        if (visible && CanReveal && _section != "overview" && CurrentSection is null) RequestPage(null);
+        if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
     }
     void Select(PullRequestChoice? choice, bool explicitSelection = false) {
         if (_disposed || choice?.Subject == _selected?.Subject) return;
@@ -248,8 +249,15 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _openReader();
         _readerVisible = true;
         Notify();
-        if (section != "overview" && CurrentSection is null) RequestPage(null);
+        if (section != "overview") LoadOrRefreshSection();
     }
+    /// A tab the poll skipped while it was hidden comes back stale; the summary stops trusting rows
+    /// older than 30s, so rows kept past that would disagree with it.
+    void LoadOrRefreshSection() {
+        if (CurrentSection is not { } state) RequestPage(null);
+        else if (state.Completed is not { } at || _time.GetUtcNow().UtcDateTime - at >= RowsFreshFor) RequestPage(null, refresh: true);
+    }
+    internal static readonly TimeSpan RowsFreshFor = TimeSpan.FromSeconds(30);
     void Tick() {
         if (_disposed || !_foreground) return;
         if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) EnterGrace();
@@ -287,6 +295,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         else _retired.Add(_cancel);
         _cancel = new();
         _refreshing = false; _overviewPending = false; _pageRequests.Clear(); _lastOverview = null;
+        // The once-only head recovery belongs to the read just cancelled. A later subject
+        // has to be allowed its own, or its section stops instead of reloading.
+        _headRestartSection = null;
     }
     void Start(Func<CancellationToken, Task<Action>> operation, Action settled) {
         var generation = _generation;

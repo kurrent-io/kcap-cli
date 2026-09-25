@@ -41,9 +41,14 @@ static class WorkItemsNudgeEmitter {
                                   string? codexConfigPath = null) {
         if (optedOut) return null;
         if (!plan.Allows(PlanFeature.WorkItems)) return null;
-        if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath)) return null;
+        if (!ToolsRegisteredFor(harness, harnesses, codexConfigPath)) return null;
         return Build(sessionId);
     }
+
+    /// <summary>Whether the harness has the <c>kcap-workitems</c> tools to call — fail closed, so
+    /// guidance naming them is never shown to an agent that cannot reach them.</summary>
+    public static bool ToolsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null) =>
+        McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath);
 
     public static string? Build(string? sessionId) {
         if (string.IsNullOrWhiteSpace(sessionId)) return null;

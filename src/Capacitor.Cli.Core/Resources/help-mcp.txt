@@ -38,6 +38,8 @@ Resolution order per tool call: tool `pr` arg → startup `--owner/--repo/--pr`
 
 Options for judge:
   --session <sessionId>   Bind the judge to a specific session
+  --run <path>            Serve the evidence tools for one prepared question
+                          (written by kcap eval and the daemon; not for manual use)
 
 mcp sessions:
   Exposes four tools — search_sessions, get_session_summary,
@@ -108,13 +110,14 @@ mcp memory:
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
 mcp workitems:
-  Exposes thirteen tools for agents to attach the current session (and its
+  Exposes fourteen tools for agents to attach the current session (and its
   continuation chain) to an SDLC work item, to DECLARE that work item's
   structure — its breakdown (parent -> parts) and dependencies (blocks /
-  blocked-by) — to record the loose ends a session leaves unfinished, and to
-  dismiss or restore next-work suggestions. Breakdown and relations are
-  declared, never inferred, so an item whose structure nobody declares has an
-  empty topology. Requires `kcap login`.
+  blocked-by) — to record the loose ends a session leaves unfinished, to
+  read what the user should work on next, and to dismiss or restore
+  next-work suggestions. Breakdown and relations are declared, never
+  inferred, so an item whose structure nobody declares has an empty
+  topology. Requires `kcap login`.
 
     Tools:
       declare_work_item        Attach the current session to a work item by
@@ -122,6 +125,10 @@ mcp workitems:
                                 title (exactly one of the four).
       get_session_work_items   List the work items the current session is
                                 attached to.
+      get_next_work            What the user should work on next, ranked, each
+                                row with a because-clause and evidence
+                                (repo_hash defaults to this checkout; limit
+                                default 5, max 20).
       declare_loose_end        Record one concrete piece of unfinished work
                                 (text) in the user's next-work ledger; the
                                 server refuses none-class text.

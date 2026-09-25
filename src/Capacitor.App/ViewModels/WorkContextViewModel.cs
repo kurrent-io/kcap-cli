@@ -8,6 +8,7 @@ using System.Reactive.Subjects;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.WorkItems;
@@ -32,10 +33,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             if (value is not null) {
                 value.PropertyChanged += OnPullRequestChanged;
                 _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
-                OfferFallbacks();
             }
             this.RaisePropertyChanged(nameof(PullRequests));
-            RaiseRelated();
+            RebuildLinks();
         }
     }
     public bool ShowsLegacyLinks => PullRequests is null;
@@ -175,6 +175,13 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             RaiseRelated();
     }
 
+    string? _reportedBranch;
+    // The daemon reports the branch the worktree was cut on; HEAD knows a switch made since.
+    void ResolveBranch() {
+        var branch = GitRepository.CurrentBranch(WorktreePath) ?? _reportedBranch;
+        Branch = string.IsNullOrWhiteSpace(branch) ? "—" : branch;
+    }
+
     bool _isStale;
     public bool IsStale { get => _isStale; private set => this.RaiseAndSetIfChanged(ref _isStale, value); }
     bool _isReading;
@@ -183,8 +190,15 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         private set {
             if (_isReading == value) return;
             this.RaiseAndSetIfChanged(ref _isReading, value);
+            if (!value) IsRefreshing = false;
             this.RaisePropertyChanged(nameof(RefreshTip));
         }
+    }
+    bool _isRefreshing;
+    /// A refresh someone asked for, still reading; the 30s poll runs without it.
+    public bool IsRefreshing {
+        get => _isRefreshing;
+        private set { if (_isRefreshing != value) { this.RaiseAndSetIfChanged(ref _isRefreshing, value); this.RaisePropertyChanged(nameof(RefreshTip)); } }
     }
     bool _hasSession;
     // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedAgentId.
@@ -205,7 +219,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     /// Tip on the header refresh control — bound with ShowOnDisabled so a greyed icon still explains itself.
     public string RefreshTip => HasSession
-        ? IsReading ? "Refreshing…" : "Refresh"
+        ? IsRefreshing ? "Refreshing…" : "Reloads the work item, its pull requests and the plan"
         : "Waiting for the session ID";
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
@@ -237,9 +251,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         // the click with no feedback.
         RefreshCommand = ReactiveCommand.Create(
             () => {
+                ResolveBranch();
                 PullRequests?.Refresh();
                 Plan.Refresh();
                 if (_current is null) return;
+                IsRefreshing = true;
                 if (_current.IsReading) _current.RefreshPending = true;
                 else StartRead(_current);
             },
@@ -284,7 +300,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         Worktree = checkout is null
             ? "—"
             : CheckoutLabel.Format(checkout, dto.RepoPath ?? "") + (dto.WorkLocation == WorkLocationText.Borrowed ? " · borrowed" : "");
-        Branch = string.IsNullOrWhiteSpace(dto.Branch) ? "—" : dto.Branch;
+        _reportedBranch = dto.Branch;
+        ResolveBranch();
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
@@ -337,8 +354,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: work context: {ex.Message}");
         }
+        // A queued refresh keeps the pane reading, so the click that queued it keeps its progress.
+        if (lease.RefreshPending) { StartRead(lease); return; }
         IsReading = false;
-        if (lease.RefreshPending) StartRead(lease);
     }
 
     void OnTick() {

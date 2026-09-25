@@ -19,5 +19,11 @@ public sealed record ProfileRow(string Name, string? ServerUrl, bool IsActive, b
 
     public bool CanSignIn => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.NoSignInNeeded);
 
+    // Offered on a signed-in row too: the status is graded offline, so a credential the server has
+    // since rejected still reads as signed in, and the button is the only way to replace it.
+    public string SignInLabel => Status is ProfileCredentialStatus.SignedIn or ProfileCredentialStatus.Expired
+        ? "Sign in again"
+        : "Sign in";
+
     public bool CanRemove => !IsActive && !IsBound && Name != ProfileConfig.DefaultName;
 }

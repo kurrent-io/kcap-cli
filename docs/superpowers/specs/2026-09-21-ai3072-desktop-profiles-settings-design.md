@@ -221,7 +221,9 @@ Each row is a card in the Notifications tab's pattern:
   exception is logged and no other row is affected);
 - row actions as `kcapChip` buttons: **Sign in** on every row with a valid
   server and no `None` stamp, whatever its status, because a locally complete
-  verdict can hide a refresh the server now rejects; **Switch** on every row
+  verdict can hide a refresh the server now rejects — labelled **Sign in
+  again** on a signed-in or expired row, so it reads as re-authentication
+  rather than contradicting the status beside it; **Switch** on every row
   other than the bound one; **Remove** on a removable row.
 
 A row with no valid server has no action; its hint says to use Add or

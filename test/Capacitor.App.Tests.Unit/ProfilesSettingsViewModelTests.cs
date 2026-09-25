@@ -174,4 +174,19 @@ public class ProfilesSettingsViewModelTests {
         await Assert.That(opened).IsFalse();
         await Assert.That(vm.Message).IsEqualTo("Could not read the profile configuration.");
     });
+
+    /// A row that already holds a credential for its server offers "Sign in again": beside a
+    /// "Signed in" status a bare "Sign in" reads as a contradiction, not as re-authentication.
+    [Test]
+    public Task Sign_in_reads_as_again_on_a_row_that_holds_a_credential() => AvaloniaSession.RunOnUiAsync(async () => {
+        var vm = Make(await Seed());
+        await vm.RefreshAsync();
+
+        var rows = vm.Rows.ToDictionary(r => r.Name);
+        await Assert.That(rows["work"].SignInLabel).IsEqualTo("Sign in again");
+        await Assert.That(rows["stale"].SignInLabel).IsEqualTo("Sign in again");
+        await Assert.That(rows["other"].SignInLabel).IsEqualTo("Sign in");
+        await Assert.That(rows["moved"].SignInLabel).IsEqualTo("Sign in");
+        await Assert.That(rows["bad"].SignInLabel).IsEqualTo("Sign in");
+    });
 }

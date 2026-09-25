@@ -119,6 +119,78 @@ sealed class KiroHookCommand(
         }
     }
 
+    /// <summary>Crew sets this to "1" on every <c>kiro-cli</c> it launches, so it marks a session worth
+    /// waiting on; a plain Kiro session never pays the wait, even on a machine with Crew installed.</summary>
+    const string CrewSpawnedVariable = "KIROCREW_SPAWNED";
+
+    /// <summary>Longest the hook waits for Crew to record a sub-agent's session. Crew writes it about a
+    /// second after the child's first prompt, and a one-prompt sub-agent fires agentSpawn only once.</summary>
+    static readonly TimeSpan CrewParentWait = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>
+    /// The Kiro Crew session that spawned this one, or null. Waits only for a session that could still
+    /// turn out to be a sub-agent — never one Crew already maps to a chat — and never past half the
+    /// remaining budget, which the memory fetch and the POST still need. The file reads run behind that
+    /// same deadline, so a slow or oversized Crew tree is abandoned rather than awaited.
+    /// </summary>
+    /// <summary>Longest the hook spends naming this session's Crew sub-agents.</summary>
+    static readonly TimeSpan CrewChildrenLookup = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// The Crew sub-agents this session spawned. A one-prompt child can be recorded before its parent,
+    /// and Crew delivers each child's result to the parent as a new prompt, so naming the children
+    /// here is what links such a child. Abandoned at its deadline like the parent lookup.
+    /// </summary>
+    async Task<IReadOnlyList<string>> ResolveCrewChildrenAsync(string dashedSessionId, HookBudget budget) {
+        var kiro = harnesses.Of<KiroHarness>();
+        if (!kiro.Crew.IsPresent()) return [];
+
+        var bound = TimeSpan.FromTicks(Math.Min(CrewChildrenLookup.Ticks, budget.Remaining.Ticks / 4));
+        if (bound <= TimeSpan.Zero) return [];
+
+        try {
+            return await Task.Run(() => KiroCrewParentResolver.ChildrenOf(kiro.Crew, kiro.Paths.SessionsDir, dashedSessionId))
+                .WaitAsync(bound, budget.Time);
+        } catch (TimeoutException) {
+            return [];
+        }
+    }
+
+    async Task<string?> ResolveCrewParentAsync(string dashedSessionId, HookBudget budget) {
+        var kiro = harnesses.Of<KiroHarness>();
+        if (!kiro.Crew.IsPresent()) return null;
+
+        var wait     = TimeSpan.FromTicks(Math.Min(CrewParentWait.Ticks, budget.Remaining.Ticks / 2));
+        var deadline = budget.Time.GetUtcNow() + wait;
+
+        async Task<(string? Parent, bool IsChat)> LookUp() {
+            var remaining = deadline - budget.Time.GetUtcNow();
+            if (remaining <= TimeSpan.Zero) return (null, false);
+
+            var lookup = Task.Run(() => (
+                KiroCrewParentResolver.ParentOf(kiro.Crew, kiro.Paths.SessionsDir, dashedSessionId),
+                KiroCrewParentResolver.IsChatSession(kiro.Crew, dashedSessionId)));
+
+            try {
+                return await lookup.WaitAsync(remaining, budget.Time);
+            } catch (TimeoutException) {
+                return (null, false);
+            }
+        }
+
+        var (parent, isChat) = await LookUp();
+        if (parent is not null || isChat) return parent;
+        if (Environment.GetEnvironmentVariable(CrewSpawnedVariable) != "1") return null;
+
+        while (budget.Time.GetUtcNow() < deadline) {
+            await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Time);
+
+            if ((await LookUp()).Parent is { } found) return found;
+        }
+
+        return null;
+    }
+
     public async Task<int> Handle(TextReader stdin, string[] args) {
         // The installer always passes --event; default to agentSpawn so a
         // hand-rolled hook entry without it still records.
@@ -219,6 +291,15 @@ sealed class KiroHookCommand(
         // file may not exist yet — the next agentSpawn (fires every prompt) backfills.
         if (ReadKiroModel(harnesses.Of<KiroHarness>().Paths, dashedSessionId) is { } model) {
             forwarded["model"] = model;
+        }
+
+        if (await ResolveCrewParentAsync(dashedSessionId, budget) is { } parent) {
+            forwarded["parent_session_id"] = parent;
+        }
+
+        // Newest first, so a cap on one payload keeps the children most likely still unlinked.
+        if (await ResolveCrewChildrenAsync(dashedSessionId, budget) is { Count: > 0 } children) {
+            forwarded["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(children.Take(KiroCrewParentResolver.MaxChildrenPerStart));
         }
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);

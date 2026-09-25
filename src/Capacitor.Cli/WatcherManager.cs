@@ -276,6 +276,10 @@ public sealed partial class WatcherManager(
             bool    skipTitle         = false,
             string  vendor            = "claude"
         ) {
+        if (agentId is null && AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
+         && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session);
+
         if (IsWatcherAlive(key)) {
             return; // fast path: no lock needed to observe an already-healthy watcher.
         }
@@ -464,18 +468,21 @@ public sealed partial class WatcherManager(
                 lineIndex++;
             }
 
-            if (newLines.Count == 0) {
-                await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: no new lines to send");
+            var commits = (await GitHook.ObservationAsync(config, sessionId, agentId, cwd: null, time)).Collect();
+
+            if (newLines.Count == 0 && commits.Pending is not { Length: > 0 }) {
+                await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: nothing new to send");
 
                 return;
             }
 
             var batch = new TranscriptBatch {
-                SessionId   = sessionId,
-                AgentId     = agentId,
-                Lines       = [..newLines],
-                LineNumbers = [..newLineNumbers],
-                Vendor      = vendor == "claude" ? null : vendor
+                SessionId       = sessionId,
+                AgentId         = agentId,
+                Lines           = [..newLines],
+                LineNumbers     = [..newLineNumbers],
+                Vendor          = vendor == "claude" ? null : vendor,
+                ObservedCommits = commits.Pending,
             };
 
             try {

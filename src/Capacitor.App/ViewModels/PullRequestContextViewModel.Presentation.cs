@@ -14,8 +14,8 @@ public sealed partial class PullRequestContextViewModel {
     public bool HasNumberLabel => NumberLabel.Length > 0;
     public string ProviderLabel => _selected?.Subject.Provider switch { "github" => "GitHub", "gitlab" => "GitLab", _ => "Source" };
     public bool CanOpenSource => _selected is { IsAvailable: true };
-    /// Host exit beside status/repo once the card has settled — overview, legacy list, or unlisted refusal.
-    public bool ShowsOpenSource => CanOpenSource && (CanDisplay || IsLegacy || Notice == UnlistedNotice);
+    /// Host exit beside status/repo once the card has settled on an overview or a legacy list.
+    public bool ShowsOpenSource => CanOpenSource && (CanDisplay || IsLegacy);
     public bool IsChecks => _section == "checks";
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
@@ -58,7 +58,7 @@ public sealed partial class PullRequestContextViewModel {
             if (!CanDisplay) return new("");
             var checks = _sections.GetValueOrDefault("checks");
             if (checks is { Coverage: "complete", Stopped: false, Total.Kind: "exact", Completed: { } completed }
-                && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < TimeSpan.FromSeconds(30)
+                && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < RowsFreshFor
                 && completed >= _overview?.Checks?.Availability.FetchedAt && checks.Pages.Sum(page => page.Rows.Length) == checks.Total.Value) {
                 var rows = checks.Pages.SelectMany(page => page.Rows).ToArray();
                 if (rows.Length == 0) return new("No checks reported", Detail: "No checks were reported for this commit.");

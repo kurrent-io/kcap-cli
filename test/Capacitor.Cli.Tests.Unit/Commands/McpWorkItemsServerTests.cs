@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -9,7 +11,10 @@ public class McpWorkItemsServerTests {
 
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpWorkItemsServer Server() =>
-        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup, TimeProvider.System);
+        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup,
+            new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
+
+    static ValueTask<string?> NoRepo() => ValueTask.FromResult<string?>(null);
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 
@@ -104,7 +109,7 @@ public class McpWorkItemsServerTests {
         var tools = McpWorkItemsServer.BuildToolsList();
 
         await Assert.That(tools.Select(t => t.Name).ToArray()).IsEquivalentTo(new[] {
-            "declare_work_item", "get_session_work_items", "declare_loose_end",
+            "declare_work_item", "get_session_work_items", "get_next_work", "declare_loose_end",
             "declare_work_breakdown", "retract_work_breakdown",
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
@@ -187,6 +192,20 @@ public class McpWorkItemsServerTests {
 
         await Assert.That(tool.InputSchema.Required).IsEquivalentTo(new[] { "text" });
         await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "text", "session_id" });
+    }
+
+    [Test]
+    public async Task Server_instructions_send_what_next_questions_to_get_next_work_first() {
+        await Assert.That(McpWorkItemsServer.ServerInstructions)
+            .Contains("call get_next_work first and answer from it, citing its because-clauses");
+    }
+
+    [Test]
+    public async Task Get_next_work_takes_only_optional_repo_hash_and_limit() {
+        var tool = McpWorkItemsServer.BuildToolsList().Single(t => t.Name == "get_next_work");
+
+        await Assert.That(tool.InputSchema.Required).IsEmpty();
+        await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "repo_hash", "limit" });
     }
 
     [Test]
@@ -482,7 +501,7 @@ public class McpWorkItemsServerTests {
             }
         };
 
-        await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x");
+        await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", NoRepo);
 
         return handler;
     }
@@ -612,7 +631,7 @@ public class McpWorkItemsServerTests {
             }
         };
 
-        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x");
+        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", NoRepo);
 
         await Assert.That(response).Contains("\"isError\":true");
         await Assert.That(response).Contains("not_presented");
@@ -658,7 +677,7 @@ public class McpWorkItemsServerTests {
             ["params"] = new JsonObject { ["name"] = "not_a_real_tool", ["arguments"] = new JsonObject() }
         };
 
-        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x");
+        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", NoRepo);
 
         await Assert.That(McpTelemetry.ResponseOk(response)).IsFalse();
     }
@@ -676,7 +695,7 @@ public class McpWorkItemsServerTests {
             }
         };
 
-        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x");
+        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", NoRepo);
 
         await Assert.That(McpTelemetry.ResponseOk(response)).IsTrue();
     }

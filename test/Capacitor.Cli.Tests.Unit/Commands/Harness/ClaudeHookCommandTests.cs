@@ -27,6 +27,8 @@ public class ClaudeHookCommandTests {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    [TempDir] public required TempDir Tmp { get; init; }
+
     const string Sid = "9dc2775376454e4691ecc2d69973c152";
 
     /// <summary>A hook clock frozen <paramref name="elapsed"/> into its ceiling, so a near-exhausted
@@ -561,6 +563,143 @@ public class ClaudeHookCommandTests {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(stdout).IsEqualTo("");
         await Assert.That(fx.SpoolFiles.Any()).IsTrue(); // still durably spooled for retry
+    }
+
+    const string NextWorkAck =
+        """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
+
+    [Test, NotInParallel]
+    public async Task session_start_advertises_next_work_and_renders_it_after_the_guidelines() {
+        using var fx = new Fixture(Config.Root) {
+            RespondJson = """{"top_clusters":[{"text":"Run the fast suite first","category":"pattern"}],"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"t","arms_not_current":[]}}"""
+        };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
+                clock: new HookClock(new FakeTimeProvider())));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var posted     = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var postedBody = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(postedBody["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2500);
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains("1. Review PR #42 — Priya is waiting");
+        await Assert.That(ctx.IndexOf("<next-work-data>", StringComparison.Ordinal))
+            .IsGreaterThan(ctx.IndexOf("## Known patterns", StringComparison.Ordinal));
+    }
+
+    /// <summary>The same response that renders above renders nothing under the opt-out, and the
+    /// capability is never sent — so the absence is the opt-out's doing, not the fixture's.</summary>
+    [Test, NotInParallel]
+    public async Task disable_nextwork_nudge_suppresses_both_the_capability_and_the_render() {
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisableNextWorkNudge = true }) { RespondJson = NextWorkAck };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]).IsNull();
+        await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(stdout).DoesNotContain("next-work-data");
+        await Assert.That(stdout).DoesNotContain("Review PR #42");
+    }
+
+    [Test, NotInParallel]
+    public async Task a_failed_session_start_posts_the_next_work_capability_but_never_spools_it() {
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""");
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+
+        var files = fx.SpoolFiles.ToList();
+        await Assert.That(files.Count).IsEqualTo(1);
+        var spooled = JsonNode.Parse(JsonNode.Parse((await File.ReadAllTextAsync(files[0])).Split('\n')[0])!["body"]!.GetValue<string>())!;
+        await Assert.That(spooled["session_id"]!.GetValue<string>()).IsEqualTo(Sid);
+        await Assert.That(spooled["next_work"]).IsNull();
+        await Assert.That(spooled["next_work_budget_ms"]).IsNull();
+    }
+
+    /// <summary>The budget is what the hook has left at the capability, less the POST's reserve —
+    /// read off a frozen clock, so the value is exact.</summary>
+    [Test, NotInParallel]
+    public async Task the_next_work_budget_is_the_remaining_hook_time_less_the_post_reserve() {
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
+            elapsed: TimeSpan.FromMilliseconds(500));
+
+        // 5s ceiling − 500ms elapsed − 1.5s hook safety = 3000ms remaining; less the 1000ms reserve.
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2000);
+    }
+
+    /// <summary>Below reserve + the server's default feed budget neither field is sent, so a server
+    /// that ignores the budget cannot spend its default past the POST's deadline; coordination
+    /// notices are unaffected.</summary>
+    [Test, NotInParallel]
+    public async Task too_little_hook_time_withholds_the_next_work_capability_and_its_budget() {
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+
+        // 3500 − 1001 = 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
+            elapsed: TimeSpan.FromMilliseconds(1001));
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]).IsNull();
+        await Assert.That(body["next_work_budget_ms"]).IsNull();
+        await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
+    }
+
+    /// <summary>Every clock read moves time on, so a budget taken from an earlier read than the
+    /// POST's own would come out larger than the POST's timeout less the reserve.</summary>
+    [Test, NotInParallel]
+    public async Task the_next_work_budget_is_the_post_timeout_less_the_reserve() {
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var time = new TickingTimeProvider(TimeSpan.FromMilliseconds(3));
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
+            clock: new HookClock(time));
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        var postTimeout = time.TimerAtSend!.Value;
+        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>())
+            .IsEqualTo((int)Math.Floor((postTimeout - NextWorkEmitter.FeedRequestReserve).TotalMilliseconds));
+    }
+
+    [Test, NotInParallel]
+    public async Task without_the_workitems_mcp_server_next_work_is_neither_requested_nor_rendered() {
+        using var fx = new Fixture(Config.Root) { RespondJson = NextWorkAck };
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]).IsNull();
+        await Assert.That(body["next_work_budget_ms"]).IsNull();
+        await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(stdout).DoesNotContain("next-work-data");
+        await Assert.That(stdout).DoesNotContain("Review PR #42");
     }
 
     // ── SessionStart coordination-notices lane: capability advertise + response render ───────
@@ -1219,6 +1358,7 @@ public class ClaudeHookCommandTests {
         public   TimeSpan       HoldOnPost  { get; set; } = TimeSpan.Zero;
         public   string?        RespondJson { get; set; }
         readonly HttpStatusCode _postStatus;
+        HookClock?              _clock;
 
         // The memory-index endpoint is served over real HTTP, not by the stub handler above: the
         // memory lane builds its own authenticated client rather than borrowing the hook's, so a
@@ -1263,6 +1403,7 @@ public class ClaudeHookCommandTests {
                 : Resolutions.Of(profile, serverUrl: _memoryServer.Url);
             Spool = new HookSpool(_spoolPath, time: TimeProvider.System);
             Client = new HttpClient(new StubHandler(async (req, ct) => {
+                if (req.Method == HttpMethod.Post) (_clock?.Time as TickingTimeProvider)?.MarkSend();
                 var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync(ct);
                 var path = req.RequestUri!.AbsolutePath;
                 Sent.Add($"{path}|{body}");
@@ -1279,10 +1420,11 @@ public class ClaudeHookCommandTests {
         /// bounded by the same clock a test measures elapsed time on; <paramref name="elapsed"/>
         /// freezes the budget partway into its ceiling instead, for the paths that give up on the
         /// arithmetic alone.</summary>
-        public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default) {
+        public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default, HookClock? clock = null) {
             StubMemoryServer();
 
-            var clock = elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
+            clock ??= elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
+            _clock = clock;
 
             return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin));
@@ -1304,6 +1446,20 @@ public class ClaudeHookCommandTests {
             _memoryServer.Given(Request.Create().WithPath("/api/memories/index").UsingGet()).RespondWith(response);
         }
 
+        /// <summary>Installs the kcap plugin under the fixture's home with a bundled .mcp.json naming
+        /// <paramref name="serverName"/>, which is what makes that server registered for Claude.</summary>
+        public void RegisterClaudeMcpServer(string serverName) {
+            var claude      = Path.Combine(_tmpHome, ".claude");
+            var installPath = Path.Combine(claude, "plugins", "cache", "kcap", "kcap", "1.0.0");
+            Directory.CreateDirectory(installPath);
+            File.WriteAllText(Path.Combine(installPath, ".mcp.json"),
+                """{"mcpServers":{""" + System.Text.Json.JsonSerializer.Serialize(serverName) + """:{"command":"kcap","args":["mcp"]}}}""");
+            File.WriteAllText(Path.Combine(claude, "plugins", "installed_plugins.json"),
+                "{ \"plugins\": { \"kcap@kcap\": [ { \"scope\": \"user\", \"installPath\": " +
+                System.Text.Json.JsonSerializer.Serialize(installPath) + ", \"version\": \"1.0.0\" } ] } }");
+            File.WriteAllText(Path.Combine(claude, "settings.json"), "{ \"enabledPlugins\": { \"kcap@kcap\": true } }");
+        }
+
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath) : [];
 
@@ -1318,6 +1474,38 @@ public class ClaudeHookCommandTests {
             Client.Dispose();
             _memoryServer.Stop();
             _home.Dispose();
+        }
+    }
+
+    /// <summary>A fake clock that moves on by <paramref name="tick"/> at every read, and records the
+    /// due time of the last timer created on the thread that sends the POST — the POST's own
+    /// timeout, since nothing yields between creating it and calling the handler.</summary>
+    sealed class TickingTimeProvider(TimeSpan tick) : TimeProvider {
+        readonly FakeTimeProvider _inner = new();
+
+        [ThreadStatic] static TimeSpan? t_lastTimer;
+
+        public TimeSpan? TimerAtSend { get; private set; }
+
+        public void MarkSend() => TimerAtSend = t_lastTimer;
+
+        public override long TimestampFrequency => _inner.TimestampFrequency;
+
+        public override long GetTimestamp() {
+            var now = _inner.GetTimestamp();
+            _inner.Advance(tick);
+            return now;
+        }
+
+        public override DateTimeOffset GetUtcNow() {
+            var now = _inner.GetUtcNow();
+            _inner.Advance(tick);
+            return now;
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) {
+            t_lastTimer = dueTime;
+            return _inner.CreateTimer(callback, state, dueTime, period);
         }
     }
 
