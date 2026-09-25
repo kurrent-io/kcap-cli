@@ -193,6 +193,36 @@ public class PullRequestPresentationTests {
         await Assert.That(tops.Distinct().Count()).IsEqualTo(1);
     });
 
+    /// Check rows are a snapshot; the summary follows the overview. While a check runs the next
+    /// poll must reload the rows, or the summary turns green beside rows still saying pending.
+    [Test]
+    public Task Pending_check_rows_reload_on_the_next_poll() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        var outcome = "pending";
+        h.Source.PageItem = section => section == "checks"
+            ? new PullRequestCheckDto { Id = "check", Availability = "available", Name = "build", Outcome = outcome, HeadSha = new string('a', 40) } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Outcome).IsEqualTo("pending");
+        outcome = "success";
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.SingleOrDefault()?.Outcome == "success", what: "check rows reloaded");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks passing");
+    });
+
+    /// A click inside the poll's gap used to wait it out with nothing on screen.
+    [Test]
+    public Task A_refresh_click_shows_progress_at_once_and_runs_within_seconds() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        var lists = h.Source.Lists;
+        h.Model.Refresh();
+        await Assert.That(h.Model.IsReading).IsTrue();
+        h.Time.Advance(TimeSpan.FromSeconds(4));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Lists > lists && !h.Model.IsReading, what: "manual refresh ran");
+    });
+
     [Test]
     public Task Row_details_leave_out_what_the_source_did_not_report() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();

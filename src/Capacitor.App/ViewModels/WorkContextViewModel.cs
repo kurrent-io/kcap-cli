@@ -8,6 +8,7 @@ using System.Reactive.Subjects;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.WorkItems;
@@ -175,6 +176,13 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             RaiseRelated();
     }
 
+    string? _reportedBranch;
+    // The daemon reports the branch the worktree was cut on; HEAD knows a switch made since.
+    void ResolveBranch() {
+        var branch = GitRepository.CurrentBranch(WorktreePath) ?? _reportedBranch;
+        Branch = string.IsNullOrWhiteSpace(branch) ? "—" : branch;
+    }
+
     bool _isStale;
     public bool IsStale { get => _isStale; private set => this.RaiseAndSetIfChanged(ref _isStale, value); }
     bool _isReading;
@@ -205,7 +213,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     /// Tip on the header refresh control — bound with ShowOnDisabled so a greyed icon still explains itself.
     public string RefreshTip => HasSession
-        ? IsReading ? "Refreshing…" : "Refresh"
+        ? IsReading ? "Refreshing…" : "Reloads the work item, its pull requests and the plan"
         : "Waiting for the session ID";
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
@@ -237,6 +245,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         // the click with no feedback.
         RefreshCommand = ReactiveCommand.Create(
             () => {
+                ResolveBranch();
                 PullRequests?.Refresh();
                 Plan.Refresh();
                 if (_current is null) return;
@@ -284,7 +293,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         Worktree = checkout is null
             ? "—"
             : CheckoutLabel.Format(checkout, dto.RepoPath ?? "") + (dto.WorkLocation == WorkLocationText.Borrowed ? " · borrowed" : "");
-        Branch = string.IsNullOrWhiteSpace(dto.Branch) ? "—" : dto.Branch;
+        _reportedBranch = dto.Branch;
+        ResolveBranch();
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));

@@ -55,6 +55,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     bool _overviewPending;
     bool _queuedRefresh;
     bool _stopped;
+    string? _worktree;
     bool _disposed;
     bool _legacy;
     bool _hasListed;
@@ -77,7 +78,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool HasReaderNote => _readerNote is not null;
     public bool ShowsInstallTool => _readerNote?.InstallUrl is not null;
     public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
-    public bool IsReading => _refreshing || _overviewPending || _pageRequests.Count > 0;
+    public bool IsReading => _refreshing || _queuedRefresh || _overviewPending || _pageRequests.Count > 0;
     public bool HasChoice => _selected is not null;
     public bool HasPullRequest => _choices.Any(choice => choice.IsAvailable);
     public IObservable<bool> HasPullRequestChanges => _hasPullRequest;
@@ -147,6 +148,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(dto => {
             if (_disposed || dto is null) return;
             _branch = dto.Branch;
+            _worktree = dto.WorktreePath;
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
             CancelReads();
             _session = id;
