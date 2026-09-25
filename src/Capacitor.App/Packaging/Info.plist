@@ -26,6 +26,8 @@
   <string>15.0</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.developer-tools</string>
+  <key>NSUserNotificationAlertStyle</key>
+  <string>alert</string>
   <key>NSHumanReadableCopyright</key>
   <string>© Kurrent, Inc.</string>
 </dict>

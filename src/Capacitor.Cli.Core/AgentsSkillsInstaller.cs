@@ -6,10 +6,10 @@ namespace Capacitor.Cli.Core;
 /// legacy <c>~/.codex/skills/kcap-*</c> folders left by prior installer versions.
 /// </summary>
 /// <remarks>
-/// The target is a parameter because there are three: the agent-agnostic <c>~/.agents/skills/</c>,
-/// plus <c>~/.kiro/skills/</c> and <c>~/.gemini/skills/</c> for the two vendors that read their own
-/// tree instead. So <see cref="SourceNames"/> decides what all three receive — a skill added here
-/// reaches Kiro and Antigravity as well.
+/// The target is a parameter because there are several: the agent-agnostic <c>~/.agents/skills/</c>,
+/// plus <c>~/.kiro/skills/</c>, <c>~/.kiro/crew/skills/</c> and <c>~/.gemini/skills/</c> for the
+/// vendors that read their own tree instead. So <see cref="SourceNames"/> decides what every target
+/// receives — a skill added here reaches Kiro, Kiro Crew and Antigravity as well.
 /// </remarks>
 public static class AgentsSkillsInstaller {
     /// <summary>

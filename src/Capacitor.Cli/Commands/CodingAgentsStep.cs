@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Instructions;
 using Spectre.Console;
@@ -56,6 +57,8 @@ internal static class CodingAgentsStep {
             string  OpenCodeInstructionsPath = "",
             string  KiroMcpPath = "",
             string  KiroSkillsDir = "",
+            string  KiroCrewHookScript = "",
+            string  KiroCrewSkillsDir = "",
             string  PiMcpExtensionPath = "",
             string  PiAgentsMdPath = ""
         );
@@ -87,7 +90,8 @@ internal static class CodingAgentsStep {
             Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterKiroMcp = null,
             Func<string /*mcpExtensionPath*/, bool>?                 InstallPiMcp = null,
-            Func<AgentInstructionsWriter.Change>?                    InstallPiInstructions = null
+            Func<AgentInstructionsWriter.Change>?                    InstallPiInstructions = null,
+            Func<KiroCrewHookInstaller.Outcome>?                     InstallKiroCrewHook = null
         );
 
     internal record Result(
@@ -116,7 +120,9 @@ internal static class CodingAgentsStep {
             bool KiroMcpRegistered = false,
             bool KiroSkillsInstalled = false,
             bool PiMcpInstalled = false,
-            bool PiInstructionsInstalled = false
+            bool PiInstructionsInstalled = false,
+            bool KiroCrewHookInstalled = false,
+            bool KiroCrewSkillsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -126,7 +132,7 @@ internal static class CodingAgentsStep {
         /// as agents are added (consumers like SetupCommand's restart tip key off this).
         /// </summary>
         internal bool AnyHooksInstalled =>
-            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled;
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || KiroCrewHookInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled;
     }
 
     /// <summary>
@@ -180,6 +186,8 @@ internal static class CodingAgentsStep {
         // Kiro's skills live in ~/.kiro/skills (Kiro doesn't read ~/.agents/skills) and steer it toward
         // the kcap MCP tools — gate on the user having SELECTED Kiro, like the MCP registration.
         var kiroSkillsInstalled   = HandleKiroSkills(options, paths, installers, writeLine, kiroSelected);
+        var kiroCrewHookInstalled = HandleKiroCrewHook(options, paths, installers, writeLine, kiroSelected);
+        var kiroCrewSkillsInstalled = HandleKiroCrewSkills(options, paths, installers, writeLine, kiroSelected);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, writeLine, out var piSelected, out var piTools);
         // Pi has no JSON MCP config: the "MCP" is a second extension file (kcap-mcp.ts) and the
         // instructions live in the independent ~/.pi/agent/AGENTS.md — gate both on the user having
@@ -237,7 +245,9 @@ internal static class CodingAgentsStep {
                 KiroMcpRegistered: kiroMcpRegistered,
                 KiroSkillsInstalled: kiroSkillsInstalled,
                 PiMcpInstalled: piMcpInstalled,
-                PiInstructionsInstalled: piInstructionsInstalled
+                PiInstructionsInstalled: piInstructionsInstalled,
+                KiroCrewHookInstalled: kiroCrewHookInstalled,
+                KiroCrewSkillsInstalled: kiroCrewSkillsInstalled
             )
         );
     }
@@ -333,6 +343,81 @@ internal static class CodingAgentsStep {
 
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Installs kcap's Kiro Crew hook script when Crew is present (the installer is null otherwise).
+    /// Crew regenerates its agent profiles and keeps only scripts from <c>~/.kiro/hooks</c>, so
+    /// kcap.json's hook never reaches a Crew session. Honours <c>--skip-kiro-hooks</c>, which declines
+    /// capture.
+    /// </summary>
+    static bool HandleKiroCrewHook(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (installers.InstallKiroCrewHook is null || !kiroSelected || options.SkipKiro) return false;
+
+        var script = Markup.Escape(paths.KiroCrewHookScript);
+
+        switch (installers.InstallKiroCrewHook()) {
+            case KiroCrewHookInstaller.Outcome.Written:
+                writeLine($"  [green]✓[/] Kiro Crew hook installed ([dim]{script}[/])");
+                writeLine("  [dim]  Note: restart Kiro Crew so its agents pick it up.[/]");
+
+                return true;
+            case KiroCrewHookInstaller.Outcome.Unchanged:
+                writeLine("  [dim]· Kiro Crew hook already installed — no change needed[/]");
+
+                return false;
+            case KiroCrewHookInstaller.Outcome.Unowned:
+                writeLine($"  [yellow]⚠[/] {script} exists and was not written by kcap — left alone, so Kiro Crew sessions are not recorded.");
+
+                return false;
+            case KiroCrewHookInstaller.Outcome.Unsupported:
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not write the Kiro Crew hook to {script}.");
+
+                return false;
+        }
+    }
+
+    /// <summary>Installs kcap's skills into Kiro Crew's own skills root, which is all Crew reads.</summary>
+    static bool HandleKiroCrewSkills(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (string.IsNullOrEmpty(paths.KiroCrewSkillsDir) || !kiroSelected || options.SkipKiroSkills) return false;
+
+        var dst = paths.KiroCrewSkillsDir;
+
+        if (installers.AgentSkillsCurrent?.Invoke(dst) == true) {
+            writeLine("  [dim]· Kiro Crew skills already up to date — no change needed[/]");
+
+            return false;
+        }
+
+        if (paths.PluginDir is null) {
+            writeLine("  [yellow]⚠[/] Kiro Crew skills could not be installed (plugin directory not found).");
+
+            return false;
+        }
+
+        if (!installers.InstallAgentSkills(Path.Combine(paths.PluginDir, "skills"), dst)) {
+            writeLine($"  [yellow]⚠[/] Kiro Crew skills could not be copied to {Markup.Escape(dst)}");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Kiro Crew skills installed ([dim]{Markup.Escape(dst)}[/])");
+
+        return true;
     }
 
     /// <summary>

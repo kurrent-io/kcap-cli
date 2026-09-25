@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
@@ -1924,6 +1925,59 @@ public class CodingAgentsStepTests {
         await Assert.That(dsts).Contains("/fake/.kiro/skills");          // Kiro skills → ~/.kiro/skills
         await Assert.That(dsts).DoesNotContain("/fake/.agents/skills");  // NOT the agent-agnostic dir Kiro can't read
         await Assert.That(result.KiroSkillsInstalled).IsTrue();
+    }
+
+    // ── Kiro Crew (its own hooks dir and skills root) ──────────────────────────
+
+    static Paths WithCrew(Paths paths) => paths with {
+        KiroCrewHookScript = "/fake/.kiro/hooks/kcap-spawn.sh",
+        KiroCrewSkillsDir  = "/fake/.kiro/crew/skills"
+    };
+
+    [Test]
+    public async Task Kiro_crew_gets_the_hook_and_skills_when_present() {
+        var calls     = new InstallerCalls();
+        var hookCalls = 0;
+        var options   = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected  = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+        var installers = calls.AsInstallers() with {
+            InstallKiroCrewHook = () => { hookCalls++; return KiroCrewHookInstaller.Outcome.Written; }
+        };
+
+        var result = await RunAsync(options, detected, WithCrew(TestPaths()), installers, prompt: _ => true, writeLine: new Sink().Write);
+
+        await Assert.That(hookCalls).IsEqualTo(1);
+        await Assert.That(result.KiroCrewHookInstalled).IsTrue();
+        await Assert.That(result.AnyHooksInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).Contains("/fake/.kiro/crew/skills");
+        await Assert.That(result.KiroCrewSkillsInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Kiro_crew_hook_honours_skip_kiro_hooks() {
+        var hookCalls = 0;
+        var options   = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: true);
+        var detected  = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+        var installers = new InstallerCalls().AsInstallers() with {
+            InstallKiroCrewHook = () => { hookCalls++; return KiroCrewHookInstaller.Outcome.Written; }
+        };
+
+        var result = await RunAsync(options, detected, WithCrew(TestPaths()), installers, prompt: _ => true, writeLine: new Sink().Write);
+
+        await Assert.That(hookCalls).IsEqualTo(0);
+        await Assert.That(result.KiroCrewHookInstalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Kiro_crew_skills_are_not_installed_without_crew() {
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: new Sink().Write);
+
+        await Assert.That(result.KiroCrewSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).DoesNotContain(d => d.Contains("crew"));
     }
 
     [Test]

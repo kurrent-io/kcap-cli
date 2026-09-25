@@ -21,4 +21,8 @@ public sealed record PullRequestLinkDto {
     public string? Title { get; init; }
     [JsonPropertyName("head_ref")]
     public string? HeadRef { get; init; }
+    /// `open`, `draft`, `merged` or `closed` when the source knows; null from a source that only
+    /// records the link, which the server's session list is.
+    [JsonPropertyName("lifecycle")]
+    public string? Lifecycle { get; init; }
 }

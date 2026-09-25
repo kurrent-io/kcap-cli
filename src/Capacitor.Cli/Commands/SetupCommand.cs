@@ -729,6 +729,7 @@ sealed class SetupCommand(
         var copilot  = harnesses.Of<CopilotHarness>().Paths;
         var pi       = harnesses.Of<PiHarness>().Paths;
         var kiro     = harnesses.Of<KiroHarness>().Paths;
+        var kiroCrew = harnesses.Of<KiroHarness>().Crew;
         var codex    = harnesses.Of<CodexHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
         var cursor   = harnesses.Of<CursorHarness>().Paths;
@@ -761,6 +762,8 @@ sealed class SetupCommand(
             OpenCodeInstructionsPath: opencode.AgentsMd,
             KiroMcpPath:          kiro.SettingsMcpJson,
             KiroSkillsDir:        kiro.SkillsDir,
+            KiroCrewHookScript:   kiroCrew.SpawnHookScript,
+            KiroCrewSkillsDir:    kiroCrew.IsPresent() ? kiroCrew.SkillsDir : "",
             PiMcpExtensionPath:   pi.KcapMcpExtension,
             PiAgentsMdPath:       pi.AgentsMd);
 
@@ -794,6 +797,10 @@ sealed class SetupCommand(
             InstallOpenCodeInstructions: () => AgentInstructionsWriter.Write(
                 opencode.AgentsMd, KcapAgentInstructions.Body),
             RegisterKiroMcp:          () => HarnessMcpProjections.Kiro.Register(kiro.SettingsMcpJson, home),
+            InstallKiroCrewHook:      kiroCrew.IsPresent()
+                ? () => KiroCrewHookInstaller.Install(
+                    kiroCrew.SpawnHookScript, binaries.Resolve("kcap") is { } kcap ? Path.GetDirectoryName(kcap) : null)
+                : null,
             RegisterGeminiMcp:        () => HarnessMcpProjections.Gemini.Register(gemini.SettingsJson, home),
             InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
                 gemini.GeminiMd, KcapAgentInstructions.Body),
@@ -809,6 +816,9 @@ sealed class SetupCommand(
 
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
+
+        if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
+            WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
 
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
@@ -1517,7 +1527,7 @@ sealed class SetupCommand(
             new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time),
             new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
-            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, router, time),
+            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, harnesses.Of<KiroHarness>().Crew, router, time),
             new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir, router, time),
             new OpenCodeImportSource(
                     Path.Combine(opencode.DataDir, "opencode.db"),

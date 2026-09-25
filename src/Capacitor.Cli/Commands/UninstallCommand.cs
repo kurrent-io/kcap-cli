@@ -151,6 +151,8 @@ public sealed class UninstallCommand(
         // hooks file).
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--skills"]) != 0) hadFailures = true;
 
+        new GitHookInstaller(home).Remove();
+
         // Belt-and-braces marker cleanup. These hooks installers delete their
         // marker only when JSON entries changed; if the user manually pruned the
         // entries earlier (or installed via a pre-marker build that later
