@@ -4,7 +4,8 @@ using Capacitor.Cli.Core.Eval.Evidence;
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
 /// <summary>The orientation names the scope, lists its completeness, seeds only whole pages under o-handles, stays within its
-/// bytes, leaves a sentence where the summary is unavailable, and reports a moved scope instead of building.</summary>
+/// bytes, leaves a sentence where the summary is unavailable or unreadable, counts an unreadable outline as unfinished, and
+/// reports a moved scope instead of building.</summary>
 public class EvidenceOrientationBuilderTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
@@ -86,5 +87,18 @@ public class EvidenceOrientationBuilderTests : IDisposable {
 
         await Assert.That(o.FailedStatus).IsEqualTo(409);
         await Assert.That(o.Pages).IsEmpty();
+    }
+
+    [Test]
+    public async Task An_unreadable_outline_or_summary_is_left_out_instead_of_failing_the_build() {
+        _stub.Route("GET", "evidence-turns", 200, "<html>not json</html>");
+        _stub.Route("GET", "evidence-calls/summary", 200, "[1,2]");
+
+        var o = await Builder().BuildAsync(Scope(), EvidenceBudgets.OrientationBytes, 65_536, CancellationToken.None);
+
+        await Assert.That(o.FailedStatus).IsNull();
+        await Assert.That(o.Pages.Select(p => p.Tool)).IsEquivalentTo(["list_sources"]);
+        await Assert.That(o.UnfinishedOutlines).IsEqualTo(1);
+        await Assert.That(o.Text.Contains(EvidenceOrientationBuilder.SummaryUnavailable)).IsTrue();
     }
 }

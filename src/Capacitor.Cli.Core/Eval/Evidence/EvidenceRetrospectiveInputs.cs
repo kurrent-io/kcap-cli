@@ -6,7 +6,8 @@ using Capacitor.Cli.Core.Eval.Contracts;
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
 /// <summary>The retrospective's evidence: a scope and coverage summary, then every ref the judges cited re-read under the bound
-/// scope and cut to a bounded excerpt. An unreadable ref leaves a fixed line; a moved scope is returned as a 409.</summary>
+/// scope and cut to a bounded excerpt. An unreadable ref, or an answer that does not parse, leaves a fixed line; a moved scope
+/// is returned as a 409.</summary>
 public sealed class EvidenceRetrospectiveInputs(EvidenceReadClient reader) {
     public const int    ExcerptChars     = 1_500;
     public const string NoLongerReadable = "[no longer readable]";
@@ -68,14 +69,15 @@ public sealed class EvidenceRetrospectiveInputs(EvidenceReadClient reader) {
 
         var card = await reader.GetAsync("evidence-body", [("token", token), ("ref", reference), ("field", "card"), ("offset", "0"), ("max_bytes", ExcerptChars.ToString(Inv))], ct);
         if (card.Status == 409) return ("", 409);
-        return (card.IsSuccess ? Cut(Content(card.Body)) : NoLongerReadable, null);
+        return (card.IsSuccess && Content(card.Body) is { } content ? Cut(content) : NoLongerReadable, null);
     }
 
     async Task<(string Excerpt, int? Failed)> EventsExcerptAsync(string token, string reference, CancellationToken ct) {
         var page = await reader.GetAsync("evidence-events", [("token", token), ("ref", reference)], ct);
         if (page.Status == 409) return ("", 409);
         if (!page.IsSuccess) return (NoLongerReadable, null);
-        using var doc = JsonDocument.Parse(page.Body);
+        using var doc = TryParse(page.Body);
+        if (doc is null) return (NoLongerReadable, null);
         var texts = doc.RootElement.Arr("entries") is { } entries
             ? entries.EnumerateArray().Select(e => e.Str("text") ?? e.Str("output") ?? e.Str("event_type") ?? "").ToList()
             : [];
@@ -83,16 +85,21 @@ public sealed class EvidenceRetrospectiveInputs(EvidenceReadClient reader) {
     }
 
     static string? EventsRefOf(string body, long index) {
-        using var doc = JsonDocument.Parse(body);
-        if (doc.RootElement.Arr("turns") is not { } turns) return null;
+        using var doc = TryParse(body);
+        if (doc?.RootElement.Arr("turns") is not { } turns) return null;
         foreach (var t in turns.EnumerateArray())
             if (t.Num("index") == index) return t.Str("events_ref");
         return null;
     }
 
-    static string Content(string body) {
-        using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.Str("content") ?? "";
+    static string? Content(string body) {
+        using var doc = TryParse(body);
+        return doc is null ? null : doc.RootElement.Str("content") ?? "";
+    }
+
+    static JsonDocument? TryParse(string body) {
+        try { return JsonDocument.Parse(body); }
+        catch (JsonException) { return null; }
     }
 
     static string Cut(string s) => s.Length <= ExcerptChars ? s : s[..ExcerptChars];

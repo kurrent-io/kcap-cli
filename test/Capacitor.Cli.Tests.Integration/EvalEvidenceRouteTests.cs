@@ -451,6 +451,16 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(NoRunDirectory(root)).IsTrue();
     }
 
+    /// <summary>Throws an exception no evidence reader handles on every events read, when told to.</summary>
+    sealed class ThrowingOnEvents : DelegatingHandler {
+        public bool Throws { get; init; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Throws && request.RequestUri!.AbsolutePath.EndsWith("/evidence-events", StringComparison.Ordinal)
+                ? throw new InvalidOperationException("thrown by the test handler")
+                : base.SendAsync(request, cancellationToken);
+    }
+
     [Test]
     [Arguments("cancel")]
     [Arguments("throw")]
@@ -458,14 +468,13 @@ public class EvalEvidenceRouteTests : IDisposable {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
         var (root, tmp) = TempRoot();
         using var tmpScope = tmp;
-        ServeCatalog(); ServeScope(cutoff: 1);
-        if (exit == "throw") _stub.Route("GET", "evidence-events", 200, "not json");
-        else ServeEvents("hello", "world");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
+        using var http   = new HttpClient(new ThrowingOnEvents { InnerHandler = new HttpClientHandler(), Throws = exit == "throw" });
         using var claude = Claude(Dir("c12"), Verdict("q1"), before: "sleep 5");
         using var cts = new CancellationTokenSource(exit == "cancel" ? TimeSpan.FromSeconds(1) : Timeout.InfiniteTimeSpan);
         var observer = new RecordingEvalObserver();
 
-        var result = await Run(claude, ["q1"], observer, ct: cts.Token);
+        var result = await Run(claude, ["q1"], observer, ct: cts.Token, http: http);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.Failures.Count).IsEqualTo(1);

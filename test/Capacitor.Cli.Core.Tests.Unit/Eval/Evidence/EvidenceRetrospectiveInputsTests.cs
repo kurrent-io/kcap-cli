@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Eval.Evidence;
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
 /// <summary>The retrospective's evidence is a scope summary and the cited refs re-read, ranked and bounded; an unreadable ref
-/// leaves a fixed line, a turn is read through its event window, and a moved scope is run-fatal.</summary>
+/// or an unparseable answer leaves a fixed line, a turn is read through its event window, and a moved scope is run-fatal.</summary>
 public class EvidenceRetrospectiveInputsTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
@@ -99,5 +99,20 @@ public class EvidenceRetrospectiveInputsTests : IDisposable {
         var (_, failed) = await Inputs().BuildTraceAsync(Scope(), [Assessment("q", "assessed", 2, $"{Root}@1")], 200_000, null, CancellationToken.None);
 
         await Assert.That(failed).IsEqualTo(409);
+    }
+
+    [Test]
+    [Arguments("event")]
+    [Arguments("turn")]
+    public async Task An_answer_that_does_not_parse_leaves_the_fixed_line(string form) {
+        _stub.Route("GET", "evidence-events", 200, "<html>not json</html>");
+        _stub.Route("GET", "evidence-turns", 200, "<html>not json</html>");
+        _stub.Route("GET", "evidence-body", 200, "<html>not json</html>");
+        var reference = form == "event" ? $"{Root}@1" : $"{Root}#g1t1";
+
+        var (trace, failed) = await Inputs().BuildTraceAsync(Scope(), [Assessment("q", "assessed", 2, reference)], 200_000, null, CancellationToken.None);
+
+        await Assert.That(failed).IsNull();
+        await Assert.That(trace.Contains($"{reference}: {EvidenceRetrospectiveInputs.NoLongerReadable}")).IsTrue();
     }
 }

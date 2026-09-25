@@ -5,7 +5,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
 /// <summary>A tool call's arguments land in the trace exactly where the entry's own inline arguments would: nested under
 /// that call's own <c>arguments</c>, whether they arrived inline or were resolved from a deferred body — never as a
-/// sibling key next to <c>calls</c>.</summary>
+/// sibling key next to <c>calls</c>. A successful read whose body does not parse, or whose pagination does not move forward
+/// inside the requested range, ends assembly as a failed read after that one request.</summary>
 public class EvidenceTraceAssemblerTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
@@ -68,5 +69,62 @@ public class EvidenceTraceAssemblerTests : IDisposable {
         await Assert.That(calls.GetArrayLength()).IsEqualTo(2);
         await Assert.That(calls[0].GetProperty("arguments").GetProperty("cmd").GetString()).IsEqualTo("ls");
         await Assert.That(calls[1].GetProperty("arguments").GetProperty("path").GetString()).IsEqualTo("a.txt");
+    }
+
+    // Bounds every call, so a loop that never ends fails the test instead of hanging it.
+    static CancellationToken Bounded() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
+
+    [Test]
+    [Arguments("", 0L)]
+    [Arguments("", 7L)]
+    [Arguments("abc", 0L)]
+    public async Task A_body_chunk_that_does_not_advance_is_a_failed_read(string content, long nextOffset) {
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Root, [EvidenceServerStub.EventEntry(Root, 0, null, deferText: true)]));
+        _stub.Route("GET", "evidence-body", 200, EvidenceServerStub.BodyChunk($"{Root}@0", "text", content, nextOffset: nextOffset));
+
+        var trace = await Assembler().AssembleAsync(Source(0), 400_000, Bounded());
+
+        await Assert.That(trace.Fits).IsFalse();
+        await Assert.That(trace.FailedStatus).IsEqualTo(200);
+    }
+
+    [Test]
+    [Arguments(0L, 2)]
+    [Arguments(9L, 1)]
+    [Arguments(long.MaxValue, 1)]
+    public async Task An_events_page_whose_revisions_leave_the_requested_range_is_a_failed_read(long revision, int reads) {
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Root, [EvidenceServerStub.EventEntry(Root, revision, "hi")], next: "more"));
+
+        var trace = await Assembler().AssembleAsync(Source(5), 4_000, Bounded());
+
+        await Assert.That(trace.Fits).IsFalse();
+        await Assert.That(trace.FailedStatus).IsEqualTo(200);
+        await Assert.That(trace.Reads).IsEqualTo(reads);
+    }
+
+    [Test]
+    [Arguments("evidence-events")]
+    [Arguments("evidence-body")]
+    public async Task A_successful_read_whose_body_does_not_parse_is_a_failed_read(string unreadable) {
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Root, [EvidenceServerStub.EventEntry(Root, 0, null, deferText: true)]));
+        _stub.Route("GET", "evidence-body", 200, EvidenceServerStub.BodyChunk($"{Root}@0", "text", "hi"));
+        _stub.Route("GET", unreadable, 200, "<html>not json</html>", priority: 1);
+
+        var trace = await Assembler().AssembleAsync(Source(0), 400_000, Bounded());
+
+        await Assert.That(trace.Fits).IsFalse();
+        await Assert.That(trace.FailedStatus).IsEqualTo(200);
+    }
+
+    [Test]
+    public async Task Deferred_arguments_that_are_not_json_are_a_failed_read() {
+        var entry = EvidenceServerStub.ToolCallEntry(Root, 0, [EvidenceServerStub.DeferredCall(Root, 0, 0, "Bash")]);
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Root, [entry]));
+        _stub.Route("GET", "evidence-body", 200, EvidenceServerStub.BodyChunk($"{Root}@0", "arguments", "{\"cmd\":"));
+
+        var trace = await Assembler().AssembleAsync(Source(0), 400_000, Bounded());
+
+        await Assert.That(trace.Fits).IsFalse();
+        await Assert.That(trace.FailedStatus).IsEqualTo(200);
     }
 }

@@ -6,8 +6,9 @@ namespace Capacitor.Cli.Core.Eval.Evidence;
 
 /// <summary>The one-shot fit test over the wire. An event-count lower bound decides without a read when the scope cannot fit;
 /// otherwise each available source's events stream in manifest order, every canonical body is completed, and assembly stops
-/// on the first entry past the limit or the first body that is not UTF-8 text. The writer escapes every non-ASCII character,
-/// so the trace's characters and bytes are one number.</summary>
+/// on the first entry past the limit or the first body that is not UTF-8 text. A successful read that does not parse, or whose
+/// revisions or body offsets do not move forward inside the requested range, fails assembly under its own status rather than
+/// being read again. The writer escapes every non-ASCII character, so the trace's characters and bytes are one number.</summary>
 public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string token, int pageBudgetBytes) {
     public const int MinEntryChars = 32;
     const int BodyChunkBytes = 65_536;
@@ -42,16 +43,20 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
                     [("token", token), ("ref", $"{source.SourceId}@{from}-{source.RevisionCutoff}"), ("budget_bytes", pageBudgetBytes.ToString(Inv))], ct);
                 if (!page.IsSuccess) return EvidenceTraceResult.Failed(page.Status, reads);
 
-                using var doc = JsonDocument.Parse(page.Body);
+                using var doc = TryParse(page.Body);
+                if (doc is null) return EvidenceTraceResult.Failed(page.Status, reads);
                 if (doc.RootElement.Arr("entries") is not { } entries) break;
                 long? last = null;
                 foreach (var entry in entries.EnumerateArray()) {
+                    if (entry.Num("revision") is not { } revision || revision < from || revision > source.RevisionCutoff || revision <= last)
+                        return EvidenceTraceResult.Failed(page.Status, reads);
                     var cite = JudgeCiteHandles.OneShot(k++);
                     cites[cite] = entry.Str("ref") ?? "";
 
                     var (bodies, status) = await ReadBodiesAsync(entry, limitChars - Position(w), ct);
                     if (status == NoFit) return EvidenceTraceResult.TooLarge(Position(w) + 1, reads);
                     if (status is { } failed) return EvidenceTraceResult.Failed(failed, reads);
+                    if (!ArgumentsParse(bodies)) return EvidenceTraceResult.Failed(page.Status, reads);
 
                     // Every entry after the first in its array is preceded by one comma.
                     var start = (int)Position(w) + (written++ > 0 ? 1 : 0);
@@ -59,12 +64,11 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
                     var end = Position(w);
                     if (end > limitChars) return EvidenceTraceResult.TooLarge(end, reads);
 
-                    var revision = entry.Num("revision") ?? -1;
                     detail.Add((source.SourceId, revision, start, (int)end - start));
                     last = revision;
                 }
                 // Advance past the last event returned: the page's to_revision echoes the requested end.
-                if (doc.RootElement.Str("next_cursor") is null || last is null) break;
+                if (doc.RootElement.Str("next_cursor") is null || last is null || last.Value == source.RevisionCutoff) break;
                 from = last.Value + 1;
             }
             w.WriteEndArray();
@@ -96,13 +100,16 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
                 var chunk = await reader.GetAsync("evidence-body", query, ct);
                 if (!chunk.IsSuccess) return ([], chunk.Status);
 
-                using var doc = JsonDocument.Parse(chunk.Body);
+                using var doc = TryParse(chunk.Body);
+                if (doc is null) return ([], chunk.Status);
                 if (doc.RootElement.Str("encoding") != "utf-8") return ([], NoFit);
                 var text = doc.RootElement.Str("content") ?? "";
                 charged += JsonEncodedText.Encode(text).EncodedUtf8Bytes.Length;
                 if (charged > remaining) return ([], NoFit);
                 content.Append(text);
                 if (doc.RootElement.Num("next_offset") is not { } next) break;
+                // A continuation must follow content and start past it; anything else would re-read the same chunk.
+                if (text.Length == 0 || next <= offset) return ([], chunk.Status);
                 offset = next;
             }
             remaining -= charged;
@@ -145,6 +152,20 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
             w.WriteString(ordinal is { } n ? $"{field}[{n}]" : field, content);
         }
         w.WriteEndObject();
+    }
+
+    static JsonDocument? TryParse(string body) {
+        try { return JsonDocument.Parse(body); }
+        catch (JsonException) { return null; }
+    }
+
+    static bool ArgumentsParse(List<(string Field, int? Ordinal, string Content)> bodies) {
+        foreach (var (field, _, content) in bodies) {
+            if (field != "arguments") continue;
+            using var doc = TryParse(content);
+            if (doc is null) return false;
+        }
+        return true;
     }
 
     static long Position(Utf8JsonWriter w) => w.BytesCommitted + w.BytesPending;

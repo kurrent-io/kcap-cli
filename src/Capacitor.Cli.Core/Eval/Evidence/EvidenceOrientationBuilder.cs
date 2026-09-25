@@ -45,7 +45,7 @@ public sealed class EvidenceOrientationBuilder(EvidenceReadClient reader) {
             var outline = await reader.GetAsync("evidence-turns", [("token", scope.Token), ("source", root.SourceId), ("budget_bytes", budget)], ct);
             if (outline.Status is 404 or 409) return EvidenceOrientation.Failed(outline.Status);
             var args = "{\"source\":\"" + JsonEncodedText.Encode(root.SourceId) + "\"}";
-            if (outline.IsSuccess && EvidencePageRenderer.Render(0, JudgeCiteHandles.Seeded(pages.Count), "list_turns", args, outline.Body) is var page && AddPage(page)) {
+            if (outline.IsSuccess && TryRender(JudgeCiteHandles.Seeded(pages.Count), "list_turns", args, outline.Body) is { } page && AddPage(page)) {
                 outlined   = page.Turns.Count;
                 unfinished = page.HasNext ? 1 : 0;
             } else {
@@ -56,10 +56,17 @@ public sealed class EvidenceOrientationBuilder(EvidenceReadClient reader) {
         var summary = await reader.GetAsync("evidence-calls/summary", [("token", scope.Token), ("budget_bytes", budget)], ct);
         if (summary.Status is 404 or 409) return EvidenceOrientation.Failed(summary.Status);
         if (summary.Status == 503) Add(SummaryBusy);
-        else if (!summary.IsSuccess || IndexState(summary.Body) == "unavailable") Add(SummaryUnavailable);
-        else AddPage(EvidencePageRenderer.Render(0, JudgeCiteHandles.Seeded(pages.Count), "summarize_calls", "{}", summary.Body));
+        else if (!summary.IsSuccess || IndexState(summary.Body) == "unavailable" || TryRender(JudgeCiteHandles.Seeded(pages.Count), "summarize_calls", "{}", summary.Body) is not { } rendered)
+            Add(SummaryUnavailable);
+        else AddPage(rendered);
 
         return new EvidenceOrientation(text.ToString(), pages, outlined, unfinished, null);
+    }
+
+    // A success whose body is not a JSON object is left out like an unavailable read.
+    static JudgeLedgerPage? TryRender(string handle, string tool, string args, string body) {
+        try { return EvidencePageRenderer.Render(0, handle, tool, args, body); }
+        catch (Exception e) when (e is JsonException or InvalidOperationException) { return null; }
     }
 
     static string? IndexState(string body) {
