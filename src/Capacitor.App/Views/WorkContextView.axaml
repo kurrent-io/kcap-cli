@@ -178,6 +178,10 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Opacity" Value="0.4" />
         </Style>
+        <!-- Disabled while its own refresh runs, but the spinner is the feedback and stays at full strength. -->
+        <Style Selector="Button.iconButton.refreshing:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
         <Style Selector="Border.card">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -295,6 +299,7 @@
                             <Path Classes="prExternal" Width="14" Height="14" />
                         </Button>
                         <Button x:Name="RefreshButton" Command="{Binding RefreshCommand}" Classes="iconButton"
+                                Classes.refreshing="{Binding IsRefreshing}" IsEnabled="{Binding !IsRefreshing}"
                                 VerticalAlignment="Center" ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Refresh this work">
                             <ToolTip.Tip>
                                 <StackPanel Spacing="2" MaxWidth="260">
@@ -302,9 +307,15 @@
                                     <TextBlock Text="Refresh this work" Classes="kcapTipCaption" />
                                 </StackPanel>
                             </ToolTip.Tip>
-                            <Path Width="14" Height="14" Stretch="Uniform"
-                                  Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
-                                  Classes.kcapSpinning="{Binding IsRefreshing}" Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
+                            <!-- The arrow glyph is off-centre in its box and would orbit if turned; the ring spins in place. -->
+                            <Panel Width="14" Height="14">
+                                <Path Width="14" Height="14" Stretch="Uniform" IsVisible="{Binding !IsRefreshing}"
+                                      Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
+                                      Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
+                                <Path Width="12" Height="12" Stretch="Uniform" IsVisible="{Binding IsRefreshing}" Classes.kcapSpinning="{Binding IsRefreshing}"
+                                      Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
+                                      Data="M11,2 A9,9 0 1 1 2,11" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Panel>
                         </Button>
                     </StackPanel>
                 </Grid>

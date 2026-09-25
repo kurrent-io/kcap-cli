@@ -53,7 +53,7 @@
                                      Classes.danger="{Binding ReviewStatus.IsDanger}" Classes.pending="{Binding ReviewStatus.IsPulsing}" views:PulseClock.IsActive="{Binding ReviewStatus.IsPulsing}" />
                         </StackPanel>
                     </TabStripItem>
-                    <TabStripItem Content="Activity" />
+                    <TabStripItem Content="Comments" />
                 </TabStrip>
             </Border>
             <!-- Fixed height: the Threads-only toggle is taller than the pills and would shift the content below. -->
@@ -194,7 +194,8 @@
                     </TextBlock>
                     <StackPanel Orientation="Horizontal" Spacing="7" IsVisible="{Binding ShowsRefreshing}">
                         <Path x:Name="ReadingGlyph" Width="12" Height="12" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
-                              StrokeLineCap="Round" Data="M11,2 A9,9 0 1 1 2,11" VerticalAlignment="Center" Classes.kcapSpinning="{Binding ShowsRefreshing}" />
+                              StrokeLineCap="Round" Data="M11,2 A9,9 0 1 1 2,11" VerticalAlignment="Center" Margin="0,0,0,3"
+                              Classes.kcapSpinning="{Binding ShowsRefreshing}" />
                         <TextBlock Text="Refreshing…" Classes="prNote" />
                     </StackPanel>
                 </Grid>

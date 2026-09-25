@@ -52,7 +52,7 @@ public sealed partial class PullRequestContextViewModel {
     /// A first load only: a reload keeps the rows it is replacing on screen.
     public bool IsSectionLoading => _section != "overview" && CanDisplayReader && CurrentSection is null && _pageRequests.Contains(SectionKey);
     public string LoadingNote => "Loading " + _section switch {
-        "checks" => "checks", "reviewers" => "reviewers", "reviews" => "reviews", "threads" => "threads", "thread_comments" => "replies", _ => "activity"
+        "checks" => "checks", "reviewers" => "reviewers", "reviews" => "reviews", "threads" => "threads", "thread_comments" => "replies", _ => "comments"
     } + "…";
     public string SnapshotLabel => CanDisplayReader && CurrentSection?.Completed is { } at
         ? "Updated " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
