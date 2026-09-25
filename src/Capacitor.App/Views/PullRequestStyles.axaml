@@ -20,15 +20,39 @@
             </Setter>
             <Style Selector="^:selected">
                 <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
             </Style>
             <Style Selector="^:pointerover"><Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" /></Style>
-            <Style Selector="^:focus-visible /template/ Border#FocusBorder"><Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" /></Style>
+            <Style Selector="^:focus-visible /template/ Border#FocusBorder"><Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" /></Style>
             <Style Selector="^:disabled"><Setter Property="Opacity" Value="0.55" /></Style>
         </ControlTheme>
-        <ControlTheme x:Key="PullRequestReviewTabTheme" TargetType="TabStripItem" BasedOn="{StaticResource PullRequestTabTheme}">
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Padding" Value="3,6" />
+        <!-- Second level reads as a segmented control, not another underline, so it never competes with the section tabs. -->
+        <ControlTheme x:Key="PullRequestReviewTabTheme" TargetType="TabStripItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border x:Name="FocusBorder" Background="{TemplateBinding Background}" BorderThickness="1" BorderBrush="Transparent"
+                            CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Name="PART_ContentPresenter" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Style Selector="^:pointerover">
+                <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            </Style>
+            <Style Selector="^:selected">
+                <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            </Style>
+            <Style Selector="^:focus-visible /template/ Border#FocusBorder"><Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" /></Style>
+            <Style Selector="^:disabled"><Setter Property="Opacity" Value="0.55" /></Style>
         </ControlTheme>
     </Styles.Resources>
     <Style Selector="Button.prButton">
@@ -97,13 +121,17 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Opacity" Value="0.45" />
     </Style>
-    <Style Selector="Button.prStatusButton">
-        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
-        <Setter Property="Margin" Value="0,0,8,6" />
+    <!-- Outcome dot on a section tab: hidden while the status is neutral, so only a verdict draws the eye. -->
+    <Style Selector="Ellipse.prTabDot">
+        <Setter Property="Width" Value="7" /><Setter Property="Height" Value="7" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsVisible" Value="False" />
+        <Setter Property="Fill" Value="{StaticResource KcapMutedBrush}" />
     </Style>
-    <Style Selector="Button.prStatusButton.danger"><Setter Property="Background" Value="{StaticResource KcapDangerDimBrush}" /></Style>
-    <Style Selector="Button.prStatusButton.warning"><Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" /></Style>
-    <Style Selector="Button.prStatusButton.success"><Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.success"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapSuccessBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.warning"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapWarningBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.danger"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapDangerBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.pulsing"><Setter Property="IsVisible" Value="True" /></Style>
     <Style Selector="TextBlock.prMuted">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         <Setter Property="FontSize" Value="13" />
@@ -112,11 +140,6 @@
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="TextWrapping" Value="Wrap" />
-    </Style>
-    <Style Selector="TextBlock.prSectionTitle">
-        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        <Setter Property="FontSize" Value="15.5" />
-        <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="Border.prRow">
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />

@@ -10,6 +10,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public int Overviews;
     public int Pages;
     public int TotalPages = 3;
+    public bool EmptyPages;
     public string? Failure;
     public string OverviewTitle = "Private PR";
     public Func<string, object?>? PageItem;
@@ -50,7 +51,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
         return Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,
             Coverage = "complete", HeadSha = section == "checks" ? new string('a', 40) : null, Total = new() { Kind = "exact", Value = TotalPages },
-            ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
+            ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
         }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp()));
     }
     public static PullRequestLinkDto Link(int number) => new() { Provider = "github", Host = "github.com", RepoHash = "hash",

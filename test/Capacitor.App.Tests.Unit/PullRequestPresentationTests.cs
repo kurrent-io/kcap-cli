@@ -33,8 +33,9 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.ChecksStatus.IsDanger).IsTrue();
         await Assert.That(h.Model.ChecksStatus.Detail).Contains("1 failed");
         await Assert.That(AutomationProperties.GetName(checks)).IsEqualTo("Open checks: 1 failed");
-        var headerChecks = h.Reader.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.CommandParameter, "checks"));
-        await Assert.That(AutomationProperties.GetName(headerChecks)).IsEqualTo("Open checks: 1 failed");
+        var checksTab = h.Reader.FindControl<TabStripItem>("ChecksTab")!;
+        await Assert.That(AutomationProperties.GetName(checksTab)).IsEqualTo("Checks: 1 failed");
+        await Assert.That(checksTab.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Ellipse>().Single().IsEffectivelyVisible).IsTrue();
 
         var review = h.Card.FindControl<Button>("SidebarReviewsButton")!;
         review.Command!.Execute(review.CommandParameter);
@@ -119,6 +120,65 @@ public class PullRequestPresentationTests {
         var title = row.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == new string('r', 100));
         await Assert.That(title.Bounds.Width).IsGreaterThan(0);
         await Assert.That(title.Bounds.Right).IsLessThanOrEqualTo(row.Bounds.Width);
+    });
+
+    /// A requested reviewer who has not reviewed carries no state; that is a wait, not an unknown,
+    /// and the label stays on one line beside the name at the narrow width.
+    [Test]
+    public Task A_requested_reviewer_without_a_review_reads_as_awaiting_on_one_line() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost(360);
+        h.Source.PageItem = section => section == "reviewers" ? new PullRequestReviewerDto {
+            Id = "reviewer", Availability = "available", Requested = true, Actor = new() { Id = "octocat", Kind = "user", Login = "octocat" }
+        } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("reviewers");
+        await h.SettleAsync();
+        var row = h.Reader.FindControl<ItemsControl>("ReviewerRows")!.GetVisualDescendants().OfType<Border>().Single(border => border.Classes.Contains("prRow"));
+        var text = row.GetVisualDescendants().OfType<PullRequestStatusLabel>().Single().FindControl<TextBlock>("StatusText")!;
+        await Assert.That(text.Text).IsEqualTo("Awaiting review");
+        await Assert.That(text.Bounds.Height).IsLessThanOrEqualTo(text.LineHeight + 1);
+        await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(block => block.Text == "Review re-requested").IsEffectivelyVisible).IsFalse();
+        await Assert.That(h.Model.Rows.Single().AvatarUrl).IsEqualTo("https://github.com/octocat.png?size=64");
+    });
+
+    /// A re-request after a review is the only case the subline adds anything the status does not say.
+    [Test]
+    public Task A_reviewer_asked_again_after_reviewing_shows_the_re_request_and_bots_get_no_avatar() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.PageItem = section => section == "reviewers" ? new PullRequestReviewerDto {
+            Id = "reviewer", Availability = "available", Requested = true, ReviewState = "changes_requested",
+            Actor = new() { Id = "bot", Kind = "bot", Login = "review-bot" }
+        } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("reviewers");
+        await h.SettleAsync();
+        var row = h.Reader.FindControl<ItemsControl>("ReviewerRows")!.GetVisualDescendants().OfType<Border>().Single(border => border.Classes.Contains("prRow"));
+        await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(block => block.Text == "Review re-requested").IsEffectivelyVisible).IsTrue();
+        await Assert.That(h.Model.Rows.Single().AvatarUrl).IsNull();
+    });
+
+    [Test]
+    public Task Row_details_leave_out_what_the_source_did_not_report() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Detail).IsEmpty();
+        await h.Model.ShowSectionCommand.Execute("threads");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Detail).IsEmpty();
+    });
+
+    [Test]
+    public Task An_empty_section_shows_the_empty_state_instead_of_a_page_note() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.EmptyPages = true;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("reviews");
+        await h.SettleAsync();
+        await Assert.That(h.Reader.FindControl<StackPanel>("EmptyState")!.IsEffectivelyVisible).IsTrue();
+        await Assert.That(h.Model.EmptyNote).IsEqualTo("No submitted reviews.");
+        await Assert.That(h.Model.PageNote).IsEmpty();
     });
 
     [Test]

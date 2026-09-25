@@ -36,7 +36,7 @@
                          HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
                 <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapMutedBrush}"
                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
-                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
+                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
                          HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsNeutralDisc}" />
                 <Path Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
                       Data="M3.5,6 H8.5" HorizontalAlignment="Center" VerticalAlignment="Center"
