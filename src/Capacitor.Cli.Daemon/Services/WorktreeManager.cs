@@ -506,8 +506,13 @@ public partial class WorktreeManager(
         // `reset --hard HEAD`, not `checkout -- .`: --no-checkout leaves the INDEX unpopulated too, so a
         // pathspec matches nothing. This is the step that materialises the tree, and therefore the step
         // the overrides have to guard.
-        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. overrides], "reset", "--hard", "HEAD");
+        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. overrides, .. ParallelCheckout], "reset", "--hard", "HEAD");
     }
+
+    /// Writing the tree is most of a launch's wait, and git checks files out one at a time unless told
+    /// otherwise: 0 means a worker per core. Measured on a 7.5k-file repo on Windows, 9.1 s serial,
+    /// 2.4 s parallel. Git older than 2.32 ignores the keys.
+    internal static readonly GitConfigOverride[] ParallelCheckout = [new("checkout.workers", "0")];
 
     /// <summary>
     /// The filter overrides for a context, LOGGED as a side effect.
