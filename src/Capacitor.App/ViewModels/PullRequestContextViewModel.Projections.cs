@@ -53,10 +53,6 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
     public bool HasEmptyNote => EmptyNote.Length > 0;
-    /// Only the unresolved view learns how many it left out, so the count is read from there and
-    /// still labels the toggle once it is on.
-    public string ShowResolvedLabel => CanDisplayReader && _sections.GetValueOrDefault("threads:unresolved")?.Excluded is { Kind: "exact", Value: > 0 } hidden
-        ? $"Show resolved ({hidden.Value})" : "Show resolved";
     /// A first load only: a reload keeps the rows it is replacing on screen.
     public bool IsSectionLoading => _section != "overview" && CanDisplayReader && CurrentSection is null && _pageRequests.Contains(SectionKey);
     public string LoadingNote => "Loading " + (IsSelectionLoading ? "pull request" : _section switch {
@@ -70,7 +66,7 @@ public sealed partial class PullRequestContextViewModel {
 
     static readonly string[] NotifiedProperties = [
         nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
-        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(ShowResolvedLabel), nameof(IsSectionLoading), nameof(LoadingNote), nameof(ShowsRefreshing), nameof(FetchedLabel), nameof(AccessLabel),
+        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(IsSectionLoading), nameof(LoadingNote), nameof(ShowsRefreshing), nameof(FetchedLabel), nameof(AccessLabel),
         nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved), nameof(IsSelectionLoading), nameof(ShowsLoading),
         nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
         nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(FreshnessDetail),

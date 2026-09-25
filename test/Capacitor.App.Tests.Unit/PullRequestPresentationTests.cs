@@ -390,20 +390,6 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.FreshnessDetail).IsEqualTo("Checks ran on commit aaaaaaa");
     });
 
-    /// Only the unresolved view reports what it hid; the count must survive turning the toggle on.
-    [Test]
-    public Task The_resolved_toggle_names_how_many_threads_it_hides() => RunOnUiAsync(async () => {
-        await using var h = new PullRequestViewTestHost();
-        h.Source.ResolvedHidden = 3;
-        await h.ShowAsync();
-        await h.Model.ShowSectionCommand.Execute("threads");
-        await h.SettleAsync();
-        await Assert.That(h.Model.ShowResolvedLabel).IsEqualTo("Show resolved (3)");
-        h.Model.IncludeResolved = true;
-        await h.SettleAsync();
-        await Assert.That(h.Model.ShowResolvedLabel).IsEqualTo("Show resolved (3)");
-    });
-
     [Test]
     public Task Row_details_leave_out_what_the_source_did_not_report() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();

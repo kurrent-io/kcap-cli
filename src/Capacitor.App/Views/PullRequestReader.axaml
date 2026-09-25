@@ -69,7 +69,7 @@
                     <TabStripItem Content="Replies" IsVisible="{Binding IsThreadComments}" />
                 </TabStrip>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding IsThreads}">
-                    <TextBlock Text="{Binding ShowResolvedLabel}" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="Show resolved" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                     <ToggleSwitch x:Name="ShowResolvedToggle" Classes="kcapSwitch" IsChecked="{Binding IncludeResolved, Mode=TwoWay}"
                                   IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Show resolved threads" />
                 </StackPanel>

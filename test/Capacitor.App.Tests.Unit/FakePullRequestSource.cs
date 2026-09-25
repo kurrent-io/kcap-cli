@@ -14,7 +14,6 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     /// Held open, every page read waits on it: the section stays in its first load.
     public TaskCompletionSource? PageGate;
     public string HeadSha = new string('a', 40);
-    public int ResolvedHidden;
     /// The next page read answers Restart with this reason instead of a page.
     public string? RestartNextPage;
     public string? Failure;
@@ -64,7 +63,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
         var read = new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,
             Coverage = "complete", HeadSha = section == "checks" ? HeadSha : null, Total = new() { Kind = "exact", Value = TotalPages },
-            ExcludedByFilter = new() { Kind = "exact", Value = section == "threads" && resolved == "unresolved" ? ResolvedHidden : 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
+            ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
         }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
         return PageGate is { } gate ? gate.Task.ContinueWith(_ => read, TaskScheduler.Default) : Task.FromResult(read);
     }
