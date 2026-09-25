@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using WireMock.Logging;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -56,4 +57,53 @@ public sealed class EvidenceServerStub : IDisposable {
         [.. Server.LogEntries.Where(e => e.RequestMessage.Path == (relative.StartsWith('/') ? relative : $"{Base}/{relative}"))];
 
     public void Dispose() => Server.Stop();
+
+    public static string Quote(string s) => "\"" + JsonEncodedText.Encode(s) + "\"";
+
+    public static string Descriptor(string reference, string field, long bytes, int? ordinal = null) =>
+        $"{{\"field\":{Quote(field)},\"ordinal\":{ordinal?.ToString(CultureInfo.InvariantCulture) ?? "null"},\"bytes\":{bytes},\"ref\":{Quote(reference)}}}";
+
+    public static string EventEntry(string source, long revision, string? text, string kind = "assistant_text", bool deferText = false) {
+        var r = $"{source}@{revision}";
+        var parts = new List<string> {
+            $"\"ref\":{Quote(r)}", $"\"revision\":{revision}", "\"event_type\":\"AssistantMessage\"", "\"content_type\":\"application/json\"",
+            "\"timestamp\":\"2026-09-23T12:00:00+00:00\"", $"\"kind\":{Quote(kind)}",
+            $"\"payload_body\":{Descriptor(r, "payload", 50)}", $"\"metadata_body\":{Descriptor(r, "metadata", 2)}"
+        };
+        if (deferText) parts.Add($"\"text_body\":{Descriptor(r, "text", 20_000)}");
+        else if (text is not null) parts.Add($"\"text\":{Quote(text)}");
+        return "{" + string.Join(",", parts) + "}";
+    }
+
+    public static string EventsPage(string source, IEnumerable<string> entries, string? next = null) {
+        var cursor = next is null ? "null" : Quote(next);
+        return $"{{\"scope_version\":\"v1\",\"source_id\":{Quote(source)},\"reference\":{Quote(source + "@0")},\"from_revision\":0,\"to_revision\":0,\"budget_bytes\":65536,"
+             + $"\"entries\":[{string.Join(",", entries)}],\"supplied\":{{\"items\":1,\"bytes\":null}},\"remaining\":{{\"items\":0,\"bytes\":null}},\"over_budget\":false,\"next_cursor\":{cursor}}}";
+    }
+
+    public static string TurnsPage(string source, IEnumerable<(int Index, long Start, long End)> turns, string? next = null) {
+        var rows = new List<string>();
+        foreach (var (index, start, end) in turns) {
+            var turnRef = $"{source}#g1t{index}";
+            var events  = $"{source}@{start}-{end}";
+            rows.Add($"{{\"turn_ref\":{Quote(turnRef)},\"events_ref\":{Quote(events)},\"range_state\":\"ok\",\"index\":{index},\"start_revision\":{start},\"end_revision\":{end},"
+                   + $"\"closed_reason\":\"next_prompt\",\"user_prompt\":\"do it\",\"tool_call_count\":0,\"tool_error_count\":0,\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2,"
+                   + $"\"content_empty\":false,\"card_body\":{Descriptor(turnRef, "card", 100)}}}");
+        }
+        var cursor = next is null ? "null" : Quote(next);
+        var more   = next is null ? "false" : "true";
+        return $"{{\"scope_version\":\"v1\",\"source_id\":{Quote(source)},\"from_index\":0,\"take\":50,\"budget_bytes\":65536,\"turns_available\":true,\"generation\":1,"
+             + $"\"turns\":[{string.Join(",", rows)}],\"supplied\":{{\"items\":1,\"bytes\":null}},\"has_more\":{more},\"over_budget\":false,\"next_cursor\":{cursor}}}";
+    }
+
+    public static string BodyChunk(string reference, string field, string content, long offset = 0, long? nextOffset = null, string encoding = "utf-8") {
+        var next = nextOffset?.ToString(CultureInfo.InvariantCulture) ?? "null";
+        return $"{{\"scope_version\":\"v1\",\"reference\":{Quote(reference)},\"field\":{Quote(field)},\"ordinal\":null,\"content_type\":\"text/plain\",\"encoding\":{Quote(encoding)},"
+             + $"\"total_bytes\":{offset + content.Length + (nextOffset is null ? 0 : 1)},\"offset\":{offset},\"length\":{content.Length},\"content\":{Quote(content)},\"next_offset\":{next},\"over_budget\":false}}";
+    }
+
+    public static string Summary(string indexState = "ready") =>
+        $"{{\"scope_version\":\"v1\",\"scope_complete\":true,\"scope_incomplete_reasons\":[],\"index_state\":{Quote(indexState)},\"incomplete_sources\":[],\"incomplete_sources_truncated\":false,"
+      + "\"budget_bytes\":65536,\"over_budget\":false,\"totals\":{\"calls\":3},\"by_class\":[],\"authorizations\":{},\"by_tool\":[],\"tools_truncated\":false,\"by_actor\":[],"
+      + "\"actors_truncated\":false,\"by_source\":[],\"sources_truncated\":false,\"unknown_tools\":[],\"unknown_tools_truncated\":false,\"repeated_candidates\":[],\"groups_truncated\":false}";
 }
