@@ -84,4 +84,47 @@ public class KiroImportSourceImportTests : IDisposable {
             classified[0].Status, result.Outcome, result.SentChildContent);
         await Assert.That(resolved).IsNull();
     }
+
+    /// <summary>The server takes a bounded batch of children per session-start, so a Crew chat with more
+    /// sub-agents than that names every one across repeat session-starts rather than dropping the rest.</summary>
+    [Test]
+    public async Task ImportSession_names_every_crew_child_across_batches() {
+        var root = WriteSession();
+        var crew = new KiroCrewPaths(root, null);
+
+        Directory.CreateDirectory(crew.Root);
+        await File.WriteAllTextAsync(crew.SessionMapJson, $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}"}}""");
+
+        var spawnedAt = new DateTimeOffset(2026, 6, 10, 21, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+        var children  = Enumerable.Range(0, KiroCrewParentResolver.MaxChildrenPerStart + 1).Select(_ => Guid.NewGuid().ToString("D")).ToList();
+
+        foreach (var (child, i) in children.Select((c, i) => (c, i))) {
+            var dir = Path.Combine(crew.SubagentsDir, $"s{i:D3}");
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, "state.json"),
+                $$"""{"session_id": "{{child}}", "parent_session": "dashboard:chat-1", "started": {{spawnedAt}}}""");
+        }
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":1}"""));
+        foreach (var route in new[] { "/hooks/session-start/kiro", "/hooks/set-title", "/hooks/session-end/kiro" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new KiroImportSource(Config.Root, root, crew, new GitProviderRouter(), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+        await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var starts = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/kiro").UsingPost());
+        var named  = starts.SelectMany(e => System.Text.Json.Nodes.JsonNode.Parse(e.RequestMessage.Body!)!["subagent_session_ids"]!.AsArray())
+            .Select(n => n!.GetValue<string>())
+            .ToList();
+
+        await Assert.That(starts.Count).IsEqualTo(2);
+        await Assert.That(named).IsEquivalentTo(children);
+    }
 }

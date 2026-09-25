@@ -20,6 +20,9 @@ public static class KiroCrewParentResolver {
     /// checked first.</summary>
     public const int LiveScanLimit = 256;
 
+    /// <summary>The most children the server takes on one session-start; more go out in further batches.</summary>
+    public const int MaxChildrenPerStart = 64;
+
     /// <summary>Crew's records are a few KB; anything far larger is not one and is not parsed.</summary>
     const long MaxRecordBytes = 1024 * 1024;
 
@@ -37,8 +40,8 @@ public static class KiroCrewParentResolver {
         return null;
     }
 
-    /// <summary>The dashed ids of the recorded sub-agents this session spawned. Scans at most
-    /// <see cref="LiveScanLimit"/> sub-agents.</summary>
+    /// <summary>The dashed ids of the recorded sub-agents this session spawned, newest first. Scans at
+    /// most <see cref="LiveScanLimit"/> sub-agents.</summary>
     public static IReadOnlyList<string> ChildrenOf(KiroCrewPaths crew, string sessionsDir, string sessionId) {
         if (!Guid.TryParse(sessionId, out var parent) || !crew.IsPresent()) return [];
 

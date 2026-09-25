@@ -238,11 +238,15 @@ internal sealed class KiroImportSource : IImportSource {
         _crewParents  ??= KiroCrewParentResolver.AllParents(_crew, _sessionsDir);
         _crewChildren ??= _crewParents.ToLookup(kv => Guid.Parse(kv.Value), kv => kv.Key);
 
+        // The server takes a bounded batch per session-start, so children beyond it follow in repeat
+        // session-starts, which its deterministic ids make idempotent.
+        var childBatches = new List<string[]>();
+
         if (Guid.TryParse(lifecycleId, out var self)) {
             if (_crewParents.TryGetValue(self, out var parent)) startPayload["parent_session_id"] = parent;
 
-            if (_crewChildren[self].Select(c => (JsonNode)c.ToString("D")).ToArray() is { Length: > 0 } children)
-                startPayload["subagent_session_ids"] = new JsonArray(children);
+            childBatches = _crewChildren[self].Select(c => c.ToString("D")).Chunk(KiroCrewParentResolver.MaxChildrenPerStart).ToList();
+            if (childBatches.Count > 0) startPayload["subagent_session_ids"] = new JsonArray([.. childBatches[0].Select(c => (JsonNode)c)]);
         }
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
             startPayload["default_visibility"] = visibility;
@@ -253,6 +257,14 @@ internal sealed class KiroImportSource : IImportSource {
             startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
+
+        foreach (var batch in childBatches.Skip(1)) {
+            var repeat = startPayload.DeepClone().AsObject();
+            repeat["subagent_session_ids"] = new JsonArray([.. batch.Select(c => (JsonNode)c)]);
+
+            if (!await PostSyntheticHookAsync(ctx.HttpClient, _time, ctx.BaseUrl, "session-start/kiro", repeat, ct))
+                return ImportOutcome.Failed;
+        }
 
         var startLine = classification.Status switch {
             ImportCommand.ClassificationStatus.Partial       => classification.ResumeFromLine,
