@@ -10,9 +10,18 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public int Overviews;
     public int Pages;
     public int TotalPages = 3;
+    public bool EmptyPages;
+    /// Held open, every page read waits on it: the section stays in its first load.
+    public TaskCompletionSource? PageGate;
+    public string HeadSha = new string('a', 40);
+    /// The next page read answers Restart with this reason instead of a page.
+    public string? RestartNextPage;
     public string? Failure;
     public string OverviewTitle = "Private PR";
+    public Func<PullRequestSubjectDto, string>? TitleFor;
+    public Func<PullRequestSubjectDto, string>? RollupFor;
     public Func<string, object?>? PageItem;
+    public Func<PullRequestSubjectDto, string, object?>? PageItemFor;
     public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
     public readonly List<CancellationToken> OverviewTokens = [];
     public PullRequestCapabilityKind Capability = PullRequestCapabilityKind.Supported;
@@ -30,15 +39,19 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             Subject: subject, AccessFailure: Failure, Reason: Failure == "denied" ? "github_access_denied" : "timeout"));
     }
     public PullRequestRead<PullRequestOverviewDto> Overview(PullRequestSubjectDto subject, string? title = null) => new(PullRequestReadKind.Ready,
-        new() { Title = title ?? OverviewTitle, Description = "Private description", HeadSha = new string('a', 40), Lifecycle = "open",
-            Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = "success" } },
+        new() { Title = title ?? TitleFor?.Invoke(subject) ?? OverviewTitle, Description = "Private description", HeadSha = HeadSha, Lifecycle = "open",
+            Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = RollupFor?.Invoke(subject) ?? "success" } },
         subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
     public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
         string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class {
         Pages++;
+        if (RestartNextPage is { } reason) {
+            RestartNextPage = null;
+            return Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Restart, Subject: subject, Reason: reason));
+        }
         var page = cursor is null ? 0 : int.Parse(cursor[^8..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
         var id = "item-" + page.ToString(CultureInfo.InvariantCulture);
-        object item = PageItem?.Invoke(section) ?? (section switch {
+        object item = PageItemFor?.Invoke(subject, section) ?? PageItem?.Invoke(section) ?? (section switch {
             "checks" => new PullRequestCheckDto { Id = id, Availability = "available", Name = "test", Outcome = "failure", HeadSha = new string('a', 40) },
             "reviewers" => new PullRequestReviewerDto { Id = id, Availability = "available" },
             "reviews" => new PullRequestReviewDto { Id = id, Availability = "available", Body = "Private review", State = "commented" },
@@ -47,11 +60,12 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             _ => new PullRequestCommentDto { Id = id, Availability = "available", Body = "Private comment" }
         });
         var next = page + 1 < TotalPages ? (page + 1).ToString("x64", CultureInfo.InvariantCulture) : null;
-        return Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
+        var read = new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,
-            Coverage = "complete", HeadSha = section == "checks" ? new string('a', 40) : null, Total = new() { Kind = "exact", Value = TotalPages },
-            ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
-        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp()));
+            Coverage = "complete", HeadSha = section == "checks" ? HeadSha : null, Total = new() { Kind = "exact", Value = TotalPages },
+            ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
+        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
+        return PageGate is { } gate ? gate.Task.ContinueWith(_ => read, TaskScheduler.Default) : Task.FromResult(read);
     }
     public static PullRequestLinkDto Link(int number) => new() { Provider = "github", Host = "github.com", RepoHash = "hash",
         Owner = "example", RepoName = "repo", Number = number, Url = $"https://github.com/example/repo/pull/{number}", Title = "Linked PR", HeadRef = "feature" };

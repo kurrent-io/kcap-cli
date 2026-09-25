@@ -6,39 +6,26 @@
              x:DataType="vm:PullRequestContextViewModel"
              Background="{StaticResource KcapCanvasBrush}">
     <Grid RowDefinitions="Auto,Auto,*,Auto">
-        <StackPanel Margin="24,20,24,0" Spacing="10">
+        <StackPanel Margin="24,20,24,0" Spacing="8">
             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" IsVisible="{Binding HasChoice}">
-                <views:PullRequestStatusLabel DataContext="{Binding LifecycleStatus}"
+                <views:PullRequestStatusLabel DataContext="{Binding LifecycleStatus}" VerticalAlignment="Center"
                     IsVisible="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).CanDisplay}" />
-                <TextBlock Grid.Column="1" Text="{Binding RepositoryLabel}" Classes="prMuted" TextTrimming="CharacterEllipsis"
-                           ToolTip.Tip="{Binding RepositoryLabel}" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="2" Text="{Binding NumberLabel}" Classes="prMuted" VerticalAlignment="Center" />
-            </Grid>
-            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"
-                       MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
-            <TextBlock Text="{Binding Branches}" Classes="prMuted" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Branches}"
-                       IsVisible="{Binding CanDisplay}" />
-            <DockPanel Margin="0,3,0,0" LastChildFill="True">
-                <Button DockPanel.Dock="Right" Command="{Binding OpenGitHubCommand}" Classes="prButton" IsEnabled="{Binding CanOpenSource}"
-                        AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Top">
+                <TextBlock Grid.Column="1" Classes="prMuted" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                           ToolTip.Tip="{Binding RepositoryLabel}">
+                    <Run Text="{Binding RepositoryLabel}" /><Run Text=" " /><Run Text="{Binding NumberLabel}" />
+                </TextBlock>
+                <Button Grid.Column="2" Command="{Binding OpenGitHubCommand}" Classes="kcapGhost kcapQuiet prFlushRight" IsEnabled="{Binding CanOpenSource}"
+                        AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
                         <Path Classes="prExternal prAfterLabel" />
                     </StackPanel>
                 </Button>
-                <WrapPanel IsVisible="{Binding CanDisplay}">
-                    <Button Classes="prButton prStatusButton" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
-                            Classes.danger="{Binding ChecksStatus.IsDanger}" Classes.warning="{Binding ChecksStatus.IsWarning}" Classes.success="{Binding ChecksStatus.IsSuccess}"
-                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
-                        <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
-                    </Button>
-                    <Button Classes="prButton prStatusButton" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
-                            Classes.danger="{Binding ReviewStatus.IsDanger}" Classes.warning="{Binding ReviewStatus.IsWarning}" Classes.success="{Binding ReviewStatus.IsSuccess}"
-                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
-                        <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
-                    </Button>
-                </WrapPanel>
-            </DockPanel>
+            </Grid>
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"
+                       MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
+            <TextBlock Text="{Binding Branches}" Classes="prMuted" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Branches}"
+                       IsVisible="{Binding HasBranches}" />
             <TextBlock Text="{Binding OverviewFreshnessLabel}" IsVisible="{Binding HasStaleOverview}" Classes="prNote" />
             <Border IsVisible="{Binding HasNotice}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="6" Padding="10,8">
                 <TextBlock Text="{Binding Notice}" Classes="prNote" Foreground="{StaticResource KcapWarningBrush}" />
@@ -50,56 +37,83 @@
                           ItemContainerTheme="{StaticResource PullRequestTabTheme}" AutomationProperties.Name="Pull request sections">
                     <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
                     <TabStripItem Content="Overview" />
-                    <TabStripItem Content="Checks" />
-                    <TabStripItem Content="Reviews" />
-                    <TabStripItem Content="Activity" />
+                    <TabStripItem x:Name="ChecksTab" ToolTip.Tip="{Binding ChecksStatus.Tip}"
+                                  AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Checks: {0}'}">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <TextBlock Text="Checks" />
+                            <Ellipse Classes="prTabDot" Classes.success="{Binding ChecksStatus.IsSuccess}" Classes.warning="{Binding ChecksStatus.IsWarning}"
+                                     Classes.danger="{Binding ChecksStatus.IsDanger}" Classes.pending="{Binding ChecksStatus.IsPulsing}" views:PulseClock.IsActive="{Binding ChecksStatus.IsPulsing}" />
+                        </StackPanel>
+                    </TabStripItem>
+                    <TabStripItem x:Name="ReviewsTab" ToolTip.Tip="{Binding ReviewStatus.Tip}"
+                                  AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Reviews: {0}'}">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <TextBlock Text="Reviews" />
+                            <Ellipse Classes="prTabDot" Classes.success="{Binding ReviewStatus.IsSuccess}" Classes.warning="{Binding ReviewStatus.IsWarning}"
+                                     Classes.danger="{Binding ReviewStatus.IsDanger}" Classes.pending="{Binding ReviewStatus.IsPulsing}" views:PulseClock.IsActive="{Binding ReviewStatus.IsPulsing}" />
+                        </StackPanel>
+                    </TabStripItem>
+                    <TabStripItem Content="Comments" />
                 </TabStrip>
             </Border>
-            <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}" IsVisible="{Binding IsReviewSection}"
-                      IsEnabled="{Binding CanReveal}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}" Margin="0,8,0,0"
-                      AutomationProperties.Name="Review sections">
-                <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
-                <TabStripItem Content="Reviewers" />
-                <TabStripItem Content="Published reviews" />
-                <TabStripItem Content="Threads" />
-                <TabStripItem Content="Replies" IsVisible="{Binding IsThreadComments}" />
-            </TabStrip>
+            <!-- Fixed height: the Threads-only toggle is taller than the pills and would shift the content below. -->
+            <Grid x:Name="ReviewTabsRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="0,10,0,0" Height="30" IsVisible="{Binding IsReviewSection}">
+                <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}"
+                          IsEnabled="{Binding CanReveal}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}"
+                          AutomationProperties.Name="Review sections">
+                    <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
+                    <TabStripItem Content="Reviewers" />
+                    <TabStripItem Content="Submitted" />
+                    <TabStripItem Content="Threads" />
+                    <TabStripItem Content="Replies" IsVisible="{Binding IsThreadComments}" />
+                </TabStrip>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding IsThreads}">
+                    <TextBlock Text="Show resolved" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                    <ToggleSwitch x:Name="ShowResolvedToggle" Classes="kcapSwitch" IsChecked="{Binding IncludeResolved, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Show resolved threads" />
+                </StackPanel>
+            </Grid>
         </StackPanel>
         <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" BringIntoViewOnFocusChange="False">
-            <StackPanel Margin="24,18,24,24" Spacing="10">
-                <TextBlock Text="{Binding SectionTitle}" Classes="prSectionTitle" />
+            <StackPanel Margin="24,16,24,24" Spacing="10">
                 <StackPanel IsVisible="{Binding IsOverview}" Spacing="10">
                     <TextBlock Text="{Binding DescriptionNote}" Classes="prNote" IsVisible="{Binding DescriptionNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <views:MarkdownView Text="{Binding Description}" OpenLink="{Binding OpenBodyLinkCommand}" Flavor="GitHub" />
                     <TextBlock Text="Description preview truncated. Open the pull request in your browser for the full text."
                                IsVisible="{Binding DescriptionTruncated}" Classes="prNote" />
                 </StackPanel>
-                <CheckBox Content="Include resolved threads" IsChecked="{Binding IncludeResolved, Mode=TwoWay}"
-                          IsVisible="{Binding IsThreads}" IsEnabled="{Binding CanReveal}" FontSize="12" />
-                <Button Content="Back to threads" Command="{Binding ShowSectionCommand}" CommandParameter="threads" Classes="prButton"
-                        IsVisible="{Binding IsThreadComments}" IsEnabled="{Binding CanReveal}" HorizontalAlignment="Left" />
                 <TextBlock Text="{Binding PageNote}" Classes="prNote" IsVisible="{Binding PageNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                <Button Content="Reload earlier" Command="{Binding ReloadEarlierCommand}" IsVisible="{Binding CanReloadEarlier}" HorizontalAlignment="Left" Classes="prButton" />
+                <!-- Loading and empty share one slot, glyph size and type so the one gives way to the other in place. -->
+                <StackPanel x:Name="LoadingState" Classes="prSectionState" Classes.shown="{Binding ShowsLoading}">
+                    <Path Classes="prStateGlyph kcapSpinning" Data="M11,2 A9,9 0 1 1 2,11" />
+                    <TextBlock Text="{Binding LoadingNote}" Classes="prNote" TextAlignment="Center" />
+                </StackPanel>
+                <StackPanel x:Name="EmptyState" Classes="prSectionState" Classes.shown="{Binding HasEmptyNote}">
+                    <Path Classes="prStateGlyph" Data="M2,9 L5,3 H15 L18,9 V16 Q18,17 17,17 H3 Q2,17 2,16 Z M2,9 H7 L8,11 H12 L13,9 H18" />
+                    <TextBlock Text="{Binding EmptyNote}" Classes="prNote" TextAlignment="Center" />
+                </StackPanel>
+                <Button Content="Reload earlier" Command="{Binding ReloadEarlierCommand}" IsVisible="{Binding CanReloadEarlier}" HorizontalAlignment="Left" Classes="kcapGhost kcapQuiet prFlushLeft" />
                 <ItemsControl x:Name="ReviewerRows" ItemsSource="{Binding ReviewerRows}" IsVisible="{Binding IsReviewers}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:PullRequestRow">
                             <Border Classes="prRow">
                                 <Grid ColumnDefinitions="30,*,Auto,Auto" ColumnSpacing="10" RowDefinitions="Auto,Auto">
-                                    <Border Width="30" Height="30" CornerRadius="7" Background="{StaticResource KcapSurfaceRaisedBrush}" VerticalAlignment="Center">
+                                    <Border Width="30" Height="30" CornerRadius="7" Background="{StaticResource KcapSurfaceRaisedBrush}" VerticalAlignment="Center" ClipToBounds="True">
                                         <Panel>
                                             <TextBlock Text="{Binding Initial}" IsVisible="{Binding !IsBot}" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                        Foreground="{StaticResource KcapMutedBrush}" FontSize="12" />
                                             <Path Width="16" Height="16" Stretch="Uniform" IsVisible="{Binding IsBot}" Stroke="{StaticResource KcapMutedBrush}"
                                                   StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
                                                   Data="M3,5 H13 V13 H3 Z M8,5 V2 H6 M5.5,8 V10 M10.5,8 V10 M3,8 H1 M13,8 H15" />
+                                            <views:RemoteAvatar Url="{Binding AvatarUrl}" />
                                         </Panel>
                                     </Border>
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
                                         <TextBlock Text="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" FontSize="13" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
-                                        <TextBlock Text="Review requested" Classes="prNote" IsVisible="{Binding ReviewRequested}" />
+                                        <TextBlock Text="Review re-requested" Classes="prNote" IsVisible="{Binding ReRequested}" />
                                     </StackPanel>
-                                    <views:PullRequestStatusLabel Grid.Column="2" DataContext="{Binding Status}" MaxWidth="150" VerticalAlignment="Center" />
-                                    <Button Grid.Column="3" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
+                                    <views:PullRequestStatusLabel Grid.Column="2" DataContext="{Binding Status}" VerticalAlignment="Center" />
+                                    <Button Grid.Column="3" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                             CommandParameter="{Binding}" AutomationProperties.Name="Open review in browser" ToolTip.Tip="Open review in browser">
                                         <Path Classes="prExternal" />
@@ -120,8 +134,8 @@
                                         <TextBlock Text="{Binding Detail}" Classes="prNote" IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                         <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
                                     </StackPanel>
-                                    <views:PullRequestStatusLabel Grid.Column="1" DataContext="{Binding Status}" MaxWidth="110" VerticalAlignment="Center" />
-                                    <Button Grid.Column="2" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
+                                    <views:PullRequestStatusLabel Grid.Column="1" DataContext="{Binding Status}" VerticalAlignment="Center" />
+                                    <Button Grid.Column="2" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                             CommandParameter="{Binding}" AutomationProperties.Name="Open check in browser" ToolTip.Tip="Open check in browser">
                                         <Path Classes="prExternal" />
@@ -141,7 +155,7 @@
                                             <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" />
                                             <TextBlock Text="{Binding Detail}" Classes="prNote" IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                         </StackPanel>
-                                        <Button Grid.Column="1" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Top"
+                                        <Button Grid.Column="1" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Top"
                                                 Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                                 CommandParameter="{Binding}" AutomationProperties.Name="Open comment in browser" ToolTip.Tip="Open in browser">
                                             <Path Classes="prExternal" />
@@ -154,7 +168,7 @@
                                     <views:MarkdownView Text="{Binding Body}" IsVisible="{Binding HasBody}" Flavor="GitHub"
                                         OpenLink="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenBodyLinkCommand}" />
                                     <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
-                                    <Button Content="View replies" IsVisible="{Binding IsThread}" Classes="prButton" HorizontalAlignment="Left"
+                                    <Button Content="View replies" IsVisible="{Binding IsThread}" Classes="kcapGhost kcapQuiet prFlushLeft" HorizontalAlignment="Left"
                                             IsEnabled="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).CanReveal}"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).ExpandThreadCommand}"
                                             CommandParameter="{Binding}" />
@@ -163,31 +177,39 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <Button Content="Load more" Command="{Binding LoadMoreCommand}" IsVisible="{Binding HasMore}" HorizontalAlignment="Left" Classes="prButton" />
+                <Button Content="Load more" Command="{Binding LoadMoreCommand}" IsVisible="{Binding HasMore}" HorizontalAlignment="Left" Classes="kcapGhost kcapQuiet prFlushLeft" />
             </StackPanel>
         </ScrollViewer>
-        <Border Grid.Row="3" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="16,6">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="4">
-                <Button Classes="prButton" Command="{Binding RefreshCommand}" ToolTip.Tip="Refresh pull request" AutomationProperties.Name="Refresh pull request">
-                    <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4" StrokeLineCap="Round"
-                          Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
-                </Button>
-                <Grid Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding FreshnessLabel}" Classes="prNote" IsVisible="{Binding !IsReading}" />
-                    <TextBlock Text="Refreshing…" Classes="prNote" IsVisible="{Binding IsReading}" />
+        <!-- Status only: refresh lives on the About this work pane, which reloads this view too. -->
+        <Border Grid.Row="3" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="24,8">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <Grid VerticalAlignment="Center">
+                    <TextBlock x:Name="FreshnessText" Text="{Binding FreshnessLabel}" Classes="prNote" IsVisible="{Binding !ShowsRefreshing}" HorizontalAlignment="Left">
+                        <ToolTip.Tip>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{Binding FreshnessDetail}" />
+                                <TextBlock Text="Last updated" Classes="kcapTipCaption" />
+                            </StackPanel>
+                        </ToolTip.Tip>
+                    </TextBlock>
+                    <StackPanel Orientation="Horizontal" Spacing="7" IsVisible="{Binding ShowsRefreshing}">
+                        <Path x:Name="ReadingGlyph" Width="12" Height="12" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
+                              StrokeLineCap="Round" Data="M11,2 A9,9 0 1 1 2,11" VerticalAlignment="Center" Margin="0,0,0,3"
+                              Classes.kcapSpinning="{Binding ShowsRefreshing}" />
+                        <TextBlock Text="Refreshing…" Classes="prNote" />
+                    </StackPanel>
                 </Grid>
-                <Button Grid.Column="2" Classes="prButton" AutomationProperties.Name="Pull request access details" ToolTip.Tip="Access and reading details">
+                <Border Grid.Column="1" Background="Transparent" VerticalAlignment="Center"
+                        AutomationProperties.Name="Pull request access" AutomationProperties.HelpText="{Binding AccessLabel}">
+                    <ToolTip.Tip>
+                        <StackPanel Spacing="2" MaxWidth="280">
+                            <TextBlock Text="{Binding AccessLabel}" TextWrapping="Wrap" />
+                            <TextBlock Text="Read here; reply, resolve, review and see the full diff on GitHub" Classes="kcapTipCaption" />
+                        </StackPanel>
+                    </ToolTip.Tip>
                     <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4"
                           Data="M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M8,7 V12 M8,4 V5" />
-                    <Button.Flyout>
-                        <Flyout>
-                            <StackPanel Spacing="8" MaxWidth="280">
-                                <TextBlock Text="{Binding AccessLabel}" Classes="prNote" />
-                                <TextBlock Text="Read descriptions, reviews and threads here. Reply, resolve, review, or view the full diff in your browser." Classes="prNote" />
-                            </StackPanel>
-                        </Flyout>
-                    </Button.Flyout>
-                </Button>
+                </Border>
             </Grid>
         </Border>
     </Grid>

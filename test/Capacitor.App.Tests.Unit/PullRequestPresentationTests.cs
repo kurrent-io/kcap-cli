@@ -3,12 +3,9 @@ using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
-using Path = Avalonia.Controls.Shapes.Path;
 using Avalonia.Headless;
 using Avalonia.Input;
-using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Views;
@@ -33,8 +30,8 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.ChecksStatus.IsDanger).IsTrue();
         await Assert.That(h.Model.ChecksStatus.Detail).Contains("1 failed");
         await Assert.That(AutomationProperties.GetName(checks)).IsEqualTo("Open checks: 1 failed");
-        var headerChecks = h.Reader.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.CommandParameter, "checks"));
-        await Assert.That(AutomationProperties.GetName(headerChecks)).IsEqualTo("Open checks: 1 failed");
+        var checksTab = h.Reader.FindControl<TabStripItem>("ChecksTab")!;
+        await Assert.That(AutomationProperties.GetName(checksTab)).IsEqualTo("Checks: 1 failed");
 
         var review = h.Card.FindControl<Button>("SidebarReviewsButton")!;
         review.Command!.Execute(review.CommandParameter);
@@ -96,29 +93,346 @@ public class PullRequestPresentationTests {
         }
     });
 
+    /// A requested reviewer who has not reviewed carries no state; that is a wait, not an unknown.
     [Test]
-    [Arguments(700)]
-    [Arguments(360)]
-    public Task Reviewer_rows_are_compact_and_long_names_fit_the_reader(double width) => RunOnUiAsync(async () => {
-        await using var h = new PullRequestViewTestHost(width);
+    public Task A_requested_reviewer_without_a_review_reads_as_awaiting() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
         h.Source.PageItem = section => section == "reviewers" ? new PullRequestReviewerDto {
-            Id = "reviewer", Availability = "available", ReviewState = "commented",
-            Actor = new() { Id = "bot", Kind = "bot", Login = new string('r', 100) }
+            Id = "reviewer", Availability = "available", Requested = true, Actor = new() { Id = "octocat", Kind = "user", Login = "octocat" }
         } : null;
         await h.ShowAsync();
         await h.Model.ShowSectionCommand.Execute("reviewers");
         await h.SettleAsync();
-        var list = h.Reader.FindControl<ItemsControl>("ReviewerRows")!;
-        var row = list.GetVisualDescendants().OfType<Border>().Single(border => border.Classes.Contains("prRow"));
-        await Assert.That(row.Bounds.Height).IsLessThan(70);
-        await Assert.That(row.Bounds.Width).IsLessThanOrEqualTo(width);
-        var status = row.GetVisualDescendants().OfType<PullRequestStatusLabel>().Single();
-        await Assert.That(status.FindControl<TextBlock>("StatusText")!.Text).IsEqualTo("Commented");
-        await Assert.That(status.GetVisualDescendants().OfType<Path>().Single(path => path.IsEffectivelyVisible).Data).IsNotNull();
-        await Assert.That(h.Model.Rows.Single().IsBot).IsTrue();
-        var title = row.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == new string('r', 100));
-        await Assert.That(title.Bounds.Width).IsGreaterThan(0);
-        await Assert.That(title.Bounds.Right).IsLessThanOrEqualTo(row.Bounds.Width);
+        var row = h.Reader.FindControl<ItemsControl>("ReviewerRows")!.GetVisualDescendants().OfType<Border>().Single(border => border.Classes.Contains("prRow"));
+        var text = row.GetVisualDescendants().OfType<PullRequestStatusLabel>().Single().FindControl<TextBlock>("StatusText")!;
+        await Assert.That(text.Text).IsEqualTo("Awaiting review");
+        await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(block => block.Text == "Review re-requested").IsEffectivelyVisible).IsFalse();
+        await Assert.That(h.Model.Rows.Single().AvatarUrl).IsEqualTo("https://github.com/octocat.png?size=64");
+    });
+
+    /// A re-request after a review is the only case the subline adds anything the status does not say.
+    [Test]
+    public Task A_reviewer_asked_again_after_reviewing_shows_the_re_request_and_bots_get_no_avatar() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.PageItem = section => section == "reviewers" ? new PullRequestReviewerDto {
+            Id = "reviewer", Availability = "available", Requested = true, ReviewState = "changes_requested",
+            Actor = new() { Id = "bot", Kind = "bot", Login = "review-bot" }
+        } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("reviewers");
+        await h.SettleAsync();
+        var row = h.Reader.FindControl<ItemsControl>("ReviewerRows")!.GetVisualDescendants().OfType<Border>().Single(border => border.Classes.Contains("prRow"));
+        await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(block => block.Text == "Review re-requested").IsEffectivelyVisible).IsTrue();
+        await Assert.That(h.Model.Rows.Single().AvatarUrl).IsNull();
+    });
+
+    /// Every pending marker reads one clock, so the sidebar and reader never fade out of step, and
+    /// only the marker fades — the status text beside it stays readable.
+    [Test]
+    public Task Pending_markers_share_one_phase_and_leave_the_text_steady() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.PageItem = section => section == "checks"
+            ? new PullRequestCheckDto { Id = "check", Availability = "available", Name = "build", Outcome = "pending", HeadSha = new string('a', 40) } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.ChecksStatus.IsPulsing).IsTrue();
+        var markers = new Control[] { h.Card, h.Reader }.SelectMany(root => root.GetVisualDescendants().OfType<Visual>())
+            .Where(visual => PulseClock.GetIsActive(visual) && visual.IsEffectivelyVisible).ToArray();
+        await Assert.That(markers.Length).IsGreaterThanOrEqualTo(3);
+        await WorkspaceFixtures.WaitUntilAsync(() => markers.Select(marker => marker.Opacity).Distinct().Count() == 1, what: "one shared pulse phase");
+        var texts = h.Card.GetVisualDescendants().OfType<PullRequestStatusLabel>()
+            .Select(label => label.FindControl<TextBlock>("StatusText")!).Where(text => text.Text == h.Model.ChecksStatus.Text);
+        foreach (var text in texts) await Assert.That(text.GetSelfAndVisualAncestors().OfType<Visual>().TakeWhile(v => v != h.Card).All(v => v.Opacity == 1)).IsTrue();
+    });
+
+    /// Check rows are a snapshot; the summary follows the overview. While a check runs the next
+    /// poll must reload the rows, or the summary turns green beside rows still saying pending.
+    [Test]
+    public Task Pending_check_rows_reload_on_the_next_poll() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        var outcome = "pending";
+        h.Source.PageItem = section => section == "checks"
+            ? new PullRequestCheckDto { Id = "check", Availability = "available", Name = "build", Outcome = outcome, HeadSha = new string('a', 40) } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Outcome).IsEqualTo("pending");
+        outcome = "success";
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.SingleOrDefault()?.Outcome == "success", what: "check rows reloaded");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks passing");
+    });
+
+    /// The poll reloads only the open tab, so checks left pending behind another tab go stale while
+    /// the summary moves on; opening them again must reload rather than show the stale rows.
+    [Test]
+    public Task Returning_to_stale_checks_reloads_them() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        var outcome = "pending";
+        h.Source.PageItem = section => section == "checks"
+            ? new PullRequestCheckDto { Id = "check", Availability = "available", Name = "build", Outcome = outcome, HeadSha = new string('a', 40) } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await h.Model.ShowSectionCommand.Execute("overview");
+        outcome = "success";
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.ChecksStatus.Text == "Checks passing" && !h.Model.IsReading, what: "summary moved on");
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.SingleOrDefault()?.Outcome == "success", what: "stale checks reloaded");
+    });
+
+    /// Checks belong to a commit, and a new head is something the reader learns on its own.
+    [Test]
+    public Task A_new_head_reloads_the_checks_without_asking() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        h.Source.HeadSha = new string('b', 40);
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.FreshnessDetail == "Checks ran on commit bbbbbbb" && !h.Model.IsReading, what: "checks for the new head");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+        await Assert.That(h.Model.Rows.Count).IsEqualTo(1);
+    });
+
+    /// A page read can be the first to hear of a new head; it recovers through a fresh overview.
+    [Test]
+    public Task A_head_changed_page_restart_recovers_by_itself() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        h.Source.RestartNextPage = "head_changed";
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading, what: "checks recovered");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+    });
+
+    /// Threads are what report a moved head. A later move of the same section has to recover too.
+    [Test]
+    public Task A_second_head_change_on_threads_recovers_again() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        h.Source.RestartNextPage = "head_changed";
+        await h.Model.ShowSectionCommand.Execute("threads");
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading, what: "threads recovered");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+        h.Source.RestartNextPage = "head_changed";
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading && h.Source.Pages >= 3, what: "second head change recovered");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+    });
+
+    /// The switcher is how a session moves between linked pull requests. Each one replaces the
+    /// card and the reader, and the gap shows loading rather than the previous pull request.
+    [Test]
+    public Task The_switcher_replaces_every_linked_pull_request_including_past_the_second() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.Links = [
+            FakePullRequestSource.Link(1),
+            FakePullRequestSource.Link(2),
+            FakePullRequestSource.Link(3),
+        ];
+        h.Source.TitleFor = subject => "Title " + subject.Number.ToString(CultureInfo.InvariantCulture);
+        h.Source.RollupFor = subject => subject.Number switch { 2 => "pending", 3 => "failure", _ => "success" };
+        h.Source.PageItemFor = (subject, section) => section == "checks" ? new PullRequestCheckDto {
+            Id = "check-" + subject.Number.ToString(CultureInfo.InvariantCulture), Availability = "available",
+            Name = "build-" + subject.Number.ToString(CultureInfo.InvariantCulture),
+            Outcome = subject.Number switch { 2 => "pending", 3 => "failure", _ => "success" }, HeadSha = new string('a', 40),
+        } : null;
+        await h.ShowAsync();
+        var selector = h.Card.FindControl<ComboBox>("PullRequestSelector")!;
+        var loading = h.Reader.FindControl<StackPanel>("LoadingState")!;
+        var cardLoading = h.Card.FindControl<TextBlock>("SelectionLoading")!;
+        var checks = h.Card.FindControl<Button>("SidebarChecksButton")!;
+        await Assert.That(selector.IsEffectivelyVisible).IsTrue();
+        await Assert.That(selector.ItemCount).IsEqualTo(3);
+        await Assert.That(h.Model.SectionMeta).IsEqualTo("3");
+        await Assert.That(h.Model.Title).IsEqualTo("Title 1");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks passing");
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try {
+            h.Source.OverviewResponses.Enqueue(async (subject, ct) => {
+                await gate.Task.WaitAsync(ct).ConfigureAwait(false);
+                return h.Source.Overview(subject);
+            });
+            selector.SelectedIndex = 2;
+            await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Overviews >= 2, what: "third pull request overview started");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(h.Model.NumberLabel).IsEqualTo("#3");
+            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(3);
+            await Assert.That(h.Model.IsSelectionLoading).IsTrue();
+            await Assert.That(h.Model.DescriptionNote).IsEmpty();
+            await Assert.That(h.Model.ChecksStatus.Text).IsEmpty();
+            await Assert.That(cardLoading.IsEffectivelyVisible).IsTrue();
+            await Assert.That(checks.IsEffectivelyVisible).IsFalse();
+            await Assert.That(loading.IsEffectivelyVisible).IsTrue();
+            await Assert.That(h.Model.LoadingNote).IsEqualTo("Loading pull request…");
+        } finally {
+            gate.TrySetResult();
+        }
+        await h.SettleAsync();
+        await Assert.That(h.Model.Title).IsEqualTo("Title 3");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks failing");
+        await Assert.That(cardLoading.IsEffectivelyVisible).IsFalse();
+        await Assert.That(loading.IsEffectivelyVisible).IsFalse();
+        await Assert.That(AutomationProperties.GetName(checks)).IsEqualTo("Open checks: Checks failing");
+
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Title).IsEqualTo("build-3");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("1 failed");
+
+        selector.SelectedIndex = 1;
+        await h.SettleAsync();
+        await Assert.That(h.Model.NumberLabel).IsEqualTo("#2");
+        await Assert.That(h.Model.Title).IsEqualTo("Title 2");
+        await Assert.That(h.Model.Section).IsEqualTo("overview");
+        await Assert.That(h.Model.Rows).IsEmpty();
+        await Assert.That(h.Model.ChecksStatus.IsPulsing).IsTrue();
+        await Assert.That(AutomationProperties.GetName(checks)).IsEqualTo("Open checks: Checks pending");
+
+        selector.SelectedIndex = 2;
+        await h.SettleAsync();
+        await Assert.That(h.Model.Section).IsEqualTo("checks");
+        await Assert.That(h.Model.Rows.Single().Title).IsEqualTo("build-3");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("1 failed");
+        await Assert.That(h.Model.ChecksStatus.IsPulsing).IsFalse();
+    });
+
+    /// The once-only recovery is for that pull request. Left set, the next one's checks stop.
+    [Test]
+    public Task Switching_pull_request_during_a_head_change_lets_the_next_one_recover() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try {
+            await h.ShowAsync();
+            h.Source.OverviewResponses.Enqueue(async (subject, ct) => {
+                await gate.Task.WaitAsync(ct).ConfigureAwait(false);
+                return h.Source.Overview(subject);
+            });
+            h.Source.RestartNextPage = "head_changed";
+            await h.Model.ShowSectionCommand.Execute("checks");
+            await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Overviews >= 2, what: "recovery overview started");
+            h.Model.Selected = h.Model.Choices[1];
+            await h.SettleAsync();
+            h.Source.RestartNextPage = "head_changed";
+            await h.Model.ShowSectionCommand.Execute("checks");
+            await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading, what: "next pull request checks recovered");
+            await Assert.That(h.Model.PageNote).IsEmpty();
+            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(2);
+        } finally {
+            gate.TrySetResult();
+        }
+    });
+
+    /// A manual refresh shows progress at once and runs inside the short click gap.
+    [Test]
+    public Task A_refresh_click_shows_progress_at_once_and_runs_within_seconds() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        var lists = h.Source.Lists;
+        h.Model.Refresh();
+        await Assert.That(h.Model.ShowsRefreshing).IsTrue();
+        h.Time.Advance(TimeSpan.FromSeconds(4));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Lists > lists && !h.Model.IsReading, what: "manual refresh ran");
+        await Assert.That(h.Model.ShowsRefreshing).IsFalse();
+    });
+
+    /// The open tab follows the poll, and the poll never shows the progress a click does.
+    [Test]
+    public Task The_poll_reloads_the_open_tab_without_showing_progress() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        var body = "First review";
+        h.Source.PageItem = section => section == "reviews"
+            ? new PullRequestReviewDto { Id = "review", Availability = "available", Body = body, State = "commented" } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("reviews");
+        await h.SettleAsync();
+        body = "Edited review";
+        var sawProgress = false;
+        h.Model.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(h.Model.ShowsRefreshing) && h.Model.ShowsRefreshing) sawProgress = true; };
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.SingleOrDefault()?.Body == "Edited review", what: "open tab reloaded by the poll");
+        await Assert.That(sawProgress).IsFalse();
+    });
+
+    /// A reader who paged on keeps their rows: a reload would restart at page one.
+    [Test]
+    public Task The_poll_leaves_a_tab_alone_once_more_pages_are_loaded() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.TotalPages = 3;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("conversation");
+        await h.SettleAsync();
+        await h.Model.LoadMoreCommand.Execute();
+        await h.SettleAsync();
+        var pages = h.Source.Pages;
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Overviews >= 2 && !h.Model.IsReading, what: "poll ran");
+        await Assert.That(h.Source.Pages).IsEqualTo(pages);
+        await Assert.That(h.Model.Rows.Count).IsEqualTo(2);
+    });
+
+    /// Every tab's footer reads the same way; the commit the checks ran on is hover detail only.
+    [Test]
+    public Task The_footer_says_updated_on_every_tab() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        foreach (var section in new[] { "overview", "checks", "reviewers", "conversation" }) {
+            await h.Model.ShowSectionCommand.Execute(section);
+            await h.SettleAsync();
+            await Assert.That(h.Model.FreshnessLabel).Matches(@"^Updated \d\d:\d\d:\d\d$");
+        }
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.FreshnessDetail).IsEqualTo("Checks ran on commit aaaaaaa");
+    });
+
+    [Test]
+    public Task Row_details_leave_out_what_the_source_did_not_report() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Detail).IsEmpty();
+        await h.Model.ShowSectionCommand.Execute("threads");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Detail).IsEmpty();
+    });
+
+    /// A first load and the empty result it may turn into occupy one slot, one at a time.
+    [Test]
+    public Task A_first_load_shows_the_loading_state_in_the_empty_states_place() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.EmptyPages = true;
+        await h.ShowAsync();
+        h.Source.PageGate = new();
+        await h.Model.ShowSectionCommand.Execute("reviews");
+        Dispatcher.UIThread.RunJobs();
+        var loading = h.Reader.FindControl<StackPanel>("LoadingState")!;
+        var empty = h.Reader.FindControl<StackPanel>("EmptyState")!;
+        await Assert.That(h.Model.LoadingNote).IsEqualTo("Loading reviews…");
+        await Assert.That(loading.IsEffectivelyVisible).IsTrue();
+        await Assert.That(empty.IsEffectivelyVisible).IsFalse();
+        await Assert.That(h.Model.PageNote).IsEmpty();
+        h.Source.PageGate.SetResult();
+        await h.SettleAsync();
+        await Assert.That(loading.IsEffectivelyVisible).IsFalse();
+        await Assert.That(empty.IsEffectivelyVisible).IsTrue();
+    });
+
+    [Test]
+    public Task An_empty_section_shows_the_empty_state_instead_of_a_page_note() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.EmptyPages = true;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("reviews");
+        await h.SettleAsync();
+        await Assert.That(h.Reader.FindControl<StackPanel>("EmptyState")!.IsEffectivelyVisible).IsTrue();
+        await Assert.That(h.Model.EmptyNote).IsEqualTo("No submitted reviews.");
+        await Assert.That(h.Model.PageNote).IsEmpty();
     });
 
     [Test]
@@ -170,27 +484,6 @@ public class PullRequestPresentationTests {
     });
 
     [Test]
-    public Task Sidebar_status_rows_keep_a_hand_cursor_without_a_hover_wash() => RunOnUiAsync(async () => {
-        await using var h = new PullRequestViewTestHost();
-        await h.ShowAsync();
-        var checks = h.Card.FindControl<Button>("SidebarChecksButton")!;
-        var presenter = checks.GetVisualDescendants().OfType<ContentPresenter>().Single(item => item.Name == "PART_ContentPresenter" && item.TemplatedParent == checks);
-        await Assert.That(checks.Cursor?.ToString()).Contains("Hand");
-        h.Window.MouseMove(checks.TranslatePoint(new Point(checks.Bounds.Width / 2, checks.Bounds.Height / 2), h.Window)!.Value);
-        Dispatcher.UIThread.RunJobs();
-        await Assert.That(((ISolidColorBrush)presenter.Background!).Color.A).IsEqualTo((byte)0);
-
-        h.Source.Failure = "transient";
-        h.Time.Advance(TimeSpan.FromSeconds(21));
-        await h.Model.RefreshCommand.Execute();
-        await WorkspaceFixtures.WaitUntilAsync(() => !h.Model.IsReading, what: "access refresh fails");
-        await Assert.That(checks.IsEnabled).IsFalse();
-        await Assert.That(h.Model.CanDisplay).IsTrue();
-        await Assert.That(((ISolidColorBrush)presenter.Background!).Color.A).IsEqualTo((byte)0);
-        await Assert.That(presenter.Opacity).IsEqualTo(0.45);
-    });
-
-    [Test]
     public Task An_incomplete_check_page_keeps_the_advisory_summary_and_its_provenance() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();
         h.Source.TotalPages = 2;
@@ -205,29 +498,6 @@ public class PullRequestPresentationTests {
         await h.SettleAsync();
         await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("2 failed");
         await Assert.That(h.Model.ChecksStatus.IsDanger).IsTrue();
-    });
-
-    /// A rule separates two comments; the last comment has nothing to separate from.
-    [Test]
-    public Task Comments_are_ruled_apart_but_the_last_carries_no_rule() => RunOnUiAsync(async () => {
-        await using var h = new PullRequestViewTestHost();
-        h.Source.TotalPages = 3;
-        await h.ShowAsync();
-        await h.Model.ShowSectionCommand.Execute("conversation");
-        await h.SettleAsync();
-        await h.Model.LoadMoreCommand.Execute();
-        await h.SettleAsync();
-        var list = h.Reader.FindControl<ItemsControl>("DiscussionRows")!;
-        var rows = list.GetVisualDescendants().OfType<Border>().Where(border => border.Classes.Contains("prDiscussion")).ToList();
-        await Assert.That(rows.Count).IsEqualTo(2);
-        await Assert.That(rows[0].BorderThickness.Bottom).IsEqualTo(1);
-        await Assert.That(rows[1].BorderThickness.Bottom).IsEqualTo(0);
-        await h.Model.LoadMoreCommand.Execute();
-        await h.SettleAsync();
-        rows = list.GetVisualDescendants().OfType<Border>().Where(border => border.Classes.Contains("prDiscussion")).ToList();
-        await Assert.That(rows.Count).IsEqualTo(3);
-        await Assert.That(rows[1].BorderThickness.Bottom).IsEqualTo(1);
-        await Assert.That(rows[2].BorderThickness.Bottom).IsEqualTo(0);
     });
 
     /// A press focuses the comment's viewer, and a viewer taller than the reader brought into view

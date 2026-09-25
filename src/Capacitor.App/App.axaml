@@ -458,6 +458,31 @@
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
             <Setter Property="Opacity" Value="0.55" />
         </Style>
+        <!-- Ghost sizes. Declared after the ghost rules on purpose: a later style wins, so a
+             size that also recolours has to come after the colour it replaces. -->
+        <Style Selector="Button.kcapGhost.kcapIcon">
+            <Setter Property="Padding" Value="7" />
+            <Setter Property="MinWidth" Value="30" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet">
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapGhost.kcapQuiet:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
         <!-- Destructive ghost (Stop): Fluent hover paints the presenter near-white, which hides
              the danger colour. Rest and hover both pin KcapDangerBrush. -->
         <Style Selector="Button.kcapDanger">
@@ -521,6 +546,17 @@
             <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <!-- A refresh glyph turning while its read is in flight: the click's only feedback when
+             the result is unchanged. -->
+        <Style Selector="Path.kcapSpinning">
+            <Setter Property="RenderTransform" Value="rotate(0deg)" />
+            <Style.Animations>
+                <Animation Duration="0:0:0.9" IterationCount="Infinite">
+                    <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0" /></KeyFrame>
+                    <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360" /></KeyFrame>
+                </Animation>
+            </Style.Animations>
         </Style>
         <!-- In-flight state markers (a starting session's dot, a running check, a live tool-call
              row) share one pulse. -->
