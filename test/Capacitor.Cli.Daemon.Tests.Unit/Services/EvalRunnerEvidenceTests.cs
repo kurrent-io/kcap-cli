@@ -363,6 +363,31 @@ public class EvalRunnerEvidenceTests : IDisposable {
     }
 
     [Test]
+    public async Task A_finalize_cancelled_by_a_second_prepare_leaves_the_replacement_run_in_place() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        Serve(1);
+        using var claude = Claude(Verdict(), retroBefore: "sleep 20;");
+        var (_, connection, cache) = Daemon(claude);
+        await connection.PrepareEvalHandler!(Prepare());
+        var question = await connection.RunQuestionV2Handler!(Question());
+        var finalizing = connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [question.Assessment!], [], "sonnet"));
+        for (var i = 0; i < 200 && Prompts().Length < 2; i++) await Task.Delay(50);
+
+        await connection.PrepareEvalHandler!(Prepare());
+        var finalized = await finalizing.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(Prompts().Length).IsEqualTo(2);
+        await Assert.That(finalized.Success).IsFalse();
+        await Assert.That(cache.Count).IsEqualTo(1);
+        using var replacement = cache.LeaseEvidence("run-1");
+        await Assert.That(replacement).IsNotNull();
+        await Assert.That(replacement!.Cancelled.IsCancellationRequested).IsFalse();
+        await Assert.That(Directory.Exists(replacement.Setup.Context.RunDirectory)).IsTrue();
+        await Assert.That(Directory.GetDirectories(RunRoot, EvidenceRunContext.DirectoryPrefix + "*")).IsEquivalentTo([replacement.Setup.Context.RunDirectory]);
+        await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
+    }
+
+    [Test]
     public async Task The_protocol_one_question_handler_never_reads_an_evidence_run() {
         Serve(1);
         var (_, connection, _) = Daemon();

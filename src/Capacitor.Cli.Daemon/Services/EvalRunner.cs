@@ -233,7 +233,7 @@ internal sealed class EvalRunner {
         try {
             var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _baseUrl, reconciled, setup.Model, cmd.Index, cmd.Total, observer, _time, phase.Token);
             if (outcome.ScopeMoved) {
-                _cache.Remove(cmd.EvalRunId);
+                _cache.Remove(cmd.EvalRunId, setup);
                 // The server reads a run failure as run-fatal only in exactly this shape, with both branches null.
                 return new QuestionResultV2(null, null, EvalService.EvidenceScopeMovedReason, 0, 0, RunFailure: "scope_moved");
             }
@@ -276,7 +276,7 @@ internal sealed class EvalRunner {
 
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null);
         } finally {
-            _cache.Remove(cmd.EvalRunId);
+            _cache.Remove(cmd.EvalRunId, ctx);
         }
     }
 
@@ -298,7 +298,7 @@ internal sealed class EvalRunner {
             _logger.LogError(ex, "FinalizeEvalV2 failed for {RunId}", cmd.EvalRunId);
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null);
         } finally {
-            _cache.Remove(cmd.EvalRunId);
+            _cache.Remove(cmd.EvalRunId, setup);
         }
     }
 
@@ -331,7 +331,7 @@ internal sealed class EvalRunner {
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null);
         } finally {
             // Always evict — a finalize throw must not leak the cached context.
-            _cache.Remove(cmd.EvalRunId);
+            _cache.Remove(cmd.EvalRunId, ctx);
         }
     }
 

@@ -48,6 +48,14 @@ internal sealed class EvalContextCache : IDisposable, IAsyncDisposable {
         if (_entries.TryRemove(evalRunId, out var entry)) entry.Retire(idleAsOf: null);
     }
 
+    /// <summary>Removes the entry only while it still holds <paramref name="context"/>: cleanup on behalf of one run must never
+    /// take out a replacement prepared under the same id.</summary>
+    public void Remove(string evalRunId, object context) {
+        if (_entries.TryGetValue(evalRunId, out var entry) && ReferenceEquals(entry.Context, context)
+            && _entries.TryRemove(new KeyValuePair<string, Entry>(evalRunId, entry)))
+            entry.Retire(idleAsOf: null);
+    }
+
     public int Count => _entries.Count;
 
     public void Dispose() {
