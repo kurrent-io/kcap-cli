@@ -223,6 +223,21 @@ public class PullRequestPresentationTests {
         await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Lists > lists && !h.Model.IsReading, what: "manual refresh ran");
     });
 
+    /// Every tab's footer reads the same way; the commit the checks ran on is hover detail only.
+    [Test]
+    public Task The_footer_says_updated_on_every_tab() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        foreach (var section in new[] { "overview", "checks", "reviewers", "conversation" }) {
+            await h.Model.ShowSectionCommand.Execute(section);
+            await h.SettleAsync();
+            await Assert.That(h.Model.FreshnessLabel).Matches(@"^Updated \d\d:\d\d:\d\d$");
+        }
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.FreshnessDetail).IsEqualTo("Checks ran on commit aaaaaaa");
+    });
+
     [Test]
     public Task Row_details_leave_out_what_the_source_did_not_report() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();
@@ -233,6 +248,27 @@ public class PullRequestPresentationTests {
         await h.Model.ShowSectionCommand.Execute("threads");
         await h.SettleAsync();
         await Assert.That(h.Model.Rows.Single().Detail).IsEmpty();
+    });
+
+    /// A first load and the empty result it may turn into occupy one slot, one at a time.
+    [Test]
+    public Task A_first_load_shows_the_loading_state_in_the_empty_states_place() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.EmptyPages = true;
+        await h.ShowAsync();
+        h.Source.PageGate = new();
+        await h.Model.ShowSectionCommand.Execute("reviews");
+        Dispatcher.UIThread.RunJobs();
+        var loading = h.Reader.FindControl<StackPanel>("LoadingState")!;
+        var empty = h.Reader.FindControl<StackPanel>("EmptyState")!;
+        await Assert.That(h.Model.LoadingNote).IsEqualTo("Loading reviews…");
+        await Assert.That(loading.IsEffectivelyVisible).IsTrue();
+        await Assert.That(empty.IsEffectivelyVisible).IsFalse();
+        await Assert.That(h.Model.PageNote).IsEmpty();
+        h.Source.PageGate.SetResult();
+        await h.SettleAsync();
+        await Assert.That(loading.IsEffectivelyVisible).IsFalse();
+        await Assert.That(empty.IsEffectivelyVisible).IsTrue();
     });
 
     [Test]

@@ -11,7 +11,7 @@ public sealed partial class PullRequestContextViewModel {
     public string Branches => CanDisplay && (_overview?.HeadRef is not null || _overview?.BaseRef is not null)
         ? (_overview.HeadRef ?? "?") + " → " + (_overview.BaseRef ?? "?") : "";
     public bool HasBranches => Branches.Length > 0;
-    public string FetchedLabel => CanDisplay && _overviewRead?.FetchedAt is { } at ? "Fetched " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
+    public string FetchedLabel => CanDisplay && _overviewRead?.FetchedAt is { } at ? "Updated " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
     public string AccessLabel => CanDisplay ? (_grace ? "Access refresh paused" : "Access checked for " + (_overview?.AccessCheckedFor ?? "linked GitHub account")) : "";
     public string? Description => CanDisplayReader && _section == "overview" ? _overview?.Description : null;
     public bool DescriptionTruncated => CanDisplayReader && _overview?.DescriptionTruncated == true;
@@ -31,7 +31,7 @@ public sealed partial class PullRequestContextViewModel {
         get {
             if (_section == "overview") return "";
             if (!CanDisplayReader) return "Refresh access to open PR content.";
-            if (CurrentSection is not { } state) return _pageRequests.Contains(SectionKey) ? "Loading…" : "Choose Refresh to load this section.";
+            if (CurrentSection is not { } state) return _pageRequests.Contains(SectionKey) ? "" : "This section has not loaded yet.";
             if (state.Error is { } error) return error;
             if (state.Coverage != "complete") return "Limited snapshot: an ordered subset. More may be available on GitHub.";
             return "";
@@ -49,15 +49,23 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
     public bool HasEmptyNote => EmptyNote.Length > 0;
+    /// A first load only: a reload keeps the rows it is replacing on screen.
+    public bool IsSectionLoading => _section != "overview" && CanDisplayReader && CurrentSection is null && _pageRequests.Contains(SectionKey);
+    public string LoadingNote => "Loading " + _section switch {
+        "checks" => "checks", "reviewers" => "reviewers", "reviews" => "reviews", "threads" => "threads", "thread_comments" => "replies", _ => "activity"
+    } + "…";
     public string SnapshotLabel => CanDisplayReader && CurrentSection?.Completed is { } at
-        ? "Snapshot " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) + (CurrentSection.Head is { Length: >= 7 } head ? " · " + head[..7] : "") : "";
+        ? "Updated " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
+    /// The footer names one thing, the time; which commit the checks ran on rides its hover.
+    public string FreshnessDetail => !IsOverview && CanDisplayReader && CurrentSection?.Head is { Length: >= 7 } head
+        ? "Checks ran on commit " + head[..7] : "When GitHub last sent what this tab shows";
 
     static readonly string[] NotifiedProperties = [
         nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
-        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(FetchedLabel), nameof(AccessLabel),
+        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(IsSectionLoading), nameof(LoadingNote), nameof(FetchedLabel), nameof(AccessLabel),
         nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
         nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
-        nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel),
+        nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(FreshnessDetail),
         nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel),
     ];
 

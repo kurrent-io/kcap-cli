@@ -124,6 +124,30 @@
     <Style Selector="ContentPresenter:nth-child(1) > Border.prDiscussion:not(.thread)">
         <Setter Property="Padding" Value="0,12,0,18" />
     </Style>
+    <!-- A section's loading or empty state: one centred slot. Each fades in as it is shown, so a
+         fast load never flashes the spinner and loading gives way to empty without a jump. -->
+    <Style Selector="StackPanel.prSectionState">
+        <Setter Property="IsVisible" Value="False" />
+        <Setter Property="Spacing" Value="10" />
+        <Setter Property="Margin" Value="0,48,0,0" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="StackPanel.prSectionState.shown">
+        <Setter Property="IsVisible" Value="True" />
+        <Style.Animations>
+            <Animation Duration="0:0:0.45" FillMode="Forward">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0" /></KeyFrame>
+                <KeyFrame Cue="45%"><Setter Property="Opacity" Value="0" /></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="Path.prStateGlyph">
+        <Setter Property="Width" Value="22" /><Setter Property="Height" Value="22" /><Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" /><Setter Property="StrokeThickness" Value="1.4" />
+        <Setter Property="StrokeLineCap" Value="Round" /><Setter Property="StrokeJoin" Value="Round" />
+    </Style>
     <!-- A quiet text action on a content edge: its padding is hit area, not indent. -->
     <Style Selector="Button.kcapQuiet.prFlushLeft"><Setter Property="Margin" Value="-8,0,0,0" /></Style>
     <Style Selector="Button.kcapQuiet.prFlushRight"><Setter Property="Margin" Value="0,0,-8,0" /></Style>

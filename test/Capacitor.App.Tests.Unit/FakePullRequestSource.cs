@@ -11,6 +11,8 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public int Pages;
     public int TotalPages = 3;
     public bool EmptyPages;
+    /// Held open, every page read waits on it: the section stays in its first load.
+    public TaskCompletionSource? PageGate;
     public string? Failure;
     public string OverviewTitle = "Private PR";
     public Func<string, object?>? PageItem;
@@ -48,11 +50,12 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             _ => new PullRequestCommentDto { Id = id, Availability = "available", Body = "Private comment" }
         });
         var next = page + 1 < TotalPages ? (page + 1).ToString("x64", CultureInfo.InvariantCulture) : null;
-        return Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
+        var read = new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,
             Coverage = "complete", HeadSha = section == "checks" ? new string('a', 40) : null, Total = new() { Kind = "exact", Value = TotalPages },
             ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
-        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp()));
+        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
+        return PageGate is { } gate ? gate.Task.ContinueWith(_ => read, TaskScheduler.Default) : Task.FromResult(read);
     }
     public static PullRequestLinkDto Link(int number) => new() { Provider = "github", Host = "github.com", RepoHash = "hash",
         Owner = "example", RepoName = "repo", Number = number, Url = $"https://github.com/example/repo/pull/{number}", Title = "Linked PR", HeadRef = "feature" };
