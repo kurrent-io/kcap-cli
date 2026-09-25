@@ -109,7 +109,7 @@
         <Setter Property="FontSize" Value="13" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
-    <!-- Every section's first text sits 12 below the content's top margin: rows and comments share
+    <!-- Every section's first text sits 12 below the content edge: rows and comments share
          that top inset, and a comment's larger gap goes between comments only. -->
     <Style Selector="Border.prRow">
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
