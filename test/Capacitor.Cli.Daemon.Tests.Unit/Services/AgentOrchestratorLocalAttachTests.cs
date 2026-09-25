@@ -87,6 +87,27 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(a.Args[^1]).IsEqualTo("gpt");
     }
 
+    /// A detached `kcap agent start codex -d` has nobody attached to answer Codex's "Hooks need review"
+    /// dialog, which appears whenever kcap rewrites its hooks, so the launch bypasses it like a hosted one.
+    [Test]
+    public async Task Codex_passthrough_bypasses_the_hook_trust_dialog() {
+        var launcher = new CodexLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<CodexLauncher>.Instance);
+
+        var a = launcher.BuildPassthrough(CtxFor("/r"), ["fix it"]);
+
+        await Assert.That(a.Args).Contains("--dangerously-bypass-hook-trust");
+        await Assert.That(a.Args[^1]).IsEqualTo("fix it");
+    }
+
+    [Test]
+    public async Task Codex_passthrough_does_not_repeat_a_user_supplied_hook_trust_bypass() {
+        var launcher = new CodexLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<CodexLauncher>.Instance);
+
+        var a = launcher.BuildPassthrough(CtxFor("/r"), ["--dangerously-bypass-hook-trust", "fix it"]);
+
+        await Assert.That(a.Args.Count(x => x == "--dangerously-bypass-hook-trust")).IsEqualTo(1);
+    }
+
     [Test]
     public async Task Codex_passthrough_rejects_user_duplicate_of_mandatory_flag() {
         var launcher = new CodexLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<CodexLauncher>.Instance);
