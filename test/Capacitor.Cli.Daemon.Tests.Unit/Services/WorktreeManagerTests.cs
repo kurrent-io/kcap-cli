@@ -612,4 +612,11 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(activeCwd)).IsTrue()
             .Because("an active snapshot must survive regardless of what its name happens to end with");
     }
+
+    /// Parallel checkout is a Windows-only change: macOS and Linux keep git's default checkout.
+    [Test]
+    public async Task Parallel_checkout_is_asked_for_on_windows_only() {
+        await Assert.That(WorktreeManager.ParallelCheckoutFor(isWindows: true)).IsEquivalentTo([new GitConfigOverride("checkout.workers", "0")]);
+        await Assert.That(WorktreeManager.ParallelCheckoutFor(isWindows: false)).IsEmpty();
+    }
 }

@@ -504,8 +504,15 @@ public partial class WorktreeManager(
         // `reset --hard HEAD`, not `checkout -- .`: --no-checkout leaves the INDEX unpopulated too, so a
         // pathspec matches nothing. This is the step that materialises the tree, and therefore the step
         // the overrides have to guard.
-        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. overrides], "reset", "--hard", "HEAD");
+        await RunGit(worktreePath, GitTimeout, time,
+            [.. noHooks, .. overrides, .. ParallelCheckoutFor(OperatingSystem.IsWindows())], "reset", "--hard", "HEAD");
     }
+
+    /// Windows only: its per-file write cost makes a serial checkout most of a launch's wait (7.5k files,
+    /// 9.1 s serial vs 2.4 s with a worker per core), while macOS and Linux keep git's default. Git older
+    /// than 2.32 ignores the key.
+    internal static GitConfigOverride[] ParallelCheckoutFor(bool isWindows) =>
+        isWindows ? [new("checkout.workers", "0")] : [];
 
     /// <summary>
     /// The filter overrides for a context, LOGGED as a side effect.
