@@ -280,8 +280,12 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         if (status == HttpStatusCode.ServiceUnavailable && ErrorCode(body) == "next_work_timeout")
             return BuildToolResult(id, NextWorkTimeoutMessage, isError: true);
 
+        // Only a well-formed code survives from an error body: its prose is server or proxy text
+        // that would reach the agent outside any data block.
         if ((int)status is < 200 or > 299)
-            return BuildToolResult(id, $"Error: HTTP {(int)status} — {NextWorkUntrustedText.Render(body, NextWorkEmitter.FieldCap)}", isError: true);
+            return BuildToolResult(id,
+                ErrorCode(body) is { } code && NextWorkEmitter.IsCode(code) ? $"Error: HTTP {(int)status} — {code}" : $"Error: HTTP {(int)status}",
+                isError: true);
 
         return RenderNextWorkFeed(body) is { } text
             ? BuildToolResult(id, text)
