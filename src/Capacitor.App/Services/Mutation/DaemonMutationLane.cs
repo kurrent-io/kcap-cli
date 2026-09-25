@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Capacitor.App.Services.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Setup;
@@ -15,9 +16,6 @@ internal delegate Task<MutationOutcome> MutationClassifier(
 public sealed class DaemonMutationLane : IAsyncDisposable {
     // Named so DeliverFaulted's outcome is self-explanatory instead of a bare magic number.
     internal const int UnexpectedExitCode = -1;
-
-    // The capability a positive service-verb/DetachedStart success requires the observed daemon to advertise.
-    const string ConsentCapability = "consent/3";
 
     // The one EvidenceFailureLeg sentinel that means "not yet confirmable" rather than "a definite problem".
     const string UnreachableLeg = "unreachable";
@@ -241,7 +239,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (IsRetired(request.DaemonName) || request.RetireServiceId is { } retired && IsRetired(retired))
             return new MutationOutcome.Refused("daemon_renamed_restart_app", RecoverySurface.Attention);
 
-        // Pinned before the first await (spec pin-once rule): evidence is always a fresh socket dial, never a live-graph replay.
+        // Pinned once, before the first await: evidence is always a fresh socket dial, never a live-graph replay.
         var observation = _oneShotFactory(request);
 
         var pinnedPath = await ResolvePathAsync(ct).ConfigureAwait(false);
@@ -277,7 +275,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             _ => throw new ArgumentOutOfRangeException(nameof(request), request.Verb, "unknown MutationVerb"),
         };
 
-    // --- classification (spec §3/§4) ---
+    // --- classification ---
 
     Task<MutationOutcome> ClassifyOutcomeAsync(
             MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation,
@@ -322,7 +320,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return new MutationOutcome.Failed(result.ExitCode, null, RecoverySurface.Attention);
     }
 
-    // Positive evidence only (spec §6): every leg below must independently hold for Succeeded — any
+    // Positive evidence only: every leg below must independently hold for Succeeded — any
     // gap degrades to AttentionSkew/AttentionRepair/UnconfirmedNoAttach, never a guessed success.
     static async Task<MutationOutcome> ClassifyServiceSuccessAsync(
             MutationRequest request, IKcapCli executor, IDaemonObservation observation, CancellationToken ct) {
@@ -442,7 +440,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
         if (!evidence.IdentityConsistent) return "identity_inconsistent";
 
-        if (evidence.Capabilities is null || !evidence.Capabilities.Contains(ConsentCapability)) return "missing_capability_consent_3";
+        if (evidence.Capabilities is null || !evidence.Capabilities.Contains(ConsentFlipCoordinator.ConsentV3Capability)) return "missing_capability_consent_3";
 
         if (!KcapCliCompatibility.Satisfies(evidence.DaemonVersion)) return "daemon_below_floor";
 

@@ -59,6 +59,10 @@ internal interface IHostedAgentRuntimeFactory {
     /// </summary>
     UnattendedSupport DescribeUnattendedSupport() => new(SupportsUnattended, null);
 
+    /// <summary>Whether a <see cref="LaunchKind.Review"/> launch gets the <c>kcap mcp review</c> tools and
+    /// review prompt here. A runtime without them would host a PR reviewer with no review surface.</summary>
+    bool SupportsPrReview => false;
+
     /// <summary>Whether this runtime has a certified containment strategy for review flows that
     /// request the caller's current checkout contents.</summary>
     bool SupportsBorrowedReviewFlow => false;

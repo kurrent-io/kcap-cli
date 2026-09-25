@@ -67,6 +67,11 @@ Options:
                           without a title, and the other seven agents never title
                           locally, so this changes nothing for them.
   --generate-summaries    Also generate per-session what's-done summaries
+  --repair-capture        Recover omitted file-tool records for one ended session
+                          you own. Requires --session; Claude and Codex only.
+                          Scans the root and discovered child transcripts.
+  --dry-run               With --repair-capture: compare and report candidates,
+                          without durable repair writes
   --reimport              Force OpenCode sessions to re-import even if a local
                           ledger records them as complete (use after deleting a
                           session server-side); scope it with the vendor/--repo/
@@ -74,3 +79,30 @@ Options:
 
 Re-running the same command is idempotent — a server-side watermark dedupes
 already-imported lines so nothing is double-loaded.
+
+Transcript records are secret-redacted before upload, with a 4 MiB UTF-8 limit
+per record and batch. Records that cannot be safely processed produce a warning
+and a numbered capture-loss marker; other records continue importing. Install
+server capture-loss support first so session details can show these warnings.
+
+Targeted capture recovery:
+  kcap import --session <id> --repair-capture --dry-run
+  kcap import --session <id> --repair-capture
+
+Install server recovery support first; the CLI checks it before reading sources.
+Repair mode rejects normal import scope/filter/action flags (including --all,
+--repo, --org, --reimport and --private). It preserves ownership and visibility.
+Missing, changed or unsupported sources are reported. Only existing root/child
+streams are eligible; unsupported gaps can remain after file records recover.
+
+Uploads contain at most 100 lines and 4 MiB of serialized JSON, including escaping.
+An individual line exceeding that encoded limit refuses the operation. Staging
+allows at most 128 sources, 4,096 candidates and 64 MiB of candidate payload, and
+expires after 20 minutes without activity. A cancelled scan can be rerun from its
+start; validated repairs continue durably even after this CLI exits.
+
+Exit codes: 0 = complete accounting with no remaining gaps (or a clean dry-run
+preview); 2 = completed recovery/preview with residual gaps; 1 = refused, failed,
+or still incomplete. Output includes the repair ID and latest phase when work
+continues on the server. The CLI waits up to two minutes for accounting; check the
+session's capture status if it is still running.

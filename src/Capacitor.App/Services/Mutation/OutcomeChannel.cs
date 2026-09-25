@@ -109,12 +109,7 @@ public sealed class OutcomeChannel {
                     var (entry, token) = mine[i];
                     if (entry.ActiveLeaseToken != token) continue; // already resolved directly
                     entry.ActiveLeaseToken = 0;
-                    if (!entry.Requeued) {
-                        entry.Requeued = true;
-                        _queue.AddFirst(entry);
-                    } else {
-                        LogSecondAbandonment(entry.Envelope); // already used its one requeue: consumed-with-log, never silent
-                    }
+                    RequeueOnce(entry);
                 }
                 Wake();
             }
@@ -126,14 +121,19 @@ public sealed class OutcomeChannel {
             if (entry.ActiveLeaseToken != token) return; // stale: this lease was already resolved
             entry.ActiveLeaseToken = 0;
             if (!requeue) return; // Ack: consumed, done
-            if (!entry.Requeued) {
-                entry.Requeued = true;
-                _queue.AddFirst(entry);
-                Wake();
-            } else {
-                LogSecondAbandonment(entry.Envelope); // already used its one requeue: consumed-with-log, never silent
-            }
+            if (RequeueOnce(entry)) Wake();
         }
+    }
+
+    // Caller holds _gate. False means the entry already used its one requeue and is consumed with a log.
+    bool RequeueOnce(Entry entry) {
+        if (entry.Requeued) {
+            LogSecondAbandonment(entry.Envelope);
+            return false;
+        }
+        entry.Requeued = true;
+        _queue.AddFirst(entry);
+        return true;
     }
 
     // requeue-exactly-once is exhausted here by design; log so a second abandonment is never a silent drop.

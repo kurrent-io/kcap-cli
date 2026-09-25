@@ -149,6 +149,17 @@ public class LoginFacadeParityTests {
     }
 
     [Test]
+    public async Task MapDiscoverResult_committed_without_a_saved_credential_fails() {
+        var progress = new RecordingAuthProgress();
+        var result   = new AuthResult.Committed("acme", "https://acme.kcap.ai", AuthProvider.GitHubApp, "alice", [], CredentialSaved: false);
+
+        var exit = LoginCommand.MapDiscoverResult(result, progress);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(progress.Notices).IsEmpty();
+    }
+
+    [Test]
     public async Task MapDiscoverResult_retarget_prints_todays_setup_hint_and_fails() {
         var progress = new RecordingAuthProgress();
         var result   = new AuthResult.Retarget("kurrent");

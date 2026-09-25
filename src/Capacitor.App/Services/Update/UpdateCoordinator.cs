@@ -31,9 +31,9 @@ public sealed class UpdateCoordinator {
     UpdateCandidate? _pendingApply;
 
     /// The single-flight lane (`_inflight`) guarantees only one check ever writes this. Readers run
-    /// on the UI thread via `RunMenuActionAsync`, and `RunCheckAsync` holds `_lock` across its
-    /// synchronous prefix (through `_menu.OnNext` and into `ConfirmAsync`) — so this must never
-    /// block on `_lock`, or a UI-thread caller blocked on the same dialog deadlocks against it.
+    /// on the UI thread via `RunMenuActionAsync`, and `CheckAsync` holds `_lock` across
+    /// `RunCheckAsync`'s synchronous prefix (which can reach `_menu.OnNext` and `ConfirmAsync`) — so
+    /// this must never block on `_lock`, or a UI-thread caller blocked on the same dialog deadlocks.
     UpdateCandidate? Ready {
         get => Volatile.Read(ref _ready);
         set => Volatile.Write(ref _ready, value);
@@ -148,7 +148,7 @@ public sealed class UpdateCoordinator {
                 return;
             }
 
-            await _updater.DownloadAsync(candidate, null, _lifetime).ConfigureAwait(false);
+            await _updater.DownloadAsync(candidate, _lifetime).ConfigureAwait(false);
             Ready = candidate;
             _menu.OnNext(new UpdateMenuItem(true, $"Restart to update to {candidate.Version}"));
 

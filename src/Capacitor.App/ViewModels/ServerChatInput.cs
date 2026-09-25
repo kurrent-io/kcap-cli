@@ -69,8 +69,6 @@ internal sealed class ServerChatInput : ChatInput {
         HubCallOutcome outcome;
         try {
             outcome = await _lane.SendUserInputAsync(_agentId, text, ct);
-        } catch (OperationCanceledException) {
-            return Settle(ChatSendOutcome.Unconfirmed, Unconfirmed);
         } catch (Exception) {
             return Settle(ChatSendOutcome.Unconfirmed, Unconfirmed);
         }

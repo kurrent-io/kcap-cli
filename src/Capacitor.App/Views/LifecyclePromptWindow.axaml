@@ -11,9 +11,8 @@
                      CanResize="False" Topmost="True" WindowStartupLocation="CenterOwner">
     <!-- Fixed Width/Height + a ScrollViewer, deliberately NOT SizeToContent="Height": Avalonia's
          headless platform never completes measure for SizeToContent.Height + wrapped
-         multi-paragraph TextBlocks (Task 21's carried-forward finding — BuildConfirmForceStopWindow
-         has the same latent shape). Explicit Width on both TextBlocks below is the second half of
-         that fix — wrap has a bound to terminate against either way. -->
+         multi-paragraph TextBlocks. The explicit Width on both TextBlocks gives the wrap a bound
+         to terminate against. -->
     <Grid Margin="20" RowDefinitions="*,Auto">
         <ScrollViewer Grid.Row="0">
             <StackPanel Spacing="12">
@@ -23,9 +22,9 @@
             </StackPanel>
         </ScrollViewer>
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,16,0,0">
-            <Button Content="Not now" Command="{Binding DeclineCommand}" IsCancel="True"
+            <Button Content="Not now" Classes="kcapChip" Command="{Binding DeclineCommand}" IsCancel="True"
                     IsVisible="{Binding ShowDeclineButton}" />
-            <Button Content="{Binding AcceptButtonText}" Command="{Binding AcceptCommand}" IsDefault="True" />
+            <Button Content="{Binding AcceptButtonText}" Classes="kcapPrimary" Command="{Binding AcceptCommand}" IsDefault="True" />
         </StackPanel>
     </Grid>
 </rxui:ReactiveWindow>

@@ -1,9 +1,90 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Capacitor.Cli.Capture;
 
 namespace Capacitor.Cli.Tests.Unit;
 
+// The production regex deadlines must not measure contention from process-heavy fixtures.
+[NotInParallel]
 public class SecretRedactorTests {
+    [Test]
+    public async Task UnchangedUnicodeRecord_DoesNotNeedAnExpandedRewrite() {
+        var raw = "{\"content\":\"" + new string('\u2028', 710_000) + "\"}";
+        var outcome = SecretRedactor.RedactLineWithOutcome(raw);
+        await Assert.That(outcome.Loss).IsNull();
+        await Assert.That(outcome.Line).IsEqualTo(raw);
+    }
+
+    [Test]
+    public async Task CompleteAsciiRecord_AtTransportLimit_IsRetained() {
+        var raw = "{\"content\":\"" + new string('x', 4 * 1024 * 1024 - 14) + "\"}";
+        var outcome = SecretRedactor.RedactLineWithOutcome(raw);
+        await Assert.That(outcome.Loss).IsNull();
+        await Assert.That(outcome.Line).IsEqualTo(raw);
+    }
+
+    [Test]
+    public async Task InputLimitCountsUtf8BytesBeforeRedaction() {
+        var raw = "{\"content\":\"" + new string('\u4e00', 1_400_000) + " ghp_0123456789abcdefghij\"}";
+        var outcome = SecretRedactor.RedactLineWithOutcome(raw);
+        await Assert.That(outcome.Loss).IsEqualTo(RedactionLossReason.InputLimit);
+        await Assert.That(outcome.InputUtf16Length).IsEqualTo(raw.Length);
+        await Assert.That(outcome.InputUtf8Bytes).IsEqualTo(Encoding.UTF8.GetByteCount(raw));
+        await Assert.That(outcome.Line).DoesNotContain("ghp_");
+    }
+
+    [Test]
+    public async Task EscapingGrowthCannotExceedOutputLimit() {
+        var raw = "{\"content\":\"" + new string('\u2028', 710_000) + " ghp_0123456789abcdefghij\"}";
+        var outcome = SecretRedactor.RedactLineWithOutcome(raw);
+        await Assert.That(outcome.Loss).IsEqualTo(RedactionLossReason.OutputLimit);
+        await Assert.That(outcome.Line).DoesNotContain("ghp_");
+    }
+
+    [Test]
+    public async Task ExcessiveDepthNeverUsesRawFallback() {
+        var raw = new string('[', 1001) + "\"private body\"" + new string(']', 1001);
+        var outcome = SecretRedactor.RedactLineWithOutcome(raw);
+        await Assert.That(outcome.Loss).IsEqualTo(RedactionLossReason.MalformedInput);
+        await Assert.That(outcome.Line).DoesNotContain("private body");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task LargeResult_RetainsCorrelationAndOutcome_WhileRedacting(bool isError) {
+        const string secret = "ghp_0123456789abcdefghij";
+        var raw = JsonSerializer.Serialize(new {
+            type = "user", message = new { content = new[] {
+                new { type = "tool_result", tool_use_id = "large-edit", is_error = isError,
+                    // Not 'x': it starts the xox* vendor prefixes, so the scan would test every
+                    // position and could breach the watcher's per-call deadline on a loaded runner.
+                    content = new string('a', 100_000) + " " + secret }
+            }}
+        });
+
+        var output = SecretRedactor.RedactLine(raw);
+
+        await Assert.That(output).Contains("large-edit");
+        await Assert.That(output).DoesNotContain(secret);
+        await Assert.That(output).Contains("[REDACTED]");
+        using var parsed = JsonDocument.Parse(output);
+        var result = parsed.RootElement.GetProperty("message").GetProperty("content")[0];
+        await Assert.That(result.GetProperty("is_error").GetBoolean()).IsEqualTo(isError);
+    }
+
+    [Test]
+    [Arguments(65_535)]
+    [Arguments(65_536)]
+    [Arguments(65_537)]
+    public async Task ValidJson_AroundLegacyLimit_RemainsComplete(int length) {
+        var raw = "{\"content\":\"" + new string('x', length - 14) + "\"}";
+        await Assert.That(raw.Length).IsEqualTo(length);
+        await Assert.That(SecretRedactor.RedactLine(raw)).IsEqualTo(raw);
+    }
+
     [Test]
     public async Task IsSecretKey_recognises_a_secret_key_and_passes_an_innocuous_one() {
         await Assert.That(SecretRedactor.IsSecretKey("api_key")).IsTrue();
@@ -18,12 +99,47 @@ public class SecretRedactorTests {
     }
 
     [Test]
+    public async Task RedactValue_ScansAMultiMegabyteValue_WithoutTheWatcherDeadline() {
+        // Every delimiter gate is open, so each pattern scans the whole value before reaching the secret.
+        const string secret = "DATABASE_PASSWORD=hunter2-hunter2";
+        var row   = "[inventory row 000001] status=ok bytes=4096 note: none user@host\n";
+        var value = string.Concat(Enumerable.Repeat(row, 8_000_000 / row.Length)) + secret;
+
+        var redacted = SecretRedactor.RedactValue(value, keyIsSecret: false);
+
+        await Assert.That(redacted).IsNotNull();
+        await Assert.That(redacted!).DoesNotContain("hunter2-hunter2");
+        await Assert.That(redacted!).Contains("DATABASE_PASSWORD=[REDACTED]");
+    }
+
+    [Test]
+    public async Task OutOfProcessPatterns_AreTheWatcherVocabulary_UnderALongerDeadline() {
+        var slots = typeof(SecretPatterns).GetProperties().Where(p => p.PropertyType == typeof(Regex)).ToList();
+        await Assert.That(slots).IsNotEmpty();
+
+        foreach (var slot in slots) {
+            var watcher      = (Regex)slot.GetValue(SecretRedactor.WatcherPatterns)!;
+            var outOfProcess = (Regex)slot.GetValue(SecretRedactor.OutOfProcessPatterns.Value)!;
+            await Assert.That(watcher.MatchTimeout).IsLessThan(SecretRedactor.OutOfProcessMatchTimeout);
+            await Assert.That(outOfProcess.MatchTimeout).IsEqualTo(SecretRedactor.OutOfProcessMatchTimeout);
+            await Assert.That(outOfProcess.ToString()).IsEqualTo(watcher.ToString());
+            await Assert.That(outOfProcess.Options & ~RegexOptions.Compiled).IsEqualTo(watcher.Options);
+        }
+    }
+
+    [Test]
+    public async Task ASuperLinearScan_StillMeetsItsDeadline_OnARebuiltSet() {
+        // A quote-less run of keywords sends the JSON-key pattern into quadratic backtracking, so
+        // the deadline is the only thing that ends this scan.
+        var patterns = SecretRedactor.WatcherPatterns.WithMatchTimeout(TimeSpan.FromMilliseconds(50));
+        var value    = "\"" + string.Concat(Enumerable.Repeat("secret", 200_000)) + ":\n";
+
+        await Assert.That(() => patterns.Redact(value, keyIsSecret: false, RedactionBudget.Unlimited))
+            .Throws<RegexMatchTimeoutException>();
+    }
+
+    [Test]
     public async Task RedactsLine_TruncatedPemPrivateKey_DoesNotHangOnBacktracking() {
-        // Regression: a tool result containing `-----BEGIN RSA PRIVATE KEY-----` followed by many
-        // `\n`-escaped key body lines, then truncated WITHOUT a matching `-----END` marker, used
-        // to wedge the watcher: the `(?:\\n|[\s\S])*?` alternation in PemBlockRegex had two paths
-        // for every `\n` pair, producing ~2^N backtracking on the failed-to-find-END search.
-        // Observed in prod: watcher main loop at 100% CPU for 50s+ on a 5KB line.
         var keyBody = new StringBuilder();
 
         // Synthetic base64-like body — NOT a real key. The redactor's backtracking shape only
@@ -40,8 +156,6 @@ public class SecretRedactorTests {
         var result = SecretRedactor.RedactLine(line);
         sw.Stop();
 
-        // The pre-fix regex would not return inside any reasonable test budget on this input.
-        // 2 seconds is generous; the fixed regex completes in <10ms.
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(2));
         // No END marker means there's no PEM block to redact — line should pass through unchanged.
         await Assert.That(result).IsEqualTo(line);
@@ -49,10 +163,6 @@ public class SecretRedactorTests {
 
     [Test]
     public async Task RedactsLine_OverSizeLimit_ReplacesWithPlaceholder_DoesNotLeakContent() {
-        // Defense in depth: lines above the size cap skip the regex pipeline entirely so a
-        // future regex change reintroducing ambiguity cannot wedge the watcher. The line MUST
-        // NOT be returned verbatim — WatchCommand uploads RedactLine output to the server, so
-        // raw passthrough on an oversize tool-result line would be an exfiltration path.
         var secretMarker = "GHOST_TOKEN_DO_NOT_LEAK_ME_xyz12345";
         var padding      = new string('A', SecretRedactor.MaxRedactableLineChars);
         var oversized    = padding + secretMarker;
@@ -990,17 +1100,14 @@ public class SecretRedactorTests {
 
     [Test]
     public async Task RedactsLine_NestedDeeperThanTheReaderAllows() {
-        // Nested past the depth System.Text.Json itself refuses, so nothing can walk it and the
-        // whole-line pipeline is all there is. It still has to come back redacted: the alternative
-        // is shipping the secret raw.
         var line = string.Concat(Enumerable.Repeat("""{"a":""", 1100))
           + "\"tok ghp_abc123def456ghi789jkl012mno345\""
           + new string('}', 1100);
 
-        var result = SecretRedactor.RedactLine(line);
+        var result = SecretRedactor.RedactLineWithOutcome(line);
 
-        await Assert.That(result).DoesNotContain("ghp_abc123");
-        await Assert.That(result).Contains("[REDACTED]");
+        await Assert.That(result.Line).DoesNotContain("ghp_abc123");
+        await Assert.That(result.Loss).IsEqualTo(RedactionLossReason.MalformedInput);
     }
 
     [Test]

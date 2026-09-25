@@ -320,14 +320,14 @@ public sealed class WizardBridges {
 /// </summary>
 public static class WizardSignInOperation {
     public static Func<ConnectIntent, CancellationToken, Task<AuthResult>> For(
-            OnboardingFacade facade, string profile) =>
+            OnboardingFacade facade, string profile, CommitPrecondition? precondition = null) =>
         async (intent, ct) => intent switch {
             ConnectIntent.Paste paste => await facade.LoginAsync(
-                ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true),
-            ConnectIntent.Discover discover => await facade.DiscoverAsync(discover.Provider, forceDevice: false, ct),
+                ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true, precondition: precondition),
             // Creation runs inside WorkOS discovery, after the org-less sign-in finds no tenant.
-            ConnectIntent.Create => await facade.DiscoverAsync(AuthProvider.WorkOS, forceDevice: false, ct),
-            _                    => new AuthResult.Failed("No connection was chosen.")
+            ConnectIntent.Discover or ConnectIntent.Create =>
+                await facade.DiscoverAsync(AuthProvider.WorkOS, forceDevice: false, ct),
+            _ => new AuthResult.Failed("No connection was chosen.")
         };
 
     /// <summary>

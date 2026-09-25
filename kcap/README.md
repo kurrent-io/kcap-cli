@@ -12,9 +12,14 @@ Search and recall past Kurrent Capacitor sessions from inside the agent.
 
 | Tool | Description |
 |------|-------------|
-| `search_sessions` | Free-text + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
-| `get_session_summary` | Concise `summary_text` + `plan` for a session |
+| `search_sessions` | Keyword (one to three terms or identifiers) + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
+| `list_repo_sessions` | List a repository's sessions you can see, running ones first |
+| `get_session_summary` | Concise `summary_text` + `plan` + `declared_plans` for a session |
+| `list_turns` | Per-turn prose outline for a session |
+| `get_turn` | One turn's full transcript, by session id and turn index |
 | `get_session_transcript` | Speaker-tagged transcript window, with `around_event` drill-in for search hits |
+| `list_repo_plans` | List a repository's declared plans you can see, most recently touched first |
+| `get_declared_plans` | A plan's documents and full task list, by `plan_id` or `session_id` |
 
 Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` defaults to *this* repo.
 

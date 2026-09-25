@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -43,6 +44,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
     readonly SessionSubagents _subagents;
+    readonly PlanActivity? _planActivity;
     readonly CompositeDisposable _disposables = new();
     readonly CancellationTokenSource _lifetime = new();
     // Read once: the source is disposed at teardown, and a retry waking after that still needs a
@@ -55,12 +57,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     // Every tool id with a result, not only the running ones: a replayed request can arrive after
     // the transcript's initial load, and then only this set can tell that its tool is done.
     readonly HashSet<string> _settledTools = new(StringComparer.Ordinal);
+    // AskUserQuestion's permission hook carries no tool-use id, so a finished ask is recognized
+    // by question text. The latest overlapping ask is the one a card belongs to.
+    readonly List<AskedQuestion> _questionAsks = [];
     readonly HashSet<string> _withdrawing = new(StringComparer.Ordinal);
     readonly Dictionary<string, int> _withdrawFailures = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<string, byte> _loggedFailures = new(StringComparer.Ordinal);
     readonly Dictionary<string, PendingPermissionRequest> _requests = new(StringComparer.Ordinal);
     readonly HashSet<ToolCallItem> _marked = new(ReferenceEqualityComparer.Instance);
     ToolGroupItem? _openGroup;
+    /// The bang command waiting for the output record that follows it.
+    ShellCommandItem? _openShell;
 
     /// The feed and the generation it belongs to, taken as one reference: reading them separately
     /// lets a switch land between them and tag a read of the old source with the new generation,
@@ -132,7 +139,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     public PendingCardsViewModel Cards { get; }
     public ReadOnlyObservableCollection<PendingCardViewModel> PendingCards => Cards.PendingCards;
-    public IObservable<string?> Root => _rootSubject;
 
     readonly ObservableAsPropertyHelper<bool> _hasPendingCards;
     public bool HasPendingCards => _hasPendingCards.Value;
@@ -224,6 +230,42 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     readonly ObservableAsPropertyHelper<string> _composerHint;
     public string ComposerHint => _composerHint.Value;
+
+    UsageLimitNoticeDto? _usageLimit;
+    bool _hasUsageLimitQuestion;
+    string _usageLimitSummary = "";
+    string _usageLimitPrompt = "";
+    string _usageLimitError = "";
+    IReadOnlyList<UsageLimitChoiceViewModel> _usageLimitChoices = [];
+    bool _usageLimitChoiceTaken;
+
+    public bool HasUsageLimitQuestion {
+        get => _hasUsageLimitQuestion;
+        private set => this.RaiseAndSetIfChanged(ref _hasUsageLimitQuestion, value);
+    }
+
+    public string UsageLimitSummary {
+        get => _usageLimitSummary;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitSummary, value);
+    }
+
+    public string UsageLimitPrompt {
+        get => _usageLimitPrompt;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitPrompt, value);
+    }
+
+    public string UsageLimitError {
+        get => _usageLimitError;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitError, value);
+    }
+
+    public IReadOnlyList<UsageLimitChoiceViewModel> UsageLimitChoices {
+        get => _usageLimitChoices;
+        private set => this.RaiseAndSetIfChanged(ref _usageLimitChoices, value);
+    }
+
+    /// False once a choice has been sent, until this notice changes. A failed send turns it back on.
+    public bool UsageLimitChoicesOpen => !_usageLimitChoiceTaken;
 
     readonly ObservableAsPropertyHelper<bool> _showsComposer;
     /// Input + Send stay in the tree only while messaging is still possible. An ended session
@@ -327,7 +369,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 foreach (var change in changes) {
                     if (change.Key != agentId) continue;
                     if (change.Reason == ChangeReason.Remove)
-                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true };
+                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true, UsageLimit = null };
                     else if (change.Reason is ChangeReason.Add or ChangeReason.Update)
                         info = ChatSessionInfo.FromLocal(change.Current, ended: false);
                 }
@@ -360,17 +402,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             string agentId, IDaemonClientService daemon, ChatInput input, IAttachmentUploader uploader,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             SessionSubagents subagents, string? unavailableNote = null, IObservable<string?>? sessionId = null,
-            IObservable<bool>? localDaemonOnAppServer = null)
+            IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
-               subagents, unavailableNote, null, sessionId, localDaemonOnAppServer) { }
+               subagents, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
             ChatInput input, IAttachmentUploader uploader, Func<string, IChatTranscriptFeed>? openFeed, IUrlOpener opener, TimeProvider time,
             IPermissionService permissions, SessionSubagents subagents, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
-            IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null) {
+            IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null) {
+        _planActivity = planActivity;
         _input = input;
         _uploader = uploader;
         _disposables.Add(input);
@@ -435,10 +478,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _input.WhenAnyValue(i => i.Hint),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
                 this.WhenAnyValue(x => x.UploadingFiles),
+                this.WhenAnyValue(x => x.HasUsageLimitQuestion),
                 _intakeNotice,
-                (hint, readOnly, uploading, notice) =>
+                (hint, readOnly, uploading, limit, notice) =>
                     uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
-                        : notice ?? (readOnly ? "" : hint))
+                        : notice ?? (readOnly ? ""
+                            : limit ? "Choose how to handle the usage limit. A message here would be typed into that menu."
+                            : hint))
             .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);
 
@@ -448,6 +494,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 (availability, readOnly) => !readOnly && availability != SendAvailability.Ended)
             .ToProperty(this, x => x.ShowsComposer,
                 initialValue: !IsReadOnlyParticipant && _input.Availability != SendAvailability.Ended)
+            .DisposeWith(_disposables);
+
+        _input.WhenAnyValue(i => i.Availability)
+            .Subscribe(_ => SyncPendingCardItems())
             .DisposeWith(_disposables);
 
         // The view reaches the gate through the sink, so its two members are the ones the binding
@@ -466,7 +516,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             this.WhenAnyValue(x => x.ComposerText),
             _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-            (text, can, readOnly) => can && !readOnly && !string.IsNullOrWhiteSpace(text));
+            this.WhenAnyValue(x => x.HasUsageLimitQuestion),
+            (text, can, readOnly, limit) => can && !readOnly && !limit && !string.IsNullOrWhiteSpace(text));
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
@@ -500,6 +551,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     return;
                 }
             }
+            // The upload can finish after the menu is on screen. The text would be typed into
+            // that menu, so the draft and the chips stay where they are.
+            if (HasUsageLimitQuestion) return;
             var chipIds = files.Select(f => f.Id).ToList();
             var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
             _lastSent = queued;
@@ -583,13 +637,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         StatusText = info.StatusLabel;
-        StatusDot = SessionStatusDots.For(info.Status, info.WaitsOnUser);
+        StatusDot = SessionStatusDots.For(info.Status, info.WaitsOnUser || UsageLimitNoticeDto.IsQuestion(info.UsageLimit));
+        ApplyUsageLimit(info.UsageLimit);
         _status = info.Status;
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
         _subagents.SessionOver = info.Ended;
+        if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
         if (info.FeedKey != _queueKey) {
@@ -602,13 +658,53 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         RefreshQueue();
     }
 
+    void ApplyUsageLimit(UsageLimitNoticeDto? notice) {
+        if (Equals(_usageLimit, notice)) return;
+        _usageLimit = notice;
+        foreach (var old in _usageLimitChoices) old.Choose.Dispose();
+        SetUsageLimitChoiceTaken(false);
+        var question = UsageLimitNoticeDto.IsQuestion(notice);
+        HasUsageLimitQuestion = question;
+        UsageLimitSummary = question ? notice!.Summary : "";
+        UsageLimitPrompt = question ? notice!.Prompt : "";
+        UsageLimitError = "";
+        UsageLimitChoices = question
+            ? notice!.Options.Select(option => new UsageLimitChoiceViewModel(
+                option.Index, option.Label,
+                ReactiveCommand.CreateFromTask(
+                    () => ChooseUsageLimitAsync(option.Index),
+                    this.WhenAnyValue(x => x.UsageLimitChoicesOpen)))).ToList()
+            : [];
+    }
+
+    void SetUsageLimitChoiceTaken(bool taken) {
+        if (_usageLimitChoiceTaken == taken) return;
+        _usageLimitChoiceTaken = taken;
+        this.RaisePropertyChanged(nameof(UsageLimitChoicesOpen));
+    }
+
+    // The digit is written before the menu leaves the screen, so another click would land on
+    // the next prompt. A failed send is the only reason to try the same menu again.
+    async Task ChooseUsageLimitAsync(int index) {
+        if (index is < 1 or > 9 || _usageLimitChoiceTaken) return;
+        SetUsageLimitChoiceTaken(true);
+        UsageLimitError = "";
+        var sent = await _input.SendKeyAsync((byte)('0' + index), _lifetimeToken);
+        if (sent || _lifetimeToken.IsCancellationRequested) return;
+        UsageLimitError = "The terminal is not attached, so that choice was not sent.";
+        SetUsageLimitChoiceTaken(false);
+    }
+
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
         _items.Clear();
         _pendingTools.Clear();
         _settledTools.Clear();
+        _questionAsks.Clear();
         _openGroup = null;
+        _openShell = null;
         _marked.Clear();
         _subagents.Clear();
+        _planActivity?.Clear();
         _feedKey = key;
         var previous = _lease;
         _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation));
@@ -703,9 +799,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _items.Clear();
                 _pendingTools.Clear();
                 _settledTools.Clear();
+                _questionAsks.Clear();
                 _openGroup = null;
+                _openShell = null;
                 _marked.Clear();
                 _subagents.Clear();
+                _planActivity?.Clear();
                 break;
         }
 
@@ -727,6 +826,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             return;
         }
 
+        _planActivity?.Apply(read.Lines.Select(line => line.Projection));
         var fresh = new List<ChatItemViewModel>();
         foreach (var (projected, offset) in read.Lines) {
             _subagents.Apply(projected);
@@ -739,22 +839,44 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             }
             foreach (var e in projected.Envelopes) {
                 switch (e.Kind) {
+                    case AcpEventKind.UserMessage when e.ToolKind == ChatDisplayKind.Shell:
+                        _openGroup = null;
+                        _openShell = new ShellCommandItem(e.Text ?? "");
+                        fresh.Add(_openShell);
+                        break;
                     case AcpEventKind.UserMessage:
                         _openGroup = null;
+                        _openShell = null;
                         fresh.Add(new UserTurnItem(e.Text ?? ""));
                         break;
                     case AcpEventKind.AssistantText:
                         _openGroup = null;
+                        _openShell = null;
                         fresh.Add(new AssistantTextItem(e.Text ?? ""));
+                        break;
+                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell && _openShell is { HasOutput: false } shell:
+                        _openGroup = null;
+                        shell.Output = e.Text ?? "";
+                        break;
+                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell:
+                        _openGroup = null;
+                        _openShell = null;
+                        fresh.Add(new ShellCommandItem("") { Output = e.Text ?? "" });
                         break;
                     case AcpEventKind.SystemNote:
                         _openGroup = null;
+                        _openShell = null;
                         fresh.Add(new SystemNoteItem(e.Text ?? ""));
                         break;
                     case AcpEventKind.ToolCall: {
+                        _openShell = null;
                         var name = e.ToolName ?? "tool";
-                        var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root), ToolSummary.Categorize(name, e.ToolInputJson));
-                        if (e.ToolCallId is { } id) _pendingTools[id] = item;
+                        var category = ToolSummary.Categorize(name, e.ToolInputJson);
+                        var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root, category), category);
+                        if (e.ToolCallId is { } id) {
+                            _pendingTools[id] = item;
+                            if (name == ClaudeElicitation.ToolName) NoteQuestionCall(id, e.ToolInputJson);
+                        }
                         if (_openGroup is null) {
                             _openGroup = new ToolGroupItem();
                             fresh.Add(_openGroup);
@@ -765,6 +887,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     case AcpEventKind.ToolResult:
                         if (e.ToolCallId is not { } resultId) break;
                         _settledTools.Add(resultId);
+                        NoteQuestionResult(resultId, e.TimestampIso);
                         if (_pendingTools.Remove(resultId, out var call))
                             call.Outcome = e.ToolIsError ? ToolOutcome.Error : ToolOutcome.Done;
                         break;
@@ -778,32 +901,60 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         RefreshActivityNote();
     }
 
+    /// The one group carrying the pack/suppress flags. Only the trailing group ever carries them,
+    /// and it stops being the trailing group without any card changing, so it is cleared by
+    /// identity rather than by sweeping every row on each drain.
+    ToolGroupItem? _flaggedGroup;
+
+    /// The group a question card has stood in for, so the row can come back the moment that card
+    /// retires rather than waiting for the transcript to carry the answer.
+    ToolGroupItem? _questionCardHost;
+
     /// Cards ride the same virtualizing list as the thread, always last, so a path switch or a
     /// transcript reset cannot bury them in the middle of replayed rows.
     void SyncPendingCardItems() {
         var cards = PendingCards;
         var start = _items.Count;
         while (start > 0 && _items[start - 1] is PendingCardItem) start--;
-        if (TrailingCardsMatch(start, cards)) return;
+        var trailingGroup = start > 0 && _items[start - 1] is ToolGroupItem g ? g : null;
+        var questionPending = cards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
+        if (questionPending && trailingGroup is not null) _questionCardHost = trailingGroup;
+        var suppressGroup = trailingGroup is not null && HidesBehindQuestionCard(trailingGroup, questionPending);
 
-        foreach (var item in _items)
-            if (item is ToolGroupItem { PacksWithCard: true } packed)
-                packed.PacksWithCard = false;
-
-        var wasEmpty = _items.Count == 0;
-        for (var i = _items.Count - 1; i >= 0; i--)
-            if (_items[i] is PendingCardItem) _items.RemoveAt(i);
-
-        var packs = cards.Count > 0 && _items.Count > 0 && _items[^1] is ToolGroupItem;
-        if (packs) ((ToolGroupItem)_items[^1]).PacksWithCard = true;
-        var first = true;
-        foreach (var card in cards) {
-            _items.Add(new PendingCardItem(card, packsWithPrevious: first && packs));
-            first = false;
+        if (!TrailingCardsMatch(start, cards)) {
+            var wasEmpty = _items.Count == 0;
+            for (var i = _items.Count - 1; i >= 0; i--)
+                if (_items[i] is PendingCardItem) _items.RemoveAt(i);
+            var first = true;
+            foreach (var card in cards) {
+                _items.Add(new PendingCardItem(card, packsWithPrevious: first && trailingGroup is not null && !suppressGroup));
+                first = false;
+            }
+            if (wasEmpty != (_items.Count == 0))
+                this.RaisePropertyChanged(nameof(PhaseNote));
         }
-        if (wasEmpty != (_items.Count == 0))
-            this.RaisePropertyChanged(nameof(PhaseNote));
+
+        if (!ReferenceEquals(_flaggedGroup, trailingGroup) && _flaggedGroup is { } stale) {
+            stale.PacksWithCard = false;
+            stale.SuppressedForPendingQuestion = false;
+        }
+        _flaggedGroup = trailingGroup;
+        if (trailingGroup is not null) {
+            trailingGroup.PacksWithCard = cards.Count > 0 && !suppressGroup;
+            trailingGroup.SuppressedForPendingQuestion = suppressGroup;
+        }
     }
+
+    /// The centered card is where a question is answered, so the left card for the same call is
+    /// chrome while the question is live. Hiding keys off the call, not off the card: the card
+    /// lands a round trip later, and waiting for it shows the left card only to take it away
+    /// again. Two cases hand the row back — an ended session, which is getting no card at all,
+    /// and a card that has already retired, after which the row is the only record of the call
+    /// until the transcript carries its result.
+    bool HidesBehindQuestionCard(ToolGroupItem group, bool questionPending) =>
+        _input.Availability != SendAvailability.Ended
+        && (questionPending || !ReferenceEquals(_questionCardHost, group))
+        && group.Calls.Any(static c => c.Category == ToolCategory.Question && !c.IsSettled);
 
     bool TrailingCardsMatch(int start, ReadOnlyObservableCollection<PendingCardViewModel> cards) {
         if (_items.Count - start != cards.Count) return false;
@@ -834,14 +985,49 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     /// A pending request whose tool already has a result was answered where the daemon cannot see
-    /// (the vendor's own terminal prompt), so this tab is the one party that can retire it. Sent
-    /// once per request; a failed send reopens it and retries on a bounded backoff.
+    /// (the vendor's own terminal prompt), so this tab is the one party that can retire it.
+    /// AskUserQuestion's hook carries no tool-use id, so that card matches the latest ask with
+    /// the same question text, and only once that ask's result is at or after the card. A card
+    /// whose requested time did not parse is left: that stamp is not an ordering. Sent once per
+    /// request; a failed send reopens it and retries on a bounded backoff.
     void WithdrawSettled() {
         if (_lifetimeToken.IsCancellationRequested) return;
         foreach (var request in _requests.Values) {
-            if (request.ToolUseId is not { } id || !_settledTools.Contains(id) || !_withdrawing.Add(request.Key)) continue;
+            if (!ShouldWithdraw(request) || !_withdrawing.Add(request.Key)) continue;
             _ = WithdrawAsync(request);
         }
+    }
+
+    bool ShouldWithdraw(PendingPermissionRequest request) {
+        if (request.ToolUseId is { } id && _settledTools.Contains(id)) return true;
+        if (!request.IsQuestion || request.RequestedAt == DateTimeOffset.MinValue) return false;
+        AskedQuestion? latest = null;
+        foreach (var ask in _questionAsks)
+            if (request.OverlapsQuestion(ask.Fingerprints)) latest = ask;
+        return latest is { SettledAt: { } settled } && request.RequestedAt <= settled;
+    }
+
+    void NoteQuestionCall(string callId, string? inputJson) {
+        if (_questionAsks.Exists(a => a.CallId == callId)) return;
+        if (PendingPermissionRequest.QuestionTexts(inputJson) is not { } texts) return;
+        var ask = new AskedQuestion(callId, texts);
+        if (_settledTools.Contains(callId)) ask.SettledAt = _time.GetUtcNow();
+        _questionAsks.Add(ask);
+    }
+
+    void NoteQuestionResult(string callId, string? timestampIso) {
+        var ask = _questionAsks.LastOrDefault(a => a.CallId == callId);
+        if (ask is null || ask.SettledAt is not null) return;
+        ask.SettledAt = Timestamp(timestampIso) ?? _time.GetUtcNow();
+    }
+
+    static DateTimeOffset? Timestamp(string? iso) =>
+        iso is not null && DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : null;
+
+    sealed class AskedQuestion(string callId, HashSet<string> fingerprints) {
+        public string CallId { get; } = callId;
+        public HashSet<string> Fingerprints { get; } = fingerprints;
+        public DateTimeOffset? SettledAt { get; set; }
     }
 
     async Task WithdrawAsync(PendingPermissionRequest request) {
@@ -881,6 +1067,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _subagents.Changed -= RefreshSubagents;
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
         // the cancellation before the channel it is sending through goes away.
+        foreach (var choice in _usageLimitChoices) choice.Choose.Dispose();
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         Cards.Dispose();

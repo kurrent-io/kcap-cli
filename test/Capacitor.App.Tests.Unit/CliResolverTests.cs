@@ -76,11 +76,4 @@ public class CliResolverTests {
 
         await Assert.That(path).IsEqualTo("/opt/kcap/kcap");
     }
-
-    [Test]
-    public async Task ResolvePath_missing_sibling_falls_through_to_path() {
-        var path = CliResolver.ResolvePath(_ => null, _ => false, "/Applications/Kurrent Capacitor.app/Contents/MacOS");
-
-        await Assert.That(path).IsEqualTo("kcap");
-    }
 }

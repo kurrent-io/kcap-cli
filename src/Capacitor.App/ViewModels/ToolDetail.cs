@@ -9,6 +9,9 @@ namespace Capacitor.App.ViewModels;
 /// a repository root is stripped as well.
 public static class ToolDetail {
     const int MaxLength = 80;
+    /// A question is read rather than scanned — the row wraps it instead of eliding — so the only
+    /// cap on it is the one that keeps an unbounded prompt out of a notification body.
+    const int MaxQuestionLength = 400;
     const string WorktreesSegment = "/.capacitor/worktrees/";
 
     static readonly string[] Keys = [
@@ -16,14 +19,23 @@ public static class ToolDetail {
     ];
     static readonly string[] PathKeys = ["file_path", "path", "notebook_path"];
 
-    public static string From(string? inputJson, string? root = null) {
+    public static string From(string? inputJson, string? root = null, ToolCategory category = ToolCategory.Other) {
         if (string.IsNullOrEmpty(inputJson)) return "";
         try {
             using var doc = JsonDocument.Parse(inputJson);
             if (!doc.RootElement.IsObject) return "";
+            if (doc.RootElement.Arr("questions") is { } questions) {
+                foreach (var item in questions.EnumerateArray()) {
+                    if (item.Str("question") is { } text && text.Trim().Length > 0)
+                        return TextElision.End(FirstLine(text), MaxQuestionLength);
+                }
+            }
+            if (category == ToolCategory.Question && doc.RootElement.Str("prompt") is { } prompt && prompt.Trim().Length > 0)
+                return TextElision.End(FirstLine(prompt), MaxQuestionLength);
             foreach (var key in Keys) {
+                if (category == ToolCategory.Question && key == "prompt") continue;
                 if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0)
-                    return FirstLine(PathKeys.Contains(key) ? Relative(s.Trim(), root) : s);
+                    return TextElision.Middle(FirstLine(PathKeys.Contains(key) ? Relative(s.Trim(), root) : s), MaxLength);
             }
         } catch (JsonException) { }
         return "";
@@ -44,10 +56,6 @@ public static class ToolDetail {
     static string FirstLine(string text) {
         var line = text.Trim();
         var newline = line.IndexOfAny(['\r', '\n']);
-        if (newline >= 0) line = line[..newline].TrimEnd();
-        if (line.Length <= MaxLength) return line;
-        var cut = MaxLength - 1;
-        if (char.IsHighSurrogate(line[cut - 1])) cut--;
-        return string.Concat(line.AsSpan(0, cut), "…");
+        return newline < 0 ? line : line[..newline].TrimEnd();
     }
 }

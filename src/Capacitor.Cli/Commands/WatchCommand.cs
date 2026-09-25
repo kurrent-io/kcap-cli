@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Capture;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
@@ -1990,7 +1991,8 @@ partial class WatchCommand(
             }
 
             var newLineNumbers = drainRead.LineNumbers;
-            var newLines       = drainRead.Lines.Select(SecretRedactor.RedactLine).ToList();
+            var newLines = TranscriptCapture.EncodeLines(drainRead.Lines,
+                (reason, count) => Log(time, $"Capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
             var linesRead      = drainRead.NextPosition;
 
             state.Commits = state.Commits.Collect();
@@ -2048,11 +2050,7 @@ partial class WatchCommand(
                 }
             }
 
-            // Claude subagent idle-ceiling guard. Reads drainRead.Lines, NOT the redacted newLines:
-            // RedactLine swaps any line over 64 KiB for a placeholder with no tool ids, and an
-            // oversized tool_result (a big file read, a build log) would then never clear its id —
-            // pinning toolInFlight true forever and disabling the ceiling entirely. Only ids are
-            // read here; no raw content leaves the process.
+            // Capture-loss markers have no tool IDs; local completion tracking needs raw lines.
             if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {
                 foreach (var line in drainRead.Lines) {
                     UpdateClaudePendingToolCalls(state.PendingClaudeToolCalls, line);
@@ -2300,17 +2298,7 @@ partial class WatchCommand(
                     cursorGuardVerifiedRange = rangeBuffer;
                 }
 
-                // SendTranscriptBatch takes a single TranscriptBatch record (arity 1) —
-                // SignalR matches on argument COUNT and does NOT auto-supply C# optional
-                // defaults (PR #576 / v0.4.0 incident), so a parameter object keeps the
-                // contract stable: adding a field stays backward-compatible (this client
-                // omits a null vendor; servers ignore unknown fields). This calls the
-                // record-based `SendTranscriptBatch2` added in (the legacy
-                // positional `SendTranscriptBatch` stays on the server for older CLIs),
-                // so it requires a server deployed with that method — server-before-CLI.
-                // Cursor uses the ACKED variant instead — its return carries the
-                // server's source-acknowledgement frontier, which the watcher's local cursor
-                // tracks (see below) rather than the raw count of lines just sent.
+                // SignalR dispatch binds by arity; the record payload keeps additive fields compatible.
                 var batch = new TranscriptBatch {
                     SessionId       = sessionId,
                     AgentId         = agentId,
@@ -2323,22 +2311,20 @@ partial class WatchCommand(
 
                 int? cursorAckNextLine = null;
 
-                if (vendor == "cursor") {
-                    // re-check both markers IMMEDIATELY at the delivery
-                    // boundary. The early checks at the top of this method ran before the guard's
-                    // file reads/re-verification above (which can take real, if small, wall-clock
-                    // time), so a beforeSubmitPrompt barrier created — or a quarantine written by
-                    // a concurrent process — in that window must still be caught here, never sent.
-                    // Hold (never advance state) so the next poll re-evaluates from scratch.
-                    if (_markers.IsQuarantined(sessionId)
-                     || _markers.BarrierPending(sessionId, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound)) {
-                        return newLines;
-                    }
+                foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
+                    if (vendor == "cursor") {
+                        // A barrier can appear between chunks, after the initial admission check.
+                        if (_markers.IsQuarantined(sessionId)
+                         || _markers.BarrierPending(sessionId, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound)) {
+                            return newLines;
+                        }
 
-                    var ack = await hubConnection.InvokeAsync<TranscriptBatchAck>("SendTranscriptBatchAcked", batch, ct);
-                    cursorAckNextLine = ack.NextLineNumber;
-                } else {
-                    await hubConnection.InvokeAsync("SendTranscriptBatch2", batch, ct);
+                        var ack = await hubConnection.InvokeAsync<TranscriptBatchAck>("SendTranscriptBatchAcked", chunk, ct);
+                        cursorAckNextLine = ack.NextLineNumber;
+                        if (chunk.LineNumbers!.Length > 0 && ack.NextLineNumber <= chunk.LineNumbers[^1]) break;
+                    } else {
+                        await hubConnection.InvokeAsync("SendTranscriptBatch2", chunk, ct);
+                    }
                 }
 
                 if (newLines.Count > 0) {
@@ -2450,13 +2436,6 @@ partial class WatchCommand(
         return [];
     }
 
-    /// <summary>
-    /// Pure builder for the JSON payload spooled into <see cref="TranscriptSpool"/>
-    /// at shutdown when the hub is down and the final drain's still-undelivered tail cannot be sent
-    /// live. Mirrors the <see cref="TranscriptBatch"/> construction in <see cref="DrainNewLines"/>
-    /// (the live SignalR send) so the shape the global drain (task 3) later POSTs to
-    /// <c>/hooks/transcript</c> on replay is identical to a normal live batch.
-    /// </summary>
     internal static string BuildTranscriptSpoolBatch(
             string                sessionId,
             string?               agentId,
@@ -2475,19 +2454,7 @@ partial class WatchCommand(
             },
             CapacitorJsonContext.Default.TranscriptBatch);
 
-    /// <summary>
-    /// Task 8: called from the shutdown path only when the hub is NOT connected at the point
-    /// the final drain finishes. Re-reads the transcript from <paramref name="linesProcessed"/> (the
-    /// last line the server actually confirmed, per <see cref="DrainNewLines"/>'s
-    /// "only advance position after successful send" rule) to EOF, using the same
-    /// <see cref="IncompleteFinalLinePolicy.ConsumeIfComplete"/> decision as the final drain itself so
-    /// a still-growing/unparseable last line is never spooled prematurely. Any resulting lines are the
-    /// tail the outage prevented from being delivered live; spools them via
-    /// <see cref="TranscriptSpool.Append"/> so the global drain (task 3) replays them once the hub
-    /// recovers, rather than dropping them when this process exits.
-    /// Returns <c>null</c> when there is nothing undelivered (nothing spooled), otherwise the
-    /// <see cref="TranscriptSpool.AppendResult"/> from the spool write.
-    /// </summary>
+    /// <summary>Spool only records beyond the acknowledged source frontier.</summary>
     internal async Task<TranscriptSpool.AppendResult?> SpoolUndeliveredTranscriptTailAsync(
             TranscriptSpool   transcriptSpool,
             string            transcriptPath,
@@ -2500,14 +2467,7 @@ partial class WatchCommand(
         ) {
         if (!File.Exists(transcriptPath)) return null;
 
-        // a Cursor session already quarantined by the runtime rewrite
-        // guard must never have its tail re-read and spooled here either: the bytes past
-        // `linesProcessed` ARE the exact corrupted batch the guard just discarded (the discard
-        // never advanced state.LinesProcessed), so without this check a later global drain
-        // (LifecycleSpoolDrain) would replay from the spool precisely what the guard existed to
-        // block. No needs-import marker either — D0's quarantine is a deliberate, permanent,
-        // diagnosable stop (see CursorRewriteGuard), and `kcap import` also refuses a quarantined
-        // session (review fix #7), so a needs-import marker here would just be inert.
+        // A quarantined source must not escape through spool replay.
         if (vendor == "cursor" && _markers.IsQuarantined(sessionId)) {
             Log(time, $"Cursor session {sessionId} is quarantined; skipping shutdown-tail spool "
               + "(no line-number path may keep feeding a corrupted cursor)");
@@ -2531,13 +2491,18 @@ partial class WatchCommand(
 
         if (tail.Lines.Count == 0 && commits.Pending is not { Length: > 0 }) return null;
 
-        // Redact secrets exactly as the live drain does (DrainNewLines: drainRead.Lines.Select(
-        // SecretRedactor.RedactLine)) — otherwise the spooled tail lands on disk raw and is POSTed
-        // unredacted on replay, leaking secrets the live path would have stripped.
-        var redacted = tail.Lines.Select(SecretRedactor.RedactLine).ToList();
-
-        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, redacted, tail.LineNumbers, commits.Pending);
-        var result = transcriptSpool.Append(sessionId, batch);
+        var redacted = TranscriptCapture.EncodeLines(tail.Lines,
+            (reason, count) => Log(time, $"Shutdown capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
+        var batch = new TranscriptBatch {
+            SessionId = sessionId, AgentId = agentId, Vendor = vendor,
+            Lines = [..redacted], LineNumbers = [..tail.LineNumbers], ObservedCommits = commits.Pending
+        };
+        var result = TranscriptSpool.AppendResult.Appended;
+        foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
+            result = transcriptSpool.Append(sessionId,
+                BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
+            if (result != TranscriptSpool.AppendResult.Appended) break;
+        }
 
         switch (result) {
             case TranscriptSpool.AppendResult.Appended:

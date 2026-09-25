@@ -27,9 +27,9 @@ public static class SessionStatusDots {
     /// Waiting-on-user overrides the process word: a live agent whose turn is idle is not Connected.
     public static IBrush For(string status, bool waitsOnUser) => waitsOnUser ? WaitingDot : For(status);
 
-    public static IBrush For(AgentStatusDto dto) => For(dto.Status, WaitsOnUser(dto));
+    public static IBrush For(AgentStatusDto dto) => For(dto.Status, WaitsOnUser(dto) || UsageLimitNoticeDto.IsQuestion(dto.UsageLimit));
 
-    public static IBrush For(AgentRow row) => For(row.Status, WaitsOnUser(row));
+    public static IBrush For(AgentRow row) => For(row.Status, WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit));
 
     /// The daemon's finished-turn verdict, for an agent the user can answer: a flow participant
     /// between rounds waits on the flow, so nothing here may describe it as waiting on the user.
@@ -38,13 +38,15 @@ public static class SessionStatusDots {
 
     /// The needs-you pip's rule from the dto alone (a pending ask is the other source), held
     /// beside the dot vocabulary so the two can never disagree.
-    public static bool NeedsAttention(AgentStatusDto dto) => dto.Status == "Failed" || WaitsOnUser(dto);
+    public static bool NeedsAttention(AgentStatusDto dto) =>
+        dto.Status == "Failed" || WaitsOnUser(dto) || UsageLimitNoticeDto.IsQuestion(dto.UsageLimit);
 
     /// The merged-row twins of the two rules above, for rail rows from either lane.
     public static bool WaitsOnUser(AgentRow row) =>
         row.AwaitingInput == true && !AgentActionService.IsProtectedKind(row.Kind);
 
-    public static bool NeedsAttention(AgentRow row) => row.Status == "Failed" || WaitsOnUser(row);
+    public static bool NeedsAttention(AgentRow row) =>
+        row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit);
 
     /// The one busy verdict every surface reads: a live agent that is either mid-turn or still has
     /// subagents the daemon counts. The wait flag keeps its meaning beside it — a parent that
@@ -54,9 +56,13 @@ public static class SessionStatusDots {
 
     /// Display text for the status: the daemon's own word, except for the one state its
     /// vocabulary does not spell, a live agent whose turn is over.
-    public static string Label(AgentStatusDto dto) => WaitsOnUser(dto) ? "Waiting for input" : dto.Status;
+    public static string Label(AgentStatusDto dto) =>
+        UsageLimitNoticeDto.IsQuestion(dto.UsageLimit) ? dto.UsageLimit!.Summary
+        : WaitsOnUser(dto) ? "Waiting for input" : dto.Status;
 
-    public static string Label(AgentRow row) => WaitsOnUser(row) ? "Waiting for input" : row.Status;
+    public static string Label(AgentRow row) =>
+        UsageLimitNoticeDto.IsQuestion(row.UsageLimit) ? row.UsageLimit!.Summary
+        : WaitsOnUser(row) ? "Waiting for input" : row.Status;
 
     /// Process is gone — Completed/Failed stay in the snapshot until teardown removes the agent.
     public static bool IsTerminal(string? status) => status is "Completed" or "Failed";

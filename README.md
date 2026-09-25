@@ -95,6 +95,8 @@ Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/
 
 When a Claude Code session spawns subagents, the chat shows a strip above the composer while any of them run ("2 subagents running"), and the work-context pane lists them under **SUBAGENTS** — the agent type, a *background* tag for one launched in the background, and its state: running with its elapsed time, done, failed or stopped. The section starts collapsed, its header showing how many subagents are running, completed, failed and stopped; click the header to open the list. Both are read from the transcript; a session on another machine's daemon shows the strip alone, since the work-context pane is not part of the remote session view. Rows are not links.
 
+When the agent declares a plan through the `kcap-plans` tools, the work-context pane shows it under **PLAN**, between the pull request and the subagents: the plan, spec and design documents it named, then every task with its state — pending, in progress, completed or skipped — and any note the agent left on it. The header reads "2 of 6 done" while the list is open and, folded, shows how many tasks are settled and how many are still open. The list follows the agent closely: a task the session updates moves within a second or two, and a change made anywhere else arrives within half a minute. Rows are not links.
+
 The app must run from the Applications folder — launched from the disk image or from Downloads it offers to move itself there first, because the terminal link and the background service point at its location.
 
 Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. Set it to **0** for no limit. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself. Rename waits for startup to finish and requires a CLI that supports retiring the old service. If `KCAP_DAEMON_NAME` sets the name, remove that override and restart the app before renaming.
@@ -224,6 +226,13 @@ kcap import --antigravity       # only Antigravity
 
 Sessions are imported most-recent-first, so your latest work appears in the dashboard earliest.
 
+For an ended Claude or Codex session with omitted large file-tool records, preview
+recovery with `kcap import --session <id> --repair-capture --dry-run`, then run the
+same command without `--dry-run` to apply it. Deploy server recovery support first;
+see [targeted capture recovery](#targeted-capture-recovery) for limits and exit codes.
+
+Transcript uploads redact secrets before sending. Large records are preserved within the 4 MiB UTF-8 limit; records that cannot be safely processed produce a capture-loss warning and a numbered marker, so file totals or plans may be incomplete.
+
 > **Already-running sessions.** On a *first* `plugin install --kiro`, any Kiro session already running loaded no kcap integration, so it isn't captured live — the install names it and where it is. It is not lost: the agent writes its transcript to disk regardless, so `kcap import --kiro` backfills it once it ends. kcap deliberately does not offer to restart it, which would mean killing an interactive session on a terminal it does not own with no way to relaunch it. Nothing is printed when there is no such session, or when you re-run an install you already had — that session started *with* the integration and is being captured.
 
 > **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Because Pi also ships no built-in MCP, the same command installs an MCP-bridge extension (`~/.pi/agent/extensions/kcap-mcp.ts`, opt out `--skip-pi-mcp`) that exposes the kcap MCP servers as native Pi tools, plus a steering block in `~/.pi/agent/AGENTS.md` (opt out `--skip-pi-instructions`). Historical `kcap import --pi` works with or without any of it.
@@ -248,7 +257,7 @@ kcap also reports anonymous CLI usage data by default — see [Telemetry](#telem
 
 The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. `kcap setup` **registers it (with `kcap-review`) for Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, Gemini CLI, SST OpenCode, Google Antigravity, and AWS Kiro CLI** — no manual `claude mcp add` or TOML/JSON edit. For Claude Code it's carried by the plugin's `.mcp.json`; for Codex CLI, `kcap setup` / `kcap plugin install --codex` write it into `~/.codex/config.toml`; for Cursor, `kcap setup` / `kcap plugin install --cursor` write it into `~/.cursor/mcp.json` (opt out with `--skip-cursor-mcp`); for Copilot, `kcap setup` / `kcap plugin install --copilot` write it into `~/.copilot/mcp-config.json` (opt out with `--skip-copilot-mcp`); for Gemini, `kcap setup` / `kcap plugin install --gemini` write it into the shared `~/.gemini/settings.json` (opt out with `--skip-gemini-mcp`); for OpenCode, into `~/.config/opencode/opencode.json` (opt out with `--skip-opencode-mcp`); for Antigravity, `kcap setup` / `kcap plugin install --antigravity` write it into `~/.gemini/config/mcp_config.json` (opt out with `--skip-antigravity-mcp`); for Kiro, `kcap setup` / `kcap plugin install --kiro` write it into `~/.kiro/settings/mcp.json` (opt out with `--skip-kiro-mcp`). The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
-The `kcap mcp flows` stdio server lets agents start and interact with AI-powered agent flows — any flow-definition catalog entry, not just reviews. The plugin **auto-registers it for Claude Code**, and `kcap setup` / the harness-specific plugin installers also register it for Codex, Cursor, Copilot, and Gemini. Codex registration is conservative: existing manual entries are preserved, and uninstall removes only unchanged kcap-owned entries. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
+The `kcap mcp flows` stdio server lets agents start and interact with AI-powered agent flows — any flow-definition catalog entry, not just reviews. The plugin **auto-registers it for Claude Code**, and `kcap setup` / the harness-specific plugin installers also register it for Codex, Cursor, Copilot, and Gemini. Codex registration is conservative: existing manual entries are preserved, and uninstall removes only unchanged kcap-owned entries. The Codex `kcap-flows` entry also carries `tool_timeout_sec = 600`, so Codex's own per-tool timeout never cuts a flow call short; an entry an earlier kcap wrote picks it up on the next `kcap setup` or plugin refresh, and an entry you edited is left alone. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
 The `kcap mcp flow-result` stdio server is the reviewer-side counterpart: the daemon injects it into hosted review-flow reviewer sessions so they can submit their result. It is not meant to be registered or run manually — see [Flow-result MCP server](#flow-result-mcp-server-hosted-reviewers).
 
@@ -256,7 +265,7 @@ The `kcap mcp memory` stdio server lets agents search, save, and update durable 
 
 Beyond registering the servers, `kcap setup` / `kcap plugin install` also installs a small kcap-owned **agent-instructions block** for harnesses that read a user-level instructions file (GitHub Copilot CLI's `~/.copilot/copilot-instructions.md`, and Gemini CLI's + Google Antigravity's shared `~/.gemini/GEMINI.md` today; more rolling out per harness). It's a marker-delimited, non-destructive note (preserves any instructions you've written) that steers the agent to prefer the kcap tools for "why / history / prior-work" questions over native `git`/GitHub/grep — registration alone doesn't make agents route to the tools. Opt out with `--skip-<harness>-instructions`.
 
-Where a harness exposes a per-server trust knob, registration also marks the **read-only** kcap servers auto-approved so the agent doesn't stop to ask before every read: **Gemini** marks `kcap-review`, `kcap-sessions`, and `kcap-analytics` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same three via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The write-capable `kcap-memory` (saves memories) and the work-launching `kcap-flows` (starts a *paid* hosted reviewer) are deliberately left prompting. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
+Where a harness exposes a per-server trust knob, registration also marks the kcap servers that only read, or that write only to the session's own Capacitor record, auto-approved so the agent doesn't stop to ask before every call: **Gemini** marks `kcap-review`, `kcap-sessions`, `kcap-analytics`, `kcap-workitems` and `kcap-plans` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same five via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The work-launching `kcap-flows` (starts a *paid* hosted reviewer), `kcap-memory` (a save or rescope can widen who sees a memory) and `kcap-artefacts` (can widen who may open a page) are deliberately not pre-approved. Every kcap tool also advertises MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a harness that decides approval from them — Codex's `auto` mode, for one — runs the reads and the additive writes without a prompt whatever the registration says, and asks only before a tool that removes or overwrites something. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
 
 The `kcap mcp workitems` stdio server lets agents attach the current session to a work item — by issue key, PR number, work item id, or a brand-new title — list what a session is already attached to, or record the loose ends a session leaves unfinished. `kcap setup` / `kcap plugin install` **register it for every supported harness** (Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, OpenCode, Antigravity, and Pi). See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
 
@@ -550,16 +559,18 @@ kcap mcp sessions
 
 Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex, Cursor, Copilot, Gemini, Antigravity) so they can search and recall prior work without leaving the chat. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it (alongside `kcap-review`) directly in `~/.codex/config.toml` under `[mcp_servers]`, so there's nothing extra to do — launch Codex from your repo directory so the server resolves the right repo. Enabling the kcap plugin through Codex's native plugin manager (`codex plugin add`) also provides them via the plugin's `.codex-mcp.json` descriptor. **Cursor:** `kcap setup` / `kcap plugin install --cursor` register it (alongside the other three kcap servers) in `~/.cursor/mcp.json`; opt out with `--skip-cursor-mcp`. **GitHub Copilot CLI:** `kcap setup` / `kcap plugin install --copilot` register it (alongside the other three kcap servers) in `~/.copilot/mcp-config.json`; opt out with `--skip-copilot-mcp`. **Gemini CLI:** `kcap setup` / `kcap plugin install --gemini` register it (alongside the other three kcap servers) in the shared `~/.gemini/settings.json`; opt out with `--skip-gemini-mcp`. **Google Antigravity:** `kcap setup` / `kcap plugin install --antigravity` register it (alongside the other three kcap servers) in `~/.gemini/config/mcp_config.json` — Antigravity's own MCP file, not the Gemini CLI's `settings.json`; opt out with `--skip-antigravity-mcp`.
 
-It provides six tools:
+It provides eight tools:
 
-- **`search_sessions`** — free-text search over past sessions (and subagent transcripts), searching the current repo first and automatically widening to every visible repo when results come back thin (the response then carries `widened_to_all_repos: true`, and each hit includes its own repo). Pass `repo: "all"` to search across every repo you can see up front, or `repo: "owner/name"` for a different one — an explicit `repo` (including `"all"`) never auto-widens. Filter by `author` / `author_github_id`. Returns ranked hits with `session_id`, snippet, and (for transcript hits) `hit_event_index` + `agent_id` for drilling in.
-- **`list_repo_sessions`** — the sessions on a repository you are allowed to see, running first, ordered by last activity, with `access_level`, `stale`, branch, cwd, last prompt and Edit/Write attempt paths (blank below full access). `repo` defaults to the current repo and accepts `owner/name` or a 16-hex hash; `state` is `active` (default), `ended` or `all`; `owner` is `me` or a canonical id; `touching_path` matches attempt paths on full-access rows only.
-- **`get_session_summary`** — concise `summary_text` + `plan` for a session. Use this to orient before reading the transcript.
+- **`search_sessions`** — keyword search over past sessions (and subagent transcripts). `query` takes one to three keywords or identifiers (a ticket id, a file name, a symbol), not a sentence: the literal lanes need every term inside one event or turn summary, so a sentence gets only embedding neighbours. Each hit carries `hit_kind` — `transcript` and `title` are literal matches, `turn_prose` and `semantic` may be nearest-neighbour hits that never contain the query. Searches the current repo first and automatically widens to every visible repo when results come back thin (the response then carries `widened_to_all_repos: true`, and each hit includes its own repo). Pass `repo: "all"` to search across every repo you can see up front, or `repo: "owner/name"` for a different one — an explicit `repo` (including `"all"`) never auto-widens. Filter by `author` / `author_github_id`. Returns ranked hits with `session_id`, snippet, and (for transcript hits) `hit_event_index` + `agent_id` for drilling in.
+- **`list_repo_sessions`** — the sessions on a repository you are allowed to see, running first, ordered by last activity, with `access_level`, `stale`, branch, cwd, last prompt and Edit/Write attempt paths (blank below full access). `repo` defaults to the current repo and accepts `owner/name` or a 16-hex hash; `state` is `active` (default, so finished sessions are hidden unless you pass `ended` or `all`); `owner` is `me` or a canonical id; `touching_path` matches attempt paths on full-access rows only. There is no time filter — an undeclared argument such as a date range is ignored, not rejected.
+- **`list_repo_plans`** — the declared plans on a repository that you can see, unfinished ones by default, with progress, the next open task and the sessions attached to each. Use this to find work a session left behind.
+- **`get_declared_plans`** — a plan's documents and full task list, by `plan_id` or for every plan a `session_id` touched.
+- **`get_session_summary`** — concise `summary_text` + `plan` for a session, plus `declared_plans`: a progress pointer for each plan the session declared. Use this to orient before reading the transcript.
 - **`get_session_transcript`** — speaker-tagged events from a session. Pair `around_event` (and `agent_id` if the hit was in a subagent) with the values returned by `search_sessions` to fetch the exact decision context.
 - **`get_turn`** — the full event transcript for one turn (user prompt, tool calls + results, assistant text) by `session_id` + `turn_index`. A turn is one user message and the assistant's full response up to the next user message.
 - **`list_turns`** — every turn of a session with its prose summary, prompt, tools, files and token counts; works on running sessions at `activity` access and above.
 
-The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash, auto-widening to all repos only when that pinned search comes back thin. **If the current repo can't be resolved** (run outside a git checkout, or a missing/unparseable `origin` remote), `search_sessions` returns an error asking you to pass `repo: "owner/name"` or `repo: "all"` — it will not silently search across all repos.
+The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash, auto-widening to all repos only when that pinned search comes back thin. **If the current repo can't be resolved** (run outside a git checkout, or a missing/unparseable `origin` remote), `search_sessions` returns an error asking you to pass `repo: "owner/name"` or `repo: "all"` — it will not silently search across all repos. `list_repo_sessions` and `list_repo_plans` are repo-scoped the same way and fail closed the same way, but neither accepts `repo: "all"`: unresolved, they return an error asking for `repo: "owner/name"` rather than falling back to every repo.
 
 ### Flows MCP server (for agents)
 
@@ -567,13 +578,13 @@ The server is repo-aware — it resolves the current working directory to a repo
 kcap mcp flows
 ```
 
-Stdio MCP server that lets coding agents start and interact with AI-powered agent flows — any entry in the server's flow-definition catalog, not just reviews — directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_flow` returns an error) until a daemon with the repo is available. `kcap setup` / `kcap plugin install --codex` register it for **Codex** in `~/.codex/config.toml`; existing manual/custom entries are never overwritten or claimed, and uninstall removes only unchanged kcap-owned entries. The native Codex plugin descriptor also includes it. The corresponding installers register it for **Cursor**, **GitHub Copilot CLI**, and **Gemini CLI** in their normal MCP configuration files. For the harnesses that expose no per-process identity to a long-lived MCP server (Cursor, Copilot, Gemini, Kiro, OpenCode, Antigravity), that registration includes an internal `--driver <vendor>` argument so the flows server can tell which harness is driving and recommend a *different* reviewer; Claude Code and Codex are identified from their own environment and are left unstamped. `--driver` is written by kcap into the registration — it is not a flag you set yourself. Because `kcap-flows` launches paid work, it is deliberately not marked read-only or auto-approved on any harness.
+Stdio MCP server that lets coding agents start and interact with AI-powered agent flows — any entry in the server's flow-definition catalog, not just reviews — directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_flow` returns an error) until a daemon with the repo is available. `kcap setup` / `kcap plugin install --codex` register it for **Codex** in `~/.codex/config.toml`; existing manual/custom entries are never overwritten or claimed, and uninstall removes only unchanged kcap-owned entries. That entry carries `tool_timeout_sec = 600` — above the CLI's own bound on a flow call (see [harness tool timeouts](#harness-tool-timeouts) below), so Codex's default per-tool timeout of 300 s never aborts one; an entry an earlier kcap wrote is healed to include it on the next `kcap setup` / `kcap plugin install --codex`, and an entry you edited (your own timeout included) is preserved as is. The native Codex plugin descriptor also includes it. The corresponding installers register it for **Cursor**, **GitHub Copilot CLI**, and **Gemini CLI** in their normal MCP configuration files. For the harnesses that expose no per-process identity to a long-lived MCP server (Cursor, Copilot, Gemini, Kiro, OpenCode, Antigravity), that registration includes an internal `--driver <vendor>` argument so the flows server can tell which harness is driving and recommend a *different* reviewer; Claude Code and Codex are identified from their own environment and are left unstamped. `--driver` is written by kcap into the registration — it is not a flag you set yourself. Because `kcap-flows` launches paid work, it is deliberately not marked read-only or auto-approved on any harness.
 
 It provides four generic tools:
 
 - **`start_flow`** — start a new flow from either `definition_id` (the server's flow-definition catalog, e.g. `spec-review`, `code-review`, or a custom definition) **or** `definition_yaml` (an inline dynamic flow definition — the full YAML, same schema as catalog definitions); provide exactly one of the two. Catalog starts use the guarded v2 protocol. A `definition_yaml` flow has extra constraints: every participant must declare `workspace: none` and a concrete, priced model (no `default`), the server clamps `limits`/`mcp` to its own caps rather than trusting the definition, may reject the whole thing with a coded error, and requires a server with dynamic flows enabled. Also provide `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`. A single-participant definition starts its first round eagerly; a multi-participant definition starts **round-less** — the response carries no round, and each declared role's agent launches lazily on its first `send_to_participant`. Optional `mode`: by default, when the daemon runs on the same machine and the selected vendor declares a borrowed-context containment strategy, the participant sees current tracked, dirty, and non-ignored untracked checkout content; the safety boundary is vendor-specific. Cursor runs in a daemon-owned snapshot refreshed before follow-up rounds, while direct borrowing is reserved for runtimes with a native read-only tool clamp. The capability is advertised for whatever build of the vendor CLI is installed — it is not gated on a per-version validation record, since a vendor auto-update would then silently drop the participant back onto a stale committed base. It IS gated per platform where the containment boundary has not been measured: **GitHub Copilot advertises borrowed review only on macOS/ARM64, and only on a daemon that can both enforce an OS sandbox (`sandbox-exec`) and broker a token** (`COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN`) — widening its tool surface enough to read a snapshot also widens what a read tool can be pointed at, so the boundary is an OS sandbox rather than the vendor's own permission prompts, and that sandbox grants neither your keychain nor your Copilot state (see [Borrowed-context Copilot reviews](#borrowed-context-copilot-reviews)). Where any of the three is missing, a Copilot borrowed request returns `vendor_containment_unreadable` naming the daemon and the remedies; `mode="context-only"` works and is the remedy. Pass `mode="context-only"` to opt out. Claude review flows currently use owned worktrees because it declares no borrowed-review containment strategy. Optional `vendor`: for reserved `spec-review`/`code-review`, explicitly selects the reviewer independently of the driver; when omitted, resolution falls through to the definition's authored vendor when it declares one, then to your saved `flows.reviewer_vendor` preference (applied via one automatic retry, with the response saying so), and finally a coded `reviewer_vendor_required` if neither is set — ask the user which reviewer vendor to use, pass it explicitly, and offer to save it with `kcap config set flows.reviewer_vendor <vendor>`. Custom single-participant catalog definitions retain their authored vendor unless explicitly overridden. The server records requested/applied vendor plus selection source, and rejects an unavailable or uncertified vendor without silent fallback. Dynamic (`definition_yaml`) flows reject a top-level vendor override because each participant declares its own vendor. Optional `model`: a per-run reviewer **model** override for a single-participant catalog review — REQUIRES `vendor` (the model is interpreted against that vendor; there is no vendor→model table anywhere in the CLI, so `model` without `vendor` is rejected locally before any request is sent) and is rejected on a `definition_yaml` (dynamic) or multi-participant start (each participant already pins its own model). Pass the vendor's own model id or alias verbatim, case-sensitive — the CLI never translates, canonicalizes, or guesses it.
 - **`send_to_participant`** — send a follow-up message to a participant role declared by the flow definition (single-participant definitions use `"reviewer"`; the server rejects an unknown role, naming the valid ones). One round runs at a time per role — a second send to a busy role is rejected naming the busy round, while other roles remain addressable. Returns the new round's findings.
-- **`get_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow run. Optional `wait` (boolean, default `false`): when `true`, blocks — via repeated bounded internal checks, never a raw long-poll — until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately. A long-running round is expected, not an error; on the 8-minute cap this returns the same benign "still running" text an unset/false `wait` already returns on the round-submission path, so simply call it again with `wait: true`.
+- **`get_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow run. Optional `wait` (boolean, default `false`): when `true`, blocks — via repeated bounded internal checks, never a raw long-poll — until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately. A long-running round is expected, not an error; on that cap this returns the same benign "still running" text an unset/false `wait` already returns on the round-submission path, so simply call it again with `wait: true`. `flow_run_id` is optional: omitted, the newest open flow this session started is read (Cursor, Copilot, Gemini, Kiro, OpenCode and Antigravity give the flows server no session, so there it reads the flows started from the same repository — or working directory — on this machine, which the flows server records in `flow-runs-v1.json` under the config directory) — with several open, the reply lists them to choose from; with none open, the newest settled one, so a failure you were not watching for is still readable — and `session_id` selects another session's flows. The lookup needs a server with the by-session flow route; an older server answers with an error that says to pass the id.
 - **`close_flow`** — mark a completed flow run as closed.
 
 Every flow response reports which **workspace** the reviewer actually used, so you can tell whether it saw your uncommitted work:
@@ -613,6 +624,10 @@ If the deadline is exhausted the call does **not** hang or silently succeed: the
 
 The four review tools — **`start_review_flow`**, **`submit_review_round`**, **`get_review_flow_status`**, **`close_review_flow`** — are aliases of the generic tools above: `start_review_flow`'s `kind` maps to `start_flow`'s `definition_id`, and `submit_review_round`'s `context` maps to `send_to_participant`'s `message` with the `reviewer` role targeted implicitly. Current clients always use flow protocol v2 for catalog starts; servers can reject legacy reserved-alias starts with `client_upgrade_required`. New integrations should prefer the generic tools; the review aliases remain convenient for a plain spec/code-review loop.
 
+#### Harness tool timeouts
+
+A start or round call holds the tool call open while the round runs. The CLI bounds it to end under 5 minutes — the shortest per-tool timeout among the harnesses that drive flows — with the round result or the benign `Flow still running for flow_run_id …` text, which is also the only place the driver is handed its `flow_run_id`. If a harness aborts the call anyway (a shorter timeout in its config, or a user-edited one), the flow is still running server-side: the driver should not start it again and should not go looking for it, but call `get_review_flow_status` / `get_flow_status` with `wait: true`, omitting `flow_run_id` when the aborted start never delivered it. The tool descriptions and both flow skills say so up front, because the harness words its own timeout error and kcap cannot.
+
 **Reviewer model override — capability gating, protocol, and semantics:**
 
 - **Capability gating.** A daemon only advertises `SupportsReviewerModelResolution` (per vendor) when that vendor is installed, unattended-certified, AND has a runtime-owned model resolver — today that's **Claude** and **Codex** only. ACP-hosted vendors (Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity) advertise `false` for this field and keep their existing vendor-only (no model override) unattended support; the server refuses a `model` override for any vendor that doesn't advertise it, with no silent fallback. A resolver owns its own vendor's aliases/ids entirely — there is deliberately no shared, central vendor→model table anywhere in the CLI or daemon.
@@ -629,7 +644,7 @@ Requires `kcap login` **and a running daemon with this repo checked out**. Disco
 kcap mcp flow-result   # launched by the daemon — not meant to be run manually
 ```
 
-Stdio MCP server the **daemon injects into hosted flow participant sessions** (Claude, Codex, Cursor, and GitHub Copilot participants). It exposes two tools: **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the participant's round result to the Capacitor server — the **only** delivery channel: the server does not read the participant's transcript, so ending a reply with `FINDINGS:`/`NO FINDINGS` markers delivers nothing (servers ≥ Flows Phase E-0) — and **`send_flow_message`** (`text`), which pushes a short out-of-band note to the flow driver between rounds (a notable observation, a blocking question); the driver sees it as `pending_messages` on its next flow call, so delivery is not immediate. Messages are retry-safe (client-generated `message_id`, deduplicated server-side) and are NOT a substitute for round results. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow.
+The daemon gives every unattended reviewer this stdio MCP server as its result channel, by whatever mechanism the vendor supports. It exposes two tools: **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the participant's round result to the Capacitor server — the **only** delivery channel: the server does not read the participant's transcript, so ending a reply with `FINDINGS:`/`NO FINDINGS` markers delivers nothing (servers ≥ Flows Phase E-0) — and **`send_flow_message`** (`text`), which pushes a short out-of-band note to the flow driver between rounds (a notable observation, a blocking question); the driver sees it as `pending_messages` on its next flow call, so delivery is not immediate. Messages are retry-safe (client-generated `message_id`, deduplicated server-side) and are NOT a substitute for round results. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow.
 
 Cursor reviewers run only in daemon-owned worktrees and launch with Cursor's native `--force --approve-mcps --trust` controls so command, MCP-server, and workspace-trust prompts are suppressed at the source. kcap does not auto-approve or route a fallback interaction to a human: any permission, elicitation, or unknown ACP interaction frame violates the zero-prompt contract and immediately reaps the reviewer. Copilot reviewers require an authenticated Copilot CLI with access to the requested model; the daemon preloads this MCP configuration and clamps Copilot's available tools to the validated flow allowlist. That clamp is exclusive, so an owned-worktree Copilot reviewer has no ambient file or shell tool at all. A **borrowed-context** Copilot reviewer is granted read/search tools (`view`, `grep`, `glob`) so it can read the snapshot, and is confined by an OS sandbox instead of by the clamp — see below. There is nothing to register or configure.
 
@@ -834,6 +849,43 @@ not under your home directory. Off by default.
 
 
 ### Loading historical sessions
+
+Live capture and import use the same bounded secret redaction. Each record and each batch of encoded lines is limited to 4 MiB of UTF-8 content. If a record exceeds the size or processing bounds, the CLI reports the reason and uploads a capture-loss marker at its source line number. Other records continue importing. Install server support for capture-loss markers before rolling out this CLI behavior so session details can display the warning.
+
+#### Targeted capture recovery
+
+```bash
+kcap import --session <id> --repair-capture --dry-run
+kcap import --session <id> --repair-capture
+```
+
+Recovery supports **Claude and Codex** sessions that you own and that have ended.
+It scans the local root and discovered child transcripts, redacts each line, and
+compares them with existing server streams. It restores provably missing supported
+file-tool records and refreshes turn cards, file totals and summaries. Other omitted
+records can remain as reported gaps. It creates no new sessions or child streams.
+
+Deploy the server's capture-loss and recovery support **before the CLI**. The CLI
+checks support and ownership before reading transcripts. `--dry-run` performs the
+same comparison without durable repair writes. `--claude` or `--codex` can narrow
+local discovery; normal import scope, filter and action flags such as `--all`,
+`--repo`, `--org`, `--reimport`, `--private` and `--since` are rejected in repair mode.
+A missing source or a file changing during the scan refuses the operation.
+
+Recovery uploads are capped at **100 lines and 4 MiB of serialized JSON**, including
+escaping and coordinates. A single redacted line that cannot fit is refused. Server
+staging allows **128 sources, 4,096 candidates and 64 MiB of candidate payload** per
+operation and expires after 20 minutes without activity. Interrupted scans restart
+from the beginning. Once validated, the operation survives CLI exit and server restart;
+retries are idempotent and leave ordinary import cursors unchanged.
+
+The command prints candidate/restored counts, remaining gaps and the repair phase.
+Exit **0** means complete accounting with zero gaps (or a clean dry-run preview),
+**2** means a completed recovery/preview with residual gaps, and **1** means refusal,
+failure or unfinished accounting. The CLI waits up to two minutes for a durable job,
+then prints its ID and status; follow the session's capture status while it continues.
+
+#### Normal historical import
 
 Backfill older sessions from every detected coding agent in a single run. All seven agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`, `~/.gemini/tmp/<project>/chats/`, `~/.kiro/sessions/cli/`, `~/.pi/agent/sessions/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
@@ -1088,13 +1140,15 @@ minimum version automatically at startup and refuses anything older. Use `kcap d
 --vendor <name>` to move that floor past a build you have found to be bad. It is remediation, not
 permission, and it never blocks a first launch.
 
-**To disable a vendor**, set its variable to `0` (or `false`/`no`/`off`) in the **daemon's** environment:
+**To disable a vendor**, set its variable to `0` (or `false`/`no`/`off`) in the **daemon's** environment
+(Gemini, Kiro, OpenCode, Antigravity, and Pi):
 
 ```bash
 export KCAP_GEMINI_UNATTENDED_REVIEWER=0        # this DAEMON's environment — not a server setting
 export KCAP_KIRO_UNATTENDED_REVIEWER=0
 export KCAP_OPENCODE_UNATTENDED_REVIEWER=0
 export KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=0
+export KCAP_PI_UNATTENDED_REVIEWER=0
 ```
 
 Unset means enabled. A value the daemon cannot read as true or false is treated as **disabled**, and
@@ -1103,7 +1157,7 @@ so an unreadable value is a failed "off" rather than an ambiguous input. Surroun
 (`"0"` works), since a mis-quoted service-unit entry is the usual way that happens.
 
 **On a service-installed daemon, set it before you install.** `kcap daemon service install` copies these
-four variables into the service unit — on every platform — but a supervised daemon inherits nothing from
+five variables into the service unit — on every platform — but a supervised daemon inherits nothing from
 your shell afterwards, so its environment is frozen at install time. Exporting an opt-out later has no
 effect until you reinstall the service:
 
@@ -1287,6 +1341,37 @@ PTY-backed vendors are given, so an Antigravity PR-review launch is refused with
 `antigravity_pr_review_unsupported` rather than started without its review tools. Use Claude for a PR
 review.
 
+#### Unattended Pi reviews
+
+Enabled by default; `KCAP_PI_UNATTENDED_REVIEWER=0` in the daemon's environment disables it.
+
+A Pi reviewer runs in a daemon-owned worktree with none of your interactive Pi configuration reaching
+it — no extensions, no skills, no prompt templates, and no `AGENTS.md`/`SYSTEM.md`; an explicit
+system prompt replaces Pi's own. It can inspect the worktree with `read_file`, `list_directory` and
+`search_files` and report a verdict through the injected result channel; it has no shell and cannot
+write anywhere, in or out of the worktree — a path outside the worktree is refused by the tool
+itself, not merely left untrusted. It runs offline, so a repository cannot trigger a package install
+either.
+
+It authenticates as **you**: whatever Pi provider credentials and default model your account already
+has, or `KCAP_PI_MODEL` to pick a specific one — the same override a hosted Pi agent uses.
+
+**Minimum version.** That containment is a behaviour of the installed `pi` build, so the daemon
+refuses a `pi` older than the oldest build its containment was measured on, and older than the build
+you first enabled the reviewer with; any newer build is accepted with no action from you.
+
+```bash
+kcap daemon reviewer affirm --vendor pi
+```
+
+Same command and the same model as Gemini, Kiro and Antigravity: run it to move the recorded minimum
+to whatever is installed now. It records the version and nothing else — it does not enable the
+reviewer, and no kcap release is ever needed.
+
+POSIX only: the per-launch directory holds the reviewer's own transcript and manifest and cannot be
+created owner-only on Windows. Borrowed (in-place) review is not offered; a borrowed request falls
+back to a daemon-owned worktree, same as Antigravity.
+
 #### Hosted Antigravity agents run without permission prompts
 
 The same `agy` binary also backs **hosted** Antigravity agents launched from the dashboard, and there the
@@ -1386,7 +1471,7 @@ Installing any vendor that reads the shared tree — `--codex`, `--cursor`, `--c
 | `kcap-guided-tour` | analytics + sessions MCP | Onboarding tour of what Capacitor has recorded |
 | `kcap-suggest-review-flow` | `kcap mcp flows` | Proactively offer an independent second-harness review flow at spec/implementation completion |
 
-The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` and `kcap-agent-flows` work differently — they operate via flow IDs through `kcap mcp flows` rather than session auto-resolution; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details. `kcap-work-items` declares structure through `kcap mcp workitems` and needs no session id for its breakdown and relation tools. `kcap-plans` writes through `kcap mcp plans` and defaults the session the same way `kcap-work-items` does. `kcap-guided-tour` shells out to `kcap whoami` and otherwise reads through the `kcap-analytics` and `kcap-sessions` MCP servers, so it needs those registered (setup does it) rather than a session id.
+The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` and `kcap-agent-flows` work differently — they operate via flow IDs through `kcap mcp flows`; only the two status tools fall back to the session (from `CODEX_THREAD_ID`, or an explicit `session_id`) when no flow ID is passed; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details. `kcap-work-items` declares structure through `kcap mcp workitems` and needs no session id for its breakdown and relation tools. `kcap-plans` writes through `kcap mcp plans` and defaults the session the same way `kcap-work-items` does. `kcap-guided-tour` shells out to `kcap whoami` and otherwise reads through the `kcap-analytics` and `kcap-sessions` MCP servers, so it needs those registered (setup does it) rather than a session id.
 
 > **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the Capacitor server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
 >
@@ -1794,18 +1879,22 @@ KCAP_PI_MODEL=claude-opus-4-5 kcap daemon
 
 Two things are worth knowing before you pick Pi:
 
-- **Your Pi extension does not load in a hosted agent.** kcap's global Pi live-ingest extension
-  (`~/.pi/agent/extensions/kcap.ts`) auto-loads inside every `pi` process on the machine, hosted or
-  not, so the daemon spawns the hosted child with `KCAP_PI_PURE=1` — read by the extension at the
-  top of its exported function, which then returns immediately and registers no handlers. Without
-  it a hosted session would be captured twice: once over the RPC wire this runtime already speaks,
-  and once by the extension's own `session_start`/`session_shutdown` hooks. Sessions you start
-  yourself are untouched: the extension keeps its whole job there.
-- **Interactive hosting only, in an owned worktree only, in this release.** Pi has no reviewer lane
-  yet — `start_review_flow(vendor="pi")` and a Pi PR review (`kcap review <pr>` / the dashboard's
-  Review PR action) are both refused, the latter because that surface needs the `kcap mcp review`
-  tool set only the PTY-backed vendors are given. There is also no borrowed-workspace containment
-  for Pi, so a hosted Pi launch always runs in a daemon-owned worktree, never your own checkout.
+- **kcap's capture extension stands down in a hosted agent; the MCP-bridge extension does not.**
+  kcap's global Pi live-ingest extension (`~/.pi/agent/extensions/kcap.ts`) auto-loads inside every
+  `pi` process on the machine, hosted or not, so the daemon spawns the hosted child with
+  `KCAP_PI_PURE=1` — read by that extension at the top of its exported function, which then returns
+  immediately and registers no handlers, since a hosted session is already captured over the RPC
+  wire this runtime speaks and would otherwise be captured twice. The MCP-bridge extension
+  (`~/.pi/agent/extensions/kcap-mcp.ts`) is unaffected by that gate and still loads, so the kcap MCP
+  servers it exposes remain available as native Pi tools. Sessions you start yourself are untouched
+  either way: both extensions keep their whole job there.
+- **Interactive hosting and unattended review flows, in a daemon-owned worktree only.**
+  `start_review_flow(vendor="pi")` launches a real reviewer — see [Unattended Pi
+  reviews](#unattended-pi-reviews) below. A Pi PR review (`kcap review <pr>` / the dashboard's
+  Review PR action) is still refused, because that surface needs the `kcap mcp review` tool set
+  only PTY-backed vendors are given. There is also no borrowed-workspace containment for Pi, so a
+  hosted Pi launch — interactive or reviewer — always runs in a daemon-owned worktree, never your
+  own checkout.
 
 #### Review-flow reviewer backstops & crash-survivor reaping
 
@@ -1983,6 +2072,8 @@ kcap profile list
 kcap profile show work
 kcap profile remove work
 ```
+
+`kcap profile remove` also deletes the profile's saved sign-in (`~/.config/kcap/tokens/<name>.json`). The active profile cannot be removed — select another with `kcap use <name> --global` first.
 
 The `--remote` flag associates a profile with git remote patterns. When you open a repo whose remote matches a pattern, that profile activates automatically.
 

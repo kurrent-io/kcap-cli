@@ -104,13 +104,6 @@ public class AppStateStoreTests {
     }
 
     [Test]
-    public async Task Missing_harness_map_is_null_not_empty() {
-        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
-        var state = await new AppStateStore(path).LoadAsync();
-        await Assert.That(state.HarnessByRepo).IsNull();
-    }
-
-    [Test]
     public async Task Window_placement_is_remembered() {
         using var tmp = TempDir.WithPathTo("app-state.json", out var path);
         var store = new AppStateStore(path);

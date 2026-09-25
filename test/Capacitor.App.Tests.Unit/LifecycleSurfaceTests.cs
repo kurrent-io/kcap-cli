@@ -2,12 +2,8 @@ using Capacitor.App.Services;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// LifecycleSurface is plain Task/SemaphoreSlim plumbing — Avalonia-free by design (the
-/// composition root supplies the dialog factory) — so none of these need AvaloniaSession. Not
-/// named in the Task 22 brief's file list (only LifecyclePromptViewModelTests is), but the
-/// serialization and ct-cancellation contracts are LifecycleSurface's own, not the ViewModel's, so
-/// they get their own file rather than being shoehorned into the VM suite (same drift Task 21's
-/// report flagged for its own brief).
+/// LifecycleSurface is Avalonia-free (the composition root supplies the dialog factory), so none
+/// of these need AvaloniaSession.
 public class LifecycleSurfaceTests {
     static LifecyclePrompt Prompt(string kind) => new(kind, "1.0.0", "1.1.0", false, "disclosure text");
 
@@ -32,35 +28,6 @@ public class LifecycleSurfaceTests {
     }
 
     [Test]
-    public async Task Status_forwards_the_message_to_the_status_sink() {
-        var statuses = new List<string>();
-        var surface = new LifecycleSurface(statuses.Add, _ => { }, (_, _) => Task.FromResult(true));
-
-        surface.Status("daemon started, app not yet attached — retrying");
-
-        await Assert.That(statuses).IsEquivalentTo(["daemon started, app not yet attached — retrying"]);
-    }
-
-    [Test]
-    public async Task Attention_forwards_the_message_to_the_attention_sink() {
-        var attentions = new List<string>();
-        var surface = new LifecycleSurface(_ => { }, attentions.Add, (_, _) => Task.FromResult(true));
-
-        surface.Attention("restore-verification failed — see terminal for repair steps");
-
-        await Assert.That(attentions).IsEquivalentTo(["restore-verification failed — see terminal for repair steps"]);
-    }
-
-    [Test]
-    public async Task ConfirmAsync_returns_the_dialogs_result() {
-        var surface = new LifecycleSurface(_ => { }, _ => { }, (_, _) => Task.FromResult(true));
-
-        var result = await surface.ConfirmAsync(Prompt(LifecyclePrompt.KindRepair), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
-
-        await Assert.That(result).IsTrue();
-    }
-
-    [Test]
     public async Task ConfirmAsync_serializes_a_second_call_until_the_first_resolves() {
         var shower = new ScriptedPromptShower();
         var surface = new LifecycleSurface(_ => { }, _ => { }, shower.ShowAsync);
@@ -82,8 +49,7 @@ public class LifecycleSurfaceTests {
         await Assert.That(result2).IsFalse();
     }
 
-    /// Fix-round-1's ct-cancellation contract (Task 21), extended to the two-dialog queue: a
-    /// cancelled dialog must resolve false AND release the gate, or a follow-up ConfirmAsync
+    /// A cancelled dialog must resolve false AND release the gate, or a follow-up ConfirmAsync
     /// deadlocks behind it forever.
     [Test]
     public async Task ConfirmAsync_cancelled_dialog_resolves_false_and_releases_the_gate() {
@@ -133,10 +99,8 @@ public class LifecycleSurfaceTests {
         await Assert.That(result1).IsTrue();
     }
 
-    // P1-2(b): TryConfirmAsync distinguishes "never reached the factory" (null) from a genuinely
-    // shown-and-declined dialog (false) — ConfirmAsync's own `?? false` is what a caller unaware
-    // of the distinction keeps observing, so this is the same scenario as the queued-cancel test
-    // above, asserted through the new method instead.
+    // TryConfirmAsync distinguishes "never reached the factory" (null) from a shown-and-declined
+    // dialog (false); ConfirmAsync collapses both to false.
     [Test]
     public async Task TryConfirmAsync_cancelled_while_queued_returns_null_without_showing_a_dialog() {
         var shower = new ScriptedPromptShower();

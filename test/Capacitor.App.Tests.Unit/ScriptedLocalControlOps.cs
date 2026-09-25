@@ -7,7 +7,7 @@ namespace Capacitor.App.Tests.Unit;
 /// deterministic rather than timing-based. *Calls counters increment BEFORE the gate is awaited,
 /// so they double as proof a call actually reached the ops layer (as opposed to being
 /// dropped/ignored inside the caller). Mirrors ExchangeAsync's real already-cancelled-token
-/// short-circuit (spec §10) so a permanently cancelled shutdown token behaves the same as the
+/// short-circuit so a permanently cancelled shutdown token behaves the same as the
 /// real LocalControlOps. Shared by PauseControllerTests (Get/Put) and AgentActionServiceTests
 /// (Stop) — one scripted fake for every ILocalControlOps consumer in Capacitor.App.
 sealed class ScriptedLocalControlOps : ILocalControlOps {
@@ -65,7 +65,6 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
 
     public void QueuePutV2(bool ok, string? error) => ArmPutV2().SetResult(new ConsentAckDto(ok, error, null));
     public void QueuePutV2Failure(string reason) => ArmPutV2().SetException(new LocalControlOpsException(reason, reason));
-    public void QueuePutV2UnmappedFailure(Exception ex) => ArmPutV2().SetException(ex);
 
     public TaskCompletionSource<StopAgentResult> ArmStop() {
         var tcs = new TaskCompletionSource<StopAgentResult>(TaskCreationOptions.RunContinuationsAsynchronously);

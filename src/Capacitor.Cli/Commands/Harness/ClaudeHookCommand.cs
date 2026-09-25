@@ -236,11 +236,6 @@ public sealed class ClaudeHookCommand(
         } catch { return body; }
     }
 
-    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget, TimeProvider time) {
-        var winner = await Task.WhenAny(inner, Task.Delay(budget, time));
-        return winner == inner ? await inner : 0;
-    }
-
     // Await repo enrichment but never past the remaining hook budget. If it can't finish in time,
     // proceed with the un-enriched body (repo info still reaches the session via the watcher's own
     // detection) so the bounded POST/spool path is always reached before Claude kills the hook.

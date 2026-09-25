@@ -70,15 +70,14 @@ public class PullRequestTonesTests {
 
         var draft = PullRequestTones.LifecycleStatus(Overview("draft"));
         await Assert.That(draft.Text).IsEqualTo("Draft");
-        await Assert.That(draft.IsMuted).IsTrue();
         await Assert.That(draft.IsSuccess).IsFalse();
         await Assert.That(PullRequestTones.LifecycleStatus(Overview("open", draft: true)).Text).IsEqualTo("Draft");
 
         var open = PullRequestTones.LifecycleStatus(Overview("open"));
         await Assert.That(open.Text).IsEqualTo("Open");
-        await Assert.That(open.IsSuccess).IsTrue();
+        await Assert.That(open.IsSuccess).IsFalse();
 
-        await Assert.That(PullRequestTones.LifecycleStatus(Overview("merged")).IsPurple).IsTrue();
+        await Assert.That(PullRequestTones.LifecycleStatus(Overview("merged")).IsSuccess).IsTrue();
         await Assert.That(PullRequestTones.LifecycleStatus(Overview("closed")).IsDanger).IsTrue();
         await Assert.That(PullRequestTones.LifecycleStatus(null).Text).IsEqualTo("Unknown");
     }

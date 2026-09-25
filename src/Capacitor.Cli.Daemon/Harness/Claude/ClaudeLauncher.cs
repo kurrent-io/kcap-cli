@@ -20,6 +20,7 @@ internal sealed partial class ClaudeLauncher(
     public string Vendor  => "claude";
     public string CliPath => config.ClaudePath;
     public bool   SupportsUnattended => true;
+    public bool   SupportsPrReview   => true;
 
     // True only for an OWNED review-flow worktree, where BuildArgs forces bypassPermissions. A
     // borrowed review-flow keeps the default mode (and is rejected upstream anyway). An interactive

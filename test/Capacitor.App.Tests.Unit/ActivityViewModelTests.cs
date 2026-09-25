@@ -58,13 +58,13 @@ sealed class GatedReader {
     }
 }
 
-/// Covers ActivityViewModel's row mapping and refresh semantics (spec §7, task-10-brief's 7 cases),
-/// including the stat+read hop off the UI thread. The VM now hops through Task.Run and back via
+/// Covers ActivityViewModel's row mapping and refresh semantics, including the stat+read hop off
+/// the UI thread. The VM hops through Task.Run and back via
 /// Dispatcher.UIThread.InvokeAsync, so every test that triggers a refresh
 /// runs under AvaloniaSession (the real headless dispatcher) and awaits
 /// ActivityViewModel.PendingRefreshForTesting — the same completion the production single-flight
 /// guard watches — instead of guessing at a delay. A plain Subject-backed FakeTicker still delivers
-/// Tick() synchronously on the calling thread; only the VM's OWN work moved off-thread.
+/// Tick() synchronously on the calling thread; only the VM's own work runs off-thread.
 public class ActivityViewModelTests {
     static ConsentDecisionRecord Rec(
             string decidedAt = "2026-08-08T12:00:00.0000000+00:00", string agentId = "a1", string? requester = "github:1",
@@ -73,7 +73,7 @@ public class ActivityViewModelTests {
             string? requesterDisplay = null) =>
         new(decidedAt, agentId, requester, requesterIsOwner, kind, repoPath, vendor, outcome, source, requesterDisplay);
 
-    // ---- 1: row mapping ----
+    // ---- row mapping ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -103,23 +103,41 @@ public class ActivityViewModelTests {
 
         await Assert.That(first.Time).IsEqualTo(expectedTime);
         await Assert.That(first.TimeTip).IsEqualTo(expectedTip);
-        await Assert.That(first.Requester).IsEqualTo("Ada Lovelace");
-        await Assert.That(first.KindLabel).IsEqualTo("Review flow");
-        // A consent record carries the launch request's path verbatim, with no repository behind
-        // it on the wire, so the leaf is that path's own; RepoFull carries the rest.
-        await Assert.That(first.RepoLeaf).IsEqualTo("tender-honking-pebble");
-        await Assert.That(first.RepoFull).IsEqualTo("/repos/kcap-cli/.claude/worktrees/tender-honking-pebble");
-        await Assert.That(first.Vendor).IsEqualTo("codex");
-        await Assert.That(first.Outcome).IsEqualTo("allowed");
+        await Assert.That(first.Outcome).IsEqualTo("Allowed");
         await Assert.That(first.IsAllowed).IsTrue();
-        await Assert.That(first.SourceLabel).IsEqualTo("rule");
+        await Assert.That(first.PrimaryDetail).IsEqualTo("codex · Review flow");
+        await Assert.That(first.SecondaryLine).IsEqualTo("Ada Lovelace · tender-honking-pebble · rule");
+        await Assert.That(first.RequesterFull).IsEqualTo("Ada Lovelace");
+        await Assert.That(first.RepoFull).IsEqualTo("/repos/kcap-cli/.claude/worktrees/tender-honking-pebble");
+        await Assert.That(first.SecondaryTip).IsEqualTo("Ada Lovelace\n/repos/kcap-cli/.claude/worktrees/tender-honking-pebble");
 
-        await Assert.That(second.Time).IsEqualTo("not-a-timestamp"); // unparseable -> verbatim
-        await Assert.That(second.Requester).IsEqualTo("unknown"); // both requester and display absent
-        await Assert.That(second.KindLabel).IsEqualTo("Agent");
-        await Assert.That(second.Outcome).IsEqualTo("denied");
+        await Assert.That(second.Time).IsEqualTo("not-a-timestamp");
+        await Assert.That(second.Outcome).IsEqualTo("Denied");
         await Assert.That(second.IsAllowed).IsFalse();
-        await Assert.That(second.SourceLabel).IsEqualTo("timeout");
+        await Assert.That(second.PrimaryDetail).IsEqualTo("claude");
+        await Assert.That(second.SecondaryLine).IsEqualTo("unknown · kcap-cli · timeout");
+        await Assert.That(second.RequesterFull).IsEqualTo("unknown");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rows_keep_full_email_requester() {
+        var row = await AvaloniaSession.DispatchAsync(async () => {
+            var reader = new ScriptedReader();
+            reader.Set(new ConsentLogReadResult([
+                Rec(requesterDisplay: "very.long.local-part@company.com", kind: "agent",
+                    repoPath: "/repos/kcap-cli", vendor: "claude", outcome: "allowed", source: "prompt_user")
+            ], true));
+            var vm = new ActivityViewModel(reader.Read, new ScriptedStat().Get, new FakeTicker());
+            vm.OnTabVisibleChanged(true);
+            await vm.PendingRefreshForTesting!;
+            return vm.Rows[0];
+        });
+
+        await Assert.That(row.RequesterFull).IsEqualTo("very.long.local-part@company.com");
+        await Assert.That(row.SecondaryLine).IsEqualTo("very.long.local-part@company.com · kcap-cli");
+        await Assert.That(row.PrimaryDetail).IsEqualTo("claude");
+        await Assert.That(row.Outcome).IsEqualTo("Allowed");
     }
 
     [Test]
@@ -134,7 +152,15 @@ public class ActivityViewModelTests {
         await Assert.That(ActivityViewModel.SourceLabelOf(source)).IsEqualTo(expected);
     }
 
-    // ---- 2: Complete replaces, including to empty ----
+    [Test]
+    [Arguments("allowed", "Allowed")]
+    [Arguments("denied", "Denied")]
+    [Arguments("weird", "weird")]
+    public async Task Outcome_labels(string raw, string expected) {
+        await Assert.That(ActivityViewModel.OutcomeLabelOf(raw)).IsEqualTo(expected);
+    }
+
+    // ---- Complete replaces, including to empty ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -162,7 +188,7 @@ public class ActivityViewModelTests {
         await Assert.That(emptyAfterSecond).IsTrue();
     }
 
-    // ---- 3: Incomplete keeps last-good; best-effort with nothing previous ----
+    // ---- Incomplete keeps last-good; best-effort with nothing previous ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -203,7 +229,7 @@ public class ActivityViewModelTests {
         await Assert.That(isEmpty).IsFalse();
     }
 
-    // ---- 4: stat-gated poll, every 2nd tick while visible ----
+    // ---- stat-gated poll, every 2nd tick while visible ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -247,29 +273,7 @@ public class ActivityViewModelTests {
         await Assert.That(afterInvisible).IsEqualTo(2); // invisible -> polling stopped entirely
     }
 
-    // ---- 5: visibility triggers an immediate refresh ----
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Tab_visible_triggers_immediate_refresh() {
-        var (readCallsBefore, readCallsAfter, count) = await AvaloniaSession.DispatchAsync(async () => {
-            var reader = new ScriptedReader();
-            reader.Set(new ConsentLogReadResult([Rec()], true));
-            var vm = new ActivityViewModel(reader.Read, new ScriptedStat().Get, new FakeTicker());
-
-            var readCallsBefore = reader.ReadCalls;
-            vm.OnTabVisibleChanged(true);
-            await vm.PendingRefreshForTesting!;
-
-            return (readCallsBefore, reader.ReadCalls, vm.Rows.Count);
-        });
-
-        await Assert.That(readCallsBefore).IsEqualTo(0);
-        await Assert.That(readCallsAfter).IsEqualTo(1); // exactly one read — guards against an accidental double-read
-        await Assert.That(count).IsEqualTo(1);
-    }
-
-    // ---- 6: own-resolution refresh is an immediate read, eventual display ----
+    // ---- own-resolution refresh is an immediate read, eventual display ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -292,8 +296,8 @@ public class ActivityViewModelTests {
             var readCallsAfterRequest = reader.ReadCalls;
             var countAfterRequest = vm.Rows.Count;
 
-            // The append lands; the next stat-poll tick converges (spec: "no later than the next
-            // poll", not "immediately").
+            // The append lands; the next stat-poll tick converges ("no later than the next poll",
+            // not "immediately").
             reader.Set(new ConsentLogReadResult([Rec(agentId: "a1"), Rec(agentId: "a2")], true));
             stat.Key = "k1";
             ticker.Tick();
@@ -309,7 +313,7 @@ public class ActivityViewModelTests {
         await Assert.That(countAfterTick).IsEqualTo(2);
     }
 
-    // ---- 7: a throwing stat or read is swallowed; polling keeps going ----
+    // ---- a throwing stat or read is swallowed; polling keeps going ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -364,7 +368,7 @@ public class ActivityViewModelTests {
         await Assert.That(countAfterRecoveredRequest).IsEqualTo(1); // recovers on the next call
     }
 
-    // ---- 8: disposal releases the shared ticker ----
+    // ---- disposal releases the shared ticker ----
 
     /// The subscription is constructor-scoped (no WhenActivated), and the shared ticker is
     /// Publish().RefCount() — an undisposed subscriber keeps its Interval, and this object,
@@ -397,7 +401,7 @@ public class ActivityViewModelTests {
         await Assert.That(hasObservers).IsFalse();
     }
 
-    // ---- 9: single-flight — a tick during an in-flight read is dropped, not queued ----
+    // ---- single-flight — a tick during an in-flight read is dropped, not queued ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]

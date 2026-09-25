@@ -64,9 +64,38 @@
         <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
     </Style>
     <Style Selector="Button.prStatusRow">
+        <!-- Stay inside sectionBody — a negative left margin is clipped by the hairline border.
+             Icons share the content edge with lifecycle; right inset keeps the raised radius visible. -->
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="Padding" Value="0,6" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Cursor" Value="Hand" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-        <Setter Property="Padding" Value="2,6" />
+    </Style>
+    <Style Selector="Button.prStatusRow /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.prStatusRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.prStatusRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.prStatusRow:pressed">
+        <Setter Property="RenderTransform" Value="scale(1)" />
+    </Style>
+    <Style Selector="Button.prStatusRow:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Opacity" Value="0.45" />
     </Style>
     <Style Selector="Button.prStatusButton">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />

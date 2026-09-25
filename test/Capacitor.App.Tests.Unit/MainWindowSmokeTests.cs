@@ -105,17 +105,15 @@ public class MainWindowSmokeTests {
         await Assert.That(rendered).Contains("1.2.3");
     }
 
-    /// Regression coverage for a Critical bug found in review: canStart/canRetry were built
-    /// straight off service.Status with no ObserveOn, and ReactiveCommand does NOT reschedule a
-    /// SUPPLIED canExecute onto its outputScheduler (only IsExecuting/ThrownExceptions ride it) —
-    /// so a Status event arriving on a background thread carried CanExecuteChanged, and therefore
-    /// a bound Button's IsEnabled write, onto that same background thread, tripping Avalonia's
-    /// dispatcher thread-affinity check.
+    /// ReactiveCommand does NOT reschedule a SUPPLIED canExecute onto its outputScheduler (only
+    /// IsExecuting/ThrownExceptions ride it), so canStart/canRetry built off service.Status without
+    /// an ObserveOn would carry a background-thread Status event's CanExecuteChanged, and a bound
+    /// Button's IsEnabled write, onto that thread, tripping Avalonia's thread-affinity check.
     ///
     /// Deliberately NOT wrapped in AvaloniaSession.WithImmediateRxScheduler: that swaps
     /// RxSchedulers.MainThreadScheduler for ImmediateScheduler.Instance, which would deliver the
     /// background-thread OnNext synchronously on the CALLING (background) thread regardless of
-    /// whether an ObserveOn is present — it could never catch this bug either way. This test
+    /// whether an ObserveOn is present, so it could never catch a missing one. This test
     /// needs the REAL Avalonia-dispatcher scheduler that UseReactiveUI() installs for the whole
     /// headless session, so a background-thread publish actually has to cross a real dispatcher
     /// boundary to reach the Button.
@@ -155,22 +153,18 @@ public class MainWindowSmokeTests {
         await Assert.That(startEnabledAfter).IsTrue();
     }
 
-    /// Regression coverage for a Critical bug found in review: RunStartAsync did not catch
-    /// OperationCanceledException, but DaemonClientService.StartDaemonAsync deliberately
-    /// rethrows it when the caller-supplied ct fires mid-wait (App's `_shutdown` token — spec
-    /// §5, "ct abandons the WAIT, not the started daemon"). App.OnShutdownRequested cancels
-    /// that very token on Cmd+Q while a start may still be in flight. Nothing subscribes to
-    /// StartDaemonCommand.ThrownExceptions, so ReactiveCommand's own default handler
-    /// (decompile-verified: ReactiveUI.RxState.DefaultExceptionHandler) reschedules an
-    /// UnhandledErrorException onto RxSchedulers.MainThreadScheduler — the still-alive
-    /// dispatcher — crashing the app.
+    /// DaemonClientService.StartDaemonAsync deliberately rethrows OperationCanceledException when
+    /// the caller-supplied ct fires mid-wait (App's `_shutdown` token: ct abandons the WAIT, not the
+    /// started daemon), and App.OnShutdownRequested cancels that token on Cmd+Q while a start may
+    /// be in flight. Nothing subscribes to StartDaemonCommand.ThrownExceptions, so an uncaught OCE
+    /// in RunStartAsync would reach ReactiveUI.RxState.DefaultExceptionHandler, which reschedules
+    /// an UnhandledErrorException onto the still-alive dispatcher and crashes the app.
     ///
     /// Deliberately NOT wrapped in WithImmediateRxScheduler, for the same reason as the sibling
     /// test above: only a REAL dispatcher round-trip (via Dispatcher.UIThread.RunJobs(), which
-    /// decompile-verified drains Avalonia's dispatcher queue including jobs enqueued mid-drain,
-    /// and re-throws an unhandled job exception out of the call since nothing subscribes to
-    /// Dispatcher.UIThread.UnhandledException) actually reproduces — and proves the fix for — a
-    /// scheduler-rescheduled exception.
+    /// drains Avalonia's dispatcher queue including jobs enqueued mid-drain, and re-throws an
+    /// unhandled job exception out of the call since nothing subscribes to
+    /// Dispatcher.UIThread.UnhandledException) reproduces a scheduler-rescheduled exception.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Quit_during_start_does_not_crash() {
@@ -266,7 +260,7 @@ public class MainWindowSmokeTests {
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 
-    // ---- Toast overlay (spec §11: WindowNotificationManager replaces the inline banner) ----
+    // ---- Toast overlay (WindowNotificationManager) ----
     //
     // Proves the real production wiring end to end: MainWindow.Notifier assigned exactly as
     // App.BuildAndShowMainWindow does, a WindowNotificationManager actually constructible and
@@ -297,18 +291,17 @@ public class MainWindowSmokeTests {
         await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 
-    // ---- Activity gate (spec §4) ----
+    // ---- Activity gate ----
     //
     // Proves the real production wiring end to end — the Activity flyout's open state, the
-    // launcher pane being on screen (Sessions surface with NO workspace open), and the window's
+    // launcher pane being on screen (NO workspace open), and the window's
     // own IsVisible (Show()/Hide()) all drive ActivityViewModel.OnTabVisibleChanged through the
     // code-behind, not just that the ViewModel reacts correctly in isolation
     // (ActivityViewModelTests already covers that). Each gate flips the polling off on its own;
     // each TRUE transition issues exactly one more immediate read, awaited via
     // PendingRefreshForTesting — the VM's stat+read hops off the UI thread, so RunJobs() alone no
-    // longer guarantees the read has landed. Swapping the pane under the popup (leaving Sessions,
-    // or opening a workspace) CLOSES the flyout, so coming back does not auto-resume — the feed
-    // reopens by click.
+    // longer guarantees the read has landed. Opening a workspace under the popup CLOSES the
+    // flyout, so coming back does not auto-resume — the feed reopens by click.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Activity_polls_only_while_open_on_the_launcher_pane_in_a_visible_window() {
@@ -336,19 +329,6 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await activity.PendingRefreshForTesting!;
             var opened = reader.ReadCalls;
-
-            vm.ShowHomeCommand.Execute().Subscribe(); // off the Sessions surface (hidden Home)
-            Dispatcher.UIThread.RunJobs();
-            var onHome = reader.ReadCalls;
-
-            vm.ShowSessionsCommand.Execute().Subscribe();
-            Dispatcher.UIThread.RunJobs();
-            var backClosed = reader.ReadCalls; // the swap closed the feed — no auto-resume
-
-            flyout.ShowAt(button);
-            Dispatcher.UIThread.RunJobs();
-            await activity.PendingRefreshForTesting!;
-            var reopened = reader.ReadCalls;
 
             vm.OpenSession("0123456789abcdef0123456789abcdef"); // workspace replaces the launcher
             Dispatcher.UIThread.RunJobs();
@@ -380,19 +360,16 @@ public class MainWindowSmokeTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (closed, opened, onHome, backClosed, reopened, workspaceOpen, launcherBack, afterReopen, afterHide, afterReshow);
+            return (closed, opened, workspaceOpen, launcherBack, afterReopen, afterHide, afterReshow);
         });
 
         await Assert.That(reads.closed).IsEqualTo(0);
         await Assert.That(reads.opened).IsEqualTo(1); // opening on the launcher: one immediate read
-        await Assert.That(reads.onHome).IsEqualTo(1); // leaving Sessions is a FALSE transition
-        await Assert.That(reads.backClosed).IsEqualTo(1);
-        await Assert.That(reads.reopened).IsEqualTo(2);
-        await Assert.That(reads.workspaceOpen).IsEqualTo(2); // a workspace opening is a FALSE transition
-        await Assert.That(reads.launcherBack).IsEqualTo(2);
-        await Assert.That(reads.afterReopen).IsEqualTo(3);
-        await Assert.That(reads.afterHide).IsEqualTo(3); // hiding is a FALSE transition
-        await Assert.That(reads.afterReshow).IsEqualTo(4);
+        await Assert.That(reads.workspaceOpen).IsEqualTo(1); // a workspace opening is a FALSE transition
+        await Assert.That(reads.launcherBack).IsEqualTo(1);
+        await Assert.That(reads.afterReopen).IsEqualTo(2);
+        await Assert.That(reads.afterHide).IsEqualTo(2); // hiding is a FALSE transition
+        await Assert.That(reads.afterReshow).IsEqualTo(3);
     }
 
     /// What the OS does when another app takes focus. The platform layer's Deactivated hook is
@@ -459,7 +436,7 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// The surface swap itself (spec §3) — the XAML side of what WorkspaceNavigationTests pins on
+    /// The surface swap itself: the XAML side of what WorkspaceNavigationTests pins on
     /// the ViewModel. WorkspaceView is materialized from a template rather than always present, so
     /// this also proves the terminal control is CONSTRUCTED only once a workspace exists; closing
     /// it lands on the Sessions surface's placeholder, never back on Home.
@@ -483,8 +460,6 @@ public class MainWindowSmokeTests {
                 Control Surface(string name) =>
                     window.GetVisualDescendants().OfType<Control>().First(c => c.Name == name);
 
-                var bootsOnSessions = Surface("SessionsSurface").IsVisible;
-                var homeHiddenAtBoot = Surface("HomeSurface").IsVisible;
                 var launcherAtBoot = Surface("LauncherPane").IsVisible;
                 var workspacesBefore = window.GetVisualDescendants().OfType<WorkspaceView>().Count();
 
@@ -498,31 +473,27 @@ public class MainWindowSmokeTests {
 
                 vm.CloseWorkspace();
                 Dispatcher.UIThread.RunJobs();
-                var stillSessions = Surface("SessionsSurface").IsVisible;
                 var launcherBack = Surface("LauncherPane").IsVisible;
                 var workspacesAfter = window.GetVisualDescendants().OfType<WorkspaceView>().Count();
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
 
-                return (bootsOnSessions, homeHiddenAtBoot, launcherAtBoot, workspacesBefore, launcherGone,
-                    OpenedCount: opened.Count, boundToWorkspace, stillSessions, launcherBack, workspacesAfter);
+                return (launcherAtBoot, workspacesBefore, launcherGone,
+                    OpenedCount: opened.Count, boundToWorkspace, launcherBack, workspacesAfter);
             });
 
-            await Assert.That(swap.bootsOnSessions).IsTrue();
-            await Assert.That(swap.homeHiddenAtBoot).IsFalse(); // Home stays in the tree, hidden
             await Assert.That(swap.launcherAtBoot).IsTrue(); // the empty state IS the launcher
             await Assert.That(swap.workspacesBefore).IsEqualTo(0); // nothing terminal-shaped until a session is opened
             await Assert.That(swap.launcherGone).IsFalse();
             await Assert.That(swap.OpenedCount).IsEqualTo(1);
             await Assert.That(swap.boundToWorkspace).IsTrue();
-            await Assert.That(swap.stillSessions).IsTrue();
             await Assert.That(swap.launcherBack).IsTrue();
             await Assert.That(swap.workspacesAfter).IsEqualTo(0);
         });
     }
 
-    /// A shown MainWindow on the Sessions surface whose rail holds two rows, "Fix the flaky test"
+    /// A shown MainWindow whose rail holds two rows, "Fix the flaky test"
     /// and "Leave this one alone", under one worktree named feature-x.
     static (MainWindowViewModel Vm, MainWindow Window) RailWindow(bool awaitingInput = false, int? liveSubagents = null) {
         var service = new FakeDaemonClientService();
@@ -552,16 +523,14 @@ public class MainWindowSmokeTests {
         window.Show();
         Dispatcher.UIThread.RunJobs();
 
-        vm.ShowSessionsCommand.Execute().Subscribe();
-        Dispatcher.UIThread.RunJobs();
         return (vm, window);
     }
 
     static Button RailRow(MainWindow window, string text) => window.GetVisualDescendants().OfType<Button>()
         .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
 
-    /// The rail's own click path (spec §3): a session row rendered by SessionRailView carries the
-    /// VM's OpenCommand, and executing it opens that agent's workspace on the Sessions surface.
+    /// The rail's own click path: a session row rendered by SessionRailView carries the
+    /// VM's OpenCommand, and executing it opens that agent's workspace.
     ///
     /// Also pins the selection highlight as RENDERED state, not just as a bound class. A row's
     /// resting Background must come from the `railRow` class style: a local `Background` attribute
@@ -581,7 +550,7 @@ public class MainWindowSmokeTests {
                 Row("Fix the flaky test").Command!.Execute(null);
                 Dispatcher.UIThread.RunJobs();
 
-                var result = (vm.IsSessionsView, vm.CurrentWorkspace?.AgentId,
+                var result = (vm.CurrentWorkspace?.AgentId,
                     SelectedClass: Row("Fix the flaky test").Classes.Contains("selected"),
                     SelectedAlpha: Alpha(Row("Fix the flaky test")),
                     SiblingAlpha: Alpha(Row("Leave this one alone")),
@@ -591,8 +560,7 @@ public class MainWindowSmokeTests {
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
-            await Assert.That(opened.Item1).IsTrue();
-            await Assert.That(opened.Item2).IsEqualTo("a1");
+            await Assert.That(opened.AgentId).IsEqualTo("a1");
             await Assert.That(opened.SelectedClass).IsTrue();
             await Assert.That(opened.SelectedAlpha).IsGreaterThan((byte)0); // the highlight actually paints
             await Assert.That(opened.SiblingAlpha).IsEqualTo((byte)0); // an unopened row stays transparent
@@ -757,7 +725,7 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// The tabless boot (spec §3, revised): the window opens on the Sessions surface — rail plus
+    /// The tabless boot: the window opens on the Sessions surface — rail plus
     /// the launcher pane — with no TabControl anywhere in its visual tree; the rail's New session
     /// row is the deselect-to-launcher affordance.
     [Test]
@@ -984,10 +952,10 @@ public class MainWindowSmokeTests {
     }
 
     /// Signed-out is a rail diagnosis; the launcher's Sign in is on the other pane and hidden
-    /// once a workspace is open, so the footer has to offer the same action beside the word.
+    /// once a workspace is open, so the help flyout has to offer the same action (not the footer).
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Rail_footer_offers_sign_in_when_signed_out() {
+    public async Task Rail_help_flyout_offers_sign_in_when_signed_out() {
         var (visibleWhileOut, clicks, visibleWhileIn) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var lane = new FakeServerLane();
@@ -1006,8 +974,12 @@ public class MainWindowSmokeTests {
             window.UpdateLayout();
 
             var rail = window.FindDescendantOfType<SessionRailView>()!;
-            var signIn = rail.FindControl<Button>("RailSignInButton")!;
-            var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+            var signIn = rail.FindControl<Button>("RailHelpSignInButton")!;
+            var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled && signIn.Classes.Contains("kcapGhost");
             vm.SignInCommand.Execute().Subscribe();
             Dispatcher.UIThread.RunJobs();
 
@@ -1016,6 +988,7 @@ public class MainWindowSmokeTests {
             window.UpdateLayout();
             var whileIn = signIn.IsVisible;
 
+            flyout.Hide();
             window.Close();
             Dispatcher.UIThread.RunJobs();
             return (whileOut, clicks, whileIn);

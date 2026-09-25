@@ -1,6 +1,7 @@
 using System.Reflection;
 using Capacitor.Cli;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Capture;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -22,6 +23,15 @@ if (args.Length < 1) {
 }
 
 var command = args[0];
+
+// `skills sync --auto` outlives the hook that spawned it, and that hook closes the pipe read ends as
+// it exits: a write afterwards lands on a dead fd and can take the sync down with it. The writers
+// are replaced HERE rather than at dispatch because config and profile resolution sit in between and
+// both can warn.
+if (args is ["skills", "sync", ..] && args.Contains("--auto")) {
+    Console.SetOut(TextWriter.Null);
+    Console.SetError(TextWriter.Null);
+}
 
 // Daemon-only borrowed-review context mode. This exact invocation is dispatched before server URL
 // resolution and update checks so the sidecar reader has no backend, auth, Git, or config authority.
@@ -503,15 +513,8 @@ switch (command) {
             Console.Error.WriteLine("Usage: kcap skills sync [--dry-run] [--auto]");
             return 1;
         }
-        var skillsAuto = args.Contains("--auto");
-        if (skillsAuto) {
-            // The auto spawn's parent (a hook) exits long before this process does, closing the
-            // pipe read ends — a later write would then throw on a dead fd. Null writers never
-            // touch an fd, so the background sync can outlive its parent safely.
-            Console.SetOut(TextWriter.Null);
-            Console.SetError(TextWriter.Null);
-        }
-        return await Run<SkillsCommand>().HandleSync(args.Contains("--dry-run"), skillsAuto);
+        // --auto silenced its writers at startup, ahead of everything that can warn.
+        return await Run<SkillsCommand>().HandleSync(args.Contains("--dry-run"), args.Contains("--auto"));
     }
     case "curate": {
         if (args.Length < 2) {
@@ -628,6 +631,15 @@ switch (command) {
         return 0;
     }
     case "import": {
+        var repairCapture = args.Contains("--repair-capture");
+        if (repairCapture && CaptureRepairArgs.Validate(args) is { } repairError) {
+            Console.Error.WriteLine(repairError);
+            return 1;
+        }
+        if (!repairCapture && args.Contains("--dry-run")) {
+            Console.Error.WriteLine("--dry-run requires --repair-capture and an explicit --session ID.");
+            return 1;
+        }
         // Vendor selection first — quick exit on parse errors so we don't do other work.
         var vsel = VendorSelection.Parse(args);
         if (vsel.HasError) {
@@ -684,6 +696,9 @@ switch (command) {
         var sources = SetupCommand.BuildImportSources(
             config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(), time,
             explicitVendorSelection ? vsel.Vendors : null);
+
+        if (repairCapture)
+            return await Run<CaptureRepairCommand>().HandleAsync(filterSession!, args.Contains("--dry-run"), sources);
 
         // --- Scope resolution ---
         var profileConfig = profiles.Snapshot;

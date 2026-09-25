@@ -1,8 +1,31 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class TranscriptBatchBufferTests {
+    [Test]
+    public async Task SplittingUsesUtf8SizeAndPreservesSourceCoordinates() {
+        var line = new string('\u4e00', 600_000);
+        var source = new TranscriptBatch {
+            SessionId = "parent", AgentId = "child", Vendor = "codex", Strict = true,
+            Lines = [line, line, line], LineNumbers = [2, 4, 7]
+        };
+
+        var batches = TranscriptBatchBuffer.Split(source).ToArray();
+
+        await Assert.That(batches.Length).IsEqualTo(2);
+        await Assert.That(batches[0].LineNumbers!).IsEquivalentTo(new[] { 2, 4 });
+        await Assert.That(batches[1].LineNumbers!).IsEquivalentTo(new[] { 7 });
+        await Assert.That(batches.All(x => x is { SessionId: "parent", AgentId: "child", Vendor: "codex", Strict: true })).IsTrue();
+    }
+
+    [Test]
+    public async Task EmptyEnvelopeCanStillCarryMetadata() {
+        var batch = new TranscriptBatch { SessionId = "parent", Lines = [], LineNumbers = [] };
+        await Assert.That(TranscriptBatchBuffer.Split(batch).Count()).IsEqualTo(1);
+    }
+
     [Test]
     public async Task Fills_at_the_line_cap() {
         var buffer = new TranscriptBatchBuffer();

@@ -6,6 +6,45 @@ using Capacitor.Cli.Harness.Cursor;
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
 public class CursorTranscriptBackfillTests {
+    [Test]
+    [Arguments(false, 2)]
+    [Arguments(true, 3)]
+    public async Task Final_drain_finishes_started_chunks_after_the_soft_budget(bool finalDrain, int expectedLines) {
+        using var tmp = new TempDir();
+        var line = "{\"role\":\"assistant\",\"content\":\"" + new string('x', 1_500_000) + "\"}";
+        var path = tmp.CreateFile("large.jsonl", string.Join('\n', Enumerable.Repeat(line, 3)) + "\n");
+        var posted = new List<string>();
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent),
+            (_, body) => { posted.Add(body); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(), path,
+            () => posted.Count > 0, TimeProvider.System, CancellationToken.None, finalDrain: finalDrain);
+        await Assert.That(stats.LinesPosted).IsEqualTo(expectedLines);
+        await Assert.That(stats.Failed).IsFalse();
+    }
+
+    [Test]
+    public async Task BackfillSplitsLargeEncodedRecordsWithinByteBudget() {
+        using var tmp = new TempDir();
+        var line = "{\"role\":\"assistant\",\"content\":\"" + new string('x', 1_500_000) + "\"}";
+        var path = tmp.CreateFile("large.jsonl", string.Join('\n', Enumerable.Repeat(line, 3)) + "\n");
+        var posted = new List<string>();
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent),
+            (_, body) => { posted.Add(body); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(),
+            path, () => false, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(stats.LinesPosted).IsEqualTo(3);
+        await Assert.That(posted.Count).IsEqualTo(2);
+        foreach (var body in posted) {
+            var lines = JsonNode.Parse(body)!["lines"]!.AsArray();
+            await Assert.That(lines.Sum(x => System.Text.Encoding.UTF8.GetByteCount(x!.GetValue<string>())))
+                .IsLessThanOrEqualTo(4 * 1024 * 1024);
+        }
+    }
+
     CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -177,7 +216,7 @@ public class CursorTranscriptBackfillTests {
     public async Task RunAsync_resumes_from_last_line_number_plus_one_and_posts_single_batch() {
         using var tmp = new TempDir();
         var transcript = tmp.PathTo("t.jsonl");
-        await File.WriteAllLinesAsync(transcript, ["line0", "line1", "line2", "line3"]);
+        await File.WriteAllLinesAsync(transcript, ["0", "1", "2", "3"]);
 
         string? postedBody = null;
         string? postedPath = null;
@@ -208,8 +247,8 @@ public class CursorTranscriptBackfillTests {
         var lines = node["lines"]!.AsArray();
         var lineNumbers = node["line_numbers"]!.AsArray();
         await Assert.That(lines.Count).IsEqualTo(2);
-        await Assert.That(lines[0]!.GetValue<string>()).IsEqualTo("line2");
-        await Assert.That(lines[1]!.GetValue<string>()).IsEqualTo("line3");
+        await Assert.That(lines[0]!.GetValue<string>()).IsEqualTo("2");
+        await Assert.That(lines[1]!.GetValue<string>()).IsEqualTo("3");
         await Assert.That(lineNumbers[0]!.GetValue<int>()).IsEqualTo(2);
         await Assert.That(lineNumbers[1]!.GetValue<int>()).IsEqualTo(3);
     }

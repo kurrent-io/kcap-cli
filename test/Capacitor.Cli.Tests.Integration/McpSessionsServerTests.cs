@@ -189,20 +189,21 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
             await Assert.That(result["instructions"]?.GetValue<string>()).IsNotNull();
             await Assert.That(result["instructions"]!.GetValue<string>()).IsNotEmpty();
+            await Assert.That(result["instructions"]!.GetValue<string>()).Contains("list_repo_plans");
         } finally {
             await ShutdownAsync(proc);
         }
     }
 
     [Test]
-    public async Task Tools_list_returns_six_tools_with_correct_names() {
+    public async Task Tools_list_returns_eight_tools_with_correct_names() {
         using var proc = SpawnMcpServer();
         try {
             var response = await SendRequest(proc, ToolsListRequest(2));
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(6);
+            await Assert.That(tools!.Count).IsEqualTo(8);
 
             var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("search_sessions")).IsTrue();
@@ -211,10 +212,19 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(names.Contains("get_turn")).IsTrue();
             await Assert.That(names.Contains("list_turns")).IsTrue();
             await Assert.That(names.Contains("list_repo_sessions")).IsTrue();
+            await Assert.That(names.Contains("list_repo_plans")).IsTrue();
+            await Assert.That(names.Contains("get_declared_plans")).IsTrue();
 
-            // Hard gate: search_sessions carries the comparative routing cue.
+            // Hard gates: the routing cue, the query shape that can actually hit, and the two
+            // facts about list_repo_sessions that otherwise read as a broken filter.
             var searchDesc = tools.First(t => t?["name"]?.GetValue<string>() == "search_sessions")!["description"]!.GetValue<string>();
             await Assert.That(searchDesc).Contains("before grepping the code or git log");
+            await Assert.That(searchDesc).Contains("one to three keywords or identifiers");
+            await Assert.That(searchDesc).Contains("hit_kind");
+
+            var listDesc = tools.First(t => t?["name"]?.GetValue<string>() == "list_repo_sessions")!["description"]!.GetValue<string>();
+            await Assert.That(listDesc).Contains("defaults to active");
+            await Assert.That(listDesc).Contains("no time filter");
         } finally {
             await ShutdownAsync(proc);
         }
@@ -311,6 +321,107 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(projected).IsNotNull();
             await Assert.That(projected!["summary_text"]?.GetValue<string>()).IsEqualTo("did X");
             await Assert.That(projected["plan"]?.GetValue<string>()).IsEqualTo("do Y");
+            await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_session_summary_carries_declared_plans_when_the_session_has_any() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"type":"whats_done","content":"did X"}]"""));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """[{"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true}]"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response  = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var projected = JsonNode.Parse(response["result"]!["content"]![0]!["text"]!.GetValue<string>())!.AsObject();
+
+            await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+            await Assert.That(projected["declared_plans"]![0]!["plan_id"]!.GetValue<string>()).IsEqualTo("p-1");
+            await Assert.That(projected["declared_plans"]![0]!["completed"]!.GetValue<int>()).IsEqualTo(2);
+            await Assert.That(projected["declared_plans"]![0]!["finished"]!.GetValue<bool>()).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_session_summary_survives_a_failing_plans_lookup() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"type":"whats_done","content":"did X"}]"""));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("boom"));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response  = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var projected = JsonNode.Parse(response["result"]!["content"]![0]!["text"]!.GetValue<string>())!.AsObject();
+
+            await Assert.That(response["result"]?["isError"]).IsNull();
+            await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+            await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_session_summary_reports_a_failing_recap_even_when_plans_succeed() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("boom"));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """[{"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true}]"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var text     = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).IsEqualTo("Error: HTTP 500 — boom");
+            await Assert.That(text).DoesNotContain("declared_plans");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>A failed recap must return immediately, not wait out the plans lookup's 10s
+    /// bound; a stalled lookup left running would then block the next stdio request too.</summary>
+    [Test]
+    public async Task Get_session_summary_returns_a_failed_recap_without_waiting_for_a_stalled_plans_lookup() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("boom"));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                    """[{"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true}]""")
+                .WithDelay(TimeSpan.FromSeconds(20)));
+        _server.Given(Request.Create().WithPath("/api/sessions/def/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("[]"));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var firstSw  = Stopwatch.StartNew();
+            var response = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            firstSw.Stop();
+            var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).IsEqualTo("Error: HTTP 500 — boom");
+            await Assert.That(text).DoesNotContain("declared_plans");
+            await Assert.That(firstSw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+
+            // Pins that the stalled lookup no longer holds the serial stdio loop.
+            var secondSw       = Stopwatch.StartNew();
+            var secondResponse = await SendRequest(proc, ToolsCallRequest(5, "get_declared_plans", new JsonObject { ["session_id"] = "def" }));
+            secondSw.Stop();
+
+            await Assert.That(secondResponse["result"]?["isError"]).IsNull();
+            await Assert.That(secondSw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
         } finally {
             await ShutdownAsync(proc);
         }
@@ -564,6 +675,75 @@ public class McpSessionsServerTests : IDisposable {
 
             var widenedHits = _server.FindLogEntries(Request.Create().WithPath("/api/sessions/search").WithParam("repo", MatchBehaviour.RejectOnMatch).UsingGet());
             await Assert.That(widenedHits.Count).IsEqualTo(1); // the widen call did happen and did fail
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task List_repo_plans_hits_the_repo_route_for_the_cwd_repo() {
+        using var repo = CwdRepo("acme", "widgets");
+        var       hash = RepoHashHelper.ComputeRepoHash("acme", "widgets");
+
+        _server.Given(Request.Create().WithPath($"/api/repositories/{hash}/plans").UsingGet().WithParam("state", "open"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"items":[{"plan_id":"p-1","key_kind":"session","documents":[],"progress":{"completed":1,"total":3,"total_known":true,"finished":false},"next_task":{"task_id":"t-2","ordinal":2,"title":"Two","status":"pending","status_partial":false},"sessions":[],"work_item_id":null,"declared_at":"2026-09-02T09:00:00+00:00","last_touched_at":"2026-09-02T10:00:00+00:00","is_complete":true,"withheld_contributions":0}]}"""));
+
+        using var proc = SpawnMcpServer(workingDirectory: repo.Path);
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var response = await SendRequest(proc, ToolsCallRequest(2, "list_repo_plans", new JsonObject()));
+            var text     = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]).IsNull();
+            await Assert.That(text).Contains("\"plan_id\":\"p-1\"");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>Nothing is stubbed, so the route answers 404 the way an older server does.</summary>
+    [Test]
+    public async Task List_repo_plans_against_a_server_without_the_route_says_so() {
+        using var repo = CwdRepo("acme", "widgets");
+        using var proc = SpawnMcpServer(workingDirectory: repo.Path);
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var response = await SendRequest(proc, ToolsCallRequest(2, "list_repo_plans", new JsonObject()));
+            var text     = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).Contains("does not list a repository's plans yet");
+            await Assert.That(text).DoesNotContain("HTTP 404");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_declared_plans_answers_with_an_array_for_either_argument() {
+        const string plan = """{"plan_id":"p-1","tasks":[],"progress":{"completed":0,"total":0,"total_known":false,"finished":false},"is_complete":true,"withheld_contributions":0,"is_current":false}""";
+
+        _server.Given(Request.Create().WithPath("/api/plans/p-1").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(plan));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/plans").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody($"[{plan}]"));
+
+        using var proc = SpawnMcpServer();
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            foreach (var (requestId, args) in new[] { (2, new JsonObject { ["plan_id"] = "p-1" }), (3, new JsonObject { ["session_id"] = "abc" }) }) {
+                var response = await SendRequest(proc, ToolsCallRequest(requestId, "get_declared_plans", args));
+                var text     = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+                var plans    = JsonNode.Parse(text!)?.AsArray();
+
+                await Assert.That(response["result"]?["isError"]).IsNull();
+                await Assert.That(plans!.Count).IsEqualTo(1);
+                await Assert.That(plans[0]?["plan_id"]?.GetValue<string>()).IsEqualTo("p-1");
+            }
         } finally {
             await ShutdownAsync(proc);
         }
