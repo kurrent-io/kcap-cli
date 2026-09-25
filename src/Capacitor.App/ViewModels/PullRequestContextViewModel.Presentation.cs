@@ -14,8 +14,8 @@ public sealed partial class PullRequestContextViewModel {
     public bool HasNumberLabel => NumberLabel.Length > 0;
     public string ProviderLabel => _selected?.Subject.Provider switch { "github" => "GitHub", "gitlab" => "GitLab", _ => "Source" };
     public bool CanOpenSource => _selected is { IsAvailable: true };
-    /// Host exit beside status/repo once the card has settled — overview, legacy list, or unlisted refusal.
-    public bool ShowsOpenSource => CanOpenSource && (CanDisplay || IsLegacy || Notice == UnlistedNotice);
+    /// Host exit beside status/repo once the card has settled on an overview or a legacy list.
+    public bool ShowsOpenSource => CanOpenSource && (CanDisplay || IsLegacy);
     public bool IsChecks => _section == "checks";
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";

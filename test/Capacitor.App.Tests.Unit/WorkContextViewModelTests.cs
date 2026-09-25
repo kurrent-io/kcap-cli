@@ -977,11 +977,11 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// Session-admitted PRs and the work item's own links are different facts. Refreshing the
-    /// session list cannot invent a row that only exists on the item.
+    /// The pane shows the session's pull requests only: a PR the work item links is not a link
+    /// card, whatever its link class, while the item's issues still show.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_work_item_pull_request_link_shows_when_the_session_has_none() {
+    public async Task A_work_item_pull_request_link_is_not_a_link_card() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
@@ -989,18 +989,15 @@ public class WorkContextViewModelTests {
                     Link("issue", "WK-1"),
                     Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar"),
                     Link("pull_request", "#764", "https://github.com/kurrent-io/kcap-cli/pull/764", "Also"),
+                    Link("pr", "!765", "https://github.com/kurrent-io/kcap-cli/pull/765", "Mentioned", linkClass: "reference"),
                 ],
             }));
             try {
                 await h.PushAsync(Dto());
-                await Assert.That(h.Vm.Links.Select(l => (l.Eyebrow, l.Key, l.Title, l.Url))).IsEquivalentTo(
-                    new (string, string, string, string?)[] {
-                        ("PULL REQUEST", "#763", "Sidebar", "https://github.com/kurrent-io/kcap-cli/pull/763"),
-                        ("PULL REQUEST", "#764", "Also", "https://github.com/kurrent-io/kcap-cli/pull/764"),
-                    }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-                await Assert.That(h.Vm.ShowsLegacyLinkCards).IsTrue();
-                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
-                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
+                await Assert.That(h.Vm.Links).IsEmpty();
+                await Assert.That(h.Vm.ShowsLegacyLinkCards).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsTrue();
+                await Assert.That(h.Vm.Issues.Select(i => i.Key)).IsEquivalentTo(new[] { "WK-1" });
             } finally {
                 await h.Vm.TeardownAsync();
             }
@@ -1038,51 +1035,14 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// An empty session list still offers the work-item PR so the in-app reader can open: reads
-    /// route to the local `gh` reader, which needs no session admission.
+    /// The card lists the session's pull requests only: a PR linked to the work item alone is not
+    /// offered, and the pane's empty copy speaks instead.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_empty_session_list_offers_the_work_item_pull_request() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            var opened = 0;
-            var source = new FakePullRequestSource(h.Time) { Links = [] };
-            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => opened++);
-            h.Vm.PullRequests = pullRequests;
-            pullRequests.SetForeground(true);
-            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
-                Links = [Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Sidebar")],
-            }));
-            try {
-                await h.PushAsync(Dto());
-                await WaitUntilAsync(() => source.Lists == 1 && !pullRequests.IsReading, what: "empty session PR list");
-                await Assert.That(pullRequests.HasListed).IsTrue();
-                await Assert.That(pullRequests.HasPullRequest).IsTrue();
-                await Assert.That(pullRequests.Notice).IsEqualTo("");
-                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
-                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
-                await Assert.That(h.Vm.ShowsPullRequestCard).IsTrue();
-                await Assert.That(h.Vm.Links[0].Key).IsEqualTo("#763");
-                await Assert.That(pullRequests.NumberLabel).IsEqualTo("#763");
-                await pullRequests.OpenReaderCommand.Execute();
-                await Assert.That(opened).IsEqualTo(1);
-            } finally {
-                await pullRequests.TeardownAsync();
-                await h.Vm.TeardownAsync();
-            }
-        });
-    }
-
-    /// Without a local reader the read falls to the server, which refuses a PR the session was not
-    /// credited with; the notice must then say what happened and point at the GitHub button.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_work_item_pull_request_the_server_refuses_names_the_reason() {
+    public async Task An_empty_session_list_shows_the_empty_note_whatever_the_work_item_links() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var source = new FakePullRequestSource(h.Time) { Links = [] };
-            source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
-                PullRequestReadKind.SubjectUnavailable, Subject: subject, Reason: "subject_unavailable", AccessFailure: "invalid")));
             var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
             h.Vm.PullRequests = pullRequests;
             pullRequests.SetForeground(true);
@@ -1091,10 +1051,14 @@ public class WorkContextViewModelTests {
             }));
             try {
                 await h.PushAsync(Dto());
-                await WaitUntilAsync(() => source.Overviews == 1 && !pullRequests.IsReading, what: "server refused the unlisted PR");
-                await Assert.That(pullRequests.Selected!.IsListed).IsFalse();
-                await Assert.That(pullRequests.Notice).IsEqualTo(PullRequestContextViewModel.UnlistedNotice);
-                await Assert.That(pullRequests.CanOpenSource).IsTrue();
+                await WaitUntilAsync(() => source.Lists == 1 && pullRequests.HasListed && !pullRequests.IsReading, what: "empty session PR list");
+                await Assert.That(pullRequests.HasPullRequest).IsFalse();
+                await Assert.That(pullRequests.HasChoice).IsFalse();
+                await Assert.That(pullRequests.Notice).IsEqualTo("");
+                await Assert.That(h.Vm.Links).IsEmpty();
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
             } finally {
                 await pullRequests.TeardownAsync();
                 await h.Vm.TeardownAsync();
@@ -1128,52 +1092,6 @@ public class WorkContextViewModelTests {
                 await Assert.That(h.Opener.Opened[0]).Contains($"/pull/{pullRequests.Selected!.Link.Number}");
             } finally {
                 await pullRequests.TeardownAsync();
-                await h.Vm.TeardownAsync();
-            }
-        });
-    }
-
-    /// A `reference` is an ambient mention; only a `link`-class PR is the work item's.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_referenced_pull_request_is_not_shown_as_linked() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
-                Links = [
-                    Link("pr", "!763", "https://github.com/kurrent-io/kcap-cli/pull/763", "Mentioned", linkClass: "reference"),
-                    Link("pr", "!764", "https://github.com/kurrent-io/kcap-cli/pull/764", "Linked"),
-                ],
-            }));
-            try {
-                await h.PushAsync(Dto());
-                await Assert.That(h.Vm.Links.Select(l => l.Key)).IsEquivalentTo(new[] { "#764" });
-            } finally {
-                await h.Vm.TeardownAsync();
-            }
-        });
-    }
-
-    /// PR numbers are repository-local: #42 in two repositories is two pull requests.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_same_number_in_two_repositories_is_two_pull_requests() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with {
-                Links = [
-                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-cli/pull/42", "CLI"),
-                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-server/pull/42", "Server"),
-                    Link("pr", "!42", "https://github.com/kurrent-io/kcap-server/pull/42", "Server again"),
-                ],
-            }));
-            try {
-                await h.PushAsync(Dto());
-                await Assert.That(h.Vm.Links.Select(l => l.Url!)).IsEquivalentTo(new[] {
-                    "https://github.com/kurrent-io/kcap-cli/pull/42",
-                    "https://github.com/kurrent-io/kcap-server/pull/42",
-                });
-            } finally {
                 await h.Vm.TeardownAsync();
             }
         });

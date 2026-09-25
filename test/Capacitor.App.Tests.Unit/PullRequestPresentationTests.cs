@@ -87,12 +87,12 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.SectionEyebrow).IsEqualTo("PULL REQUESTS");
         await Assert.That(h.Model.SectionMeta).IsEqualTo(count.ToString(CultureInfo.InvariantCulture));
         await Assert.That(h.Model.RepositoryLabel).IsEqualTo("example/repo");
-        await Assert.That(h.Model.NumberLabel).IsEqualTo("#1");
+        await Assert.That(h.Model.NumberLabel).IsEqualTo($"#{count}");
         if (visible) {
-            selector.SelectedIndex = 1;
+            selector.SelectedIndex = 0;
             await h.SettleAsync();
-            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(2);
-            await Assert.That(h.Model.NumberLabel).IsEqualTo("#2");
+            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(1);
+            await Assert.That(h.Model.NumberLabel).IsEqualTo("#1");
         }
     });
 

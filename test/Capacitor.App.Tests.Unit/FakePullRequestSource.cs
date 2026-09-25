@@ -12,6 +12,8 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public int TotalPages = 3;
     public string? Failure;
     public string OverviewTitle = "Private PR";
+    /// Lifecycle an overview reports per PR number; a number not listed reads as open.
+    public readonly Dictionary<int, string> Lifecycles = [];
     public Func<string, object?>? PageItem;
     public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
     public readonly List<CancellationToken> OverviewTokens = [];
@@ -30,7 +32,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             Subject: subject, AccessFailure: Failure, Reason: Failure == "denied" ? "github_access_denied" : "timeout"));
     }
     public PullRequestRead<PullRequestOverviewDto> Overview(PullRequestSubjectDto subject, string? title = null) => new(PullRequestReadKind.Ready,
-        new() { Title = title ?? OverviewTitle, Description = "Private description", HeadSha = new string('a', 40), Lifecycle = "open",
+        new() { Title = title ?? OverviewTitle, Description = "Private description", HeadSha = new string('a', 40), Lifecycle = Lifecycles.GetValueOrDefault(subject.Number, "open"),
             Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = "success" } },
         subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
     public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,

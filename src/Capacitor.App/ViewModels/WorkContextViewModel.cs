@@ -32,7 +32,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             if (value is not null) {
                 value.PropertyChanged += OnPullRequestChanged;
                 _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
-                OfferFallbacks();
             }
             this.RaisePropertyChanged(nameof(PullRequests));
             RaiseRelated();
