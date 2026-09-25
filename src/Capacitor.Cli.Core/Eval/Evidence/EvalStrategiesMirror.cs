@@ -6,13 +6,21 @@ public static class EvalStrategiesMirror {
 
     /// <summary>Among the run's completion questions, the one the catalog marks, else the first in run order; none without one.
     /// Only the exact id counts: an id this build does not know behaves as general.</summary>
-    public static string? ReportingQuestion(IReadOnlyList<EvalQuestionDto> questions) {
+    public static string? ReportingQuestion(IReadOnlyList<EvalQuestionDto> questions) =>
+        ReportingQuestion(questions.Select(q => (q.Id, q.Strategy, q.ReportsObligations)));
+
+    public static string? ReportingQuestion(IEnumerable<(string Id, string? Strategy, bool ReportsObligations)> questions) {
         string? first = null;
-        foreach (var q in questions) {
-            if (q.Strategy != Completion) continue;
-            if (q.ReportsObligations) return q.Id;
-            first ??= q.Id;
+        foreach (var (id, strategy, reports) in questions) {
+            if (strategy != Completion) continue;
+            if (reports) return id;
+            first ??= id;
         }
         return first;
     }
+
+    /// <summary>The run's reporting question in the server's order: the catalog's, whatever order the run selected its
+    /// questions in.</summary>
+    public static string? ReportingQuestion(EvalCatalogDto catalog, IReadOnlyCollection<string> runIds) =>
+        ReportingQuestion(catalog.Questions.Where(q => runIds.Contains(q.Id)).Select(q => (q.Id, q.Strategy, q.ReportsObligations == true)));
 }

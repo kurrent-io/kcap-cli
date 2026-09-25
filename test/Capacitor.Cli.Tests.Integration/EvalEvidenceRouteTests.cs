@@ -570,6 +570,60 @@ public class EvalEvidenceRouteTests : IDisposable {
     }
 
     [Test]
+    public async Task The_retrospective_reads_each_obligation_as_its_id_and_status_only() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c25");
+        ServeCompletion();
+        using var claude = Claude(dir, CompletionVerdict("""[{"title":"Write the tests","origin":"plan","status":"verified","anchor":"o3.1","citations":["o3.2"],"note":"judge prose"}]"""));
+
+        await Run(claude, ["completed_items"], new RecordingEvalObserver());
+
+        var retrospective = Prompt(dir, 1);
+        var id = EvalObligationRules.DeriveId($"{Root}@0", "Write the tests");
+        await Assert.That(retrospective.Contains($$"""
+            "obligations":[{"id":"{{id}}","status":"verified"}]
+            """)).IsTrue();
+        await Assert.That(retrospective.Contains("Write the tests")).IsFalse();
+        await Assert.That(retrospective.Contains("judge prose")).IsFalse();
+    }
+
+    [Test]
+    public async Task With_no_marked_question_selected_the_first_completion_question_in_catalog_order_reports() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c26");
+        ServeCompletion(CompletionQuestion("followed_plan", marked: false), CompletionQuestion("unplanned_changes", marked: false), CompletionQuestion("completed_items", marked: true));
+        using var claude = Claude(dir, CompletionVerdict("""[{"title":"Write the tests","origin":"plan","status":"verified","anchor":"o3.1","citations":["o3.2"]}]"""));
+
+        await Run(claude, ["unplanned_changes", "followed_plan"], new RecordingEvalObserver());
+
+        await Assert.That(Prompt(dir, 0).Contains("unplanned_changes")).IsTrue();
+        await Assert.That(Prompt(dir, 0).Contains(EvalObligationContract.ReporterMarker)).IsFalse();
+        await Assert.That(Prompt(dir, 1).Contains(EvalObligationContract.ReporterMarker)).IsTrue();
+        var questions = Payload().GetProperty("categories")[0].GetProperty("questions").EnumerateArray().ToDictionary(q => q.GetProperty("question_id").GetString()!);
+        await Assert.That(questions["followed_plan"].GetProperty("obligations").GetArrayLength()).IsEqualTo(1);
+        await Assert.That(questions["unplanned_changes"].TryGetProperty("obligations", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_transient_first_view_failure_is_retried_by_the_next_question() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c27");
+        ServeCompletion(CompletionQuestion("followed_plan", marked: false), CompletionQuestion("completed_items", marked: true));
+        _stub.Server.Given(Request.Create().WithPath($"/api/sessions/{Sid}/evidence-first-view").UsingGet())
+            .InScenario("first-view").WillSetStateTo("recovered").AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(503).WithBody("busy"));
+        using var claude = Claude(dir, CompletionVerdict("""[{"title":"Write the tests","origin":"plan","status":"verified","anchor":"o3.1","citations":["o3.2"]}]"""));
+
+        await Run(claude, ["followed_plan", "completed_items"], new RecordingEvalObserver());
+
+        await Assert.That(_stub.Requests("evidence-first-view").Count).IsEqualTo(2);
+        var questions = Payload().GetProperty("categories")[0].GetProperty("questions").EnumerateArray().ToDictionary(q => q.GetProperty("question_id").GetString()!);
+        await Assert.That(questions["followed_plan"].TryGetProperty("strategy", out _)).IsFalse();
+        await Assert.That(questions["completed_items"].GetProperty("strategy").GetString()).IsEqualTo("completion");
+        await Assert.That(questions["completed_items"].GetProperty("obligations").GetArrayLength()).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task An_assessed_checklist_with_no_decisive_entry_and_complete_coverage_persists_as_insufficient_evidence() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
         var dir = Dir("c21");

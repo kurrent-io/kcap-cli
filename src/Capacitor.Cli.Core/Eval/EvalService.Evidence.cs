@@ -106,6 +106,7 @@ public static partial class EvalService {
             return new EvidenceRunSetup {
                 Context = context, Scope = scope, Reader = reader, Citations = new EvidenceCitationClient(httpClient, baseUrl, sessionId, time),
                 Advertisement = ad, Route = route, Trace = trace, OneShotLimitChars = limit, Orientation = orientation, Questions = reconciled,
+                ReportingQuestionId = EvalStrategiesMirror.ReportingQuestion(catalog, [.. reconciled.Select(q => q.Id)]),
                 EvalRunId = evalRunId, SessionId = sessionId, EncodedSessionId = Uri.EscapeDataString(sessionId),
                 RetrospectivePrompt = catalog.RetrospectivePrompt, RetrospectivePromptVersion = catalog.RetrospectivePromptVersion,
                 Model = model, Profile = profile, Harnesses = harnesses
@@ -171,12 +172,13 @@ public static partial class EvalService {
                 model: JudgeModelFor(model), maxTurns: JudgeMaxTurns, promptViaStdin: true, jsonSchema: EvidenceVerdictJsonSchema, ct: ct);
         } else {
             if (question.Strategy is { Length: > 0 } strategy && !setup.FirstViews.TryGetValue(strategy, out view)) {
-                var (built, failedView) = await EvidenceFirstViewReader.ReadAsync(setup.Reader, state.Token, strategy, setup.Orientation.Pages.Count, ct);
+                var (built, failedView, answered) = await EvidenceFirstViewReader.ReadAsync(setup.Reader, state.Token, strategy, setup.Orientation.Pages.Count, ct);
                 if (failedView is not null) return EvidenceQuestionOutcome.Moved;
-                setup.FirstViews[strategy] = view = built;
+                view = built;
+                if (answered) setup.FirstViews[strategy] = built;
             }
             // As on the server's own route, only a question that received its first view reports obligations.
-            reporting = view is not null && question.Id == EvalStrategiesMirror.ReportingQuestion(setup.Questions);
+            reporting = view is not null && question.Id == setup.ReportingQuestionId;
             IReadOnlyList<JudgeLedgerPage> seeded = view is null ? setup.Orientation.Pages : [.. setup.Orientation.Pages, .. view.Pages];
 
             var soft = time.GetUtcNow() + setup.RetrievalTimeout * EvidenceBudgets.SoftDeadlineFraction;
@@ -361,7 +363,7 @@ public static partial class EvalService {
         var started      = time.GetTimestamp();
         var overallText  = aggregate.OverallScore is { } score ? $"{score}/5" : "not scored";
         var sessionMeta  = $"session-id: {setup.Scope.State!.RootSessionId}\nrun-id: {setup.EvalRunId}\nmodel: {model}\noverall-score: {overallText}";
-        var verdictsJson = JsonSerializer.Serialize(assessments.ToList(), CapacitorJsonContext.Default.ListEvalQuestionAssessment);
+        var verdictsJson = RetrospectiveVerdictsJson(assessments);
         var prompt       = EvidencePromptBlocks.Preamble(EvidencePromptBlocks.RetrospectivePreambleResource)
                          + BuildRetrospectivePrompt(setup.RetrospectivePrompt, sessionMeta, verdictsJson, knownPatterns: "", trace);
         try {
@@ -437,6 +439,34 @@ public static partial class EvalService {
             w.WriteEndObject();
             w.WriteEndObject();
             w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    // The retrospective reads obligation citations through the coverage record, so each obligation travels as its id and
+    // status only: titles and notes are judge-written free text.
+    internal static string RetrospectiveVerdictsJson(IReadOnlyList<EvalQuestionAssessment> assessments) {
+        if (assessments.All(a => a.Obligations is null)) return JsonSerializer.Serialize(assessments.ToList(), CapacitorJsonContext.Default.ListEvalQuestionAssessment);
+        using var buffer = new MemoryStream();
+        using (var w = new Utf8JsonWriter(buffer)) {
+            w.WriteStartArray();
+            foreach (var a in assessments) {
+                using var doc = JsonDocument.Parse(JsonSerializer.Serialize(a with { Obligations = null }, CapacitorJsonContext.Default.EvalQuestionAssessment));
+                w.WriteStartObject();
+                foreach (var property in doc.RootElement.EnumerateObject()) property.WriteTo(w);
+                if (a.Obligations is { Count: > 0 } obligations) {
+                    w.WriteStartArray("obligations");
+                    foreach (var o in obligations) {
+                        w.WriteStartObject();
+                        w.WriteString("id", o.Id);
+                        w.WriteString("status", o.Status);
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                }
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
         }
         return Encoding.UTF8.GetString(buffer.ToArray());
     }

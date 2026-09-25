@@ -25,9 +25,10 @@ public class EvidenceFirstViewReaderTests : IDisposable {
     public async Task A_built_view_is_seeded_pages_after_the_orientation_with_its_stamps() {
         _stub.Route("GET", "evidence-first-view", 200, Built(), new Dictionary<string, string> { ["token"] = "tok", ["strategy"] = "completion", ["budget_bytes"] = "196608" });
 
-        var (view, failed) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "completion", 3, CancellationToken.None);
+        var (view, failed, answered) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "completion", 3, CancellationToken.None);
 
         await Assert.That(failed).IsNull();
+        await Assert.That(answered).IsTrue();
         await Assert.That(view!.Strategy).IsEqualTo("completion");
         await Assert.That(view.StrategyVersion).IsEqualTo("completion-v1");
         var page = view.Pages.Single();
@@ -44,7 +45,7 @@ public class EvidenceFirstViewReaderTests : IDisposable {
     public async Task The_server_first_view_vector_reads_as_one_turns_page_and_names_its_omitted_section() {
         _stub.Route("GET", "evidence-first-view", 200, File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "eval-strategies", "first-view-response.json")));
 
-        var (view, _) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "completion", 2, CancellationToken.None);
+        var (view, _, _) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "completion", 2, CancellationToken.None);
 
         var page = view!.Pages.Single();
         await Assert.That(page.Handle).IsEqualTo("o2");
@@ -57,29 +58,32 @@ public class EvidenceFirstViewReaderTests : IDisposable {
     [Test]
     public async Task An_unavailable_view_is_no_view_and_a_refused_or_moved_scope_is_reported() {
         _stub.Route("GET", "evidence-first-view", 200, """{"state":"unavailable","strategy":"general","strategy_version":"general-v1","sections":[]}""");
-        var (none, noneFailed) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
+        var (none, noneFailed, noneAnswered) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
         await Assert.That(none).IsNull();
         await Assert.That(noneFailed).IsNull();
+        await Assert.That(noneAnswered).IsTrue();
 
         _stub.Route("GET", "evidence-first-view", 409, """{"code":"scope_moved","current_version":"v2"}""", priority: 1);
-        var (_, moved) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
+        var (_, moved, _) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
         await Assert.That(moved).IsEqualTo(409);
 
         _stub.Route("GET", "evidence-first-view", 404, "", priority: 0);
-        var (_, gone) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
+        var (_, gone, _) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
         await Assert.That(gone).IsEqualTo(404);
     }
 
     [Test]
-    public async Task A_failed_or_unreadable_answer_is_no_view() {
+    public async Task A_failed_or_unreadable_answer_is_no_view_and_not_an_answer() {
         _stub.Route("GET", "evidence-first-view", 500, "boom");
-        var (failedView, failedStatus) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
+        var (failedView, failedStatus, failedAnswered) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
         await Assert.That(failedView).IsNull();
         await Assert.That(failedStatus).IsNull();
+        await Assert.That(failedAnswered).IsFalse();
 
         _stub.Route("GET", "evidence-first-view", 200, "not json", priority: 1);
-        var (view, failed) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
+        var (view, failed, answered) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "safety", 3, CancellationToken.None);
         await Assert.That(view).IsNull();
         await Assert.That(failed).IsNull();
+        await Assert.That(answered).IsFalse();
     }
 }

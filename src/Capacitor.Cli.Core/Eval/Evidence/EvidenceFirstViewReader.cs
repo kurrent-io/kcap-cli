@@ -13,17 +13,20 @@ public static class EvidenceFirstViewReader {
         ["turns"] = "list_turns", ["events"] = "read_events", ["calls"] = "list_calls", ["authorizations"] = "list_authorizations"
     };
 
-    /// <summary>The view when it was built, else none; <c>FailedStatus</c> is set only for a 404 or 409, which mean the scope is
-    /// gone. A view whose rendered block would exceed the request's budget is dropped whole, as the server's own runner does.</summary>
-    public static async Task<(EvidenceFirstView? View, int? FailedStatus)> ReadAsync(EvidenceReadClient reader, string token, string strategy, int firstSeededOrdinal, CancellationToken ct) {
+    /// <summary>The view when it was built, else none. <c>FailedStatus</c> is set only for a 404 or 409, which mean the scope is
+    /// gone. <c>Answered</c> is false for a transient failure (any other status, an unreachable server, an unreadable body), which
+    /// a caller must not remember. A view whose rendered block would exceed the request's budget is dropped whole, as the
+    /// server's own runner does.</summary>
+    public static async Task<(EvidenceFirstView? View, int? FailedStatus, bool Answered)> ReadAsync(EvidenceReadClient reader, string token, string strategy, int firstSeededOrdinal, CancellationToken ct) {
         var result = await reader.GetAsync(Route, [("token", token), ("strategy", strategy), ("budget_bytes", EvidenceBudgets.FirstViewBytes.ToString(CultureInfo.InvariantCulture))], ct);
-        if (result.Status is 404 or 409) return (null, result.Status);
-        if (!result.IsSuccess) return (null, null);
+        if (result.Status is 404 or 409) return (null, result.Status, true);
+        if (!result.IsSuccess) return (null, null, false);
 
         try {
             using var doc = JsonDocument.Parse(result.Body);
             var root = doc.RootElement;
-            if (root.Str("state") != "built" || root.Str("strategy") is not { } resolved || root.Str("strategy_version") is not { } version) return (null, null);
+            if (root.Str("state") is not { } answer) return (null, null, false);
+            if (answer != "built" || root.Str("strategy") is not { } resolved || root.Str("strategy_version") is not { } version) return (null, null, true);
 
             var text = new StringBuilder($"First view ({resolved}):\n");
             if (root.Str("guidance") is { Length: > 0 } guidance) text.Append(guidance).Append('\n');
@@ -43,10 +46,10 @@ public static class EvidenceFirstViewReader {
                     .Append('\n');
 
             var block = text.ToString();
-            if (Encoding.UTF8.GetByteCount(block) > EvidenceBudgets.FirstViewBytes) return (null, null);
-            return (new EvidenceFirstView(resolved, version, block, pages), null);
+            if (Encoding.UTF8.GetByteCount(block) > EvidenceBudgets.FirstViewBytes) return (null, null, true);
+            return (new EvidenceFirstView(resolved, version, block, pages), null, true);
         } catch (JsonException) {
-            return (null, null);
+            return (null, null, false);
         }
     }
 }
