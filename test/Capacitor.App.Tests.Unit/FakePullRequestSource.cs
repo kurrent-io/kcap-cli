@@ -13,6 +13,9 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public bool EmptyPages;
     /// Held open, every page read waits on it: the section stays in its first load.
     public TaskCompletionSource? PageGate;
+    public string HeadSha = new string('a', 40);
+    /// The next page read answers Restart with this reason instead of a page.
+    public string? RestartNextPage;
     public string? Failure;
     public string OverviewTitle = "Private PR";
     public Func<string, object?>? PageItem;
@@ -33,12 +36,16 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             Subject: subject, AccessFailure: Failure, Reason: Failure == "denied" ? "github_access_denied" : "timeout"));
     }
     public PullRequestRead<PullRequestOverviewDto> Overview(PullRequestSubjectDto subject, string? title = null) => new(PullRequestReadKind.Ready,
-        new() { Title = title ?? OverviewTitle, Description = "Private description", HeadSha = new string('a', 40), Lifecycle = "open",
+        new() { Title = title ?? OverviewTitle, Description = "Private description", HeadSha = HeadSha, Lifecycle = "open",
             Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = "success" } },
         subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
     public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
         string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class {
         Pages++;
+        if (RestartNextPage is { } reason) {
+            RestartNextPage = null;
+            return Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Restart, Subject: subject, Reason: reason));
+        }
         var page = cursor is null ? 0 : int.Parse(cursor[^8..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
         var id = "item-" + page.ToString(CultureInfo.InvariantCulture);
         object item = PageItem?.Invoke(section) ?? (section switch {
@@ -52,7 +59,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
         var next = page + 1 < TotalPages ? (page + 1).ToString("x64", CultureInfo.InvariantCulture) : null;
         var read = new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,
-            Coverage = "complete", HeadSha = section == "checks" ? new string('a', 40) : null, Total = new() { Kind = "exact", Value = TotalPages },
+            Coverage = "complete", HeadSha = section == "checks" ? HeadSha : null, Total = new() { Kind = "exact", Value = TotalPages },
             ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
         }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
         return PageGate is { } gate ? gate.Task.ContinueWith(_ => read, TaskScheduler.Default) : Task.FromResult(read);

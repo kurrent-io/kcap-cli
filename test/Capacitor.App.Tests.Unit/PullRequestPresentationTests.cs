@@ -183,6 +183,31 @@ public class PullRequestPresentationTests {
         await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.SingleOrDefault()?.Outcome == "success", what: "stale checks reloaded");
     });
 
+    /// Checks belong to a commit, and a new head is something the reader learns on its own.
+    [Test]
+    public Task A_new_head_reloads_the_checks_without_asking() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        h.Source.HeadSha = new string('b', 40);
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.FreshnessDetail == "Checks ran on commit bbbbbbb" && !h.Model.IsReading, what: "checks for the new head");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+        await Assert.That(h.Model.Rows.Count).IsEqualTo(1);
+    });
+
+    /// A page read can be the first to hear of a new head; it recovers through a fresh overview.
+    [Test]
+    public Task A_head_changed_page_restart_recovers_by_itself() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        h.Source.RestartNextPage = "head_changed";
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading, what: "checks recovered");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+    });
+
     /// A click inside the poll's gap used to wait it out with nothing on screen.
     [Test]
     public Task A_refresh_click_shows_progress_at_once_and_runs_within_seconds() => RunOnUiAsync(async () => {

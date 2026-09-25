@@ -7,6 +7,7 @@ namespace Capacitor.App.ViewModels;
 public sealed partial class PullRequestContextViewModel {
     bool _refreshDiscovery;
     bool _refreshPage;
+    bool _headRestarted;
     PullRequestSectionState? CurrentSection => _sections.GetValueOrDefault(SectionKey);
 
     void RequestRefresh(bool manual = false) {
@@ -77,9 +78,8 @@ public sealed partial class PullRequestContextViewModel {
             var read = await _source.OverviewAsync(session, choice.Subject, ct).ConfigureAwait(false);
             return () => {
                 if (read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale && read.Data is not null && AcceptAccess(read)) {
-                    if (_overview?.HeadSha is { } old && old != read.Data.HeadSha) {
-                        foreach (var state in _sections.Values.Where(state => state.Key == "checks")) { state.Pages.Clear(); state.Stopped = true; state.Error = "The PR head changed. Refresh checks."; }
-                    }
+                    // Checks belong to a commit: a new head drops the old rows, and the open tab reloads below.
+                    if (_overview?.HeadSha is { } old && old != read.Data.HeadSha) _sections.Remove("checks");
                     var rollupMoved = _overview?.Checks?.Rollup != read.Data.Checks?.Rollup;
                     _overview = read.Data; _overviewRead = read;
                     SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier snapshot while GitHub is unavailable." : "");
@@ -90,7 +90,8 @@ public sealed partial class PullRequestContextViewModel {
                     // The open tab follows the poll too, unless the reader paged past the first page:
                     // a reload restarts at page one and would pull the rows they were reading away.
                     var onePage = CurrentSection is { Pages.Count: 1, Earlier.Count: 0 };
-                    var reload = _refreshPage || checksLive || onePage;
+                    var stoppedChecks = _section == "checks" && CurrentSection is { Stopped: true };
+                    var reload = _refreshPage || checksLive || onePage || stoppedChecks;
                     if (_readerVisible && _section != "overview" && (CurrentSection is null || reload)) RequestPage(null, refresh: reload);
                     _refreshPage = false;
                 } else Fail(read);
@@ -109,6 +110,9 @@ public sealed partial class PullRequestContextViewModel {
         var thread = _thread;
         _pageRequests.Add(key);
         Notify();
+        // Set by a head_changed restart; the overview it asks for goes out once this read has settled,
+        // or its apply would find this request still in flight and skip the reload.
+        var restartOverview = false;
         switch (section) {
             case "checks": Page<PullRequestCheckDto>(ToRow); break;
             case "reviewers": Page<PullRequestReviewerDto>(ToRow); break;
@@ -133,6 +137,7 @@ public sealed partial class PullRequestContextViewModel {
                         if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(); return; }
                         state.Pages.Add(saved);
                     }
+                    if (section == "checks") _headRestarted = false;
                     state.Snapshot = page.SnapshotId; state.Completed = page.SnapshotCompletedAt;
                     state.Head = page.HeadSha; state.Coverage = page.Coverage;
                     state.Total = page.Total; state.Excluded = page.ExcludedByFilter; state.Stopped = false; state.Error = null;
@@ -140,15 +145,22 @@ public sealed partial class PullRequestContextViewModel {
                     EnforcePageBudget(state, saved, earlier);
                     state.Next = state.Pages.LastOrDefault()?.Next;
                     SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier page while GitHub is unavailable." : "");
+                } else if (read.Kind == PullRequestReadKind.Restart && read.Reason == "head_changed" && !_headRestarted) {
+                    // Learn the new head from a fresh overview, whose apply reloads the checks. Once only:
+                    // an overview still on the old head would bounce straight back here.
+                    _headRestarted = true;
+                    _sections.Remove(key);
+                    _lastOverview = null;
+                    restartOverview = true;
                 } else if (read.Kind == PullRequestReadKind.Restart && read.Reason is not ("identity_changed" or "integration_changed")) {
                     var state = _sections.GetValueOrDefault(key) ?? new PullRequestSectionState(key);
-                    state.Stopped = true; state.Error = read.Reason == "head_changed" ? "The PR head changed. Refresh checks." : "This snapshot can no longer load pages. Refresh to start again.";
+                    state.Stopped = true; state.Error = read.Reason == "head_changed" ? "Checks are catching up with a new commit." : "This snapshot can no longer load pages. Refresh to start again.";
                     if (read.Reason == "head_changed") state.Pages.Clear();
                     _sections[key] = state;
                     Notify();
                 } else Fail(read);
             };
-        }, () => _pageRequests.Remove(key));
+        }, () => { _pageRequests.Remove(key); if (restartOverview) RequestOverview(); });
     }
     void EnforcePageBudget(PullRequestSectionState state, PullRequestSectionState.Page newest, bool earlier) {
         while (state.Pages.Count > 8) {
