@@ -28,10 +28,9 @@ public class EvalServiceEvidenceRequestTests {
         var config = EvalService.BuildEvidenceMcpConfig("/opt/kcap", "sess-1", "/tmp/kcap-eval-x/q1.run.json", "https://tenant.example");
 
         await Assert.That(config).IsEqualTo("""{"mcpServers":{"kcap-judge":{"command":"/opt/kcap","args":["mcp","judge","--session","sess-1","--run","/tmp/kcap-eval-x/q1.run.json"],"env":{"KCAP_URL":"https://tenant.example"}}}}""");
-        await Assert.That(EvalService.EvidenceMcpAllowedTools).IsEquivalentTo([
-            "mcp__kcap-judge__list_sources", "mcp__kcap-judge__list_turns", "mcp__kcap-judge__read_events", "mcp__kcap-judge__read_body",
-            "mcp__kcap-judge__list_calls", "mcp__kcap-judge__summarize_calls", "mcp__kcap-judge__list_authorizations", "mcp__kcap-judge__open_page"
-        ]);
+        await Assert.That(string.Join(",", EvalService.EvidenceMcpAllowedTools)).IsEqualTo(
+            "mcp__kcap-judge__list_sources,mcp__kcap-judge__list_turns,mcp__kcap-judge__read_events,mcp__kcap-judge__read_body,"
+          + "mcp__kcap-judge__list_calls,mcp__kcap-judge__summarize_calls,mcp__kcap-judge__list_authorizations,mcp__kcap-judge__open_page");
     }
 
     [Test]

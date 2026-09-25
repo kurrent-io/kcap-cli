@@ -68,6 +68,11 @@ public class EvalEvidenceRouteTests : IDisposable {
             """);
     }
 
+    // The gate-off V4 body for the q1 + q-tools legacy run, so a change landing on every legacy run alike is still caught.
+    const string LegacyV4BodySha = "5dedc141ffc16920271b414b495efc1126d7abe24f8aaa1f2390faa3d21964a4";
+
+    static string Sha(string s) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(s)));
+
     static string Prompt(string dir, int n) => File.ReadAllText(Path.Combine(dir, $"prompt-{n}.txt"));
     static string[] ArgsOf(string dir, int n) => File.ReadAllLines(Path.Combine(dir, $"args-{n}.txt"));
     static string After(string[] args, string flag) => args[Array.IndexOf(args, flag) + 1];
@@ -93,17 +98,16 @@ public class EvalEvidenceRouteTests : IDisposable {
 
     static IReadOnlyList<EvalQuestionDto> Questions(params string[] ids) => [.. ids.Select(id => new EvalQuestionDto { Category = "safety", Id = id, Text = id, Prompt = id })];
 
-    Task<SessionEvalCompletedPayloadV4?> Run(string[] ids, IEvalObserver observer, bool chain = false, int? threshold = null, TimeProvider? time = null, CancellationToken ct = default) =>
-        EvalService.RunAsync(_stub.Url, _http, null, TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()), Sid, "sonnet", chain, threshold, observer,
+    Task<SessionEvalCompletedPayloadV4?> Run(FakeClaudeOnPath claude, string[] ids, IEvalObserver observer, bool chain = false, int? threshold = null, TimeProvider? time = null, CancellationToken ct = default) =>
+        EvalService.RunAsync(_stub.Url, _http, null, TestHarnesses.Under(Home, BinaryProbe.Searching(claude.BinDirectory)), Sid, "sonnet", chain, threshold, observer,
             time ?? TimeProvider.System, ct, "run-fixed", Questions(ids));
 
-    // The harnesses resolve claude from PATH when they are built, so a caller puts its fake claude on PATH first.
-    Task<EvidenceRunSetup?> Prepare(IEvalObserver observer, TimeProvider time, string tempRoot, params string[] ids) {
+    Task<EvidenceRunSetup?> Prepare(FakeClaudeOnPath claude, IEvalObserver observer, TimeProvider time, string tempRoot, params string[] ids) {
         Directory.CreateDirectory(tempRoot);
         var catalog = JsonSerializer.Deserialize(
             $$"""{"retrospective_prompt":"Retro {SESSION_META} {VERDICTS_JSON} {TRACE_JSON}","retrospective_prompt_version":"7","questions":{{CatalogQuestions}},"evidence_retrieval":{{Ad}} }""",
             CapacitorJsonContext.Default.EvalCatalogDto)!;
-        return EvalService.PrepareEvidenceAsync(_stub.Url, _http, null, TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()), Sid, Questions(ids), catalog, "sonnet",
+        return EvalService.PrepareEvidenceAsync(_stub.Url, _http, null, TestHarnesses.Under(Home, BinaryProbe.Searching(claude.BinDirectory)), Sid, Questions(ids), catalog, "sonnet",
             observer, time, CancellationToken.None, "run-fixed", tempRoot);
     }
 
@@ -131,7 +135,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(dir, Verdict("q1", "e0"));
         var observer = new RecordingEvalObserver();
 
-        var result = await Run(["q1"], observer);
+        var result = await Run(claude, ["q1"], observer);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(_stub.Requests("eval-context")).IsEmpty();
@@ -160,7 +164,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(dir, Verdict("q1", "o1.1"));
         var observer = new RecordingEvalObserver();
 
-        await Run(["q1"], observer);
+        await Run(claude, ["q1"], observer);
 
         await Assert.That(PreparationReads("evidence-events")).IsEmpty();
         await Assert.That(PreparationReads("evidence-turns").Count).IsEqualTo(1);
@@ -170,7 +174,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(After(args, "--max-budget-usd")).IsEqualTo("1");
         await Assert.That(After(args, "--mcp-config").Contains("\"--run\"")).IsTrue();
         await Assert.That(After(args, "--mcp-config").Contains("tok")).IsFalse();
-        await Assert.That(After(args, "--allowedTools").Split(',')).IsEquivalentTo(EvalService.EvidenceMcpAllowedTools);
+        await Assert.That(After(args, "--allowedTools")).IsEqualTo(string.Join(",", EvalService.EvidenceMcpAllowedTools));
         await Assert.That(Prompt(dir, 0).Contains(EvidenceOrientationBuilder.ScopeSentence)).IsTrue();
         var retrospective = Prompt(dir, 1);
         await Assert.That(retrospective.StartsWith(EvidencePromptBlocks.Preamble(EvidencePromptBlocks.RetrospectivePreambleResource), StringComparison.Ordinal)).IsTrue();
@@ -188,7 +192,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         ServeCatalog(); ServeScope(cutoff: 124_999); Certify($"{Root}#g1t0");
         using var claude = Claude(Dir("c3"), Verdict("q1", "o1.1"));
 
-        await Run(["q1"], new RecordingEvalObserver());
+        await Run(claude, ["q1"], new RecordingEvalObserver());
 
         foreach (var entry in _stub.Server.LogEntries.Where(e => e.RequestMessage.Path.Contains("/evidence-", StringComparison.Ordinal))) {
             var query = entry.RequestMessage.Query ?? new Dictionary<string, WireMock.Types.WireMockList<string>>();
@@ -203,7 +207,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         ServeCatalog(); ServeScope(cutoff: 124_999, turns: 7);
         using var claude = Claude(Dir("c4"), Verdict("q1"), special: """{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":52}""");
 
-        await Run(["q1", "q-special"], new RecordingEvalObserver());
+        await Run(claude, ["q1", "q-special"], new RecordingEvalObserver());
 
         var failure = Payload().GetProperty("failed_questions").EnumerateArray().Single();
         await Assert.That(failure.GetProperty("code").GetString()).IsEqualTo("iteration_cap");
@@ -218,7 +222,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         ServeCatalog(); ServeScope(cutoff: 124_999);
         using var claude = Claude(Dir("c5"), Verdict("q1"), special: """{"type":"result","subtype":"error_max_budget_usd","is_error":true,"num_turns":9}""");
 
-        await Run(["q1", "q-special"], new RecordingEvalObserver());
+        await Run(claude, ["q1", "q-special"], new RecordingEvalObserver());
 
         var failure = Payload().GetProperty("failed_questions").EnumerateArray().Single();
         await Assert.That(failure.GetProperty("code").GetString()).IsEqualTo("spend_budget");
@@ -233,7 +237,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         ServeScope(cutoff: 124_999);
         var observer = new RecordingEvalObserver();
         using var claude = Claude(Dir("c6"), Verdict("q1"), before: "sleep 5");
-        await using var setup = (await Prepare(observer, TimeProvider.System, Dir("root-6"), "q1"))!;
+        await using var setup = (await Prepare(claude, observer, TimeProvider.System, Dir("root-6"), "q1"))!;
         setup.RetrievalTimeout = TimeSpan.FromSeconds(1);
 
         var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, TimeProvider.System, CancellationToken.None);
@@ -252,7 +256,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(Dir("c7"), Verdict("q1"),
             before: $"printf '%s\\n' '{footer}' >> \"$(ls -d '{Dir("root-7")}'/{EvidenceRunContext.DirectoryPrefix}*)/q1.ledger.jsonl\"");
         File.WriteAllText(Path.Combine(Dir("c7"), "verdict.json"), """{"type":"result","subtype":"success","is_error":false,"num_turns":5,"result":"I could not decide."}""");
-        await using var setup = (await Prepare(observer, TimeProvider.System, Dir("root-7"), "q1"))!;
+        await using var setup = (await Prepare(claude, observer, TimeProvider.System, Dir("root-7"), "q1"))!;
 
         var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, TimeProvider.System, CancellationToken.None);
 
@@ -281,7 +285,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         Certify($"{Root}#g1t0");
         var observer = new RecordingEvalObserver();
         using var claude = Claude(Dir("c8"), Verdict("q1", "o1.1"));
-        await using var setup = (await Prepare(observer, time, Dir("root-8"), "q1"))!;
+        await using var setup = (await Prepare(claude, observer, time, Dir("root-8"), "q1"))!;
         time.Advance(TimeSpan.FromSeconds(1_100));
 
         var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, time, CancellationToken.None);
@@ -291,6 +295,76 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(outcome.Assessment!.EvidenceCoverage!.Citations.Single().Digest).IsEqualTo(Digest);
         await Assert.That(setup.Scope.Refreshes).IsEqualTo(1);
         await Assert.That(_stub.Requests("evidence-citations").Single().RequestMessage.Body!.Contains("\"tok2\"")).IsTrue();
+    }
+
+    // Answers the cursor re-opens in order: 200 for the first `ok` of them, then 500 for every later one.
+    void ReopenFailsAfter(int ok) {
+        var reopen = Request.Create().WithPath($"/api/sessions/{Sid}/evidence-scope").WithParam("cursor", "tok").UsingGet();
+        var body   = EvidenceServerStub.Manifest("v1", "tok", null, null, null);
+        for (var i = 0; i < ok; i++) {
+            var step = _stub.Server.Given(reopen).InScenario("reopens");
+            if (i > 0) step = step.WhenStateIs($"s{i}");
+            step.WillSetStateTo($"s{i + 1}").AtPriority(1).RespondWith(Response.Create().WithStatusCode(200).WithBody(body));
+        }
+        _stub.Server.Given(reopen).InScenario("reopens").WhenStateIs($"s{ok}").AtPriority(1).RespondWith(Response.Create().WithStatusCode(500));
+    }
+
+    [Test]
+    [Arguments("handle")]
+    [Arguments("work_budget")]
+    [Arguments("elapsed")]
+    [Arguments("slice_failed")]
+    public async Task Every_citation_that_misses_the_payload_is_reported(string loss) {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        ServeScope(cutoff: 124_999);
+        var cited = $"{Root}#g1t0";
+        switch (loss) {
+            case "handle":       Certify(cited); break;
+            case "work_budget":  _stub.Route("POST", "evidence-citations", 200, $$"""{"scope_version":"v1","citations":[{"ref":"{{cited}}","state":"refused","code":"work_budget"}]}"""); break;
+            case "elapsed":      _stub.Route("POST", "evidence-citations", 200, "{}", delay: TimeSpan.FromSeconds(5)); break;
+            case "slice_failed": Certify(cited); ReopenFailsAfter(1); break;
+        }
+        var observer = new RecordingEvalObserver();
+        using var claude = Claude(Dir("c-loss"), loss == "handle" ? Verdict("q1", "o1.1", "p99.1") : Verdict("q1", "o1.1"));
+        await using var setup = (await Prepare(claude, observer, time, Dir("root-loss"), "q1"))!;
+
+        var question = EvalService.RunEvidenceQuestionAsync(setup, _http, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, time, CancellationToken.None);
+        if (loss == "elapsed") {
+            while (_stub.Requests("evidence-scope").Count(e => e.RequestMessage.Query?.ContainsKey("cursor") == true) < 2) await Task.Delay(20);
+            while (!question.IsCompleted) { time.Advance(EvidenceCitationClient.CertificationBudget + TimeSpan.FromSeconds(1)); await Task.Delay(50); }
+        }
+        var outcome = await question;
+
+        await Assert.That(File.Exists(Path.Combine(Dir("c-loss"), "prompt-0.txt"))).IsTrue();
+        var notes = observer.Info.Where(i => i.StartsWith("  safety/q1: ", StringComparison.Ordinal)).ToList();
+        string[] expected = loss switch {
+            "handle"       => [$"  safety/q1: 1 citation(s) dropped: unknown handle or over the {EvidenceBudgets.MaxCitations}-citation cap"],
+            "slice_failed" => ["  safety/q1: certification skipped (Failed): failed to resolve the evidence scope: HTTP 500; 1 citation(s) not certified"],
+            _              => ["  safety/q1: 1 of 1 citation(s) not certified"]
+        };
+        await Assert.That(string.Join("\n", notes)).IsEqualTo(string.Join("\n", expected));
+        await Assert.That(outcome.Assessment!.EvidenceCoverage!.Citations.Count).IsEqualTo(loss == "handle" ? 1 : 0);
+    }
+
+    [Test]
+    public async Task A_pre_drain_check_that_fails_discards_the_buffered_fact() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
+        ReopenFailsAfter(2);
+        var withFact = Verdict("q1").Replace("\"retain_fact\":null", "\"retain_fact\":\"a recurring pattern\"", StringComparison.Ordinal);
+        using var claude = Claude(Dir("c-drain"), withFact);
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q1"], observer);
+
+        await Assert.That(File.Exists(Path.Combine(Dir("c-drain"), "prompt-1.txt"))).IsTrue();
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Retrospective).IsNotNull();
+        await Assert.That(observer.Info).Contains("retained facts discarded: the pre-drain admission check failed (failed to resolve the evidence scope: HTTP 500)");
+        await Assert.That(observer.FactsRetained).IsEmpty();
+        await Assert.That(_stub.Requests("judge-facts")).IsEmpty();
+        await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(1);
     }
 
     [Test]
@@ -307,7 +381,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(dir, Verdict("q1"));
         var observer = new RecordingEvalObserver();
 
-        var result = await Run(["q1"], observer);
+        var result = await Run(claude, ["q1"], observer);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.Failures).Contains(EvalService.EvidenceScopeMovedReason);
@@ -328,7 +402,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(Dir("c10"), withFact);
         var observer = new RecordingEvalObserver();
 
-        var result = await Run(["q1", "q-special"], observer);
+        var result = await Run(claude, ["q1", "q-special"], observer);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.Failures).Contains(EvalService.EvidenceScopeMovedReason);
@@ -349,7 +423,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         var outPath  = Dir("baseline.json");
         var baseline = new BaselineObserver(new RecordingEvalObserver(), outPath, Sid, "sonnet", chain: false, TimeProvider.System);
 
-        await Run(["q1"], baseline);
+        await Run(claude, ["q1"], baseline);
 
         using var doc = JsonDocument.Parse(File.ReadAllText(outPath));
         var question = doc.RootElement.GetProperty("questions")[0];
@@ -375,7 +449,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var cts = new CancellationTokenSource(exit == "cancel" ? TimeSpan.FromSeconds(1) : Timeout.InfiniteTimeSpan);
         var observer = new RecordingEvalObserver();
 
-        var result = await Run(["q1"], observer, ct: cts.Token);
+        var result = await Run(claude, ["q1"], observer, ct: cts.Token);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.Failures.Count).IsEqualTo(1);
@@ -389,7 +463,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(Dir("c13"), Verdict("q1"));
         var observer = new RecordingEvalObserver();
 
-        await Run(["q1"], observer, threshold: 10);
+        await Run(claude, ["q1"], observer, threshold: 10);
 
         await Assert.That(observer.Completed.Single().Route).IsEqualTo("evidence_one_shot");
         await Assert.That(_stub.Server.LogEntries.Any(e => e.RequestMessage.Query?.ContainsKey("threshold") == true)).IsFalse();
@@ -405,7 +479,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var claude = Claude(Dir("c14"), Verdict("q1"));
         var observer = new RecordingEvalObserver();
 
-        await Run(["q1"], observer, chain: true);
+        await Run(claude, ["q1"], observer, chain: true);
 
         await Assert.That(_stub.Requests("eval-context").Single().RequestMessage.Query!["chain"].Single()).IsEqualTo("true");
         await Assert.That(_stub.Requests("evidence-scope")).IsEmpty();
@@ -425,21 +499,24 @@ public class EvalEvidenceRouteTests : IDisposable {
             _stub.Route("POST", "evals/v4", 200, "{}");
             ServeCatalog(advertised);
             var dir = Dir(name);
-            using (Claude(dir, Verdict("q1")))
-                await Run(["q1", "q-tools"], new RecordingEvalObserver(), chain: chain);
+            using (var claude = Claude(dir, Verdict("q1")))
+                await Run(claude, ["q1", "q-tools"], new RecordingEvalObserver(), chain: chain);
             runs.Add((dir, _stub.Requests("evals/v4").Single().RequestMessage.Body!));
         }
 
+        await Assert.That(Sha(runs[0].Body)).IsEqualTo(LegacyV4BodySha);
         foreach (var (dir, body) in runs.Skip(1)) {
             await Assert.That(body).IsEqualTo(runs[0].Body);
             for (var n = 0; n < 3; n++) {
                 await Assert.That(Prompt(dir, n)).IsEqualTo(Prompt(runs[0].Dir, n));
-                await Assert.That(ArgsOf(dir, n)).IsEquivalentTo(ArgsOf(runs[0].Dir, n));
+                await Assert.That(string.Join("\n", ArgsOf(dir, n))).IsEqualTo(string.Join("\n", ArgsOf(runs[0].Dir, n)));
             }
         }
         var tools = ArgsOf(runs[0].Dir, 1);
         await Assert.That(After(tools, "--max-turns")).IsEqualTo("15");
-        await Assert.That(After(tools, "--allowedTools").Split(',')).IsEquivalentTo(EvalService.JudgeMcpAllowedTools);
+        await Assert.That(After(tools, "--allowedTools")).IsEqualTo(
+            "mcp__kcap-judge__get_session_recap,mcp__kcap-judge__get_session_errors,mcp__kcap-judge__get_transcript,"
+          + "mcp__kcap-judge__get_session_summary,mcp__kcap-judge__search_session,mcp__kcap-judge__get_tool_result");
         await Assert.That(After(tools, "--mcp-config").Contains("--run")).IsFalse();
     }
 }

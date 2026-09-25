@@ -28,10 +28,10 @@ public class EvalServiceLegacyByteIdentityTests {
     public async Task The_judge_mcp_config_and_allowlist_are_byte_identical() {
         await Assert.That(EvalService.BuildJudgeMcpConfig("/opt/kcap", "sess-1", "https://tenant.example"))
             .IsEqualTo("""{"mcpServers":{"kcap-judge":{"command":"/opt/kcap","args":["mcp","judge","--session","sess-1"],"env":{"KCAP_URL":"https://tenant.example"}}}}""");
-        await Assert.That(EvalService.JudgeMcpAllowedTools).IsEquivalentTo([
-            "mcp__kcap-judge__get_session_recap", "mcp__kcap-judge__get_session_errors", "mcp__kcap-judge__get_transcript",
-            "mcp__kcap-judge__get_session_summary", "mcp__kcap-judge__search_session", "mcp__kcap-judge__get_tool_result"
-        ]);
+        // Sent as one comma-joined --allowedTools value, so the order is part of the bytes.
+        await Assert.That(string.Join(",", EvalService.JudgeMcpAllowedTools)).IsEqualTo(
+            "mcp__kcap-judge__get_session_recap,mcp__kcap-judge__get_session_errors,mcp__kcap-judge__get_transcript,"
+          + "mcp__kcap-judge__get_session_summary,mcp__kcap-judge__search_session,mcp__kcap-judge__get_tool_result");
     }
 
     [Test]

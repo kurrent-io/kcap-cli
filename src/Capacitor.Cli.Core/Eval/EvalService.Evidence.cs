@@ -206,8 +206,10 @@ public static partial class EvalService {
             tokens = [];
         }
 
-        var refs      = JudgeCiteHandles.Expand(tokens, ledger, EvidenceBudgets.MaxCitations, out _);
+        // No wire field carries these counts, so every citation that does not reach the payload is reported here.
+        var refs      = JudgeCiteHandles.Expand(tokens, ledger, EvidenceBudgets.MaxCitations, out var unexpanded);
         var certified = new List<EvalEvidenceCitation>();
+        if (unexpanded > 0) Note($"{unexpanded} citation(s) dropped: unknown handle or over the {EvidenceBudgets.MaxCitations}-citation cap");
         if (refs.Count > 0) {
             var slice = await setup.Scope.EnsureScopeAsync(EvidenceScopeClient.CertificationHeadroom, ct);
             if (slice == EvidenceScopeStatus.Moved) return EvidenceQuestionOutcome.Moved;
@@ -215,6 +217,9 @@ public static partial class EvalService {
                 var certification = await setup.Citations.CertifyAsync(setup.Scope.State!.Token, refs, ct);
                 if (certification.ScopeLost) return EvidenceQuestionOutcome.Moved;
                 certified.AddRange(certification.Certified);
+                if (certification.Dropped > 0) Note($"{certification.Dropped} of {refs.Count} citation(s) not certified");
+            } else {
+                Note($"certification skipped ({slice}): {setup.Scope.LastError ?? "could not renew the evidence scope"}; {refs.Count} citation(s) not certified");
             }
         }
 
@@ -234,6 +239,8 @@ public static partial class EvalService {
         observer.OnQuestionLedger(index, question.Id, ledgerPath);
         if (raw is not null && ExtractRetainFact(raw) is { } fact) setup.Context.BufferRetainedFact(question.Category, fact);
         return new EvidenceQuestionOutcome(assessment, null, usage, false);
+
+        void Note(string msg) => observer.OnInfo($"  {question.Category}/{question.Id}: {msg}");
 
         EvalQuestionFailure Failure(string failureCode) => new() { Category = question.Category, QuestionId = question.Id, Code = failureCode };
 
@@ -274,7 +281,12 @@ public static partial class EvalService {
         aggregate = aggregate with { Retrospective = retrospective, RetrospectivePromptVersion = setup.RetrospectivePromptVersion };
 
         // A best-effort abort before anything is written; the eval-read floor covers a revocation after this check.
-        if (await setup.Scope.EnsureScopeAsync(EvidenceScopeClient.PreDrainHeadroom, ct) == EvidenceScopeStatus.Moved) return ScopeMoved(setup, observer);
+        var admitted = await setup.Scope.EnsureScopeAsync(EvidenceScopeClient.PreDrainHeadroom, ct);
+        if (admitted == EvidenceScopeStatus.Moved) return ScopeMoved(setup, observer);
+        if (admitted != EvidenceScopeStatus.Ok) {
+            observer.OnInfo($"retained facts discarded: the pre-drain admission check failed ({setup.Scope.LastError ?? admitted.ToString()})");
+            clean = false;
+        }
         if (clean)
             await setup.Context.DrainRetainedFactsAsync((category, fact, token) => PostJudgeFactAsync(httpClient, baseUrl, setup.EncodedSessionId, category, fact.Fact,
                 setup.EvalRunId, fact.AppliesToVendors, fact.AppliesToSessionKinds, observer, time, token), observer, ct);

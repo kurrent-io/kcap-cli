@@ -12,6 +12,9 @@ public sealed class FakeClaudeOnPath : IDisposable {
         _path = EnvScope.Exclusive("PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
     }
 
+    /// <summary>The directory holding only the fake: a probe searching it alone can never resolve a real <c>claude</c>.</summary>
+    public string BinDirectory => _bin.Path;
+
     public void Dispose() {
         _path.Dispose();
         _bin.Dispose();
