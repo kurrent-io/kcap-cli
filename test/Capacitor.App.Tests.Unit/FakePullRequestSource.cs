@@ -14,7 +14,6 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     /// Held open, every page read waits on it: the section stays in its first load.
     public TaskCompletionSource? PageGate;
     public string HeadSha = new string('a', 40);
-    /// Resolved threads the unresolved view leaves out.
     public int ResolvedHidden;
     /// The next page read answers Restart with this reason instead of a page.
     public string? RestartNextPage;
