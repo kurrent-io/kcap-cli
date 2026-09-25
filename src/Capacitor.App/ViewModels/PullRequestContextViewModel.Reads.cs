@@ -87,8 +87,11 @@ public sealed partial class PullRequestContextViewModel {
                     // any is still running, or the summary goes green beside rows that still say pending.
                     var checksLive = _section == "checks" && CurrentSection is { } checks
                         && (rollupMoved || checks.Pages.Any(page => page.Rows.Any(row => row.Outcome == "pending")));
-                    if (_readerVisible && _section != "overview" && (CurrentSection is null || _refreshPage || checksLive))
-                        RequestPage(null, refresh: _refreshPage || checksLive);
+                    // The open tab follows the poll too, unless the reader paged past the first page:
+                    // a reload restarts at page one and would pull the rows they were reading away.
+                    var onePage = CurrentSection is { Pages.Count: 1, Earlier.Count: 0 };
+                    var reload = _refreshPage || checksLive || onePage;
+                    if (_readerVisible && _section != "overview" && (CurrentSection is null || reload)) RequestPage(null, refresh: reload);
                     _refreshPage = false;
                 } else Fail(read);
             };

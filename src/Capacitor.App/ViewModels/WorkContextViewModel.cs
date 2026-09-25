@@ -191,8 +191,15 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         private set {
             if (_isReading == value) return;
             this.RaiseAndSetIfChanged(ref _isReading, value);
+            if (!value) IsRefreshing = false;
             this.RaisePropertyChanged(nameof(RefreshTip));
         }
+    }
+    bool _isRefreshing;
+    /// A refresh someone asked for, still reading; the 30s poll runs without it.
+    public bool IsRefreshing {
+        get => _isRefreshing;
+        private set { if (_isRefreshing != value) { this.RaiseAndSetIfChanged(ref _isRefreshing, value); this.RaisePropertyChanged(nameof(RefreshTip)); } }
     }
     bool _hasSession;
     // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedAgentId.
@@ -213,7 +220,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     /// Tip on the header refresh control — bound with ShowOnDisabled so a greyed icon still explains itself.
     public string RefreshTip => HasSession
-        ? IsReading ? "Refreshing…" : "Reloads the work item, its pull requests and the plan"
+        ? IsRefreshing ? "Refreshing…" : "Reloads the work item, its pull requests and the plan"
         : "Waiting for the session ID";
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
@@ -249,6 +256,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 PullRequests?.Refresh();
                 Plan.Refresh();
                 if (_current is null) return;
+                IsRefreshing = true;
                 if (_current.IsReading) _current.RefreshPending = true;
                 else StartRead(_current);
             },
@@ -347,8 +355,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: work context: {ex.Message}");
         }
+        // A queued refresh keeps the pane reading, so the click that queued it keeps its progress.
+        if (lease.RefreshPending) { StartRead(lease); return; }
         IsReading = false;
-        if (lease.RefreshPending) StartRead(lease);
     }
 
     void OnTick() {

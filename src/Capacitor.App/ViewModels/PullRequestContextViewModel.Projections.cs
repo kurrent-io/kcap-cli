@@ -62,7 +62,7 @@ public sealed partial class PullRequestContextViewModel {
 
     static readonly string[] NotifiedProperties = [
         nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
-        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(IsSectionLoading), nameof(LoadingNote), nameof(FetchedLabel), nameof(AccessLabel),
+        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(IsSectionLoading), nameof(LoadingNote), nameof(ShowsRefreshing), nameof(FetchedLabel), nameof(AccessLabel),
         nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
         nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
         nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(FreshnessDetail),
@@ -70,6 +70,7 @@ public sealed partial class PullRequestContextViewModel {
     ];
 
     void Notify() {
+        if (!IsReading) _userRefresh = false;
         _readerNote = _readers is null ? null
             : _selected?.Subject is { } subject ? _readers.NoteFor(subject.Provider, subject.Host)
             : _primaryRepo?.Invoke() is { } repository ? _readers.NoteFor(repository.Provider, repository.Host) : null;

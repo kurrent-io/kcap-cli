@@ -218,9 +218,45 @@ public class PullRequestPresentationTests {
         await h.ShowAsync();
         var lists = h.Source.Lists;
         h.Model.Refresh();
-        await Assert.That(h.Model.IsReading).IsTrue();
+        await Assert.That(h.Model.ShowsRefreshing).IsTrue();
         h.Time.Advance(TimeSpan.FromSeconds(4));
         await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Lists > lists && !h.Model.IsReading, what: "manual refresh ran");
+        await Assert.That(h.Model.ShowsRefreshing).IsFalse();
+    });
+
+    /// The open tab follows the poll, and the poll never shows the progress a click does.
+    [Test]
+    public Task The_poll_reloads_the_open_tab_without_showing_progress() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        var body = "First review";
+        h.Source.PageItem = section => section == "reviews"
+            ? new PullRequestReviewDto { Id = "review", Availability = "available", Body = body, State = "commented" } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("reviews");
+        await h.SettleAsync();
+        body = "Edited review";
+        var sawProgress = false;
+        h.Model.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(h.Model.ShowsRefreshing) && h.Model.ShowsRefreshing) sawProgress = true; };
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.SingleOrDefault()?.Body == "Edited review", what: "open tab reloaded by the poll");
+        await Assert.That(sawProgress).IsFalse();
+    });
+
+    /// A reader who paged on keeps their rows: a reload would restart at page one.
+    [Test]
+    public Task The_poll_leaves_a_tab_alone_once_more_pages_are_loaded() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.TotalPages = 3;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("conversation");
+        await h.SettleAsync();
+        await h.Model.LoadMoreCommand.Execute();
+        await h.SettleAsync();
+        var pages = h.Source.Pages;
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Overviews >= 2 && !h.Model.IsReading, what: "poll ran");
+        await Assert.That(h.Source.Pages).IsEqualTo(pages);
+        await Assert.That(h.Model.Rows.Count).IsEqualTo(2);
     });
 
     /// Every tab's footer reads the same way; the commit the checks ran on is hover detail only.

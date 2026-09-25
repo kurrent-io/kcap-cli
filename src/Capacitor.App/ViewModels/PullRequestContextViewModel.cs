@@ -79,6 +79,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool ShowsInstallTool => _readerNote?.InstallUrl is not null;
     public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
     public bool IsReading => _refreshing || _queuedRefresh || _overviewPending || _pageRequests.Count > 0;
+    bool _userRefresh;
+    /// Progress for a refresh someone asked for; the background poll reads silently.
+    public bool ShowsRefreshing => _userRefresh && IsReading;
     public bool HasChoice => _selected is not null;
     public bool HasPullRequest => _choices.Any(choice => choice.IsAvailable);
     public IObservable<bool> HasPullRequestChanges => _hasPullRequest;
@@ -191,7 +194,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         RequestRefresh();
     }
     /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
-    public void Refresh() => RequestRefresh(manual: true);
+    public void Refresh() { _userRefresh = true; RequestRefresh(manual: true); Notify(); }
     /// On a legacy or unsupported capability the reader would open onto a notice and nothing else,
     /// so a caller with a PR in hand opens its URL instead.
     public bool CanOpenReader => HasPullRequest && !_legacy;
