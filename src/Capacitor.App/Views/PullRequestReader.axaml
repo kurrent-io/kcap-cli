@@ -57,8 +57,8 @@
                 </TabStrip>
             </Border>
             <!-- Fixed height: the Threads-only toggle is taller than the pills and would shift the content below.
-                 Padding under the row keeps a diff hunk from reading as part of the bar. -->
-            <Grid x:Name="ReviewTabsRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="0,10,0,8" Height="30" IsVisible="{Binding IsReviewSection}">
+                 Equal margin keeps the pills centered between the section rule and the row beneath. -->
+            <Grid x:Name="ReviewTabsRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="0,8,0,8" Height="30" IsVisible="{Binding IsReviewSection}">
                 <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}" VerticalAlignment="Center"
                           IsEnabled="{Binding CanReveal}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}"
                           AutomationProperties.Name="Review sections">
