@@ -207,17 +207,19 @@ public sealed partial class PullRequestContextViewModel {
             .ThenByDescending(choice => choice.Link.Number)
             .FirstOrDefault();
     }
+    /// An overview the card has read is fresher than the list row it was chosen from, which waits
+    /// for the next list refresh.
     bool IsSettled(PullRequestChoice choice) =>
-        (choice.Link.Lifecycle ?? _lifecycles.GetValueOrDefault(choice.Subject)) is "merged" or "closed";
-    /// True the first time a lifecycle is known for the subject.
+        (_lifecycles.GetValueOrDefault(choice.Subject) ?? choice.Link.Lifecycle) is "merged" or "closed";
+    /// True when the subject's lifecycle is new or has changed.
     bool Learn(PullRequestSubjectDto subject, string? lifecycle) {
         if (lifecycle is null) return false;
-        var first = !_lifecycles.ContainsKey(subject);
+        var changed = _lifecycles.GetValueOrDefault(subject) != lifecycle;
         _lifecycles[subject] = lifecycle;
-        return first;
+        return changed;
     }
-    /// A default whose overview turned out merged hands over to the next candidate; an explicit
-    /// choice is never moved.
+    /// A default whose overview says merged hands over to the next candidate; an explicit choice
+    /// is never moved.
     bool ReconsiderDefault() {
         if (_explicitSelection) return false;
         var best = DefaultChoice(_choices);

@@ -1222,6 +1222,31 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// Legacy link cards stand in for the card only while there is none; attaching the card
+    /// afterwards clears them, so the empty copy rather than a hidden list decides what shows.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Attaching_the_card_clears_legacy_link_cards_projected_before_it() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(null, summary: new SessionSummaryDto {
+                SessionId = SessionA, PullRequests = [Pr("kurrent-io", "kcap-cli", 42, "https://github.com/kurrent-io/kcap-cli/pull/42", "Listed")],
+            }));
+            var source = new FakePullRequestSource(h.Time) { Links = [] };
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Links.Count).IsEqualTo(1);
+                h.Vm.PullRequests = pullRequests;
+                await Assert.That(h.Vm.Links).IsEmpty();
+                await Assert.That(h.Vm.ShowsLegacyLinkCards).IsFalse();
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Links_come_from_the_list_with_the_top_level_triple_as_a_repository_aware_fallback() {

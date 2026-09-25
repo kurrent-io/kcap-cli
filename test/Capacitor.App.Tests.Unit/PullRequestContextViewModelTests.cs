@@ -251,6 +251,30 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    /// A live list row says open until the list's next refresh; the overview read in between is fresher.
+    [Test]
+    public Task A_learned_lifecycle_outranks_the_list_row_it_came_with() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Links = [Link(1, "open"), Link(2, "open")];
+        h.Source.Lifecycles[2] = "merged";
+        h.Push(); h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Selected?.Subject.Number == 1 && h.Vm.CanReveal, what: "merged default advanced past its open list row");
+        await h.Dispose();
+    });
+
+    /// The overview is re-read while the card is shown; a PR that merges meanwhile hands the
+    /// default over on that read, without waiting for a list refresh.
+    [Test]
+    public Task A_default_that_merges_while_shown_hands_over_on_its_next_overview() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        h.Source.Lifecycles[2] = "merged";
+        h.Time.Advance(TimeSpan.FromSeconds(26)); Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => h.Vm.Selected?.Subject.Number == 1 && h.Vm.CanReveal, what: "merged default handed over");
+        await Assert.That(h.Source.Lists).IsEqualTo(1);
+        await h.Dispose();
+    });
+
     /// Among unmerged PRs in the primary repository the checked-out branch's PR outranks a newer one.
     [Test]
     public Task The_branch_pull_request_outranks_a_newer_one_in_the_same_repository() => RunOnUiAsync(async () => {

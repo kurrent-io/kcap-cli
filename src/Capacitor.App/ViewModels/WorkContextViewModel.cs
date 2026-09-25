@@ -34,7 +34,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
             }
             this.RaisePropertyChanged(nameof(PullRequests));
-            RaiseRelated();
+            RebuildLinks();
         }
     }
     public bool ShowsLegacyLinks => PullRequests is null;
