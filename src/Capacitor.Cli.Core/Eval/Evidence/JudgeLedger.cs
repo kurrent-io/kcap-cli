@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
-/// <summary>A parsed ledger and what it delivered: the sets coverage, cite expansion and S8 read.</summary>
+/// <summary>A parsed ledger and what it delivered: the sets coverage, cite expansion and retrieval reads.</summary>
 public sealed class JudgeLedger {
     readonly Dictionary<string, string> _cites = new(StringComparer.Ordinal);
 

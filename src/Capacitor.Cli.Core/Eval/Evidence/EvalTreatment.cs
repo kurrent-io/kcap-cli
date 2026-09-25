@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
-/// <summary>What a run was configured with, as S8 records it: whether the server advertised the evidence route (whatever route
+/// <summary>What a run was configured with: whether the server advertised the evidence route (whatever route
 /// the run then took), its budgets and the prompt-resource hashes. Not advertised is exactly the empty gate-off record.</summary>
 public sealed record EvalTreatment {
     [JsonPropertyName("gate_on")]         public required bool                     GateOn         { get; init; }

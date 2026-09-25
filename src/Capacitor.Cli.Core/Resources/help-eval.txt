@@ -3,21 +3,28 @@ Usage: kcap eval <sessionId> [options]
 
 Runs an LLM-as-judge evaluation over a stored session. 13 questions across 4
 categories (safety, plan adherence, quality, efficiency) are asked of Claude
-in sequence, each in its own headless invocation. Most judges read the
-compacted session trace embedded in the prompt (supplied by the server's
-eval-context endpoint); some questions — and any session whose trace is too
-large to embed — instead investigate the session on demand via a read-only,
-session-scoped MCP tool surface (summary, search, transcript, errors, recap,
-tool results). Each question resolves to assessed (scored 1-5), insufficient_evidence,
-or not_applicable; results are aggregated into per-category + overall scores
-from assessed questions only and persisted back to the session's stream as a
-SessionEvalCompleted event.
+in sequence, each in its own headless invocation. Each question resolves to
+assessed (scored 1-5), insufficient_evidence, or not_applicable; results are
+aggregated into per-category + overall scores from assessed questions only and
+persisted back to the session's stream as a SessionEvalCompleted event.
+
+When the server advertises the evidence route, a single-session evaluation
+reads this session and its subagent lanes as you are allowed to see them,
+through bounded evidence reads rather than the whole compacted trace. A session
+small enough is judged from its complete trace in one prompt; a larger one is
+investigated through eight read-only evidence tools under a tool-call, byte and
+time budget. Cited evidence is certified by the server, and each question
+records what it read and what it left unread (coverage-v2). Otherwise — and
+always with --chain — most judges read the compacted trace embedded in the
+prompt, and tool-tagged questions (or a trace too large to embed) investigate
+the session through a read-only, session-scoped MCP tool surface.
 
 Options:
   --model <name>      Judge model (default: sonnet). haiku/sonnet/opus.
   --chain             Evaluate the full continuation chain, not just this session.
   --threshold <n>     Override the server's compaction threshold (bytes per tool
                       result, default server-side: 2000). Capped at 200_000.
+                      has no effect on the evidence route.
   --questions <csv>   Run only the listed questions. Accepts category names
                       (safety, plan_adherence, quality, efficiency) and
                       individual question IDs (e.g. tests_written). Mutually
@@ -26,20 +33,22 @@ Options:
                       Mutually exclusive with --questions.
   --baseline-out <path>
                       Write one JSON record per question (route, judge token
-                      usage/cost, wall time) plus the retrospective and run
-                      totals to <path>.
+                      usage/cost, wall time) plus the retrospective, run totals
+                      and the run's treatment to <path>; on the evidence route,
+                      also copy each question's retrieval ledger to
+                      <path>.ledgers/.
   --list-questions    Print the question taxonomy (grouped by category) and exit.
   --help, -h          Show this help.
 
 Notes:
   - Judges run sequentially; expect ~1-3 minutes total depending on model and
-    session size. Parallelization is tracked in DEV-1435.
+    session size.
   - Judges have no filesystem/network tools — Read, Bash, Grep, WebFetch, etc.
-    are blocked. They either reason from the compacted trace embedded in the
-    prompt, or — for tool-tagged questions and oversized sessions — pull session
-    details on demand through a read-only MCP tool surface scoped to the session.
-    Set KCAP_EVAL_TRACE_TOKEN_BUDGET to tune the embed-vs-tools threshold
-    (default ~200K estimated tokens).
+    are blocked. They reason from the evidence given in the prompt, or pull
+    more through the read-only tools scoped to the session. Set
+    KCAP_EVAL_TRACE_TOKEN_BUDGET to tune how large a trace may be embedded
+    (default ~200K estimated tokens); on the evidence route it caps the
+    one-shot trace at four characters per token, below the server's own limit.
   - If the session ID is omitted, the currently-recorded session is used —
     resolved from KCAP_SESSION_ID (Claude) or CODEX_THREAD_ID
     (Codex 0.81+).

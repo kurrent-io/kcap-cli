@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
-/// <summary>The evidence route's prompt resources by file name, each hashed over its exact embedded text. S8 compares these
+/// <summary>The evidence route's prompt resources by file name, each hashed over its exact embedded text, compared
 /// against the manifest's declared treatment, so any edit to a resource is a treatment change.</summary>
 public static class EvidencePreambleHashes {
     public static readonly IReadOnlyList<string> Resources = [

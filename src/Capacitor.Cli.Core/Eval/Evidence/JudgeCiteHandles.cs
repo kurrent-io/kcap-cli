@@ -1,6 +1,6 @@
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
-/// <summary>S5's cite-handle grammar and verdict expansion.</summary>
+/// <summary>The cite-handle grammar and verdict expansion.</summary>
 public static class JudgeCiteHandles {
     public const int MaxHandleBytes = 16;
 
