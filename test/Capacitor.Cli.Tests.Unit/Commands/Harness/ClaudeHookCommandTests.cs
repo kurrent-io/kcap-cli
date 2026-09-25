@@ -580,8 +580,10 @@ public class ClaudeHookCommandTests {
             fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
-        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
-        await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+        var posted     = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var postedBody = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(postedBody["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsBetween(NextWorkEmitter.ServerDefaultFeedBudgetMs, 2500);
 
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("1. Review PR #42 — Priya is waiting");
@@ -624,6 +626,43 @@ public class ClaudeHookCommandTests {
         var spooled = JsonNode.Parse(JsonNode.Parse((await File.ReadAllTextAsync(files[0])).Split('\n')[0])!["body"]!.GetValue<string>())!;
         await Assert.That(spooled["session_id"]!.GetValue<string>()).IsEqualTo(Sid);
         await Assert.That(spooled["next_work"]).IsNull();
+        await Assert.That(spooled["next_work_budget_ms"]).IsNull();
+    }
+
+    /// <summary>The budget is what the hook has left at the capability, less the POST's reserve —
+    /// read off a frozen clock, so the value is exact.</summary>
+    [Test, NotInParallel]
+    public async Task the_next_work_budget_is_the_remaining_hook_time_less_the_post_reserve() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""",
+            elapsed: TimeSpan.FromMilliseconds(500));
+
+        // 5s ceiling − 500ms elapsed − 1.5s hook safety = 3000ms remaining; less the 1000ms reserve.
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2000);
+    }
+
+    /// <summary>Below reserve + the server's default feed budget neither field is sent, so a server
+    /// that ignores the budget cannot spend its default past the POST's deadline; coordination
+    /// notices are unaffected.</summary>
+    [Test, NotInParallel]
+    public async Task too_little_hook_time_withholds_the_next_work_capability_and_its_budget() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+
+        // 3500 − 1001 = 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""",
+            elapsed: TimeSpan.FromMilliseconds(1001));
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]).IsNull();
+        await Assert.That(body["next_work_budget_ms"]).IsNull();
+        await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
     }
 
     // ── SessionStart coordination-notices lane: capability advertise + response render ───────

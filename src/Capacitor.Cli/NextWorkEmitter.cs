@@ -15,6 +15,21 @@ static class NextWorkEmitter {
     /// (<c>next_work: "v1"</c>); without it the server never runs the feed for this start.</summary>
     internal const string CapabilityVersion = "v1";
 
+    /// <summary>What the server spends on the feed when the request names no budget; a server that
+    /// predates <c>next_work_budget_ms</c> spends it regardless.</summary>
+    internal const int ServerDefaultFeedBudgetMs = 1500;
+
+    /// <summary>Held back from the feed for the POST's own round trip and the rest of the ack.</summary>
+    internal static readonly TimeSpan FeedRequestReserve = TimeSpan.FromMilliseconds(1000);
+
+    /// <summary>The feed budget to send with the capability, or null when the time left before the
+    /// POST's deadline cannot fit even the server's default feed budget — the capability is then
+    /// withheld, so an optional feed can never push the whole start past its deadline.</summary>
+    internal static int? FeedBudgetMs(TimeSpan remaining) {
+        var feedBudget = (int)Math.Floor((remaining - FeedRequestReserve).TotalMilliseconds);
+        return feedBudget >= ServerDefaultFeedBudgetMs ? feedBudget : null;
+    }
+
     internal const int FieldCap = 300;
 
     const int TimestampCap = 64;

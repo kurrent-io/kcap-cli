@@ -691,7 +691,10 @@ public sealed class ClaudeHookCommand(
                     var node = JsonNode.Parse(body);
                     if (node is not null) {
                         if (!coordinationNoticesDisabled) node["coordination_notices"] = CoordinationNoticesEmitter.CapabilityVersion;
-                        if (!nextWorkDisabled) node["next_work"] = NextWorkEmitter.CapabilityVersion;
+                        if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(budget.Remaining) is { } feedBudgetMs) {
+                            node["next_work"]           = NextWorkEmitter.CapabilityVersion;
+                            node["next_work_budget_ms"] = feedBudgetMs;
+                        }
                         postBody = node.ToJsonString();
                     }
                 } catch {
