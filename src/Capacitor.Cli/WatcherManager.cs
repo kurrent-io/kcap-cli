@@ -275,6 +275,10 @@ public sealed partial class WatcherManager(
             bool    skipTitle         = false,
             string  vendor            = "claude"
         ) {
+        if (agentId is null && AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
+         && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session);
+
         if (IsWatcherAlive(key)) {
             return; // fast path: no lock needed to observe an already-healthy watcher.
         }
@@ -488,12 +492,15 @@ public sealed partial class WatcherManager(
                 return;
             }
 
+            var commits = (await GitHook.ObservationAsync(config, sessionId, agentId, cwd: null, time)).Collect();
+
             var batch = new TranscriptBatch {
-                SessionId   = sessionId,
-                AgentId     = agentId,
-                Lines       = [..newLines],
-                LineNumbers = [..newLineNumbers],
-                Vendor      = vendor == "claude" ? null : vendor
+                SessionId       = sessionId,
+                AgentId         = agentId,
+                Lines           = [..newLines],
+                LineNumbers     = [..newLineNumbers],
+                Vendor          = vendor == "claude" ? null : vendor,
+                ObservedCommits = commits.Pending,
             };
 
             var       batchJson = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);

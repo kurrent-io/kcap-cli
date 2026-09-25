@@ -99,6 +99,9 @@ var config  = ConfigRoot.FromEnvironment();
 var home    = UserHome.FromEnvironment();
 var workdir = WorkingDirectory.FromProcess();
 
+// git runs this after every commit on the machine, so it resolves no server, profile or update.
+if (command == "git-hook") return await GitHook.RunAsync(GitHookInvocation.Current(args[1..], workdir), config, time);
+
 // Claude kills a SessionEnd hook after 1.5 s (ClaudeSessionEndHandoff), so the hand-off sits
 // ahead of ResolveServerUrl's git probes and the global spool drain, each of which can spend it.
 string? claudeHookBody = null;

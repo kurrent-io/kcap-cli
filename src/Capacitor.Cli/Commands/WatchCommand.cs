@@ -514,6 +514,8 @@ partial class WatchCommand(
             state.LastRepoDetection = time.GetUtcNow();
         }
 
+        state.Commits = await GitHook.ObservationAsync(config, sessionId, agentId, cwd, time);
+
         if (vendor == "claude" && agentId is null) {
             state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
             state.SecondaryRoots.SeedFromTranscript(vendor, transcriptPath);
@@ -899,7 +901,7 @@ partial class WatchCommand(
             // dedicated TranscriptSpool so the global drain (task 3) replays it after recovery,
             // instead of silently dropping it.
             await SpoolUndeliveredTranscriptTailAsync(
-                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, CancellationToken.None);
+                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -1985,6 +1987,8 @@ partial class WatchCommand(
             var newLines       = drainRead.Lines.Select(SecretRedactor.RedactLine).ToList();
             var linesRead      = drainRead.NextPosition;
 
+            state.Commits = state.Commits.Collect();
+
             // Track Antigravity in-flight tool calls + the latest step timestamp from this
             // drain's transcript lines (BEFORE appending USAGE lines, which aren't transcript
             // steps). The created_at anchors USAGE recency; the pending-call count suppresses a
@@ -2249,12 +2253,13 @@ partial class WatchCommand(
                 cursorGuard.Checkpoint(advancedByteOffset, trailingHash);
             }
 
-            if (newLines.Count == 0 && repoToSend is null) {
+            // A commit filed with no line after it, such as a subagent's under its parent, still goes now.
+            if (newLines.Count == 0 && repoToSend is null && state.Commits.Pending is not { Length: > 0 }) {
                 // advance the byte frontier together with the
                 // line frontier (see AdvanceCursorBlankByteFrontierInLockstep above).
                 AdvanceCursorBlankByteFrontierInLockstep();
 
-                // No content lines and no repo changes — safe to advance past blank/whitespace lines
+                // Nothing to send — safe to advance past blank/whitespace lines
                 state.LinesProcessed = linesRead;
 
                 return newLines;
@@ -2301,12 +2306,13 @@ partial class WatchCommand(
                 // server's source-acknowledgement frontier, which the watcher's local cursor
                 // tracks (see below) rather than the raw count of lines just sent.
                 var batch = new TranscriptBatch {
-                    SessionId   = sessionId,
-                    AgentId     = agentId,
-                    Lines       = newLines.ToArray(),
-                    LineNumbers = newLineNumbers.ToArray(),
-                    Repository  = repoToSend,
-                    Vendor      = vendor,
+                    SessionId       = sessionId,
+                    AgentId         = agentId,
+                    Lines           = newLines.ToArray(),
+                    LineNumbers     = newLineNumbers.ToArray(),
+                    Repository      = repoToSend,
+                    Vendor          = vendor,
+                    ObservedCommits = state.Commits.Pending,
                 };
 
                 int? cursorAckNextLine = null;
@@ -2346,6 +2352,7 @@ partial class WatchCommand(
                 // frontier, not the raw line count sent — a retry-blocked or persist-blocked
                 // line re-delivers next poll and an ignored (no-event) line still advances past.
                 state.LinesProcessed = cursorAckNextLine ?? linesRead;
+                state.Commits = state.Commits.Delivered(batch.ObservedCommits);
 
                 if (cursorAckNextLine is not null) {
                     // checkpoint only the bytes the ack actually covers.
@@ -2449,14 +2456,16 @@ partial class WatchCommand(
             string?               agentId,
             string                vendor,
             IReadOnlyList<string> lines,
-            IReadOnlyList<int>    lineNumbers
+            IReadOnlyList<int>    lineNumbers,
+            ObservedCommit[]?     observedCommits
         ) => JsonSerializer.Serialize(
             new TranscriptBatch {
-                SessionId   = sessionId,
-                AgentId     = agentId,
-                Lines       = lines.ToArray(),
-                LineNumbers = lineNumbers.ToArray(),
-                Vendor      = vendor,
+                SessionId       = sessionId,
+                AgentId         = agentId,
+                Lines           = lines.ToArray(),
+                LineNumbers     = lineNumbers.ToArray(),
+                Vendor          = vendor,
+                ObservedCommits = observedCommits,
             },
             CapacitorJsonContext.Default.TranscriptBatch);
 
@@ -2480,6 +2489,7 @@ partial class WatchCommand(
             string?           agentId,
             string            vendor,
             int               linesProcessed,
+            CommitObservation commits,
             CancellationToken ct
         ) {
         if (!File.Exists(transcriptPath)) return null;
@@ -2511,14 +2521,16 @@ partial class WatchCommand(
             return null;
         }
 
-        if (tail.Lines.Count == 0) return null;
+        commits = commits.Collect();
+
+        if (tail.Lines.Count == 0 && commits.Pending is not { Length: > 0 }) return null;
 
         // Redact secrets exactly as the live drain does (DrainNewLines: drainRead.Lines.Select(
         // SecretRedactor.RedactLine)) — otherwise the spooled tail lands on disk raw and is POSTed
         // unredacted on replay, leaking secrets the live path would have stripped.
         var redacted = tail.Lines.Select(SecretRedactor.RedactLine).ToList();
 
-        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, redacted, tail.LineNumbers);
+        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, redacted, tail.LineNumbers, commits.Pending);
         var result = transcriptSpool.Append(sessionId, batch);
 
         switch (result) {

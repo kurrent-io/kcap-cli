@@ -80,6 +80,10 @@ public sealed class ClaudeHookCommand(
             source         = node?["source"]?.GetValue<string>();
             agentId        = node?["agent_id"]?.GetValue<string>();
             toolUseId      = node?["tool_use_id"]?.GetValue<string>();
+
+            // Ahead of both arms below, since each claims the new session before it posts.
+            if (node is JsonObject hook && ClearLink.Link(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
+                body = hook.ToJsonString();
         } catch { }
 
         var budget = clock.Budget(Ceiling(command));

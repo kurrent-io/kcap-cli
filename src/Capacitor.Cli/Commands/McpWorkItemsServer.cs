@@ -13,11 +13,11 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>MCP tools for the work-items correlation surface — attach the
-/// current session (and its continuation chain) to a work item, and list what a session is
-/// already attached to. Cloned from <see cref="McpMemoryServer"/>'s stdio JSON-RPC loop; unlike
-/// memory this server has no repo/machine context to resolve — the only per-call input is the
-/// session id and the declare selector, both carried in the tool arguments.</summary>
+/// <summary>
+/// MCP tools for the work-items correlation surface: attach the current session to a work item, and
+/// list what a session is already attached to. It resolves no repo or machine context. The only
+/// per-call input is the session id and the declare selector, both carried in the tool arguments.
+/// </summary>
 sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
         TelemetryStartup startup, TimeProvider time) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
@@ -385,7 +385,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     internal static McpTool[] BuildToolsList() => [
         new("declare_work_item",
-            "Attach the CURRENT session (and its continuation chain) to a work item on the Capacitor server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
+            "Attach the CURRENT session to a work item on the Capacitor server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
             new("object", new() {
                 ["issue_key"]    = new("string", "Attach to the work item for this issue, creating it if none exists yet. Accepts a tracker key ('PROJ-1234'), an issue number in this session's repository ('#123'), a qualified reference ('owner/repo#123'), or a GitHub issue URL."),
                 ["pr_number"]    = new("integer", "Attach to the work item for this PR number, creating it if none exists yet."),

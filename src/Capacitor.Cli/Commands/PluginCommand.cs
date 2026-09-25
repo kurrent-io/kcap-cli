@@ -65,16 +65,31 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         if (args.Contains("--skills")) return await InstallSkills(args);
-        if (args.Contains("--codex")) return await InstallCodex(args);
-        if (args.Contains("--cursor")) return await InstallCursor(args);
-        if (args.Contains("--copilot")) return await InstallCopilot(args);
-        if (args.Contains("--gemini")) return await InstallGemini(args);
-        if (args.Contains("--kiro")) return await InstallKiro(args);
-        if (args.Contains("--pi")) return await InstallPi(args);
-        if (args.Contains("--opencode")) return await InstallOpenCode(args);
-        if (args.Contains("--antigravity")) return await InstallAntigravity(args);
 
-        return await InstallClaude(args);
+        var exit = await InstallHarness(args);
+
+        if (exit == 0) {
+            var gitHook = new GitHookInstaller(env.Home, env.ResolveMcpBinaryPath);
+
+            // A refresh of an existing install is no consent to a new git config entry.
+            if (args.Contains("--if-installed")) gitHook.Refresh();
+            else gitHook.Install();
+        }
+
+        return exit;
+    }
+
+    Task<int> InstallHarness(string[] args) {
+        if (args.Contains("--codex")) return InstallCodex(args);
+        if (args.Contains("--cursor")) return InstallCursor(args);
+        if (args.Contains("--copilot")) return InstallCopilot(args);
+        if (args.Contains("--gemini")) return InstallGemini(args);
+        if (args.Contains("--kiro")) return InstallKiro(args);
+        if (args.Contains("--pi")) return InstallPi(args);
+        if (args.Contains("--opencode")) return InstallOpenCode(args);
+        if (args.Contains("--antigravity")) return InstallAntigravity(args);
+
+        return InstallClaude(args);
     }
 
     async Task<int> Remove(string[] args) {
