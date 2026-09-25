@@ -514,7 +514,8 @@ partial class WatchCommand(
             state.LastRepoDetection = time.GetUtcNow();
         }
 
-        state.Commits = await GitHook.ObservationAsync(config, sessionId, agentId, cwd, time);
+        state.Commits           = await GitHook.ObservationAsync(config, sessionId, agentId, cwd, time);
+        state.LastCoverageCheck = time.GetUtcNow();
 
         if (vendor == "claude" && agentId is null) {
             state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
@@ -754,6 +755,11 @@ partial class WatchCommand(
                     }
 
                     state.LastRepoDetection = time.GetUtcNow();
+                }
+
+                if (state.Commits is not CommitObservation.Uncovered && time.GetUtcNow() - state.LastCoverageCheck > TimeSpan.FromSeconds(60)) {
+                    state.Commits           = state.Commits.Rechecked(await GitHook.CoversAsync(config, sessionId, cwd, time));
+                    state.LastCoverageCheck = time.GetUtcNow();
                 }
 
                 if (state.SecondaryRoots is not null && time.GetUtcNow() - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {

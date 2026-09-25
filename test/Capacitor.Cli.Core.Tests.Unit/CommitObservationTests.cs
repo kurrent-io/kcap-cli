@@ -32,4 +32,17 @@ public class CommitObservationTests {
 
         await Assert.That(observation.Pending!.Single().Sha).IsEqualTo("bbb");
     }
+
+    [Test]
+    public async Task A_lapsed_hook_sends_what_it_holds_then_reports_nothing_until_it_returns() {
+        CommitObservation observation = new CommitObservation.Covered(Inbox);
+
+        Inbox.Append(Commit("aaa"));
+        observation = observation.Collect().Rechecked(covered: false);
+        await Assert.That(observation.Pending!.Single().Sha).IsEqualTo("aaa");
+
+        observation = observation.Delivered(observation.Pending);
+        await Assert.That(observation.Pending).IsNull();
+        await Assert.That(observation.Rechecked(covered: true).Pending).IsEmpty();
+    }
 }

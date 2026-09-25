@@ -23,13 +23,15 @@ static class GitHook {
     /// The <see cref="CommitObservation"/> a watcher starts with.
     /// </summary>
     public static async Task<CommitObservation> ObservationAsync(ConfigRoot config, string sessionId, string? agentId, string? cwd, TimeProvider time) {
-        if (SessionId.Parse(sessionId) is not { } session
-         || !AgentSessions.OnThisMachine(config).IsClaimed(session)
-         || !await RunsInAsync(cwd ?? "", time))
-            return new CommitObservation.Uncovered();
+        if (!await CoversAsync(config, sessionId, cwd, time)) return new CommitObservation.Uncovered();
 
-        return agentId is null ? new CommitObservation.Covered(CommitInbox.Of(config, session)) : new CommitObservation.Subagent();
+        return agentId is null ? new CommitObservation.Covered(CommitInbox.Of(config, SessionId.Parse(sessionId)!)) : new CommitObservation.Subagent();
     }
+
+    public static async Task<bool> CoversAsync(ConfigRoot config, string sessionId, string? cwd, TimeProvider time) =>
+        SessionId.Parse(sessionId) is { } session
+     && AgentSessions.OnThisMachine(config).IsClaimed(session)
+     && await RunsInAsync(cwd ?? "", time);
 
     // Listed means git runs config hooks and the entry is enabled. The command must also be this
     // binary's: an entry left by a moved or removed kcap is listed, runs nothing, and would still

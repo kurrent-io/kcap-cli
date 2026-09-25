@@ -164,7 +164,8 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
-    public CommitObservation Commits { get; set; } = new CommitObservation.Uncovered();
+    public CommitObservation Commits           { get; set; } = new CommitObservation.Uncovered();
+    public DateTimeOffset    LastCoverageCheck { get; set; }
 
     // Set by the shutdown final drain when it held back an unterminated/unparseable final line
     // rather than consuming it, so RunWatch can flag the session needs-import and never drop a
