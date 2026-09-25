@@ -49,14 +49,14 @@ public class AgentRunEventQueueTests {
         await Assert.That(server.Attempts("head")).IsEqualTo(AgentRunEventQueue.MaxRetryableResponses);
     }
 
-    /// <summary>Pins that an unreachable server does not spend the bound: the head outlasts more
-    /// transport failures than the bound allows and is still delivered.</summary>
     [Test]
-    public async Task Transport_failures_do_not_count_toward_the_bound() {
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task An_unreachable_server_or_a_lapsed_credential_does_not_spend_the_bound(bool unreachable) {
         var failures = AgentRunEventQueue.MaxRetryableResponses + 5;
         var server = new ScriptedServer((reason, attempt) =>
             reason == "head" && attempt <= failures
-                ? throw new HttpRequestException("connection refused")
+                ? unreachable ? throw new HttpRequestException("connection refused") : HttpStatusCode.Unauthorized
                 : HttpStatusCode.OK);
 
         await using var run = Start(server, "head", "next");

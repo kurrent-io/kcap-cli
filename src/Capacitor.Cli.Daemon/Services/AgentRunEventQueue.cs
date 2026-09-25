@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -74,7 +75,9 @@ internal sealed partial class AgentRunEventQueue(
                     return true;
                 }
 
-                if (++retryableResponses >= MaxRetryableResponses) {
+                // A lapsed credential, like an unreachable server, says nothing against this event and
+                // would fail every event behind it too, so neither spends the bound.
+                if (response.StatusCode != HttpStatusCode.Unauthorized && ++retryableResponses >= MaxRetryableResponses) {
                     LogRetriesExhausted(eventType, agentId, status, retryableResponses);
 
                     return true;
@@ -84,8 +87,6 @@ internal sealed partial class AgentRunEventQueue(
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 return false;
             } catch (Exception ex) {
-                // No response means the server was not reached, which says nothing against this event
-                // and would fail every event behind it too, so it does not count toward the bound.
                 LogTransportFailed(ex, eventType, agentId, retryDelay.TotalSeconds);
             }
 
