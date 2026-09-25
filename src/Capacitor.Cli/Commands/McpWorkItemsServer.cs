@@ -331,14 +331,15 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 if (evidence is not null) rows.Add($"  evidence: {evidence}");
             }
 
-            var arms = new List<string>();
+            var arms = new List<(string? Arm, string? State, string? Code)>();
             if (root.Arr("freshness") is { } freshness) {
                 foreach (var arm in freshness.EnumerateArray()) {
+                    if (!arm.IsObject) continue;
+
                     var state = arm.Str("state");
                     if (state is null || state == "current") continue;
 
-                    var name = arm.Str("arm") ?? "?";
-                    arms.Add(arm.Str("error_code") is { } code ? $"{name}: {state} ({code})" : $"{name}: {state}");
+                    arms.Add((arm.Str("arm"), state, arm.Str("error_code")));
                 }
             }
 
