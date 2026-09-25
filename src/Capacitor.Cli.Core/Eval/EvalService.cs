@@ -10,14 +10,10 @@ using Capacitor.Cli.Core.Harness.Claude;
 namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
-/// Core orchestration for an LLM-as-judge eval run. Consumed by the CLI
-/// (<c>kcap eval</c>) and — per DEV-1440 milestone 2 — by the daemon
-/// when the dashboard dispatches an evaluation. All progress is reported
-/// through <see cref="IEvalObserver"/> so the two host environments can
-/// render it differently (stderr logs vs SignalR events) without the
-/// service caring.
+/// Core orchestration for an LLM-as-judge eval run, shared by <c>kcap eval</c> and the daemon. All progress is reported
+/// through <see cref="IEvalObserver"/> so each host renders it its own way.
 /// </summary>
-public static class EvalService {
+public static partial class EvalService {
     // DEV-1476: every judge invocation is pinned to a JSON Schema via
     // `claude -p --json-schema`. Without this, judges occasionally emitted
     // free-form text (including harmony-style `<function_calls>` XML as
@@ -302,10 +298,13 @@ public static class EvalService {
                 return null;
             }
 
-            // Phase 3 — fetch the full catalog (rendered prompts + raw text +
-            // versions) so PrepareAsync can reconcile the run question list from it.
             var catalog = await EvalCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, ct);
             if (catalog is null) return null;   // FetchAsync already emitted OnFailed
+
+            observer.OnTreatment(EvalTreatment.For(catalog));
+            // The advertisement is the only oracle; a chain request stays on the legacy path whatever the server offers.
+            if (catalog.EvidenceRetrieval is not null && !chain)
+                return await RunEvidenceAsync(baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, model, observer, time, ct, evalRunId);
 
             var ctx = await PrepareAsync(
                 baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, chain, thresholdBytes,

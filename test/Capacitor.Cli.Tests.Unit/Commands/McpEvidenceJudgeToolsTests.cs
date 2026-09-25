@@ -280,4 +280,9 @@ public class McpEvidenceJudgeToolsTests : IDisposable {
         await Assert.That(evidence).IsEquivalentTo(["list_sources", "list_turns", "read_events", "read_body", "list_calls", "summarize_calls", "list_authorizations", "open_page"]);
         await Assert.That(McpJudgeServer.ToolsFor(evidence: true).All(t => !t.InputSchema.Properties.ContainsKey("session_id"))).IsTrue();
     }
+
+    [Test]
+    public async Task The_parents_allowlist_names_exactly_the_tools_this_server_serves() =>
+        await Assert.That(Capacitor.Cli.Core.Eval.EvalService.EvidenceMcpAllowedTools)
+            .IsEquivalentTo(McpEvidenceJudgeTools.ToolNames.Select(n => $"mcp__kcap-judge__{n}").ToArray());
 }

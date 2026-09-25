@@ -119,25 +119,4 @@ public class ClaudeCliRunnerDetailedTests {
         await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.SpendBudget);
         await Assert.That(outcome.Subtype).IsEqualTo("error_max_budget_usd");
     }
-
-    /// <summary>Puts a `claude` on PATH running the given shell script. Mirrors
-    /// <c>ImportSkipTitleTests.FakeClaudeOnPath</c>.</summary>
-    sealed class FakeClaudeOnPath : IDisposable {
-        readonly TempDir  _bin;
-        readonly EnvScope _path;
-
-        public FakeClaudeOnPath(string script) {
-            _bin = new TempDir();
-
-            _bin.CreateExecutable("claude", script);
-
-            _path = EnvScope.Exclusive(
-                "PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
-        }
-
-        public void Dispose() {
-            _path.Dispose();
-            _bin.Dispose();
-        }
-    }
 }
