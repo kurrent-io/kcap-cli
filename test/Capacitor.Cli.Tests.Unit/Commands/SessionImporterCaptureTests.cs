@@ -21,8 +21,10 @@ public class SessionImporterCaptureTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
         using var tmp = new TempDir();
         const string secret = "ghp_0123456789abcdefghij";
+        // Not 'x': it starts the xox* vendor prefixes, so every position becomes a regex candidate
+        // and a loaded runner breaches the watcher's per-call deadline, losing the record.
         var raw = "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"large-edit\",\"is_error\":true,\"content\":\""
-                + new string('x', 100_000) + " " + secret + "\"}]}}";
+                + new string('a', 100_000) + " " + secret + "\"}]}}";
         var path = tmp.CreateFile("source.jsonl", "\n" + raw + "\n");
         using var client = new HttpClient();
 

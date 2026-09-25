@@ -59,7 +59,9 @@ public class SecretRedactorTests {
         var raw = JsonSerializer.Serialize(new {
             type = "user", message = new { content = new[] {
                 new { type = "tool_result", tool_use_id = "large-edit", is_error = isError,
-                    content = new string('x', 100_000) + " " + secret }
+                    // Not 'x': it starts the xox* vendor prefixes, so the scan would test every
+                    // position and could breach the watcher's per-call deadline on a loaded runner.
+                    content = new string('a', 100_000) + " " + secret }
             }}
         });
 
