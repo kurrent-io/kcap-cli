@@ -1,5 +1,6 @@
 namespace Capacitor.Cli.Tests.Unit;
 
+[ParallelLimiter<SubprocessLimit>]
 public class GitHookInstallerTests {
     [TempHome] public required TempHome Home { get; init; }
 

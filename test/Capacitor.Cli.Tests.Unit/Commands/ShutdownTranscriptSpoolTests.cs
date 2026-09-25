@@ -125,10 +125,9 @@ public class ShutdownTranscriptSpoolTests {
     public async Task shutdown_with_only_undelivered_commits_spools_them() {
         using var tmp = new TempDir();
         var spoolDir       = tmp.PathTo("shut-commits-spool");
-        var transcriptPath = tmp.CreateDir("shut-commits").PathTo("transcript.jsonl");
+        var transcriptPath = tmp.CreateDir("shut-commits").CreateFile("transcript.jsonl", "{\"line\":0}\n");
         var inbox          = new CommitInbox(tmp.PathTo("commits.jsonl"));
 
-        await File.WriteAllTextAsync(transcriptPath, "{\"line\":0}\n");
         inbox.Append(new ObservedCommit { Sha = "aaa", Message = "Fix watcher" });
 
         var spool  = new TranscriptSpool(spoolDir, time: TimeProvider.System);

@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
 
+[ParallelLimiter<SubprocessLimit>]
 public class GitHookTests {
     [TempDir] public required TempDir Tmp { get; init; }
 

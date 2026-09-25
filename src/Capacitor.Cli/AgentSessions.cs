@@ -33,9 +33,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf) {
             var temp = $"{note}.{Environment.ProcessId}";
             File.WriteAllText(temp, text);
             File.Move(temp, note, overwrite: true);
-        } catch {
-            // ignored
-        }
+        } catch { }
     }
 
     /// <summary>

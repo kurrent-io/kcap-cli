@@ -49,9 +49,7 @@ static class GitHook {
     public static async Task<int> RunAsync(GitHookInvocation invocation, ConfigRoot config, TimeProvider time) {
         try {
             await RecordAsync(invocation, AgentSessions.OnThisMachine(config), config, time);
-        } catch {
-            // ignored
-        }
+        } catch { }
 
         return 0;
     }
