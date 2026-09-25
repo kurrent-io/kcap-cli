@@ -1410,6 +1410,45 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// Pins the reader at the bottom across a series answer. The option click is a press inside
+    /// the list, and the card swaps to the next question in the same layout pass; that growth is
+    /// the card's, not the reader scrolling, so following has to carry on and land the whole next
+    /// question in view. The next question genuinely has to be taller — a shorter one clamps back
+    /// to the bottom on its own and this test proves nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Answering_a_series_question_keeps_the_reader_at_the_bottom() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var prose = string.Join("\\n\\n", Enumerable.Range(1, 60).Select(i => $"Paragraph {i} of a long reply that wraps across the column."));
+            var tall = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + prose + "\"}]}}";
+            var tags = string.Join(",", Enumerable.Range(1, 8).Select(i =>
+                $$$"""{"label":"Tag {{{i}}}","description":"A longer description of tag {{{i}}} that wraps across the column and adds height."}"""));
+            var question = $$$"""{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]},{"question":"Tags","multiSelect":true,"options":[{{{tags}}}]}]}""";
+            var ask = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q-tool","name":"AskUserQuestion","input":{{{question}}}}]}}""";
+            var path = Tmp.CreateFile("series.jsonl", [tall, tall, tall, .. Enumerable.Repeat(UserLine, 20), ask]);
+            await host.LoadAsync(path);
+            await Assert.That(host.AtBottom()).IsTrue();
+
+            host.Permissions.Add(PermissionEntries.Entry("q1", "a1", "claude", ClaudeElicitation.ToolName, question, toolUseId: "q-tool"));
+            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 1, what: "the card");
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+
+            var card = (QuestionCardViewModel)host.Chat.PendingCards.Single();
+            var option = Option(host, "A");
+            // Headless pointer events do not focus, so the focus a real click gives the button is applied by hand.
+            option.Focus(NavigationMethod.Pointer);
+            Click(host, option);
+            await WaitUntilAsync(() => card.CurrentIndex == 1, what: "the next question");
+            host.Settle();
+            host.Settle();
+
+            await Assert.That(host.AtBottom()).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
     /// The chip strip's whole wiring: it is collapsed with an empty tray, a staged file renders a
     /// chip carrying its name and size, and the chip's own button takes that file back out.
     [Test]
