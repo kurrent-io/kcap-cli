@@ -433,22 +433,17 @@ public record EvalQuestionDto {
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
 
-    // DEV-1486: server-owned flag that opts this question into tools-enabled
-    // judging. Defaults to false so older servers that don't send the field
-    // keep producing text-only judge runs.
+    // Server-owned opt-in to tools-enabled judging; false when an older server omits it, keeping those runs text-only.
     [JsonPropertyName("needs_tools")]
     public bool NeedsTools { get; init; }
 
-    // Phase 3 — the catalog prompt version this question's rendered prompt
-    // ran against. Null on the back-compat /api/eval/questions alias (which does
-    // not emit it) and on older servers; populated only by /api/eval/catalog.
+    // The catalog prompt version the rendered prompt ran against. Only /api/eval/catalog sends it; the
+    // /api/eval/questions alias and older servers leave it null.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
 
-    // Phase 3 — RAW question text from the catalog, used by the tools path
-    // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
-    // the alias / older servers. Distinct from Prompt, which on a reconciled
-    // text-path question holds the server-RENDERED prompt.
+    // The raw catalog question text the tools template substitutes into {QUESTION_TEXT}; null from the alias and older
+    // servers. On a reconciled text-path question Prompt holds the server-rendered prompt instead.
     [JsonPropertyName("raw_text")]
     public string? RawText { get; init; }
 
@@ -2255,7 +2250,7 @@ public readonly record struct TerminalOutput(
         string Base64Data
     );
 
-// ── Per-question eval dispatch (DEV-1463 PR 2) ────────────────────────────
+// ── Per-question eval dispatch ───────────────────────────────────────────────
 // Plain PascalCase records — no [JsonPropertyName] attrs — so they round-trip
 // via SignalR's default JSON protocol with the matching server-side records.
 // Inner DTOs (EvalQuestionDto, EvalQuestionVerdict) carry their own snake_case

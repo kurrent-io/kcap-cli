@@ -361,7 +361,7 @@ static class ClaudeCliRunner {
             // (or stale content from auto-memory in the shared project
             // directory) — it is NOT schema-shaped and would be surfaced as
             // the "result" only to fail downstream parsing with misleading
-            // noise. DEV-1476 saw this produce unrelated PR-status text.
+            // noise.
             if (string.IsNullOrEmpty(jsonSchema)) {
                 var fallback = TryReadTranscriptFallback(stdout, log, harnesses);
 

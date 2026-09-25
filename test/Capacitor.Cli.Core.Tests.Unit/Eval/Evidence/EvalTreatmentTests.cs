@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>Without an advertisement the treatment is exactly the empty gate-off record S8's baseline side compares equal to;
+/// <summary>Without an advertisement the treatment is exactly the empty gate-off record a baseline comparison treats as equal;
 /// with one it carries all eight budget keys, the child's trace token budget and the three resource hashes.</summary>
 public class EvalTreatmentTests {
     static EvalCatalogDto Catalog(EvalEvidenceAdvertisementDto? ad) => new() { RetrospectivePrompt = "r", RetrospectivePromptVersion = "1", EvidenceRetrieval = ad };

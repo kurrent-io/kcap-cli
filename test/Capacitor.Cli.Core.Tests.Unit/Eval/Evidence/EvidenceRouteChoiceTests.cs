@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>Route choice is S5's fit test over the wire: F is the smaller bound, a scope that cannot fit is decided without a
+/// <summary>Route choice is the server's fit test over the wire: F is the smaller bound, a scope that cannot fit is decided without a
 /// read, a fitting trace carries every canonical body with its cites and entry spans, an oversized one stops on the page that
 /// crosses F, a non-text body routes to retrieval, and a failed read is reported rather than routed.</summary>
 public class EvidenceRouteChoiceTests : IDisposable {

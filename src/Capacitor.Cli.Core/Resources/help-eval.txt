@@ -24,7 +24,7 @@ Options:
   --chain             Evaluate the full continuation chain, not just this session.
   --threshold <n>     Override the server's compaction threshold (bytes per tool
                       result, default server-side: 2000). Capped at 200_000.
-                      has no effect on the evidence route.
+                      Has no effect on the evidence route.
   --questions <csv>   Run only the listed questions. Accepts category names
                       (safety, plan_adherence, quality, efficiency) and
                       individual question IDs (e.g. tests_written). Mutually
@@ -48,7 +48,8 @@ Notes:
     more through the read-only tools scoped to the session. Set
     KCAP_EVAL_TRACE_TOKEN_BUDGET to tune how large a trace may be embedded
     (default ~200K estimated tokens); on the evidence route it caps the
-    one-shot trace at four characters per token, below the server's own limit.
+    one-shot trace at four characters per token, never above the server's
+    own limit.
   - If the session ID is omitted, the currently-recorded session is used —
     resolved from KCAP_SESSION_ID (Claude) or CODEX_THREAD_ID
     (Codex 0.81+).

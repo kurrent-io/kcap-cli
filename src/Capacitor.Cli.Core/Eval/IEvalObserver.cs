@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
 /// Progress surface for an eval run. The CLI implementation writes each
-/// callback to stderr; the daemon implementation (DEV-1440 milestone 2)
+/// callback to stderr; the daemon implementation
 /// pushes every per-run and per-question transition
 /// (<see cref="OnStarted"/>, <see cref="OnQuestionStarted"/>,
 /// <see cref="OnQuestionCompleted"/>, <see cref="OnQuestionFailed"/>,
