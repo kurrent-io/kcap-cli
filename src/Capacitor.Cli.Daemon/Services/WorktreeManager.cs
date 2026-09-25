@@ -416,10 +416,12 @@ public partial class WorktreeManager(
         // user.email fails with "Author identity unknown". Found while the broken copy was temporarily
         // repaired and this line became reachable for the first time; that repair was reverted then and has
         // landed now, so this is live rather than speculative.
+        // --allow-empty: a folder with nothing to copy — new, or holding only the daemon's own
+        // .capacitor directory — is a valid place to start an agent, and git refuses an empty commit.
         await RunGit(worktreePath, GitTimeout,
             time,
             [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
-            "commit", "-m", "Initial snapshot");
+            "commit", "--allow-empty", "-m", "Initial snapshot");
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
     }

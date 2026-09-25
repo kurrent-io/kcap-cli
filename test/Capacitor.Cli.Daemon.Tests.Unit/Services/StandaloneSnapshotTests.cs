@@ -89,6 +89,20 @@ public class StandaloneSnapshotTests {
 
     }
 
+    /// <summary>A folder with nothing to copy is still somewhere an agent can start: git refuses to
+    /// commit an empty tree, so without <c>--allow-empty</c> the launch failed at "Initial snapshot".</summary>
+    [Test]
+    public async Task An_empty_folder_still_gets_a_snapshot() {
+        using var root = new TempDir("standalone");
+        var source     = root.CreateDir("empty");
+
+        var worktree = await NewManager().CreateAsync(source);
+
+        await Assert.That(worktree.IsStandalone).IsTrue();
+        await Assert.That(CommitCount(worktree.Path)).IsEqualTo("1");
+        await Assert.That(CommittedPaths(worktree.Path)).IsEmpty();
+    }
+
     // ---- 2/3: outside links are not materialised ----------------------------------------------------
 
     /// <summary>A link to an outside FILE must not bring the file's bytes in.
