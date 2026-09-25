@@ -39,13 +39,13 @@ static partial class NextWorkEmitter {
 
     static readonly HashSet<string> ArmStates = ["current", "unknown", "catching_up", "failed", "omitted"];
 
-    [GeneratedRegex("^[A-Za-z0-9_]{1,64}$")]
+    [GeneratedRegex(@"^[A-Za-z0-9_]{1,64}\z")]
     private static partial Regex ArmName();
 
-    [GeneratedRegex("^[a-z0-9_]{1,64}$")]
+    [GeneratedRegex(@"^[a-z0-9_]{1,64}\z")]
     private static partial Regex CodePattern();
 
-    [GeneratedRegex(@"^(?<arm>[A-Za-z0-9_]{1,64}): (?<state>[a-z_]{1,64})(?: \((?<code>[a-z0-9_]{1,64})\))?$")]
+    [GeneratedRegex(@"^(?<arm>[A-Za-z0-9_]{1,64}): (?<state>[a-z_]{1,64})(?: \((?<code>[a-z0-9_]{1,64})\))?\z")]
     private static partial Regex ArmNotCurrent();
 
     /// <summary>A server error or failure code: short snake-case, nothing else.</summary>

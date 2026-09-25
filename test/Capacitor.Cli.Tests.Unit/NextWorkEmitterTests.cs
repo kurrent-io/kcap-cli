@@ -164,4 +164,17 @@ public class NextWorkEmitterTests {
         await Assert.That(NextWorkEmitter.BuildFragment(JsonNode.Parse("""{"next_work":"v1"}"""), disabled: false)).IsNull();
         await Assert.That(NextWorkEmitter.BuildFragment(JsonNode.Parse("""{"next_work":{"rows":[{"label":42}],"as_of":"t"}}"""), disabled: false)).IsNull();
     }
+
+    [Test]
+    public async Task A_terminal_newline_does_not_pass_the_code_and_arm_validators() {
+        await Assert.That(NextWorkEmitter.IsCode("bad_gateway\n")).IsFalse();
+        await Assert.That(NextWorkEmitter.IsCode("bad_gateway")).IsTrue();
+
+        var ack = JsonNode.Parse(Ack)!;
+        ack["next_work"]!["arms_not_current"] = JsonNode.Parse("[\"backlog: failed (linear_timeout)\\n\", \"backlog\\n: failed\"]");
+        var fragment = NextWorkEmitter.BuildFragment(ack, disabled: false)!;
+
+        await Assert.That(fragment).DoesNotContain("linear_timeout");
+        await Assert.That(fragment).DoesNotContain("not current");
+    }
 }
