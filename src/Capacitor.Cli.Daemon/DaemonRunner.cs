@@ -767,7 +767,12 @@ public static partial class DaemonRunner {
                 }
 
                 var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
-                await worktreeManager.CleanupOrphanedAsync();
+                // Another daemon's agents can be running in the same repositories, so the repo list is
+                // swept only when this daemon is the machine's only one.
+                var knownRepos = OtherDaemons.AnyAlive(config.Store, config.Name)
+                    ? []
+                    : await new RepoPathStore(config.ConfigRoot, time).TryGetSortedPathsAsync() ?? [];
+                await worktreeManager.CleanupOrphanedAsync(knownRepoPaths: knownRepos);
 
                 // Instantiate EvalRunner so it wires the per-phase eval handlers
                 // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the

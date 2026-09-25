@@ -1390,7 +1390,33 @@ public partial class WorktreeManager(
         return false;
     }
 
-    public Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null) {
+    /// <param name="knownRepoPaths">Repositories agents were launched in (the repo list), swept like the
+    /// allowlist: an agent whose teardown never ran — a daemon killed mid-cleanup, a crash — leaves its
+    /// worktree there, and nothing else ever removes it. The caller passes these only when no other
+    /// daemon is running, since another daemon's live worktrees can sit in the same repository. Only the
+    /// worktree directories go: their <c>capacitor/agent-*</c> branches keep whatever the agent committed.</param>
+    public async Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null, IEnumerable<string>? knownRepoPaths = null) {
+        await CleanupAllowedOrphansAsync(activeWorktreePaths);
+
+        var active = activeWorktreePaths as string[] ?? [..activeWorktreePaths ?? []];
+        var allowed = config.AllowedRepoPaths.Select(p => p.TrimEnd('/', '*')).ToArray();
+        foreach (var repoPath in allowed.Where(p => Directory.Exists(Path.Combine(p, ".capacitor", "worktrees"))))
+            await RunGitBestEffort(repoPath, time, "-c", "maintenance.auto=false", "-c", "gc.auto=0", "worktree", "prune");
+
+        foreach (var repoPath in knownRepoPaths ?? []) {
+            if (allowed.Any(a => string.Equals(Path.GetFullPath(a), Path.GetFullPath(repoPath), StringComparison.OrdinalIgnoreCase))) continue;
+
+            var perRepoRoot = Path.Combine(repoPath, ".capacitor", "worktrees");
+            if (!Directory.Exists(perRepoRoot)) continue;
+
+            CleanupDirectory(perRepoRoot, active);
+            // Deleting a linked worktree's directory leaves git's registration behind; prune drops
+            // the ones whose directory is gone, and nothing else.
+            await RunGitBestEffort(repoPath, time, "-c", "maintenance.auto=false", "-c", "gc.auto=0", "worktree", "prune");
+        }
+    }
+
+    Task CleanupAllowedOrphansAsync(IEnumerable<string>? activeWorktreePaths) {
         // Legacy global root — clean up any leftover worktrees from before the per-repo change
         var worktreePaths = activeWorktreePaths as string[] ?? [..activeWorktreePaths ?? []];
         CleanupDirectory(config.WorktreeRoot, worktreePaths, "borrowed-snapshots");
