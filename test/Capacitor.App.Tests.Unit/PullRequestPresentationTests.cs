@@ -177,6 +177,22 @@ public class PullRequestPresentationTests {
         foreach (var text in texts) await Assert.That(text.GetSelfAndVisualAncestors().OfType<Visual>().TakeWhile(v => v != h.Card).All(v => v.Opacity == 1)).IsTrue();
     });
 
+    /// Threads alone carries the resolved toggle; the content must start at the same height on every review sub-tab.
+    [Test]
+    public Task Review_sub_tabs_keep_the_content_at_one_height() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        var scroll = h.Reader.FindControl<ScrollViewer>("ReaderScroll")!;
+        var tops = new List<double>();
+        foreach (var section in new[] { "reviewers", "reviews", "threads" }) {
+            await h.Model.ShowSectionCommand.Execute(section);
+            await h.SettleAsync();
+            tops.Add(scroll.TranslatePoint(new Point(0, 0), h.Reader)!.Value.Y);
+        }
+        await Assert.That(h.Reader.FindControl<ToggleSwitch>("ShowResolvedToggle")!.IsEffectivelyVisible).IsTrue();
+        await Assert.That(tops.Distinct().Count()).IsEqualTo(1);
+    });
+
     [Test]
     public Task Row_details_leave_out_what_the_source_did_not_report() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();

@@ -56,7 +56,8 @@
                     <TabStripItem Content="Activity" />
                 </TabStrip>
             </Border>
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="0,10,0,0" IsVisible="{Binding IsReviewSection}">
+            <!-- Fixed height: the Threads-only toggle is taller than the pills and would shift the content below. -->
+            <Grid x:Name="ReviewTabsRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="0,10,0,0" Height="30" IsVisible="{Binding IsReviewSection}">
                 <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}"
                           IsEnabled="{Binding CanReveal}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}"
                           AutomationProperties.Name="Review sections">
@@ -66,9 +67,11 @@
                     <TabStripItem Content="Threads" />
                     <TabStripItem Content="Replies" IsVisible="{Binding IsThreadComments}" />
                 </TabStrip>
-                <CheckBox Grid.Column="1" Content="Show resolved" IsChecked="{Binding IncludeResolved, Mode=TwoWay}" VerticalAlignment="Center"
-                          IsVisible="{Binding IsThreads}" IsEnabled="{Binding CanReveal}" FontSize="12" MinHeight="0"
-                          Foreground="{StaticResource KcapMutedBrush}" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding IsThreads}">
+                    <TextBlock Text="Show resolved" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                    <ToggleSwitch x:Name="ShowResolvedToggle" Classes="kcapSwitch" IsChecked="{Binding IncludeResolved, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Show resolved threads" />
+                </StackPanel>
             </Grid>
         </StackPanel>
         <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" BringIntoViewOnFocusChange="False">
