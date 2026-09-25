@@ -7,6 +7,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Eval.Evidence;
 
 using Capacitor.Cli.Core.Http;
 
@@ -15,15 +16,22 @@ namespace Capacitor.Cli.Commands;
 sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
         TelemetryStartup startup, TimeProvider time) {
     /// <summary>
-    /// Run as a session-scoped MCP server. All tool calls must use <paramref name="expectedSessionId"/>.
+    /// Run as a session-scoped MCP server. All tool calls must use <paramref name="expectedSessionId"/>;
+    /// with <paramref name="runPath"/>, evidence-route tool calls read that owner-only run file instead.
     /// </summary>
-    public async Task<int> RunAsync(string expectedSessionId) {
+    public async Task<int> RunAsync(string expectedSessionId, string? runPath = null) {
+        if (runPath is not null && !RunFileBelongsTo(runPath, expectedSessionId)) {
+            Console.Error.WriteLine($"kcap mcp judge: the run file does not belong to session {expectedSessionId}");
+            return 1;
+        }
+
         var baseUrl = profiles.Resolution.ServerUrl!;
 
         // Validate the shape locally, then defer client construction to the first tools/call —
         // the shape every sibling MCP server already uses.
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
         HttpClient? client = null;
+        McpEvidenceJudgeTools? evidence = null;
 
         // Best-effort, and recorded even when the read throws: a stale token on disk must never
         // block the server from starting, and an absent property is a different value in a funnel
@@ -39,7 +47,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
         await using var mcp = new McpTelemetry(telemetry);
 
-        var tools = BuildToolsList();
+        var tools = ToolsFor(evidence: runPath is not null);
 
         await using var stdin  = Console.OpenStandardInput();
         await using var stdout = Console.OpenStandardOutput();
@@ -54,7 +62,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             JsonObject? request;
 
             try {
-                request = JsonNode.Parse(line)?.AsObject();
+                request = JsonNode.Parse(line) as JsonObject;
             } catch {
                 continue; // skip malformed JSON
             }
@@ -62,7 +70,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             if (request is null) continue;
 
             var id     = request["id"];
-            var method = request["method"]?.GetValue<string>();
+            var method = StringOf(request["method"]);
 
             // Notifications have no id — don't send a response
             if (id is null) continue;
@@ -79,6 +87,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         }
         } finally {
             // Deferring construction must not also defer disposal: the loop ends when stdin closes.
+            evidence?.Dispose();
             client?.Dispose();
         }
 
@@ -90,7 +99,16 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             if (!urlOk) return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             client ??= await http.ForSessionAsync();
-            return await HandleToolCallAsync(callId, callRequest, client, baseUrl, expectedSessionId);
+
+            if (runPath is null) return await HandleToolCallAsync(callId, callRequest, client, baseUrl, expectedSessionId);
+
+            try {
+                evidence ??= McpEvidenceJudgeTools.Open(runPath, client, baseUrl, time);
+            } catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or KeyNotFoundException or InvalidOperationException) {
+                return BuildToolResult(callId, $"Error: the evidence run could not be opened: {e.Message}", isError: true);
+            }
+
+            return await DispatchEvidenceCallAsync(callId, callRequest, evidence);
         }
 
         // Records which MCP tools agents actually reach for. Never touches the response path:
@@ -109,6 +127,15 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             }
         }
     }
+
+    internal static async Task<string> DispatchEvidenceCallAsync(JsonNode callId, JsonObject callRequest, McpEvidenceJudgeTools evidence) {
+        var parameters = callRequest["params"] as JsonObject;
+        if (StringOf(parameters?["name"]) is not { } name) return BuildErrorResponse(callId, -32602, "Missing params.name");
+        var (text, isError) = await evidence.CallAsync(name, parameters!["arguments"], CancellationToken.None);
+        return BuildToolResult(callId, text, isError);
+    }
+
+    static string? StringOf(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var s) ? s : null;
 
     /// <summary>Test hook: execute a tool-call handler and return the JSON-RPC envelope.</summary>
     internal static async Task<string> HandleToolCallForTests(
@@ -140,9 +167,9 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             string     baseUrl,
             string     expectedSessionId
         ) {
-        var paramsNode = request["params"]?.AsObject();
-        var toolName   = paramsNode?["name"]?.GetValue<string>();
-        var arguments  = paramsNode?["arguments"]?.AsObject();
+        var paramsNode = request["params"] as JsonObject;
+        var toolName   = StringOf(paramsNode?["name"]);
+        var arguments  = paramsNode?["arguments"] as JsonObject;
 
         if (toolName is null) {
             return BuildErrorResponse(id, -32602, "Missing params.name");
@@ -224,6 +251,17 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         };
 
         return envelope.ToJsonString();
+    }
+
+    internal static McpTool[] ToolsFor(bool evidence) => evidence ? McpEvidenceJudgeTools.ToolsList() : BuildToolsList();
+
+    static bool RunFileBelongsTo(string runPath, string sessionId) {
+        static string Normalize(string id) => id.Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
+        try {
+            return Normalize(EvidenceRunFile.Read(runPath).RootSessionId) == Normalize(sessionId);
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or KeyNotFoundException or InvalidOperationException) {
+            return false;
+        }
     }
 
     internal static McpTool[] BuildToolsList() => [

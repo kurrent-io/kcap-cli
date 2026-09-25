@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Eval;
 
@@ -14,4 +15,8 @@ public sealed record BaselineOutput {
     [JsonPropertyName("retrospective")]    public BaselineRetrospectiveOutput?           Retrospective  { get; init; }
     [JsonPropertyName("totals")]           public EvalUsage                              Totals         { get; init; } = new();
     [JsonPropertyName("total_elapsed_ms")] public long                                   TotalElapsedMs { get; init; }
+
+    [JsonPropertyName("treatment")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EvalTreatment? Treatment { get; init; }
 }

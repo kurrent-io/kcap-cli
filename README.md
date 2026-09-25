@@ -520,11 +520,13 @@ Useful for post-session review: identify recurring mistakes, discover patterns t
 
 Score a recorded session against safety, plan adherence, quality, and efficiency criteria. Each of 13 questions (e.g. *"Did the agent run destructive commands?"*, *"Did it write tests when appropriate?"*, *"Were there repeated failed attempts at the same operation?"*) is answered by a separate headless Claude judge with **no filesystem or network tools**. Most judges reason from the compacted session trace embedded in the prompt; some questions — and any session whose trace is too large to embed — instead investigate the session on demand through a read-only, session-scoped MCP tool surface (summary, search, transcript, errors, recap, tool results). The embed-vs-tools threshold is tunable via `KCAP_EVAL_TRACE_TOKEN_BUDGET` (default ~200K estimated tokens).
 
+When the server advertises the evidence route, a single-session evaluation (from `kcap eval` or a dashboard-dispatched daemon run) reads this session and its subagent lanes as you are allowed to see them through bounded evidence reads instead of the whole compacted trace: a small session is judged from its complete trace in one prompt, a larger one through eight read-only evidence tools under a tool-call, byte and time budget. Citations are certified by the server, each question records what it read and left unread (`coverage-v2`), and a budget stop is reported rather than hidden. `--chain` keeps the embedded-trace path, and `--threshold` has no effect on the evidence route. With `--baseline-out`, each evidence question's retrieval ledger is also copied to `<path>.ledgers/`.
+
 ```bash
 kcap eval <sessionId>                      # default: sonnet judge
 kcap eval --model opus <sessionId>         # stronger judge
 kcap eval --chain <sessionId>              # include the full continuation chain
-kcap eval --threshold 5000 <sessionId>     # keep more of each tool output before truncation
+kcap eval --threshold 5000 <sessionId>     # embedded-trace path: keep more of each tool output
 kcap eval --questions safety <sessionId>   # run only the 4 safety judges
 kcap eval --skip efficiency <sessionId>    # run everything except efficiency
 kcap eval --baseline-out out.json <sessionId>  # also write per-question usage/route/timing

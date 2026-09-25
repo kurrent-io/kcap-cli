@@ -477,14 +477,15 @@ switch (command) {
             }
             case "judge": {
                 var session = GetArg(args, "--session");
+                var run     = GetArg(args, "--run");
 
                 if (string.IsNullOrWhiteSpace(session)) {
-                    Console.Error.WriteLine("Usage: kcap mcp judge --session <sessionId>");
+                    Console.Error.WriteLine("Usage: kcap mcp judge --session <sessionId> [--run <path>]");
 
                     return 1;
                 }
 
-                return await Run<McpJudgeServer>().RunAsync(session);
+                return await Run<McpJudgeServer>().RunAsync(session, string.IsNullOrWhiteSpace(run) ? null : run);
             }
             case "sessions":
                 return await Run<McpSessionsServer>().RunAsync();
