@@ -1042,6 +1042,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceEventPageDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceTurnPageDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceBodyChunkDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvalTreatment))]
 [JsonSerializable(typeof(EvalTraceCoverage))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(List<CliProjectSummary>))]
