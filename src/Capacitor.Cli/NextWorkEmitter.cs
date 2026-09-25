@@ -34,6 +34,9 @@ static partial class NextWorkEmitter {
 
     internal const int FieldCap = 300;
 
+    /// <summary>The feed's page one: the SessionStart block never shows more rows than this.</summary>
+    internal const int PageOneSlots = 3;
+
     static readonly HashSet<string> ArmStates = ["current", "unknown", "catching_up", "failed", "omitted"];
 
     [GeneratedRegex("^[A-Za-z0-9_]{1,64}$")]
@@ -65,6 +68,7 @@ static partial class NextWorkEmitter {
 
         var lines = new List<string>();
         foreach (var node in rows) {
+            if (lines.Count == PageOneSlots) break;
             if (node is not JsonObject row) continue;
 
             var label = NextWorkUntrustedText.Render(ReadString(row, "label"), FieldCap);

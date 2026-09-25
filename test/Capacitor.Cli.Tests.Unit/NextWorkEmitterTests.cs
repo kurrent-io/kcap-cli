@@ -131,6 +131,20 @@ public class NextWorkEmitterTests {
     }
 
     [Test]
+    public async Task The_block_holds_at_most_the_page_one_slots() {
+        var ack  = JsonNode.Parse(Ack)!;
+        var rows = new JsonArray();
+        for (var i = 1; i <= 5; i++) rows.Add(new JsonObject { ["label"] = JsonNode.Parse($"\"Row {i}\"") });
+        ack["next_work"]!["rows"] = rows;
+
+        var fragment = NextWorkEmitter.BuildFragment(ack, disabled: false)!;
+
+        await Assert.That(fragment).Contains("3. Row 3");
+        await Assert.That(fragment).DoesNotContain("Row 4");
+        await Assert.That(fragment).DoesNotContain("Row 5");
+    }
+
+    [Test]
     public async Task Nothing_when_the_ack_has_no_next_work() {
         await Assert.That(NextWorkEmitter.BuildFragment(JsonNode.Parse("""{"top_clusters":[]}"""), disabled: false)).IsNull();
     }
