@@ -1,73 +1,96 @@
 using System.Collections.Concurrent;
 using Capacitor.Cli.Core.Eval;
+using Capacitor.Cli.Core.Eval.Evidence;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Services;
 
-/// <summary>
-/// In-memory, per-evalRunId cache of prepared <see cref="EvalService.EvalContext"/> +
-/// accumulated verdicts. Populated by <c>PrepareEval</c>, read by each
-/// <c>RunQuestion</c>, evicted by <c>FinalizeEval</c> or <c>CancelEval</c>.
-///
-/// <para>Entries use sliding expiration keyed off last access so a long eval
-/// (13 questions × up to 5 min each) can't exceed the window between phase
-/// calls — only truly idle contexts expire. A background timer sweeps
-/// abandoned entries so a server crash between Prepare and Finalize doesn't
-/// leak <c>TraceJson</c> until process restart.</para>
-/// </summary>
-internal sealed class EvalContextCache : IDisposable {
-    sealed record Entry(EvalService.EvalContext Context, DateTimeOffset LastAccessed);
+/// <summary>Per-evalRunId cache of a prepared run: a legacy <see cref="EvalService.EvalContext"/> or an evidence-route
+/// <see cref="EvidenceRunSetup"/>. Entries slide on access and expire when idle; an entry leaving the cache for any reason is
+/// disposed, so an evidence run's private directory never outlives it.</summary>
+internal sealed class EvalContextCache : IDisposable, IAsyncDisposable {
+    sealed record Entry(object Context, DateTimeOffset LastAccessed, IDisposable? Owned);
 
-    readonly ConcurrentDictionary<string, Entry> _entries = new();
-    readonly ITimer                              _sweepTimer;
-
-    // Sliding expiration — an entry is evicted when MaxIdle elapses since
-    // its last Get(). Per-question calls refresh the timestamp, so only
-    // abandoned entries (server crashed mid-run) expire.
+    // Idle, not absolute: every per-question read refreshes the entry, so only an abandoned run expires.
     static readonly TimeSpan MaxIdle       = TimeSpan.FromMinutes(30);
     static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
 
+    readonly ConcurrentDictionary<string, Entry> _entries = new();
+    readonly ITimer       _sweepTimer;
     readonly TimeProvider _time;
+    readonly ILogger      _logger;
 
-    public EvalContextCache(TimeProvider time) {
+    public EvalContextCache(TimeProvider time, ILogger<EvalContextCache>? logger = null) {
         _time       = time;
+        _logger     = logger ?? (ILogger)NullLogger.Instance;
         _sweepTimer = time.CreateTimer(_ => Sweep(), null, SweepInterval, SweepInterval);
     }
 
-    public void Put(string evalRunId, EvalService.EvalContext ctx) =>
-        _entries[evalRunId] = new Entry(ctx, _time.GetUtcNow());
+    public void Put(string evalRunId, EvalService.EvalContext ctx) => PutEntry(evalRunId, new(ctx, _time.GetUtcNow(), null));
 
-    public EvalService.EvalContext? Get(string evalRunId) {
-        if (!_entries.TryGetValue(evalRunId, out var entry)) return null;
+    /// <summary>Caches a prepared evidence run; <paramref name="owned"/> (the client its scope and readers send through) is
+    /// disposed with it.</summary>
+    public void Put(string evalRunId, EvidenceRunSetup setup, IDisposable? owned = null) => PutEntry(evalRunId, new(setup, _time.GetUtcNow(), owned));
 
-        var now = _time.GetUtcNow();
+    public EvalService.EvalContext? Get(string evalRunId) => Touch(evalRunId) as EvalService.EvalContext;
 
-        if (now - entry.LastAccessed > MaxIdle) {
-            _entries.TryRemove(new(evalRunId, entry));
+    public EvidenceRunSetup? GetEvidence(string evalRunId) => Touch(evalRunId) as EvidenceRunSetup;
 
-            return null;
-        }
-
-        // Refresh last-access so sequential per-question dispatches don't
-        // age out a still-active run. Race-safe via TryUpdate — concurrent
-        // Get or Remove just loses the refresh, which is benign.
-        _entries.TryUpdate(evalRunId, entry with { LastAccessed = now }, entry);
-
-        return entry.Context;
+    public void Remove(string evalRunId) {
+        if (_entries.TryRemove(evalRunId, out var entry)) Release(evalRunId, entry);
     }
-
-    public void Remove(string evalRunId) => _entries.TryRemove(evalRunId, out _);
 
     public int Count => _entries.Count;
 
-    void Sweep() {
-        var now = _time.GetUtcNow();
+    public void Dispose() {
+        _sweepTimer.Dispose();
+        foreach (var key in _entries.Keys) Remove(key);
+    }
 
-        foreach (var kvp in _entries) {
-            if (now - kvp.Value.LastAccessed > MaxIdle) {
-                _entries.TryRemove(kvp);
+    public ValueTask DisposeAsync() {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    void PutEntry(string evalRunId, Entry entry) {
+        while (true) {
+            if (_entries.TryAdd(evalRunId, entry)) return;
+            if (_entries.TryGetValue(evalRunId, out var replaced) && _entries.TryUpdate(evalRunId, entry, replaced)) {
+                if (!ReferenceEquals(replaced.Context, entry.Context)) Release(evalRunId, replaced);
+                return;
             }
         }
     }
 
-    public void Dispose() => _sweepTimer.Dispose();
+    object? Touch(string evalRunId) {
+        if (!_entries.TryGetValue(evalRunId, out var entry)) return null;
+        var now = _time.GetUtcNow();
+        if (now - entry.LastAccessed > MaxIdle) {
+            if (_entries.TryRemove(new KeyValuePair<string, Entry>(evalRunId, entry))) Release(evalRunId, entry);
+            return null;
+        }
+        // A concurrent read or removal only loses this refresh.
+        _entries.TryUpdate(evalRunId, entry with { LastAccessed = now }, entry);
+        return entry.Context;
+    }
+
+    void Sweep() {
+        var now = _time.GetUtcNow();
+        foreach (var kvp in _entries)
+            if (now - kvp.Value.LastAccessed > MaxIdle && _entries.TryRemove(kvp)) Release(kvp.Key, kvp.Value);
+    }
+
+    // Disposal is synchronous underneath, so the sync paths wait on it; one failure is logged and never stops the rest.
+    void Release(string evalRunId, Entry entry) {
+        if (entry.Context is EvidenceRunSetup setup) {
+            try {
+                var disposal = setup.DisposeAsync();
+                if (!disposal.IsCompletedSuccessfully) disposal.AsTask().GetAwaiter().GetResult();
+            } catch (Exception e) {
+                _logger.LogWarning(e, "Could not remove the run directory of eval {RunId}", evalRunId);
+            }
+        }
+        entry.Owned?.Dispose();
+    }
 }
