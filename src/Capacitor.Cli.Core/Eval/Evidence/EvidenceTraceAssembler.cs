@@ -45,7 +45,11 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
 
                 using var doc = TryParse(page.Body);
                 if (doc is null) return EvidenceTraceResult.Failed(page.Status, reads);
-                if (doc.RootElement.Arr("entries") is not { } entries) break;
+                var more = doc.RootElement.Str("next_cursor") is not null;
+                if (doc.RootElement.Arr("entries") is not { } entries) {
+                    if (more) return EvidenceTraceResult.Failed(page.Status, reads);
+                    break;
+                }
                 long? last = null;
                 foreach (var entry in entries.EnumerateArray()) {
                     if (entry.Num("revision") is not { } revision || revision < from || revision > source.RevisionCutoff || revision <= last)
@@ -68,7 +72,9 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
                     last = revision;
                 }
                 // Advance past the last event returned: the page's to_revision echoes the requested end.
-                if (doc.RootElement.Str("next_cursor") is null || last is null || last.Value == source.RevisionCutoff) break;
+                if (!more) break;
+                if (last is null) return EvidenceTraceResult.Failed(page.Status, reads);
+                if (last.Value == source.RevisionCutoff) break;
                 from = last.Value + 1;
             }
             w.WriteEndArray();
@@ -138,7 +144,7 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
                 w.WriteNumber("ordinal", ordinal);
                 if (call.Str("tool") is { } tool) w.WriteString("tool", tool); else w.WriteNull("tool");
                 w.WritePropertyName("arguments");
-                if (call.Prop("arguments") is { } arguments) arguments.WriteTo(w);
+                if (call.Prop("arguments") is { IsNull: false } arguments) arguments.WriteTo(w);
                 else if (resolvedArguments.TryGetValue(ordinal, out var resolved)) {
                     using var argumentsDoc = JsonDocument.Parse(resolved);
                     argumentsDoc.RootElement.WriteTo(w);

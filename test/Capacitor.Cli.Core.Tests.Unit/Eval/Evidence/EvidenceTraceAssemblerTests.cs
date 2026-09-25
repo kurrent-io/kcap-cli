@@ -3,10 +3,7 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>A tool call's arguments land in the trace exactly where the entry's own inline arguments would: nested under
-/// that call's own <c>arguments</c>, whether they arrived inline or were resolved from a deferred body — never as a
-/// sibling key next to <c>calls</c>. A successful read whose body does not parse, or whose pagination does not move forward
-/// inside the requested range, ends assembly as a failed read after that one request.</summary>
+/// <summary>A resolved arguments body nests under its own call's <c>arguments</c>, never as a sibling of <c>calls</c>.</summary>
 public class EvidenceTraceAssemblerTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
@@ -126,5 +123,29 @@ public class EvidenceTraceAssemblerTests : IDisposable {
 
         await Assert.That(trace.Fits).IsFalse();
         await Assert.That(trace.FailedStatus).IsEqualTo(200);
+    }
+
+    [Test]
+    public async Task Null_inline_arguments_beside_a_body_resolve_to_that_body() {
+        var call  = $"{{\"ordinal\":0,\"tool\":\"Bash\",\"arguments\":null,\"arguments_body\":{EvidenceServerStub.Descriptor($"{Root}@0", "arguments", 40, 0)}}}";
+        var entry = EvidenceServerStub.ToolCallEntry(Root, 0, [call]);
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Root, [entry]));
+        _stub.Route("GET", "evidence-body", 200, EvidenceServerStub.BodyChunk($"{Root}@0", "arguments", """{"cmd":"ls"}"""));
+
+        var trace = await Assembler().AssembleAsync(Source(0), 400_000, Bounded());
+
+        await Assert.That(trace.Fits).IsTrue();
+        await Assert.That(FirstCall(trace.TraceJson).GetProperty("arguments").GetProperty("cmd").GetString()).IsEqualTo("ls");
+    }
+
+    [Test]
+    public async Task An_empty_events_page_with_a_continuation_is_a_failed_read() {
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Root, [], next: "more"));
+
+        var trace = await Assembler().AssembleAsync(Source(5), 400_000, Bounded());
+
+        await Assert.That(trace.Fits).IsFalse();
+        await Assert.That(trace.FailedStatus).IsEqualTo(200);
+        await Assert.That(trace.Reads).IsEqualTo(1);
     }
 }
