@@ -444,7 +444,11 @@ class McpFlowsServer(
             }
 
             if (toolName is "list_flow_definitions") {
-                using var definitionsResp = await client.GetAsync(apiRoot + "/api/flows/definitions");
+                var lookup = await GetBoundedAsync(client, apiRoot + "/api/flows/definitions", clock);
+                if (lookup.Response is null)
+                    return BuildToolResult(id, $"Error: listing flow definitions (GET /api/flows/definitions) {lookup.How}; nothing was started — retry the call, or start a built-in definition by id.", isError: true);
+
+                using var definitionsResp = lookup.Response;
                 var definitionsBody       = await definitionsResp.Content.ReadAsStringAsync();
 
                 if (definitionsResp.StatusCode == HttpStatusCode.Unauthorized)
@@ -1365,13 +1369,22 @@ class McpFlowsServer(
     /// <summary>A null response comes with the actionable error text in its place.</summary>
     static async Task<(HttpResponseMessage? Response, string Failure)> GetForLookupAsync(
             HttpClient client, string url, string route, FlowRetryClock clock) {
+        var (response, how) = await GetBoundedAsync(client, url, clock);
+
+        return response is not null
+            ? (response, "")
+            : (null, $"Error: the flow lookup (GET {route}) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+    }
+
+    /// <summary>One GET under <see cref="PerGetTimeout"/>, so a server that stops answering cannot hold the
+    /// serial tool loop open; a null response comes with how it failed.</summary>
+    static async Task<(HttpResponseMessage? Response, string How)> GetBoundedAsync(HttpClient client, string url, FlowRetryClock clock) {
         using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
         try {
             return (await client.GetAsync(url, getCts.Token), "");
         } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
             // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
-            var how = ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}";
-            return (null, $"Error: the flow lookup (GET {route}) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+            return (null, ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}");
         }
     }
 

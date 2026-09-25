@@ -129,6 +129,32 @@ public class McpFlowsServerFlowDefinitionsTests {
         await Assert.That(text).DoesNotContain("(v1)");
     }
 
+    /// <summary>The MCP loop is serial, so a server that stops answering must cost one bounded lookup, not
+    /// every later tool call.</summary>
+    [Test]
+    public async Task A_server_that_stops_answering_times_out_instead_of_holding_the_tool_loop() {
+        var clock = new VirtualFlowRetryClock();
+        using var client = new HttpClient(new HoldsUntilCancelled(clock));
+
+        var (text, isError) = Result(await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCall(), client, "http://unanswering.test", cwd: "/r", repoRoot: "/r", repoInfo: null, clock: clock));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("listing flow definitions");
+        await Assert.That(text).Contains("timed out after 20 s");
+    }
+
+    /// <summary>Never answers: moves the virtual clock past every timeout source and then honours the
+    /// cancellation that produces, the way a held connection is cut by the lookup's own timeout.</summary>
+    sealed class HoldsUntilCancelled(VirtualFlowRetryClock clock) : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            clock.Advance(TimeSpan.FromHours(1));
+            ct.ThrowIfCancellationRequested();
+
+            throw new InvalidOperationException("the lookup carried no timeout");
+        }
+    }
+
     [Test]
     public async Task The_tool_is_read_only_and_says_when_to_call_it() {
         var tool = McpFlowsServer.BuildToolsList().Single(t => t.Name == "list_flow_definitions");
