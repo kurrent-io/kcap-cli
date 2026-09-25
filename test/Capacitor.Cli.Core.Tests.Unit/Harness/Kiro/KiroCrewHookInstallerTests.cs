@@ -78,6 +78,8 @@ public class KiroCrewHookInstallerTests {
 
     [Test]
     public async Task Install_leaves_a_script_kcap_did_not_write() {
+        if (OperatingSystem.IsWindows()) return;
+
         Tmp.CreateFile(["hooks", "kcap-spawn.sh"], "#!/bin/sh\necho mine\n");
 
         await Assert.That(KiroCrewHookInstaller.Install(Script, "/opt/kcap/bin")).IsEqualTo(KiroCrewHookInstaller.Outcome.Unowned);
