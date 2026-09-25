@@ -683,9 +683,11 @@ public sealed class ClaudeHookCommand(
             // The coordination-notices and next-work capabilities go on postBody only, never on the
             // spooled `body`: a replay renders nothing, so a spooled capability would let the server
             // mark notices delivered, or run the feed, for output no agent ever sees. Each opt-out is
-            // read from the effective profile, which also covers KCAP_URL users.
+            // read from the effective profile, which also covers KCAP_URL users. The feed's guidance
+            // names kcap-workitems tools, so without them it is neither requested nor rendered.
             var coordinationNoticesDisabled = activeProfile?.DisableCoordinationNotices is true;
-            var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true;
+            var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true
+                                           || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses);
             var postBody = body;
             if (!coordinationNoticesDisabled || !nextWorkDisabled) {
                 try {

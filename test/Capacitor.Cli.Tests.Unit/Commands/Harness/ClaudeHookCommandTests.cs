@@ -573,6 +573,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root) {
             RespondJson = """{"top_clusters":[{"text":"Run the fast suite first","category":"pattern"}],"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"t","arms_not_current":[]}}"""
         };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
@@ -595,6 +596,7 @@ public class ClaudeHookCommandTests {
     [Test, NotInParallel]
     public async Task disable_nextwork_nudge_suppresses_both_the_capability_and_the_render() {
         using var fx = new Fixture(Config.Root, profile: new Profile { DisableNextWorkNudge = true }) { RespondJson = NextWorkAck };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
@@ -612,6 +614,7 @@ public class ClaudeHookCommandTests {
     [Test, NotInParallel]
     public async Task a_failed_session_start_posts_the_next_work_capability_but_never_spools_it() {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
 
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""");
 
@@ -631,6 +634,7 @@ public class ClaudeHookCommandTests {
     [Test, NotInParallel]
     public async Task the_next_work_budget_is_the_remaining_hook_time_less_the_post_reserve() {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
 
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
             elapsed: TimeSpan.FromMilliseconds(500));
@@ -648,6 +652,7 @@ public class ClaudeHookCommandTests {
     [Test, NotInParallel]
     public async Task too_little_hook_time_withholds_the_next_work_capability_and_its_budget() {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+        fx.RegisterClaudeMcpServer("kcap-workitems");
 
         // 3500 − 1001 = 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
@@ -658,6 +663,26 @@ public class ClaudeHookCommandTests {
         await Assert.That(body["next_work"]).IsNull();
         await Assert.That(body["next_work_budget_ms"]).IsNull();
         await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
+    }
+
+    /// <summary>The same ack that renders above renders nothing, and neither field is sent, when
+    /// Claude has no kcap-workitems server to call the tools the guidance names.</summary>
+    [Test, NotInParallel]
+    public async Task without_the_workitems_mcp_server_next_work_is_neither_requested_nor_rendered() {
+        using var fx = new Fixture(Config.Root) { RespondJson = NextWorkAck };
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]).IsNull();
+        await Assert.That(body["next_work_budget_ms"]).IsNull();
+        await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(stdout).DoesNotContain("next-work-data");
+        await Assert.That(stdout).DoesNotContain("Review PR #42");
     }
 
     // ── SessionStart coordination-notices lane: capability advertise + response render ───────
@@ -1399,6 +1424,20 @@ public class ClaudeHookCommandTests {
             if (MemoryIndexDelay > TimeSpan.Zero) response = response.WithDelay(MemoryIndexDelay);
 
             _memoryServer.Given(Request.Create().WithPath("/api/memories/index").UsingGet()).RespondWith(response);
+        }
+
+        /// <summary>Installs the kcap plugin under the fixture's home with a bundled .mcp.json naming
+        /// <paramref name="serverName"/>, which is what makes that server registered for Claude.</summary>
+        public void RegisterClaudeMcpServer(string serverName) {
+            var claude      = Path.Combine(_tmpHome, ".claude");
+            var installPath = Path.Combine(claude, "plugins", "cache", "kcap", "kcap", "1.0.0");
+            Directory.CreateDirectory(installPath);
+            File.WriteAllText(Path.Combine(installPath, ".mcp.json"),
+                """{"mcpServers":{""" + System.Text.Json.JsonSerializer.Serialize(serverName) + """:{"command":"kcap","args":["mcp"]}}}""");
+            File.WriteAllText(Path.Combine(claude, "plugins", "installed_plugins.json"),
+                "{ \"plugins\": { \"kcap@kcap\": [ { \"scope\": \"user\", \"installPath\": " +
+                System.Text.Json.JsonSerializer.Serialize(installPath) + ", \"version\": \"1.0.0\" } ] } }");
+            File.WriteAllText(Path.Combine(claude, "settings.json"), "{ \"enabledPlugins\": { \"kcap@kcap\": true } }");
         }
 
         public IEnumerable<string> SpoolFiles =>
