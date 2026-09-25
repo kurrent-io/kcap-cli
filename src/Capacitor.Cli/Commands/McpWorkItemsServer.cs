@@ -273,7 +273,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             return BuildToolResult(id, NextWorkTimeoutMessage, isError: true);
 
         if ((int)status is < 200 or > 299)
-            return BuildToolResult(id, $"Error: HTTP {(int)status} — {body}", isError: true);
+            return BuildToolResult(id, $"Error: HTTP {(int)status} — {NextWorkUntrustedText.Render(body, NextWorkEmitter.FieldCap)}", isError: true);
 
         return RenderNextWorkFeed(body) is { } text
             ? BuildToolResult(id, text)
