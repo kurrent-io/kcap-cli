@@ -1711,6 +1711,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-kiro-skills"))
             await InstallKiroSkillsAsync(refreshOnly);
 
+        await InstallKiroCrewAsync(refreshOnly, installSkills: !args.Contains("--skip-kiro-skills"));
+
         await ReportStaleAgentsAsync(kiroRunningBefore, installed: !hooksFailed);
 
         // A fresh agent-clone failure is still an error exit (capture won't work without it), but the
@@ -1726,6 +1728,50 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// </summary>
     Task InstallKiroSkillsAsync(bool refreshOnly) =>
         InstallVendorSkillsAsync(env.Harnesses.Of<KiroHarness>().Paths.SkillsDir, "Kiro", refreshOnly);
+
+    /// <summary>
+    /// Wires Kiro Crew when it is present: its agents run this same <c>kiro-cli</c> under profiles
+    /// Crew regenerates, so they never carry kcap.json's hook or read <c>~/.kiro/skills</c>. A refresh
+    /// wires a Crew installed since kcap, because the Kiro opt-in covers Crew — but once kcap has wired
+    /// Crew, a refresh only keeps what is still there, so a hook or skills the user deleted stay
+    /// deleted. Never fails the install.
+    /// </summary>
+    async Task InstallKiroCrewAsync(bool refreshOnly, bool installSkills) {
+        var kiro = env.Harnesses.Of<KiroHarness>();
+        var crew = kiro.Crew;
+        if (!crew.IsPresent()) return;
+
+        var wiredBefore = KiroCrewHookInstaller.IsInstalled(crew.SpawnHookScript) || KiroCrewHookInstaller.WasRemoved(crew.SpawnHookScript);
+        var kcapDir     = env.Binaries.Resolve("kcap") is { } kcap ? Path.GetDirectoryName(kcap) : null;
+
+        var outcome = refreshOnly && KiroCrewHookInstaller.WasRemoved(crew.SpawnHookScript)
+            ? KiroCrewHookInstaller.Outcome.Unchanged
+            : KiroCrewHookInstaller.Install(crew.SpawnHookScript, kcapDir);
+
+        switch (outcome) {
+            case KiroCrewHookInstaller.Outcome.Written:
+                await env.Stdout.WriteLineAsync(
+                    $"Kiro Crew hook installed ({crew.SpawnHookScript}). Restart Kiro Crew so its agents pick it up.");
+                break;
+            case KiroCrewHookInstaller.Outcome.Unowned:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: {crew.SpawnHookScript} exists and was not written by kcap, so Kiro Crew sessions are not recorded. "
+                  + "Move it aside and re-run: kcap plugin install --kiro");
+                break;
+            case KiroCrewHookInstaller.Outcome.Failed:
+                await env.Stderr.WriteLineAsync($"Warning: could not write the Kiro Crew hook to {crew.SpawnHookScript}.");
+                break;
+        }
+
+        if (!installSkills) return;
+
+        if (!refreshOnly)
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: false);
+        else if (wiredBefore)
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: true);
+        else if (AgentsSkillsInstaller.IsInstalled(kiro.Paths.SkillsDir))
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: false);
+    }
 
     /// <summary>
     /// Registers the kcap MCP servers in Kiro's <c>~/.kiro/settings/mcp.json</c> (<c>mcpServers</c>
@@ -1773,6 +1819,27 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync($"Could not fully remove Kiro skills from {kiro.SkillsDir}.");
         }
 
+        var crew       = env.Harnesses.Of<KiroHarness>().Crew;
+        var crewFailed = false;
+
+        switch (KiroCrewHookInstaller.Remove(crew.SpawnHookScript)) {
+            case KiroCrewHookInstaller.Outcome.Removed:
+                await env.Stdout.WriteLineAsync($"Kiro Crew hook removed ({crew.SpawnHookScript}).");
+                break;
+            case KiroCrewHookInstaller.Outcome.Failed:
+                crewFailed = true;
+                await env.Stderr.WriteLineAsync($"Could not remove the Kiro Crew hook at {crew.SpawnHookScript}.");
+                break;
+        }
+
+        var crewSkills = AgentsSkillsInstaller.Remove(crew.SkillsDir);
+        if (crewSkills.RemovedAny) {
+            await env.Stdout.WriteLineAsync($"Kiro Crew skills removed ({crew.SkillsDir}).");
+        } else if (crewSkills.HadErrors) {
+            crewFailed = true;
+            await env.Stderr.WriteLineAsync($"Could not fully remove Kiro Crew skills from {crew.SkillsDir}.");
+        }
+
         try {
             // Restore the default agent kcap replaced (recorded at install time).
             // If kcap is currently the default and the restore write FAILS, abort
@@ -1800,7 +1867,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                     : "Nothing to remove — Kiro agent hooks file not found."
             );
 
-            return mcpFailed || skills.HadErrors ? 1 : 0;
+            return mcpFailed || skills.HadErrors || crewFailed ? 1 : 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove Kiro hooks at {agentPath}: {ex.Message}");
 
