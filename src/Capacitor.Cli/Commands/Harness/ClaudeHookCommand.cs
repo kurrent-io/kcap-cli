@@ -675,17 +675,10 @@ public sealed class ClaudeHookCommand(
                 return 0;
             }
 
-            // Advertise the coordination-notices capability so the server MAY return work-overlap
-            // notices to render below (next to the memory index). Injected into a SEPARATE postBody,
-            // never `body`: `body` is what the transient-failure and ordering-guard paths spool, and a
-            // replay is a catch-up, not a live render — a spooled capability would let the server mark
-            // notices delivered that the replay can never inject (they stay in the bell/Slack and reach
-            // the next LIVE session-start instead). Live-only by construction: `kcap import` posts
-            // /hooks/session-start/{vendor} with origin=historical and never reaches here. Suppressed by
-            // the disable_coordination_notices opt-out, read from the EFFECTIVE profile (honoured for
-            // KCAP_URL users too, unlike the memory read above). Fail-open.
-            // The next-work capability follows the same live-only rule: a replay must not make the
-            // server run the feed for rows nobody will render.
+            // The coordination-notices and next-work capabilities go on postBody only, never on the
+            // spooled `body`: a replay renders nothing, so a spooled capability would let the server
+            // mark notices delivered, or run the feed, for output no agent ever sees. Each opt-out is
+            // read from the effective profile, which also covers KCAP_URL users.
             var coordinationNoticesDisabled = activeProfile?.DisableCoordinationNotices is true;
             var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true;
             var postBody = body;
@@ -780,11 +773,8 @@ public sealed class ClaudeHookCommand(
 
             if (responseNode is not null) {
                 try {
-                    // The EFFECTIVE profile (the `activeProfile` resolved above), not
-                    // profiles.Resolution.Profile, which is null whenever --server-url or KCAP_URL
-                    // wins — so the resolution-only read silently ignored disable_session_guidelines
-                    // for every KCAP_URL user (the same defect the memory adapters already fixed).
-                    // Scoped to guidelines here; the memory read above keeps its existing behaviour.
+                    // The effective profile, not profiles.Resolution.Profile: the latter is null
+                    // whenever --server-url or KCAP_URL wins, which would ignore the opt-out.
                     var disabled        = activeProfile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
                     var nextWorkFragment = NextWorkEmitter.BuildFragment(responseNode, nextWorkDisabled);

@@ -10,10 +10,11 @@ description: >-
   user's next-work ledger, and whenever the user asks what to work on next or
   you are about to propose new work, to read the ranked next-work feed first.
   Use the `kcap mcp workitems` MCP tools to DECLARE the breakdown, the
-  relations and the loose ends, and to read the feed. Do NOT declare STRUCTURE for ordinary "attach this session to issue X"
-  correlation alone (a single `declare_work_item` call, no structure), or for a
-  single indivisible task with no parts and no dependencies — a loose end is
-  worth declaring in either case.
+  relations and the loose ends, and to read the feed. Do NOT declare STRUCTURE
+  for ordinary "attach this session to issue X" correlation alone (a single
+  `declare_work_item` call, no structure), or for a single indivisible task
+  with no parts and no dependencies — a loose end is worth declaring in either
+  case.
 ---
 
 # Work items — declaring breakdown and dependencies
@@ -81,11 +82,11 @@ two — that records structure that isn't there. Merge instead:
 
 A loose end is one concrete piece of unfinished work — a missing test, a TODO you left in
 the code, a follow-up the user asked for. Declare each with `declare_loose_end` (`text`,
-one plain sentence) at the moment you decide to defer it, not in a batch at the end. The server keys it on the session, the owner and the normalized text,
-so declaring the same end twice is a no-op (`created: false`). It refuses text shorter than
-12 or longer than 500 characters and "none"-style phrases — do not declare that there is
-nothing left. Loose ends are the user's; they are never converted into work items by this
-tool.
+one plain sentence) at the moment you decide to defer it, not in a batch at the end. The
+server keys it on the session, the owner and the normalized text, so declaring the same
+end twice is a no-op (`created: false`). It refuses text shorter than 12 or longer than
+500 characters and "none"-style phrases — do not declare that there is nothing left.
+Loose ends are the user's; they are never converted into work items by this tool.
 
 ## What to work on next
 
