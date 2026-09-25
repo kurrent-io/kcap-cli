@@ -56,9 +56,11 @@
                     <TabStripItem Content="Comments" />
                 </TabStrip>
             </Border>
-            <!-- Fixed height: the Threads-only toggle is taller than the pills and would shift the content below. -->
-            <Grid x:Name="ReviewTabsRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="0,10,0,0" Height="30" IsVisible="{Binding IsReviewSection}">
-                <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}"
+            <!-- Fixed height: the Threads-only toggle is taller than the pills and would shift the content below.
+                 The rule and the padding under it keep a diff hunk from reading as part of the bar. -->
+            <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1" Padding="0,10,0,8" IsVisible="{Binding IsReviewSection}">
+            <Grid x:Name="ReviewTabsRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" Height="30">
+                <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}" VerticalAlignment="Center"
                           IsEnabled="{Binding CanReveal}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}"
                           AutomationProperties.Name="Review sections">
                     <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
@@ -68,11 +70,12 @@
                     <TabStripItem Content="Replies" IsVisible="{Binding IsThreadComments}" />
                 </TabStrip>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding IsThreads}">
-                    <TextBlock Text="Show resolved" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding ShowResolvedLabel}" FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                     <ToggleSwitch x:Name="ShowResolvedToggle" Classes="kcapSwitch" IsChecked="{Binding IncludeResolved, Mode=TwoWay}"
                                   IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Show resolved threads" />
                 </StackPanel>
             </Grid>
+            </Border>
         </StackPanel>
         <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" BringIntoViewOnFocusChange="False">
             <StackPanel Margin="24,16,24,24" Spacing="10">
