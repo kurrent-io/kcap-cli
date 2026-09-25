@@ -3,15 +3,16 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class McpWorkItemsNextWorkTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    McpWorkItemsServer Server() =>
+    McpWorkItemsServer Server(TimeProvider? time = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup,
-            new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
+            new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory), time ?? TimeProvider.System);
 
     const string Feed = """
         {
@@ -286,6 +287,53 @@ public class McpWorkItemsNextWorkTests {
 
         await Assert.That(System.Text.Encoding.UTF8.GetByteCount(body)).IsEqualTo(McpWorkItemsServer.NextWorkMaxResponseBytes);
         await Assert.That(Result(response).Text).Contains("#1 [1/blocks_others] Review PR #42");
+    }
+
+    sealed class StallingBodyHandler : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) });
+    }
+
+    /// <summary>A body whose headers have arrived but whose bytes never do.</summary>
+    sealed class StallingStream : Stream {
+        public override bool CanRead  => true;
+        public override bool CanSeek  => false;
+        public override bool CanWrite => false;
+        public override long Length   => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) {
+            await Task.Delay(Timeout.Infinite, ct);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+
+        public override int  Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Test]
+    public async Task Dispatch_gives_up_on_a_body_that_never_finishes_at_the_deadline() {
+        var time = new FakeTimeProvider();
+        using var client = new HttpClient(new StallingBodyHandler());
+        var request = new JsonObject {
+            ["params"] = new JsonObject { ["name"] = "get_next_work", ["arguments"] = new JsonObject() }
+        };
+
+        var call = Server(time).HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", () => ValueTask.FromResult<string?>(null));
+
+        time.Advance(McpWorkItemsServer.NextWorkRequestDeadline - TimeSpan.FromMilliseconds(1));
+        await Assert.That(call.IsCompleted).IsFalse();
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        var response = await call.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(Result(response)).IsEqualTo((McpWorkItemsServer.NextWorkDeadlineMessage, true));
     }
 
     [Test]

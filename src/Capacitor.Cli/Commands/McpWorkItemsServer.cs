@@ -236,6 +236,13 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// <summary>Twenty rows come to a few KiB; anything past this is not a feed.</summary>
     internal const int NextWorkMaxResponseBytes = 256 * 1024;
 
+    internal const string NextWorkDeadlineMessage = "Error: next-work did not answer in time; try again in a moment.";
+
+    /// <summary>HttpClient's default timeout, the one every other tool here runs under. Applied to
+    /// the headers and the body together: a headers-read request is otherwise unbounded while a
+    /// body trickles in, and the stdio loop serves one call at a time.</summary>
+    internal static readonly TimeSpan NextWorkRequestDeadline = TimeSpan.FromSeconds(100);
+
     const int EvidenceCap = 200;
 
     async Task<string> HandleGetNextWorkAsync(
@@ -245,17 +252,20 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             var repoHash     = explicitRepo ?? await cwdRepoHash();
             var sessionId    = McpSessionId.TryResolveWithin(null, HarnessRequesterContext.Resolve(Environment.GetEnvironmentVariable, Directory.Exists).SessionId);
 
+            using var deadline     = new CancellationTokenSource(NextWorkRequestDeadline, time);
             using var httpResponse = await client.GetAsync(
-                BuildNextWorkUrl(baseUrl, arguments, repoHash, sessionId), HttpCompletionOption.ResponseHeadersRead);
+                BuildNextWorkUrl(baseUrl, arguments, repoHash, sessionId), HttpCompletionOption.ResponseHeadersRead, deadline.Token);
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
-            var bytes = await BoundedHttpContent.ReadAsync(httpResponse.Content, NextWorkMaxResponseBytes, CancellationToken.None);
+            var bytes = await BoundedHttpContent.ReadAsync(httpResponse.Content, NextWorkMaxResponseBytes, deadline.Token);
             if (bytes is null) return BuildToolResult(id, NextWorkTooLargeMessage, isError: true);
 
             return RenderNextWorkResult(id, httpResponse.StatusCode, Encoding.UTF8.GetString(bytes));
+        } catch (OperationCanceledException) {
+            return BuildToolResult(id, NextWorkDeadlineMessage, isError: true);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
