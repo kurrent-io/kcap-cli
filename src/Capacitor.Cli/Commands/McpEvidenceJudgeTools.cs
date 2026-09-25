@@ -112,7 +112,7 @@ sealed class McpEvidenceJudgeTools : IDisposable {
             new("list_authorizations", "Permission requests and their outcomes.",
                 Schema(new() { ["source"] = A("Source ids."), ["outcome"] = A("Outcomes.") }), McpToolAnnotations.Read),
             new("open_page", "Re-open a page you were shown by its handle; with next true, fetch its continuation under a new handle.",
-                Schema(new() { ["page"] = S("A page handle such as p3 or o1."), ["next"] = new("boolean", "Fetch the page's continuation.") }, "page"), McpToolAnnotations.Read)
+                Schema(new() { ["page"] = S("A page handle from an earlier tool result, such as p3."), ["next"] = new("boolean", "Fetch the page's continuation.") }, "page"), McpToolAnnotations.Read)
         ];
     }
 
