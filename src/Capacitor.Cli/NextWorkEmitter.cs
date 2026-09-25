@@ -37,6 +37,11 @@ static partial class NextWorkEmitter {
     /// <summary>The feed's page one: the SessionStart block never shows more rows than this.</summary>
     internal const int PageOneSlots = 3;
 
+    /// <summary>The feed has eight arms; room for all of them and no more.</summary>
+    internal const int MaxArmEntries = 10;
+
+    internal const int FreshnessLineCap = 1000;
+
     static readonly HashSet<string> ArmStates = ["current", "unknown", "catching_up", "failed", "omitted"];
 
     [GeneratedRegex(@"^[A-Za-z0-9_]{1,64}\z")]
@@ -127,11 +132,18 @@ static partial class NextWorkEmitter {
             .Where(a => a.Arm is not null && ArmName().IsMatch(a.Arm)
                      && a.State is not null && ArmStates.Contains(a.State)
                      && (a.Code is null || IsCode(a.Code)))
+            .DistinctBy(a => a.Arm, StringComparer.Ordinal)
+            .Take(MaxArmEntries)
             .Select(a => a.Code is null ? $"{a.Arm}: {a.State}" : $"{a.Arm}: {a.State} ({a.Code})")
             .ToList();
-        if (arms.Count > 0) parts.Add($"not current: {string.Join(", ", arms)}");
 
-        return parts.Count == 0 ? null : $"Freshness: {string.Join("; ", parts)}.";
+        while (true) {
+            var all  = arms.Count > 0 ? parts.Append($"not current: {string.Join(", ", arms)}") : parts;
+            var line = $"Freshness: {string.Join("; ", all)}.";
+            if (line.Length <= FreshnessLineCap || arms.Count == 0)
+                return parts.Count == 0 && arms.Count == 0 ? null : line;
+            arms.RemoveAt(arms.Count - 1);
+        }
     }
 
     /// <summary>The ack's string form of one arm, <c>"arm: state"</c> or <c>"arm: state (code)"</c>;

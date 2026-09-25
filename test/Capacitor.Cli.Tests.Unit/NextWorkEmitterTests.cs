@@ -144,6 +144,45 @@ public class NextWorkEmitterTests {
         await Assert.That(fragment).DoesNotContain("Row 5");
     }
 
+    static string LastLine(JsonArray arms) {
+        var ack = JsonNode.Parse(Ack)!;
+        ack["next_work"]!.AsObject().Remove("tracker_state_as_of");
+        ack["next_work"]!["arms_not_current"] = arms;
+        return NextWorkEmitter.BuildFragment(ack, disabled: false)!.Split('\n')[^1];
+    }
+
+    [Test]
+    public async Task Fifty_valid_arms_render_only_the_first_ten() {
+        var arms = new JsonArray();
+        for (var i = 0; i < 50; i++) arms.Add((JsonNode?)$"arm_{i}: failed (code_{i})");
+
+        var line = LastLine(arms);
+
+        await Assert.That(Count(line, ": failed (")).IsEqualTo(NextWorkEmitter.MaxArmEntries);
+        await Assert.That(line).StartsWith("Freshness: not current: arm_0: failed (code_0), arm_1: failed (code_1)");
+        await Assert.That(line).EndsWith("arm_9: failed (code_9).");
+    }
+
+    [Test]
+    public async Task A_repeated_arm_renders_once() {
+        var line = LastLine(new JsonArray((JsonNode?)"backlog: failed (a)", (JsonNode?)"backlog: failed (a)", (JsonNode?)"backlog: unknown"));
+
+        await Assert.That(line).IsEqualTo("Freshness: not current: backlog: failed (a).");
+    }
+
+    [Test]
+    public async Task Long_arm_entries_are_dropped_from_the_end_to_fit_the_line_cap() {
+        var arms = new JsonArray();
+        for (var i = 0; i < 10; i++) arms.Add((JsonNode?)$"{i}{new string('a', 63)}: catching_up ({i}{new string('c', 63)})");
+
+        var line = LastLine(arms);
+
+        await Assert.That(line.Length).IsLessThanOrEqualTo(NextWorkEmitter.FreshnessLineCap);
+        await Assert.That(line).Contains($"0{new string('a', 63)}: catching_up");
+        await Assert.That(line).DoesNotContain($"9{new string('a', 63)}");
+        await Assert.That(line).EndsWith(").");
+    }
+
     [Test]
     public async Task Nothing_when_the_ack_has_no_next_work() {
         await Assert.That(NextWorkEmitter.BuildFragment(JsonNode.Parse("""{"top_clusters":[]}"""), disabled: false)).IsNull();
