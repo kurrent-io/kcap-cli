@@ -43,7 +43,7 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(rt.AcpSessionId).IsEqualTo(SessionId);
+        await Assert.That(rt.AcpSessionId).IsEqualTo(PiSessionId);
         await Assert.That(rt.ResolvedModel).IsEqualTo(StateModelId);
         await Assert.That(rt.Cwd).IsEqualTo("/w");
 
@@ -63,7 +63,7 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(rt.AcpSessionId).IsEqualTo(SessionId);
+        await Assert.That(rt.AcpSessionId).IsEqualTo(PiSessionId);
         await Assert.That(rt.ResolvedModel).IsNull();
     }
 
