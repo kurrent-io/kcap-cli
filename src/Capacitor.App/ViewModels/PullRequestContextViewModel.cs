@@ -225,7 +225,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _readerVisible = visible;
         if (!visible && _grace) _graceSection = null;
         Notify();
-        if (visible && CanReveal && _section != "overview" && CurrentSection is null) RequestPage(null);
+        if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
     }
     void Select(PullRequestChoice? choice, bool explicitSelection = false) {
         if (_disposed || choice?.Subject == _selected?.Subject) return;
@@ -253,8 +253,15 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _openReader();
         _readerVisible = true;
         Notify();
-        if (section != "overview" && CurrentSection is null) RequestPage(null);
+        if (section != "overview") LoadOrRefreshSection();
     }
+    /// A tab the poll skipped while it was hidden comes back stale; the summary stops trusting rows
+    /// older than 30s, so rows kept past that would disagree with it.
+    void LoadOrRefreshSection() {
+        if (CurrentSection is not { } state) RequestPage(null);
+        else if (state.Completed is not { } at || _time.GetUtcNow().UtcDateTime - at >= RowsFreshFor) RequestPage(null, refresh: true);
+    }
+    internal static readonly TimeSpan RowsFreshFor = TimeSpan.FromSeconds(30);
     void Tick() {
         if (_disposed || !_foreground) return;
         if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) EnterGrace();
