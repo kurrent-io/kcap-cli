@@ -4,7 +4,7 @@ using Microsoft.Extensions.Time.Testing;
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
 /// <summary>Batches of at most 64, work_budget refs resent, a 404/409 or an answer under another scope version run-fatal
-/// with nothing certified, and refs the shared 90 s budget leaves dropped and counted.</summary>
+/// with nothing certified, and refs the shared 90 s budget leaves, or a successful answer omits, dropped and counted.</summary>
 public class EvidenceCitationClientTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
@@ -76,5 +76,30 @@ public class EvidenceCitationClientTests : IDisposable {
         await Assert.That(outcome.ScopeLost).IsFalse();
         await Assert.That(outcome.Certified).IsEmpty();
         await Assert.That(outcome.Dropped).IsEqualTo(3);
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    public async Task Refs_a_successful_answer_omits_are_dropped_and_counted(int answered) {
+        var refs = Enumerable.Range(0, 3).Select(i => $"{EvidenceServerStub.RootSource}@{i}").ToList();
+        _stub.Route("POST", "evidence-citations", 200, $$"""{"scope_version":"v1","citations":[{{Certified(Enumerable.Range(0, answered))}}]}""");
+
+        var outcome = await Client().CertifyAsync("tok", "v1", refs, CancellationToken.None);
+
+        await Assert.That(outcome.ScopeLost).IsFalse();
+        await Assert.That(outcome.Certified.Count).IsEqualTo(answered);
+        await Assert.That(outcome.Dropped).IsEqualTo(refs.Count - answered);
+    }
+
+    [Test]
+    public async Task An_answer_for_a_ref_not_in_the_request_certifies_nothing() {
+        var asked = $"{EvidenceServerStub.RootSource}@0";
+        _stub.Route("POST", "evidence-citations", 200, $$"""{"scope_version":"v1","citations":[{{Certified([5])}}]}""");
+
+        var outcome = await Client().CertifyAsync("tok", "v1", [asked], CancellationToken.None);
+
+        await Assert.That(outcome.Certified).IsEmpty();
+        await Assert.That(outcome.Dropped).IsEqualTo(1);
     }
 }
