@@ -59,4 +59,27 @@ public class EvalContractValidateTests {
         await Assert.That(a.Validate()).IsNotNull();
         await Assert.That((a with { EvidenceCoverage = V2(EvalStopReasons.TimeBudget) }).Validate()).IsNull();
     }
+
+    [Test]
+    public async Task Strategy_stamps_go_together_in_their_form_and_every_obligation_rule_is_the_servers() {
+        await Assert.That((Assessed() with { Strategy = "completion", StrategyVersion = "completion-v1" }).Validate()).IsNull();
+        await Assert.That((Assessed() with { Strategy = "completion" }).Validate()).IsNotNull();
+        await Assert.That((Assessed() with { Strategy = "Completion", StrategyVersion = "completion-v1" }).Validate()).IsNotNull();
+
+        var digest = new string('d', 64);
+        var ok = new EvalObligationResult {
+            Id = Capacitor.Cli.Core.Eval.Evidence.EvalObligationRules.DeriveId("AgentSession-r@1", "Ship it"), Title = "Ship it", Origin = "plan", Status = "verified",
+            Anchor = new() { Ref = "AgentSession-r@1", Digest = digest }, Citations = [new() { Ref = "AgentSession-r@2", Digest = digest }]
+        };
+        await Assert.That((Assessed() with { Obligations = [ok] }).Validate()).IsNull();
+        await Assert.That((Assessed() with { Obligations = [] }).Validate()).IsNotNull();
+        await Assert.That((Assessed() with { Obligations = [ok, ok] }).Validate()).IsNotNull();
+        await Assert.That((Assessed() with { Obligations = [ok with { Id = "ob:0000000000000000" }] }).Validate()).IsNotNull();
+        await Assert.That((Assessed() with { Obligations = [ok with { Citations = [] }] }).Validate()).IsNotNull();
+        await Assert.That((Assessed() with { Obligations = [ok with { Citations = [ok.Anchor] }] }).Validate()).IsNotNull();
+        await Assert.That((Assessed() with { Obligations = [ok with { Anchor = ok.Anchor with { Digest = null } }] }).Validate()).IsNotNull();
+        await Assert.That((Assessed() with { Obligations = [ok with { Status = "unverified", Citations = [] }] }).Validate()).IsNotNull();
+        var notApplicable = new EvalQuestionAssessment { Category = "c", QuestionId = "q", Outcome = EvalOutcomes.NotApplicable, Finding = "f", Obligations = [ok] };
+        await Assert.That(notApplicable.Validate()).IsNotNull();
+    }
 }

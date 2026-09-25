@@ -519,4 +519,126 @@ public class EvalEvidenceRouteTests : IDisposable {
           + "mcp__kcap-judge__get_session_summary,mcp__kcap-judge__search_session,mcp__kcap-judge__get_tool_result");
         await Assert.That(After(tools, "--mcp-config").Contains("--run")).IsFalse();
     }
+
+    static string CompletionQuestion(string id, bool marked) =>
+        $$"""{"category":"plan_adherence","id":"{{id}}","title":"t","question_text":"Was everything requested done?","prompt":"P {QUESTION_ID}\n{TRACE_JSON}","prompt_version":"3","needs_tools":true,"strategy":"completion","strategy_version":"completion-v1","reports_obligations":{{(marked ? "true" : "false")}}}""";
+
+    // One-shot is out of reach for any real session, so the retrieval arm runs; the orientation and the first view together
+    // deliver both events, so a coverage record is mechanically complete.
+    const string SmallAd = """{"max_tool_calls":48,"judge_byte_budget_bytes":600000,"page_budget_bytes":65536,"one_shot_limit_chars":100,"retrospective_evidence_bytes":200000,"coverage_policy_version":"coverage-v2"}""";
+
+    void ServeCompletion(params string[] catalogQuestions) {
+        _stub.Catalog(SmallAd, "[]", "[" + string.Join(",", catalogQuestions.DefaultIfEmpty(CompletionQuestion("completed_items", marked: true))) + "]");
+        ServeScope(cutoff: 1);
+        ServeEvents("first", "second");
+        _stub.Route("GET", "evidence-first-view", 200,
+            "{\"state\":\"built\",\"requested_strategy\":\"completion\",\"strategy\":\"completion\",\"strategy_version\":\"completion-v1\",\"guidance\":\"g\",\"budget_bytes\":196608,"
+          + "\"sections\":[{\"purpose\":\"closing_events\",\"kind\":\"events\",\"operation\":\"ReadEventsAsync\",\"budget_bytes\":65536,\"events\":"
+          + EvidenceServerStub.EventsPage(Root, [EvidenceServerStub.EventEntry(Root, 0, "first"), EvidenceServerStub.EventEntry(Root, 1, "second")]) + "}],\"omitted_sections\":[],\"limitations\":[]}",
+            new Dictionary<string, string> { ["token"] = "tok", ["strategy"] = "completion", ["budget_bytes"] = "196608" });
+        _stub.Route("POST", "evidence-citations", 200,
+            $$"""{"scope_version":"v1","citations":[{"ref":"{{Root}}@0","state":"certified","digest":"{{Digest}}"},{"ref":"{{Root}}@1","state":"certified","digest":"{{Digest}}"}]}""");
+    }
+
+    static string CompletionVerdict(string obligations) =>
+        $$"""{"category":"plan_adherence","question_id":"completed_items","outcome":"assessed","score":4,"verdict":"pass","finding":"ok","evidence":null,"recommendation":null,"retain_fact":null,"citations":[],"obligations":{{obligations}} }""";
+
+    [Test]
+    public async Task A_reporting_completion_question_persists_certified_obligations_with_its_strategy_stamps() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c20");
+        ServeCompletion();
+        using var claude = Claude(dir, CompletionVerdict("""[{"title":"Write the tests","origin":"plan","status":"verified","anchor":"o3.1","citations":["o3.2"]}]"""));
+
+        await Run(claude, ["completed_items"], new RecordingEvalObserver());
+
+        var q = Payload().GetProperty("categories")[0].GetProperty("questions")[0];
+        await Assert.That(q.GetProperty("strategy").GetString()).IsEqualTo("completion");
+        await Assert.That(q.GetProperty("strategy_version").GetString()).IsEqualTo("completion-v1");
+        var obligation = q.GetProperty("obligations")[0];
+        await Assert.That(obligation.GetProperty("id").GetString()).IsEqualTo(EvalObligationRules.DeriveId($"{Root}@0", "Write the tests"));
+        await Assert.That(obligation.GetProperty("anchor").GetProperty("ref").GetString()).IsEqualTo($"{Root}@0");
+        await Assert.That(obligation.GetProperty("status").GetString()).IsEqualTo("verified");
+        await Assert.That(obligation.GetProperty("citations")[0].GetProperty("ref").GetString()).IsEqualTo($"{Root}@1");
+        await Assert.That(q.GetProperty("evidence_coverage").GetProperty("citations").GetArrayLength()).IsEqualTo(2);
+        await Assert.That(q.TryGetProperty("obligations_not_reported", out _)).IsFalse();
+        var prompt = Prompt(dir, 0);
+        await Assert.That(prompt.EndsWith("\n" + EvalObligationContract.ReporterMarker, StringComparison.Ordinal)).IsTrue();
+        await Assert.That(prompt.Contains("First view (completion):")).IsTrue();
+        await Assert.That(After(ArgsOf(dir, 0), "--json-schema")).IsEqualTo(EvalService.EvidenceReportingVerdictJsonSchema);
+        await Assert.That(Prompt(dir, 1).Contains("Cited evidence (2):")).IsTrue();
+    }
+
+    [Test]
+    public async Task An_assessed_checklist_with_no_decisive_entry_and_complete_coverage_persists_as_insufficient_evidence() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c21");
+        ServeCompletion();
+        using var claude = Claude(dir, CompletionVerdict("""[{"title":"Write the tests","origin":"plan","status":"unverified","anchor":"o3.1","citations":[]}]"""));
+
+        await Run(claude, ["completed_items"], new RecordingEvalObserver());
+
+        var q = Payload().GetProperty("categories")[0].GetProperty("questions")[0];
+        await Assert.That(q.GetProperty("outcome").GetString()).IsEqualTo("insufficient_evidence");
+        await Assert.That(q.TryGetProperty("score", out var score) && score.ValueKind != JsonValueKind.Null).IsFalse();
+        await Assert.That(q.TryGetProperty("evidence_coverage", out _)).IsFalse();
+        await Assert.That(q.GetProperty("obligations")[0].GetProperty("status").GetString()).IsEqualTo("unverified");
+    }
+
+    [Test]
+    [Arguments("unparseable")]
+    [Arguments("uncertified")]
+    public async Task A_lost_checklist_is_named_and_the_verdict_kept(string loss) {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c22-" + loss);
+        ServeCompletion();
+        var obligations = loss == "unparseable"
+            ? """[{"title":"Write the tests","origin":"wish","status":"verified","anchor":"o3.1","citations":["o3.2"]}]"""
+            : """[{"title":"Write the tests","origin":"plan","status":"verified","anchor":"p9.9","citations":["o3.2"]}]""";
+        using var claude = Claude(dir, CompletionVerdict(obligations));
+
+        await Run(claude, ["completed_items"], new RecordingEvalObserver());
+
+        var q = Payload().GetProperty("categories")[0].GetProperty("questions")[0];
+        await Assert.That(q.GetProperty("outcome").GetString()).IsEqualTo("assessed");
+        await Assert.That(q.GetProperty("obligations_not_reported").GetString()).IsEqualTo(loss);
+        await Assert.That(q.TryGetProperty("obligations", out _)).IsFalse();
+        await Assert.That(q.GetProperty("strategy").GetString()).IsEqualTo("completion");
+    }
+
+    [Test]
+    public async Task Two_completion_questions_share_one_first_view_and_only_the_marked_one_reports() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c23");
+        ServeCompletion(CompletionQuestion("followed_plan", marked: false), CompletionQuestion("completed_items", marked: true));
+        using var claude = Claude(dir, CompletionVerdict("""[{"title":"Write the tests","origin":"plan","status":"verified","anchor":"o3.1","citations":["o3.2"]}]"""));
+
+        await Run(claude, ["followed_plan", "completed_items"], new RecordingEvalObserver());
+
+        await Assert.That(_stub.Requests("evidence-first-view").Count).IsEqualTo(1);
+        await Assert.That(Prompt(dir, 0).Contains(EvalObligationContract.ReporterMarker)).IsFalse();
+        await Assert.That(After(ArgsOf(dir, 0), "--json-schema")).IsEqualTo(EvalService.EvidenceVerdictJsonSchema);
+        await Assert.That(Prompt(dir, 1).Contains(EvalObligationContract.ReporterMarker)).IsTrue();
+        var questions = Payload().GetProperty("categories")[0].GetProperty("questions").EnumerateArray().ToDictionary(q => q.GetProperty("question_id").GetString()!);
+        await Assert.That(questions["followed_plan"].TryGetProperty("obligations", out _)).IsFalse();
+        await Assert.That(questions["followed_plan"].GetProperty("strategy").GetString()).IsEqualTo("completion");
+        await Assert.That(questions["completed_items"].GetProperty("obligations").GetArrayLength()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_first_view_refused_as_moved_ends_the_run_with_nothing_posted() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var dir = Dir("c24");
+        ServeCompletion();
+        _stub.Route("GET", "evidence-first-view", 409, """{"code":"scope_moved","current_version":"v2"}""", priority: 1);
+        using var claude = Claude(dir, CompletionVerdict("null"));
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["completed_items"], observer);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(observer.Failures).Contains(EvalService.EvidenceScopeMovedReason);
+        await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
+        await Assert.That(File.Exists(Path.Combine(dir, "prompt-0.txt"))).IsFalse();
+    }
 }

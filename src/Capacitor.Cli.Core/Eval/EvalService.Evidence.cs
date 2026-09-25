@@ -26,6 +26,10 @@ public static partial class EvalService {
         {"type":"object","properties":{"category":{"type":"string"},"question_id":{"type":"string"},"outcome":{"type":"string","enum":["assessed","insufficient_evidence","not_applicable"]},"score":{"type":["integer","null"],"minimum":1,"maximum":5},"verdict":{"type":["string","null"],"enum":["pass","warn","fail",null]},"finding":{"type":"string","minLength":1},"evidence":{"type":["string","null"]},"recommendation":{"type":["string","null"]},"retain_fact":{"type":["string","object","null"],"properties":{"fact":{"type":"string"},"applies_to_vendors":{"type":"array","items":{"type":"string"},"maxItems":16},"applies_to_session_kinds":{"type":"array","items":{"type":"string"},"maxItems":16}},"required":["fact"],"additionalProperties":false},"citations":{"type":"array","items":{"type":"string"},"maxItems":200}},"required":["category","question_id","outcome","score","verdict","finding","evidence","recommendation","retain_fact"],"additionalProperties":false}
         """;
 
+    // The reporting question's contract: the same schema with the optional obligations array beside citations.
+    internal static readonly string EvidenceReportingVerdictJsonSchema =
+        EvidenceVerdictJsonSchema.Replace(",\"citations\":", ",\"obligations\":" + EvalObligationContract.ObligationsJsonSchema + ",\"citations\":", StringComparison.Ordinal);
+
     static async Task<SessionEvalCompletedPayloadV4?> RunEvidenceAsync(
             string baseUrl, HttpClient httpClient, Profile? profile, HarnessRegistry harnesses, string sessionId, IReadOnlyList<EvalQuestionDto> questions,
             EvalCatalogDto catalog, string model, IEvalObserver observer, TimeProvider time, CancellationToken ct, string? evalRunId) {
@@ -157,6 +161,8 @@ public static partial class EvalService {
         var started    = time.GetTimestamp();
         void Log(string msg) { diagnostics.Add(msg); observer.OnInfo($"  {msg}"); }
 
+        EvidenceFirstView? view = null;
+        var reporting = false;
         ClaudeCliOutcome outcome;
         if (route == EvidenceRoute.OneShot) {
             WriteOneShotLedger(setup, index, question, state, time);
@@ -164,16 +170,26 @@ public static partial class EvalService {
                 BuildOneShotPrompt(question, state.RootSessionId, setup.EvalRunId, setup.Trace.TraceJson), setup.OneShotTimeout, time, Log, setup.Profile, setup.Harnesses,
                 model: JudgeModelFor(model), maxTurns: JudgeMaxTurns, promptViaStdin: true, jsonSchema: EvidenceVerdictJsonSchema, ct: ct);
         } else {
+            if (question.Strategy is { Length: > 0 } strategy && !setup.FirstViews.TryGetValue(strategy, out view)) {
+                var (built, failedView) = await EvidenceFirstViewReader.ReadAsync(setup.Reader, state.Token, strategy, setup.Orientation.Pages.Count, ct);
+                if (failedView is not null) return EvidenceQuestionOutcome.Moved;
+                setup.FirstViews[strategy] = view = built;
+            }
+            // As on the server's own route, only a question that received its first view reports obligations.
+            reporting = view is not null && question.Id == EvalStrategiesMirror.ReportingQuestion(setup.Questions);
+            IReadOnlyList<JudgeLedgerPage> seeded = view is null ? setup.Orientation.Pages : [.. setup.Orientation.Pages, .. view.Pages];
+
             var soft = time.GetUtcNow() + setup.RetrievalTimeout * EvidenceBudgets.SoftDeadlineFraction;
             using (var writer = JudgeLedgerWriter.Create(ledgerPath, new JudgeLedgerHeader(setup.EvalRunId, question.Id, state.ScopeVersion, setup.Budgets, soft, time.GetUtcNow())))
-                foreach (var page in setup.Orientation.Pages) writer.Append(page);
+                foreach (var page in seeded) writer.Append(page);
             setup.Context.WriteRunFile(index, new EvidenceRunFile(setup.EvalRunId, question.Id, state.RootSessionId, state.ScopeVersion, state.Token, state.Deadline,
-                [.. state.Sources.Select(EvidenceRunSource.From)], setup.Budgets, soft, ledgerPath, setup.Orientation.Pages));
+                [.. state.Sources.Select(EvidenceRunSource.From)], setup.Budgets, soft, ledgerPath, seeded));
             try {
-                outcome = await ClaudeCliRunner.RunDetailedAsync(
-                    BuildEvidenceQuestionPrompt(question, state.RootSessionId, setup.EvalRunId, setup.Orientation.Text, setup.Advertisement.MaxToolCalls),
+                var prompt = BuildEvidenceQuestionPrompt(question, state.RootSessionId, setup.EvalRunId, setup.Orientation.Text + view?.Text, setup.Advertisement.MaxToolCalls)
+                           + (reporting ? "\n" + EvalObligationContract.ReporterMarker : "");
+                outcome = await ClaudeCliRunner.RunDetailedAsync(prompt,
                     setup.RetrievalTimeout, time, Log, setup.Profile, setup.Harnesses,
-                    model: JudgeModelFor(model), maxTurns: maxTurns, promptViaStdin: true, jsonSchema: EvidenceVerdictJsonSchema,
+                    model: JudgeModelFor(model), maxTurns: maxTurns, promptViaStdin: true, jsonSchema: reporting ? EvidenceReportingVerdictJsonSchema : EvidenceVerdictJsonSchema,
                     mcpConfigJson: BuildEvidenceMcpConfig(ResolveJudgeCommandPath(), setup.SessionId, setup.Context.RunFilePath(index), baseUrl),
                     allowedTools: EvidenceMcpAllowedTools, maxBudgetUsd: ToolsPerQuestionMaxBudgetUsd, ct: ct);
             } finally {
@@ -196,6 +212,7 @@ public static partial class EvalService {
         var raw        = outcome.Result?.Result;
         var assessment = raw is null ? null : ParseVerdict(raw, question, msg => observer.OnInfo($"  {question.Category}/{question.Id}: {msg}"));
         var tokens     = raw is null ? [] : ParseCitationTokens(raw);
+        var synthesized = false;
         if (assessment is null) {
             if (budgetStop is null)
                 return Failed(Failure(EvalFailureCodes.VerdictParseFailed), raw is null ? "claude verdict_parse_failed" : $"verdict JSON could not be parsed; raw response: {Truncate(raw, 500)}");
@@ -203,11 +220,27 @@ public static partial class EvalService {
                 Category = question.Category, QuestionId = question.Id, Outcome = EvalOutcomes.InsufficientEvidence,
                 Finding  = $"Retrieval stopped on {budgetStop} and the judge returned no usable verdict."
             };
-            tokens = [];
+            tokens      = [];
+            synthesized = true;
         }
 
+        IReadOnlyList<EvalReportedObligation>? reported = null;
+        string? obligationsLoss = null;
+        if (reporting) {
+            if (synthesized) obligationsLoss = ObligationLossBudgetStop;
+            else if (ObligationsMember(raw!) is { } member) {
+                using (member) reported = EvalObligationContract.TryParse(member.RootElement.GetProperty("obligations"));
+                if (reported is null) obligationsLoss = ObligationLossUnparseable;
+            }
+        }
+
+        // Verdict citations first, then every obligation handle, deduplicated by ref, so one certification slice covers both.
         // No wire field carries these counts, so every citation that does not reach the payload is reported here.
-        var refs      = JudgeCiteHandles.Expand(tokens, ledger, EvidenceBudgets.MaxCitations, out var unexpanded);
+        var verdictRefs = JudgeCiteHandles.Expand(tokens, ledger, EvidenceBudgets.MaxCitations, out var unexpanded);
+        var handleRefs  = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var handle in reported?.SelectMany(o => o.Citations.Prepend(o.Anchor)) ?? [])
+            if (ledger.Cites.TryGetValue(handle, out var expanded)) handleRefs[handle] = expanded;
+        var refs      = verdictRefs.Concat(handleRefs.Values).Distinct(StringComparer.Ordinal).Take(EvidenceBudgets.MaxCitations).ToList();
         var certified = new List<EvalEvidenceCitation>();
         if (unexpanded > 0) Note($"{unexpanded} citation(s) dropped: unknown handle or over the {EvidenceBudgets.MaxCitations}-citation cap");
         if (refs.Count > 0) {
@@ -223,15 +256,26 @@ public static partial class EvalService {
             }
         }
 
+        var byRef    = certified.DistinctBy(c => c.Ref, StringComparer.Ordinal).ToDictionary(c => c.Ref, StringComparer.Ordinal);
+        var byHandle = handleRefs.Where(h => byRef.ContainsKey(h.Value)).ToDictionary(h => h.Key, h => byRef[h.Value], StringComparer.Ordinal);
+        assessment = EvalObligationRules.Reconcile(assessment, reported, byHandle, reporting);
+        if (reported is { Count: > 0 } && assessment.Obligations is null) obligationsLoss ??= ObligationLossUncertified;
+        var cited = certified.Where(c => verdictRefs.Contains(c.Ref, StringComparer.Ordinal))
+            .Concat(assessment.Obligations?.SelectMany(o => o.Citations.Prepend(o.Anchor)) ?? [])
+            .DistinctBy(c => c.Ref, StringComparer.Ordinal).Take(EvidenceBudgets.MaxCitations).ToList();
+
         var bound    = setup.Scope.State!;
-        var coverage = route == EvidenceRoute.Retrieval ? EvidenceCoverageMeasure.ForRetrieval(bound, ledger, certified) : EvidenceCoverageMeasure.ForOneShot(bound, certified);
+        var coverage = route == EvidenceRoute.Retrieval ? EvidenceCoverageMeasure.ForRetrieval(bound, ledger, cited) : EvidenceCoverageMeasure.ForOneShot(bound, cited);
         var trace    = route == EvidenceRoute.Retrieval
             ? EvidenceCoverageMeasure.RetrievalTraceCoverage(ledger, outcome.Result?.NumTurns ?? 0, maxTurns)
             : EvalTraceCoverage.ForOneShot(false, setup.Trace.Chars, setup.Trace.TotalChars, setup.OneShotLimitChars);
         assessment = assessment with {
             EvidenceCoverage = ReconcileEvidenceCoverage(assessment.Outcome, coverage),
             TraceCoverage    = trace,
-            ToolsUsed        = route == EvidenceRoute.Retrieval ? ledger.ToolCalls : null
+            ToolsUsed        = route == EvidenceRoute.Retrieval ? ledger.ToolCalls : null,
+            Strategy         = view?.Strategy,
+            StrategyVersion  = view?.StrategyVersion,
+            ObligationsNotReported = assessment.Obligations is null ? obligationsLoss : null
         };
         if (assessment.Validate() is { } invalid) return Failed(Failure(EvalFailureCodes.ChatError), $"assessment rejected: {invalid}");
 
@@ -270,7 +314,7 @@ public static partial class EvalService {
             if (renewed == EvidenceScopeStatus.Moved) return ScopeMoved(setup, observer);
             if (renewed == EvidenceScopeStatus.Ok) {
                 var (trace, failed) = await new EvidenceRetrospectiveInputs(setup.Reader)
-                    .BuildTraceAsync(setup.Scope.State!, assessments, setup.Advertisement.RetrospectiveEvidenceBytes, null, ct);
+                    .BuildTraceAsync(setup.Scope.State!, assessments, setup.Advertisement.RetrospectiveEvidenceBytes, ObligationCitations(assessments), ct);
                 if (failed is not null) return ScopeMoved(setup, observer);
                 retrospective = await RunEvidenceRetrospectiveAsync(setup, model, aggregate, assessments, trace, observer, time, ct);
             } else {
@@ -396,6 +440,24 @@ public static partial class EvalService {
         }
         return Encoding.UTF8.GetString(buffer.ToArray());
     }
+
+    const string ObligationLossUnparseable = "unparseable";
+    const string ObligationLossBudgetStop  = "budget_stop";
+    const string ObligationLossUncertified = "uncertified";
+
+    // The reply parsed once more, when it carries a non-null obligations member.
+    static JsonDocument? ObligationsMember(string raw) {
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(StripCodeFences(raw.Trim())); }
+        catch (JsonException) { return null; }
+        if (doc.RootElement.Prop("obligations") is { IsNull: false }) return doc;
+        doc.Dispose();
+        return null;
+    }
+
+    static IReadOnlyDictionary<string, IReadOnlyList<EvalEvidenceCitation>> ObligationCitations(IReadOnlyList<EvalQuestionAssessment> assessments) =>
+        assessments.Where(a => a.Obligations is { Count: > 0 }).ToDictionary(a => a.QuestionId,
+            a => (IReadOnlyList<EvalEvidenceCitation>)[.. a.Obligations!.SelectMany(o => o.Citations.Prepend(o.Anchor))], StringComparer.Ordinal);
 
     internal static IReadOnlyList<string> ParseCitationTokens(string rawResponse) {
         try {

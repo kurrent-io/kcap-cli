@@ -1,0 +1,13 @@
+[
+  {"name": "two valid entries", "input": [{"title": "Ship the fix", "origin": "plan", "status": "verified", "anchor": "c1", "citations": ["c2"], "note": "n"},
+                                          {"title": "Write the tests", "origin": "request", "status": "unverified", "anchor": "c3", "citations": []}], "accepted": true, "count": 2},
+  {"name": "empty array", "input": [], "accepted": true, "count": 0},
+  {"name": "citations omitted", "input": [{"title": "t", "origin": "plan", "status": "unverified", "anchor": "c1"}], "accepted": true, "count": 1},
+  {"name": "unknown member", "input": [{"title": "t", "origin": "plan", "status": "verified", "anchor": "c1", "citations": [], "id": "ob:1"}], "accepted": false},
+  {"name": "unknown origin", "input": [{"title": "t", "origin": "whim", "status": "verified", "anchor": "c1", "citations": []}], "accepted": false},
+  {"name": "unknown status", "input": [{"title": "t", "origin": "plan", "status": "done", "anchor": "c1", "citations": []}], "accepted": false},
+  {"name": "blank title", "input": [{"title": " ", "origin": "plan", "status": "verified", "anchor": "c1", "citations": []}], "accepted": false},
+  {"name": "token of 17 bytes", "input": [{"title": "t", "origin": "plan", "status": "verified", "anchor": "12345678901234567", "citations": []}], "accepted": false},
+  {"name": "five citations", "input": [{"title": "t", "origin": "plan", "status": "verified", "anchor": "c1", "citations": ["a", "b", "c", "d", "e"]}], "accepted": false},
+  {"name": "not an array", "input": {"title": "t"}, "accepted": false}
+]

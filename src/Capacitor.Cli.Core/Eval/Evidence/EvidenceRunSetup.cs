@@ -30,6 +30,9 @@ public sealed class EvidenceRunSetup : IAsyncDisposable {
     internal TimeSpan RetrievalTimeout     { get; set; } = EvalService.ToolsPerQuestionTimeout;
     internal TimeSpan RetrospectiveTimeout { get; set; } = EvalService.RetrospectiveTimeout;
 
+    // One fetch per strategy per run; null records a strategy whose view was not built.
+    internal Dictionary<string, EvidenceFirstView?> FirstViews { get; } = new(StringComparer.Ordinal);
+
     public EvidenceRunBudgets Budgets  => new(Advertisement.MaxToolCalls, Advertisement.JudgeByteBudgetBytes, Advertisement.PageBudgetBytes);
     public int                MaxTurns => EvidenceBudgets.MaxTurns(Advertisement.MaxToolCalls);
 

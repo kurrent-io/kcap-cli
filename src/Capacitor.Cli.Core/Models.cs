@@ -451,6 +451,14 @@ public record EvalQuestionDto {
     // text-path question holds the server-RENDERED prompt.
     [JsonPropertyName("raw_text")]
     public string? RawText { get; init; }
+
+    // The daemon wire carries only the strategy id; the version and the reporting mark come from the reconciled catalog.
+    [JsonPropertyName("strategy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Strategy { get; init; }
+
+    [JsonIgnore] public string? StrategyVersion    { get; init; }
+    [JsonIgnore] public bool    ReportsObligations { get; init; }
 }
 
 /// <summary>
@@ -504,6 +512,12 @@ public record EvalCatalogQuestionDto {
     // members — a missing `needs_tools` throws JsonException. See the missing-field test.
     [JsonPropertyName("needs_tools")]
     public required bool NeedsTools { get; init; }
+
+    // Absent from a server without question strategies; an id this build does not know behaves as general.
+    [JsonPropertyName("strategy")]            public string? Strategy           { get; init; }
+    [JsonPropertyName("strategy_version")]    public string? StrategyVersion    { get; init; }
+    [JsonPropertyName("strategy_guidance")]   public string? StrategyGuidance   { get; init; }
+    [JsonPropertyName("reports_obligations")] public bool?   ReportsObligations { get; init; }
 }
 
 // Per-question verdict returned by each judge invocation. Matches the server
@@ -1023,6 +1037,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCategoryAssessment))]
 [JsonSerializable(typeof(EvalEvidenceCoverage))]
 [JsonSerializable(typeof(EvalEvidenceCitation))]
+[JsonSerializable(typeof(EvalObligationResult))]
 [JsonSerializable(typeof(EvalEvidenceOmission))]
 [JsonSerializable(typeof(EvalQuestionFailure))]
 [JsonSerializable(typeof(List<EvalQuestionFailure>))]

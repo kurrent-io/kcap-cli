@@ -981,7 +981,10 @@ public static partial class EvalService {
                 Prompt        = c.Prompt,        // RENDERED — text path uses directly
                 RawText       = c.QuestionText,  // RAW — tools path substitutes this
                 NeedsTools    = c.NeedsTools,
-                PromptVersion = c.PromptVersion
+                PromptVersion = c.PromptVersion,
+                Strategy           = c.Strategy,
+                StrategyVersion    = c.StrategyVersion,
+                ReportsObligations = c.ReportsObligations == true
             });
         }
         return result;
@@ -1111,6 +1114,7 @@ public static partial class EvalService {
         try {
             using var doc = JsonDocument.Parse(json);
             outcomeExplicitlyNull = doc.RootElement.Prop("outcome") is { IsNull: true };
+            if (doc.RootElement.IsObject && ProducerOwned.Any(name => doc.RootElement.TryGetProperty(name, out _))) json = WithoutMembers(doc.RootElement, ProducerOwned);
 
             parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionAssessment);
         } catch (JsonException) {
@@ -1352,6 +1356,21 @@ public static partial class EvalService {
         }
 
         return text.Trim();
+    }
+
+    // Stamped or reconciled by the producer, never taken from the judge: a reported obligations array is not the persisted
+    // shape and would fail the whole verdict's deserialization.
+    static readonly string[] ProducerOwned = ["strategy", "strategy_version", "obligations"];
+
+    static string WithoutMembers(JsonElement root, IReadOnlyCollection<string> names) {
+        using var buffer = new MemoryStream();
+        using (var w = new Utf8JsonWriter(buffer)) {
+            w.WriteStartObject();
+            foreach (var property in root.EnumerateObject())
+                if (!names.Contains(property.Name)) property.WriteTo(w);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     // ── Facts-used snapshot ────────────────────────────────────────────────
