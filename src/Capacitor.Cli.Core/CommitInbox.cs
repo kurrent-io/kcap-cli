@@ -32,12 +32,13 @@ public sealed class CommitInbox(string path) {
 
     /// <summary>
     /// One unbuffered, shared write, so a concurrent hook or the reading watcher never meets a lock.
+    /// Led by a newline too, so a record a failed write cut short never swallows the next one.
     /// </summary>
     public void Append(ObservedCommit commit) {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, Shared, bufferSize: 1);
-        stream.Write(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(commit, CapacitorJsonContext.Default.ObservedCommit) + "\n"));
+        stream.Write(Encoding.UTF8.GetBytes("\n" + JsonSerializer.Serialize(commit, CapacitorJsonContext.Default.ObservedCommit) + "\n"));
     }
 
     /// <summary>
@@ -58,7 +59,7 @@ public sealed class CommitInbox(string path) {
             if (end < 0) return ([], start);
 
             var commits = Encoding.UTF8.GetString(bytes, 0, end)
-                .Split('\n')
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
                 .Select(Parse)
                 .OfType<ObservedCommit>()
                 .ToList();
