@@ -4,7 +4,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
 
-public class ClearLinkTests {
+public class PreviousSessionTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     const string ClearStart = """{"hook_event_name":"SessionStart","session_id":"bbbb-2222","source":"clear"}""";
@@ -13,9 +13,9 @@ public class ClearLinkTests {
 
     void Claim(string session) => AgentSessions.OnThisMachine(Config.Root).Claim(Pid, SessionId.Parse(session)!);
 
-    string? PreviousAfterLink(string body, int? agentPid) {
+    string? PreviousAfterStamp(string body, int? agentPid) {
         var hook = JsonNode.Parse(body)!.AsObject();
-        ClearLink.Link(hook, Config.Root, () => agentPid);
+        PreviousSession.Stamp(hook, Config.Root, () => agentPid);
 
         return hook["previous_session_id"]?.GetValue<string>();
     }
@@ -24,14 +24,14 @@ public class ClearLinkTests {
     public async Task A_clear_start_names_the_session_its_own_process_ran() {
         Claim("aaaa-1111");
 
-        await Assert.That(PreviousAfterLink(ClearStart, Pid)).IsEqualTo("aaaa1111");
+        await Assert.That(PreviousAfterStamp(ClearStart, Pid)).IsEqualTo("aaaa1111");
     }
 
     [Test]
     public async Task Another_process_never_takes_the_link() {
         Claim("aaaa-1111");
 
-        await Assert.That(PreviousAfterLink(ClearStart, 9001)).IsNull();
+        await Assert.That(PreviousAfterStamp(ClearStart, 9001)).IsNull();
     }
 
     /// <summary>
@@ -41,7 +41,7 @@ public class ClearLinkTests {
     public async Task A_start_never_names_itself() {
         Claim("bbbb-2222");
 
-        await Assert.That(PreviousAfterLink(ClearStart, Pid)).IsNull();
+        await Assert.That(PreviousAfterStamp(ClearStart, Pid)).IsNull();
     }
 
     /// <summary>
@@ -56,7 +56,7 @@ public class ClearLinkTests {
         Claim("aaaa-1111");
         await File.WriteAllTextAsync(Config.Root.Path("agent-sessions", Pid.ToString(CultureInfo.InvariantCulture)), note);
 
-        await Assert.That(PreviousAfterLink(ClearStart, Pid)).IsNull();
+        await Assert.That(PreviousAfterStamp(ClearStart, Pid)).IsNull();
     }
 
     [Test]
@@ -68,7 +68,7 @@ public class ClearLinkTests {
 
         var hook = JsonNode.Parse(body)!.AsObject();
 
-        await Assert.That(ClearLink.Link(hook, Config.Root, () => Pid)).IsFalse();
+        await Assert.That(PreviousSession.Stamp(hook, Config.Root, () => Pid)).IsFalse();
         await Assert.That(hook.ToJsonString()).IsEqualTo(body);
     }
 }

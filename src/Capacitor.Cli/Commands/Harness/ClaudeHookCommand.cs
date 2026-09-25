@@ -82,7 +82,7 @@ public sealed class ClaudeHookCommand(
             toolUseId      = node?["tool_use_id"]?.GetValue<string>();
 
             // Ahead of both arms below, since each claims the new session before it posts.
-            if (node is JsonObject hook && ClearLink.Link(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
+            if (node is JsonObject hook && PreviousSession.Stamp(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
                 body = hook.ToJsonString();
         } catch { }
 

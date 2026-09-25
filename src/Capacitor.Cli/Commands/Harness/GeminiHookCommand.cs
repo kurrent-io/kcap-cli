@@ -297,7 +297,7 @@ sealed class GeminiHookCommand(
             ["home_dir"]        = home.Path
         };
 
-        ClearLink.Link(forwarded, config, () => ProcessHelpers.GetCodingAgentPid("gemini", allowFallback: false));
+        PreviousSession.Stamp(forwarded, config, () => ProcessHelpers.GetCodingAgentPid("gemini", allowFallback: false));
 
         if (cwd is not null) {
             forwarded["cwd"] = cwd;
