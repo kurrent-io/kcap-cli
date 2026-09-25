@@ -3,8 +3,6 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>Batches of at most 64, work_budget refs resent, a 404/409 or an answer under another scope version run-fatal
-/// with nothing certified, and refs the shared 90 s budget leaves, or a successful answer omits, dropped and counted.</summary>
 public class EvidenceCitationClientTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();

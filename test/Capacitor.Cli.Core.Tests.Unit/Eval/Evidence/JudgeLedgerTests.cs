@@ -3,8 +3,6 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>The ledger and run file round-trip every field; the last footer wins; calls a kill left after it extend its totals; a torn final line is ignored; and the
-/// derived delivery sets are what coverage and cite expansion read.</summary>
 public class JudgeLedgerTests {
     [TempDir] public required TempDir Tmp { get; init; }
 

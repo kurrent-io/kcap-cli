@@ -3,8 +3,6 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>The retrospective's evidence is a scope summary and the cited refs re-read, ranked and bounded; an unreadable ref
-/// or an unparseable answer leaves a fixed line, a turn is read through its event window, and a moved scope is run-fatal.</summary>
 public class EvidenceRetrospectiveInputsTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();

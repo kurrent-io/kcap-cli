@@ -3,9 +3,6 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>The orientation names the scope, lists its completeness, seeds only whole pages under o-handles, stays within its
-/// bytes, leaves a sentence where the summary is unavailable or unreadable, counts an unreadable outline as unfinished, and
-/// reports a moved scope instead of building.</summary>
 public class EvidenceOrientationBuilderTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();

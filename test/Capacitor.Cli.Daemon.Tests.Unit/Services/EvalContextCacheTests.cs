@@ -9,10 +9,7 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
-/// <summary>Every way a prepared evidence run leaves the cache deletes its run directory: cancel, finalize, idle expiry on
-/// read, the sweep, a second prepare under the same id, and host disposal with several runs cached. A leased run is cancelled
-/// when it leaves but disposed only when its last lease ends, and is never expired while leased. No test runs a question, so no
-/// harness is reachable.</summary>
+/// <summary>No test runs a question, so no harness is reachable.</summary>
 public class EvalContextCacheTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome]       public required TempHome       Home   { get; init; }

@@ -10,10 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
-/// <summary>The daemon's evidence branch: prepare answers the route and scope fields (legacy under chain) and caches no trace,
-/// questions carry their usage, a moved scope or a lost certification answers the run-fatal failure and leaves nothing behind,
-/// retained facts are posted only after a clean retrospective, and each phase stops itself inside the server's deadline.
-/// The harness probe searches only the fake claude's directory, so no test can reach a real one.</summary>
+/// <summary>The harness probe searches only the fake claude's directory, so no test can reach a real one.</summary>
 [NotInParallel]
 public class EvalRunnerEvidenceTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
