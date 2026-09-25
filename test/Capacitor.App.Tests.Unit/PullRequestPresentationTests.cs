@@ -208,6 +208,99 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.PageNote).IsEmpty();
     });
 
+    /// Threads are what report a moved head. A later move of the same section has to recover too.
+    [Test]
+    public Task A_second_head_change_on_threads_recovers_again() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        h.Source.RestartNextPage = "head_changed";
+        await h.Model.ShowSectionCommand.Execute("threads");
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading, what: "threads recovered");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+        h.Source.RestartNextPage = "head_changed";
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.Rows.Count == 1 && !h.Model.IsReading && h.Source.Pages >= 3, what: "second head change recovered");
+        await Assert.That(h.Model.PageNote).IsEmpty();
+    });
+
+    /// The switcher is how a session moves between linked pull requests. Each one replaces the
+    /// card and the reader, and the gap shows loading rather than the previous pull request.
+    [Test]
+    public Task The_switcher_replaces_every_linked_pull_request_including_past_the_second() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.Links = [
+            FakePullRequestSource.Link(1),
+            FakePullRequestSource.Link(2),
+            FakePullRequestSource.Link(3),
+        ];
+        h.Source.TitleFor = subject => "Title " + subject.Number.ToString(CultureInfo.InvariantCulture);
+        h.Source.RollupFor = subject => subject.Number switch { 2 => "pending", 3 => "failure", _ => "success" };
+        h.Source.PageItemFor = (subject, section) => section == "checks" ? new PullRequestCheckDto {
+            Id = "check-" + subject.Number.ToString(CultureInfo.InvariantCulture), Availability = "available",
+            Name = "build-" + subject.Number.ToString(CultureInfo.InvariantCulture),
+            Outcome = subject.Number switch { 2 => "pending", 3 => "failure", _ => "success" }, HeadSha = new string('a', 40),
+        } : null;
+        await h.ShowAsync();
+        var selector = h.Card.FindControl<ComboBox>("PullRequestSelector")!;
+        var loading = h.Reader.FindControl<StackPanel>("LoadingState")!;
+        var cardLoading = h.Card.FindControl<TextBlock>("SelectionLoading")!;
+        var checks = h.Card.FindControl<Button>("SidebarChecksButton")!;
+        await Assert.That(selector.IsEffectivelyVisible).IsTrue();
+        await Assert.That(selector.ItemCount).IsEqualTo(3);
+        await Assert.That(h.Model.SectionMeta).IsEqualTo("3");
+        await Assert.That(h.Model.Title).IsEqualTo("Title 1");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks passing");
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try {
+            h.Source.OverviewResponses.Enqueue(async (subject, ct) => {
+                await gate.Task.WaitAsync(ct).ConfigureAwait(false);
+                return h.Source.Overview(subject);
+            });
+            selector.SelectedIndex = 2;
+            await WorkspaceFixtures.WaitUntilAsync(() => h.Source.Overviews >= 2, what: "third pull request overview started");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(h.Model.NumberLabel).IsEqualTo("#3");
+            await Assert.That(h.Model.Selected!.Subject.Number).IsEqualTo(3);
+            await Assert.That(h.Model.IsSelectionLoading).IsTrue();
+            await Assert.That(h.Model.DescriptionNote).IsEmpty();
+            await Assert.That(h.Model.ChecksStatus.Text).IsEmpty();
+            await Assert.That(cardLoading.IsEffectivelyVisible).IsTrue();
+            await Assert.That(checks.IsEffectivelyVisible).IsFalse();
+            await Assert.That(loading.IsEffectivelyVisible).IsTrue();
+            await Assert.That(h.Model.LoadingNote).IsEqualTo("Loading pull request…");
+        } finally {
+            gate.TrySetResult();
+        }
+        await h.SettleAsync();
+        await Assert.That(h.Model.Title).IsEqualTo("Title 3");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks failing");
+        await Assert.That(cardLoading.IsEffectivelyVisible).IsFalse();
+        await Assert.That(loading.IsEffectivelyVisible).IsFalse();
+        await Assert.That(AutomationProperties.GetName(checks)).IsEqualTo("Open checks: Checks failing");
+
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.Rows.Single().Title).IsEqualTo("build-3");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("1 failed");
+
+        selector.SelectedIndex = 1;
+        await h.SettleAsync();
+        await Assert.That(h.Model.NumberLabel).IsEqualTo("#2");
+        await Assert.That(h.Model.Title).IsEqualTo("Title 2");
+        await Assert.That(h.Model.Section).IsEqualTo("overview");
+        await Assert.That(h.Model.Rows).IsEmpty();
+        await Assert.That(h.Model.ChecksStatus.IsPulsing).IsTrue();
+        await Assert.That(AutomationProperties.GetName(checks)).IsEqualTo("Open checks: Checks pending");
+
+        selector.SelectedIndex = 2;
+        await h.SettleAsync();
+        await Assert.That(h.Model.Section).IsEqualTo("checks");
+        await Assert.That(h.Model.Rows.Single().Title).IsEqualTo("build-3");
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("1 failed");
+        await Assert.That(h.Model.ChecksStatus.IsPulsing).IsFalse();
+    });
+
     /// The once-only recovery is for that pull request. Left set, the next one's checks stop.
     [Test]
     public Task Switching_pull_request_during_a_head_change_lets_the_next_one_recover() => RunOnUiAsync(async () => {
@@ -234,7 +327,7 @@ public class PullRequestPresentationTests {
         }
     });
 
-    /// A click inside the poll's gap used to wait it out with nothing on screen.
+    /// A manual refresh shows progress at once and runs inside the short click gap.
     [Test]
     public Task A_refresh_click_shows_progress_at_once_and_runs_within_seconds() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();

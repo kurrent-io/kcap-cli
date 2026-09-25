@@ -7,7 +7,7 @@ namespace Capacitor.App.ViewModels;
 public sealed partial class PullRequestContextViewModel {
     bool _refreshDiscovery;
     bool _refreshPage;
-    bool _headRestarted;
+    string? _headRestartSection;
     PullRequestSectionState? CurrentSection => _sections.GetValueOrDefault(SectionKey);
 
     void RequestRefresh(bool manual = false) {
@@ -137,7 +137,7 @@ public sealed partial class PullRequestContextViewModel {
                         if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(); return; }
                         state.Pages.Add(saved);
                     }
-                    if (section == "checks") _headRestarted = false;
+                    if (_headRestartSection == key) _headRestartSection = null;
                     state.Snapshot = page.SnapshotId; state.Completed = page.SnapshotCompletedAt;
                     state.Head = page.HeadSha; state.Coverage = page.Coverage;
                     state.Total = page.Total; state.Excluded = page.ExcludedByFilter; state.Stopped = false; state.Error = null;
@@ -145,16 +145,16 @@ public sealed partial class PullRequestContextViewModel {
                     EnforcePageBudget(state, saved, earlier);
                     state.Next = state.Pages.LastOrDefault()?.Next;
                     SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier page while GitHub is unavailable." : "");
-                } else if (read.Kind == PullRequestReadKind.Restart && read.Reason == "head_changed" && !_headRestarted) {
-                    // Learn the new head from a fresh overview, whose apply reloads the checks. Once only:
-                    // an overview still on the old head would bounce straight back here.
-                    _headRestarted = true;
+                } else if (read.Kind == PullRequestReadKind.Restart && read.Reason == "head_changed" && _headRestartSection is null) {
+                    // Learn the new head from a fresh overview, whose apply reloads this section. Once
+                    // only for that section: an overview still on the old head would bounce straight back here.
+                    _headRestartSection = key;
                     _sections.Remove(key);
                     _lastOverview = null;
                     restartOverview = true;
                 } else if (read.Kind == PullRequestReadKind.Restart && read.Reason is not ("identity_changed" or "integration_changed")) {
                     var state = _sections.GetValueOrDefault(key) ?? new PullRequestSectionState(key);
-                    state.Stopped = true; state.Error = read.Reason == "head_changed" ? "Checks are catching up with a new commit." : "This snapshot can no longer load pages. Refresh to start again.";
+                    state.Stopped = true; state.Error = read.Reason == "head_changed" ? "Catching up with a new commit." : "This snapshot can no longer load pages. Refresh to start again.";
                     if (read.Reason == "head_changed") state.Pages.Clear();
                     _sections[key] = state;
                     Notify();

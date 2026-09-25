@@ -15,7 +15,11 @@ public sealed partial class PullRequestContextViewModel {
     public string AccessLabel => CanDisplay ? (_grace ? "Access refresh paused" : "Access checked for " + (_overview?.AccessCheckedFor ?? "linked GitHub account")) : "";
     public string? Description => CanDisplayReader && _section == "overview" ? _overview?.Description : null;
     public bool DescriptionTruncated => CanDisplayReader && _overview?.DescriptionTruncated == true;
-    public string DescriptionNote => !CanDisplayReader ? "Refresh access to open PR content." : _overview?.Description is null ? "Description unavailable." : _overview.Description.Length == 0 ? "No description." : "";
+    /// The selected pull request has not arrived yet. Distinct from a section's own first load,
+    /// which runs only once that overview can be shown.
+    public bool IsSelectionLoading => IsReading && !CanDisplay && _selected is { IsAvailable: true };
+    public bool ShowsLoading => IsSelectionLoading || IsSectionLoading;
+    public string DescriptionNote => IsSelectionLoading ? "" : !CanDisplayReader ? "Refresh access to open PR content." : _overview?.Description is null ? "Description unavailable." : _overview.Description.Length == 0 ? "No description." : "";
     public bool IsOverview => _section == "overview";
     public bool IsThreads => _section == "threads";
     public bool IsThreadComments => _section == "thread_comments";
@@ -30,7 +34,7 @@ public sealed partial class PullRequestContextViewModel {
     public string PageNote {
         get {
             if (_section == "overview") return "";
-            if (!CanDisplayReader) return "Refresh access to open PR content.";
+            if (!CanDisplayReader) return IsSelectionLoading ? "" : "Refresh access to open PR content.";
             if (CurrentSection is not { } state) return _pageRequests.Contains(SectionKey) ? "" : "This section has not loaded yet.";
             if (state.Error is { } error) return error;
             if (state.Coverage != "complete") return "Limited snapshot: an ordered subset. More may be available on GitHub.";
@@ -51,9 +55,9 @@ public sealed partial class PullRequestContextViewModel {
     public bool HasEmptyNote => EmptyNote.Length > 0;
     /// A first load only: a reload keeps the rows it is replacing on screen.
     public bool IsSectionLoading => _section != "overview" && CanDisplayReader && CurrentSection is null && _pageRequests.Contains(SectionKey);
-    public string LoadingNote => "Loading " + _section switch {
+    public string LoadingNote => "Loading " + (IsSelectionLoading ? "pull request" : _section switch {
         "checks" => "checks", "reviewers" => "reviewers", "reviews" => "reviews", "threads" => "threads", "thread_comments" => "replies", _ => "comments"
-    } + "…";
+    }) + "…";
     public string SnapshotLabel => CanDisplayReader && CurrentSection?.Completed is { } at
         ? "Updated " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
     /// The footer names one thing, the time; which commit the checks ran on rides its hover.
@@ -63,7 +67,7 @@ public sealed partial class PullRequestContextViewModel {
     static readonly string[] NotifiedProperties = [
         nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
         nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(IsSectionLoading), nameof(LoadingNote), nameof(ShowsRefreshing), nameof(FetchedLabel), nameof(AccessLabel),
-        nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
+        nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved), nameof(IsSelectionLoading), nameof(ShowsLoading),
         nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
         nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(FreshnessDetail),
         nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel),

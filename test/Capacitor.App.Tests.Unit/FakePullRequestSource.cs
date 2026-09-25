@@ -18,7 +18,10 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public string? RestartNextPage;
     public string? Failure;
     public string OverviewTitle = "Private PR";
+    public Func<PullRequestSubjectDto, string>? TitleFor;
+    public Func<PullRequestSubjectDto, string>? RollupFor;
     public Func<string, object?>? PageItem;
+    public Func<PullRequestSubjectDto, string, object?>? PageItemFor;
     public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
     public readonly List<CancellationToken> OverviewTokens = [];
     public PullRequestCapabilityKind Capability = PullRequestCapabilityKind.Supported;
@@ -36,8 +39,8 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             Subject: subject, AccessFailure: Failure, Reason: Failure == "denied" ? "github_access_denied" : "timeout"));
     }
     public PullRequestRead<PullRequestOverviewDto> Overview(PullRequestSubjectDto subject, string? title = null) => new(PullRequestReadKind.Ready,
-        new() { Title = title ?? OverviewTitle, Description = "Private description", HeadSha = HeadSha, Lifecycle = "open",
-            Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = "success" } },
+        new() { Title = title ?? TitleFor?.Invoke(subject) ?? OverviewTitle, Description = "Private description", HeadSha = HeadSha, Lifecycle = "open",
+            Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = RollupFor?.Invoke(subject) ?? "success" } },
         subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
     public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
         string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class {
@@ -48,7 +51,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
         }
         var page = cursor is null ? 0 : int.Parse(cursor[^8..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
         var id = "item-" + page.ToString(CultureInfo.InvariantCulture);
-        object item = PageItem?.Invoke(section) ?? (section switch {
+        object item = PageItemFor?.Invoke(subject, section) ?? PageItem?.Invoke(section) ?? (section switch {
             "checks" => new PullRequestCheckDto { Id = id, Availability = "available", Name = "test", Outcome = "failure", HeadSha = new string('a', 40) },
             "reviewers" => new PullRequestReviewerDto { Id = id, Availability = "available" },
             "reviews" => new PullRequestReviewDto { Id = id, Availability = "available", Body = "Private review", State = "commented" },

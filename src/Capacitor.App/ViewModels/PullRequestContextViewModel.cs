@@ -151,7 +151,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(dto => {
             if (_disposed || dto is null) return;
             _branch = dto.Branch;
-            _worktree = dto.WorktreePath;
+            // The presented checkout, not the snapshot: a borrowed reviewer's snapshot is detached,
+            // so only BorrowedFrom still has the branch live discovery matches.
+            _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
             CancelReads();
             _session = id;
@@ -300,8 +302,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _cancel = new();
         _refreshing = false; _overviewPending = false; _pageRequests.Clear(); _lastOverview = null;
         // The once-only head recovery belongs to the read just cancelled. A later subject
-        // has to be allowed its own, or its checks stop instead of reloading.
-        _headRestarted = false;
+        // has to be allowed its own, or its section stops instead of reloading.
+        _headRestartSection = null;
     }
     void Start(Func<CancellationToken, Task<Action>> operation, Action settled) {
         var generation = _generation;

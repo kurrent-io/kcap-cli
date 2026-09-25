@@ -84,7 +84,7 @@
                 </StackPanel>
                 <TextBlock Text="{Binding PageNote}" Classes="prNote" IsVisible="{Binding PageNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <!-- Loading and empty share one slot, glyph size and type so the one gives way to the other in place. -->
-                <StackPanel x:Name="LoadingState" Classes="prSectionState" Classes.shown="{Binding IsSectionLoading}">
+                <StackPanel x:Name="LoadingState" Classes="prSectionState" Classes.shown="{Binding ShowsLoading}">
                     <Path Classes="prStateGlyph kcapSpinning" Data="M11,2 A9,9 0 1 1 2,11" />
                     <TextBlock Text="{Binding LoadingNote}" Classes="prNote" TextAlignment="Center" />
                 </StackPanel>
