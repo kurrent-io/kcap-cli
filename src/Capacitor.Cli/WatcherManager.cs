@@ -486,13 +486,13 @@ public sealed partial class WatcherManager(
                 lineIndex++;
             }
 
-            if (newLines.Count == 0) {
-                await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: no new lines to send");
+            var commits = (await GitHook.ObservationAsync(config, sessionId, agentId, cwd: null, time)).Collect();
+
+            if (newLines.Count == 0 && commits.Pending is not { Length: > 0 }) {
+                await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: nothing new to send");
 
                 return;
             }
-
-            var commits = (await GitHook.ObservationAsync(config, sessionId, agentId, cwd: null, time)).Collect();
 
             var batch = new TranscriptBatch {
                 SessionId       = sessionId,
