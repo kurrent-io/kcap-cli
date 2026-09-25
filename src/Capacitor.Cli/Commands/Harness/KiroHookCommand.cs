@@ -294,7 +294,7 @@ sealed class KiroHookCommand(
 
         // Newest first, so a cap on one payload keeps the children most likely still unlinked.
         if (await ResolveCrewChildrenAsync(dashedSessionId, budget) is { Count: > 0 } children) {
-            forwarded["subagent_session_ids"] = new JsonArray([.. children.Take(KiroCrewParentResolver.MaxChildrenPerStart).Select(c => (JsonNode)c)]);
+            forwarded["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(children.Take(KiroCrewParentResolver.MaxChildrenPerStart));
         }
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);

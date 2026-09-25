@@ -246,7 +246,7 @@ internal sealed class KiroImportSource : IImportSource {
             if (_crewParents.TryGetValue(self, out var parent)) startPayload["parent_session_id"] = parent;
 
             childBatches = _crewChildren[self].Select(c => c.ToString("D")).Chunk(KiroCrewParentResolver.MaxChildrenPerStart).ToList();
-            if (childBatches.Count > 0) startPayload["subagent_session_ids"] = new JsonArray([.. childBatches[0].Select(c => (JsonNode)c)]);
+            if (childBatches.Count > 0) startPayload["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(childBatches[0]);
         }
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
             startPayload["default_visibility"] = visibility;
@@ -260,7 +260,7 @@ internal sealed class KiroImportSource : IImportSource {
 
         foreach (var batch in childBatches.Skip(1)) {
             var repeat = startPayload.DeepClone().AsObject();
-            repeat["subagent_session_ids"] = new JsonArray([.. batch.Select(c => (JsonNode)c)]);
+            repeat["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(batch);
 
             if (!await PostSyntheticHookAsync(ctx.HttpClient, _time, ctx.BaseUrl, "session-start/kiro", repeat, ct))
                 return ImportOutcome.Failed;

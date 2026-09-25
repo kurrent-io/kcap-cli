@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Capacitor.Cli.Core.Harness.Kiro;
@@ -39,6 +40,11 @@ public static class KiroCrewParentResolver {
 
         return null;
     }
+
+    /// <summary>A JSON array of session ids, built by parsing: assigning strings into a
+    /// <see cref="JsonArray"/> throws under NativeAOT.</summary>
+    public static JsonArray SessionIdArray(IEnumerable<string> ids) =>
+        (JsonArray)JsonNode.Parse("[" + string.Join(",", ids.Select(id => $"\"{JsonEncodedText.Encode(id)}\"")) + "]")!;
 
     /// <summary>The dashed ids of the recorded sub-agents this session spawned, newest first. Scans at
     /// most <see cref="LiveScanLimit"/> sub-agents.</summary>
