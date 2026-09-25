@@ -81,8 +81,8 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
 
     // Reads each deferred body chunk by chunk, charged by its escaped length against the trace's remaining allowance, so a
     // body larger than the allowance stops one chunk past it rather than being read whole.
-    async Task<(List<(string Name, string Content)> Bodies, int? Status)> ReadBodiesAsync(JsonElement entry, long allowance, CancellationToken ct) {
-        var bodies    = new List<(string Name, string Content)>();
+    async Task<(List<(string Field, int? Ordinal, string Content)> Bodies, int? Status)> ReadBodiesAsync(JsonElement entry, long allowance, CancellationToken ct) {
+        var bodies    = new List<(string Field, int? Ordinal, string Content)>();
         var remaining = allowance;
         foreach (var (bodyRef, field, ordinal) in EvidenceCanonicalContent.Deferred(entry)) {
             var content = new StringBuilder();
@@ -106,12 +106,14 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
                 offset = next;
             }
             remaining -= charged;
-            bodies.Add((ordinal is { } n ? $"{field}[{n}]" : field, content.ToString()));
+            bodies.Add((field, ordinal, content.ToString()));
         }
         return (bodies, null);
     }
 
-    static void WriteEntry(Utf8JsonWriter w, JsonElement entry, string cite, List<(string Name, string Content)> bodies) {
+    // A resolved "arguments" body belongs to one call by ordinal, so it is nested there like an inline value
+    // rather than written as a sibling of "calls" — the same field reads as structured JSON either way it arrived.
+    static void WriteEntry(Utf8JsonWriter w, JsonElement entry, string cite, List<(string Field, int? Ordinal, string Content)> bodies) {
         w.WriteStartObject();
         w.WriteString("ref", entry.Str("ref"));
         w.WriteString("cite", cite);
@@ -120,18 +122,28 @@ public sealed class EvidenceTraceAssembler(EvidenceReadClient reader, string tok
         if (entry.Str("text") is { } text) w.WriteString("text", text);
         if (entry.Str("output") is { } output) w.WriteString("output", output);
         if (entry.Arr("calls") is { } calls) {
+            var resolvedArguments = bodies.Where(b => b.Field == "arguments" && b.Ordinal is not null)
+                .ToDictionary(b => b.Ordinal!.Value, b => b.Content);
             w.WriteStartArray("calls");
             foreach (var call in calls.EnumerateArray()) {
                 w.WriteStartObject();
-                w.WriteNumber("ordinal", call.Num("ordinal") ?? 0);
+                var ordinal = (int)(call.Num("ordinal") ?? 0);
+                w.WriteNumber("ordinal", ordinal);
                 if (call.Str("tool") is { } tool) w.WriteString("tool", tool); else w.WriteNull("tool");
                 w.WritePropertyName("arguments");
-                if (call.Prop("arguments") is { } arguments) arguments.WriteTo(w); else w.WriteNullValue();
+                if (call.Prop("arguments") is { } arguments) arguments.WriteTo(w);
+                else if (resolvedArguments.TryGetValue(ordinal, out var resolved)) {
+                    using var argumentsDoc = JsonDocument.Parse(resolved);
+                    argumentsDoc.RootElement.WriteTo(w);
+                } else w.WriteNullValue();
                 w.WriteEndObject();
             }
             w.WriteEndArray();
         }
-        foreach (var (name, content) in bodies) w.WriteString(name, content);
+        foreach (var (field, ordinal, content) in bodies) {
+            if (field == "arguments") continue;
+            w.WriteString(ordinal is { } n ? $"{field}[{n}]" : field, content);
+        }
         w.WriteEndObject();
     }
 

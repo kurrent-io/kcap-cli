@@ -75,6 +75,26 @@ public sealed class EvidenceServerStub : IDisposable {
         return "{" + string.Join(",", parts) + "}";
     }
 
+    public static string InlineCall(int ordinal, string tool, string argumentsJson) =>
+        $"{{\"ordinal\":{ordinal},\"tool\":{Quote(tool)},\"arguments\":{argumentsJson}}}";
+
+    public static string DeferredCall(string source, long revision, int ordinal, string tool) {
+        var r = $"{source}@{revision}";
+        return $"{{\"ordinal\":{ordinal},\"tool\":{Quote(tool)},\"arguments_body\":{Descriptor(r, "arguments", 40, ordinal)}}}";
+    }
+
+    public static string ToolCallEntry(string source, long revision, IEnumerable<string> calls, int? callsTotal = null) {
+        var r         = $"{source}@{revision}";
+        var callList  = calls.ToList();
+        var parts = new List<string> {
+            $"\"ref\":{Quote(r)}", $"\"revision\":{revision}", "\"event_type\":\"AssistantToolCallsGenerated\"", "\"content_type\":\"application/json\"",
+            "\"timestamp\":\"2026-09-23T12:00:00+00:00\"", "\"kind\":\"tool_call\"",
+            $"\"calls\":[{string.Join(",", callList)}]", $"\"calls_total\":{callsTotal ?? callList.Count}",
+            $"\"payload_body\":{Descriptor(r, "payload", 50)}", $"\"metadata_body\":{Descriptor(r, "metadata", 2)}"
+        };
+        return "{" + string.Join(",", parts) + "}";
+    }
+
     public static string EventsPage(string source, IEnumerable<string> entries, string? next = null) {
         var cursor = next is null ? "null" : Quote(next);
         return $"{{\"scope_version\":\"v1\",\"source_id\":{Quote(source)},\"reference\":{Quote(source + "@0")},\"from_revision\":0,\"to_revision\":0,\"budget_bytes\":65536,"
