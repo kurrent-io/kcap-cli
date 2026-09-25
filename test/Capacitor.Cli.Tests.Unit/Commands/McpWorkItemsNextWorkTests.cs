@@ -244,6 +244,26 @@ public class McpWorkItemsNextWorkTests {
     }
 
     [Test]
+    public async Task Dispatch_refuses_a_body_past_the_read_limit() {
+        var body = Feed.Replace("Priya is waiting on your review", new string('p', McpWorkItemsServer.NextWorkMaxResponseBytes));
+
+        var (_, response) = await DispatchAsync("{}", () => ValueTask.FromResult<string?>(null), body: body);
+
+        await Assert.That(Result(response)).IsEqualTo((McpWorkItemsServer.NextWorkTooLargeMessage, true));
+    }
+
+    [Test]
+    public async Task Dispatch_reads_a_body_at_the_read_limit() {
+        var body = Feed.Replace("Priya is waiting on your review",
+            new string('p', McpWorkItemsServer.NextWorkMaxResponseBytes - System.Text.Encoding.UTF8.GetByteCount(Feed) + "Priya is waiting on your review".Length));
+
+        var (_, response) = await DispatchAsync("{}", () => ValueTask.FromResult<string?>(null), body: body);
+
+        await Assert.That(System.Text.Encoding.UTF8.GetByteCount(body)).IsEqualTo(McpWorkItemsServer.NextWorkMaxResponseBytes);
+        await Assert.That(Result(response).Text).Contains("#1 [1/blocks_others] Review PR #42");
+    }
+
+    [Test]
     public async Task Dispatch_relays_the_unavailable_404() {
         var (_, response) = await DispatchAsync("{}", () => ValueTask.FromResult<string?>(null), HttpStatusCode.NotFound, """{"error":"next_work_unavailable"}""");
 

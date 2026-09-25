@@ -231,6 +231,11 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal const string NextWorkUnavailableMessage = "Next-work is not enabled on this server.";
     internal const string NextWorkTimeoutMessage     = "Next-work timed out on the server; try again in a moment.";
 
+    internal const string NextWorkTooLargeMessage = "Error: next-work response too large.";
+
+    /// <summary>Twenty rows come to a few KiB; anything past this is not a feed.</summary>
+    internal const int NextWorkMaxResponseBytes = 256 * 1024;
+
     const int EvidenceCap = 200;
 
     async Task<string> HandleGetNextWorkAsync(
@@ -240,14 +245,17 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             var repoHash     = explicitRepo ?? await cwdRepoHash();
             var sessionId    = McpSessionId.TryResolveWithin(null, HarnessRequesterContext.Resolve(Environment.GetEnvironmentVariable, Directory.Exists).SessionId);
 
-            using var httpResponse = await client.GetAsync(BuildNextWorkUrl(baseUrl, arguments, repoHash, sessionId));
-            var body = await httpResponse.Content.ReadAsStringAsync();
+            using var httpResponse = await client.GetAsync(
+                BuildNextWorkUrl(baseUrl, arguments, repoHash, sessionId), HttpCompletionOption.ResponseHeadersRead);
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
-            return RenderNextWorkResult(id, httpResponse.StatusCode, body);
+            var bytes = await BoundedHttpContent.ReadAsync(httpResponse.Content, NextWorkMaxResponseBytes, CancellationToken.None);
+            if (bytes is null) return BuildToolResult(id, NextWorkTooLargeMessage, isError: true);
+
+            return RenderNextWorkResult(id, httpResponse.StatusCode, Encoding.UTF8.GetString(bytes));
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
