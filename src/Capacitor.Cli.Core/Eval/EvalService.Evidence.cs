@@ -249,7 +249,7 @@ public static partial class EvalService {
             var slice = await setup.Scope.EnsureScopeAsync(EvidenceScopeClient.CertificationHeadroom, ct);
             if (slice == EvidenceScopeStatus.Moved) return EvidenceQuestionOutcome.Moved;
             if (slice == EvidenceScopeStatus.Ok) {
-                var certification = await setup.Citations.CertifyAsync(setup.Scope.State!.Token, refs, ct);
+                var certification = await setup.Citations.CertifyAsync(setup.Scope.State!.Token, setup.Scope.State.ScopeVersion, refs, ct);
                 if (certification.ScopeLost) return EvidenceQuestionOutcome.Moved;
                 certified.AddRange(certification.Certified);
                 if (certification.Dropped > 0) Note($"{certification.Dropped} of {refs.Count} citation(s) not certified");

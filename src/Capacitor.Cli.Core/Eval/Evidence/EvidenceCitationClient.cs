@@ -10,7 +10,9 @@ public sealed class EvidenceCitationClient(HttpClient http, string baseUrl, stri
     public const int MaxRefsPerRequest = 64;
     public static readonly TimeSpan CertificationBudget = TimeSpan.FromSeconds(90);
 
-    public async Task<EvidenceCertificationOutcome> CertifyAsync(string token, IReadOnlyList<string> refs, CancellationToken ct) {
+    /// <summary>An answer under any scope version but <paramref name="scopeVersion"/> is scope loss: its digests belong to
+    /// another scope.</summary>
+    public async Task<EvidenceCertificationOutcome> CertifyAsync(string token, string scopeVersion, IReadOnlyList<string> refs, CancellationToken ct) {
         var order    = refs.Distinct(StringComparer.Ordinal).ToList();
         var digests  = new Dictionary<string, string>(StringComparer.Ordinal);
         var pending  = new List<string>(order);
@@ -32,6 +34,7 @@ public sealed class EvidenceCitationClient(HttpClient http, string baseUrl, stri
                 if (!resp.IsSuccessStatusCode) { dropped += inFlight.Count; inFlight.Clear(); continue; }
 
                 var answer = JsonSerializer.Deserialize(await resp.Content.ReadAsStringAsync(linked.Token), CapacitorJsonContext.Default.EvidenceCitationsResponseDto);
+                if (answer is not null && answer.ScopeVersion != scopeVersion) return new(ScopeLost: true, [], order.Count);
                 var resend = new List<string>();
                 var progressed = false;
                 foreach (var entry in answer?.Citations ?? []) {

@@ -153,7 +153,7 @@ public class EvidenceScopeClientTests : IDisposable {
 
         await client.EnsureScopeAsync(EvidenceScopeClient.CertificationHeadroom, CancellationToken.None);
         await new EvidenceCitationClient(_http, _stub.Url, EvidenceServerStub.SessionId, time)
-            .CertifyAsync("tok-1", [.. Enumerable.Range(0, 130).Select(i => $"{EvidenceServerStub.RootSource}@{i}")], CancellationToken.None);
+            .CertifyAsync("tok-1", "v1", [.. Enumerable.Range(0, 130).Select(i => $"{EvidenceServerStub.RootSource}@{i}")], CancellationToken.None);
 
         await Assert.That(client.Reopens).IsEqualTo(1);
         await Assert.That(_stub.Requests("evidence-citations").Count).IsEqualTo(3);
