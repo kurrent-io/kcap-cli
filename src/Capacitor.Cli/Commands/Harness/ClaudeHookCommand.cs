@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -690,9 +691,9 @@ public sealed class ClaudeHookCommand(
                 try {
                     var node = JsonNode.Parse(body);
                     if (node is not null) {
-                        if (!coordinationNoticesDisabled) node["coordination_notices"] = CoordinationNoticesEmitter.CapabilityVersion;
+                        if (!coordinationNoticesDisabled) node["coordination_notices"] = AotJsonString(CoordinationNoticesEmitter.CapabilityVersion);
                         if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(budget.Remaining) is { } feedBudgetMs) {
-                            node["next_work"]           = NextWorkEmitter.CapabilityVersion;
+                            node["next_work"]           = AotJsonString(NextWorkEmitter.CapabilityVersion);
                             node["next_work_budget_ms"] = feedBudgetMs;
                         }
                         postBody = node.ToJsonString();
@@ -1225,4 +1226,9 @@ public sealed class ClaudeHookCommand(
     /// </summary>
     static bool CurrentSessionHasBacklog(HookSpool spool, string? sid) =>
         sid is not null && spool.HasBacklog(sid);
+
+    // Under NativeAOT a string assigned into a JsonObject throws for want of type metadata (only
+    // bool/int/double have a reflection-free path), and the capability block's catch would then
+    // silently drop every capability; a parsed JSON string node avoids the metadata lookup.
+    static JsonNode AotJsonString(string value) => JsonNode.Parse($"\"{JsonEncodedText.Encode(value)}\"")!;
 }
