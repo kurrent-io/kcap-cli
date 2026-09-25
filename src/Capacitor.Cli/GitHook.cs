@@ -25,7 +25,7 @@ static class GitHook {
     public static async Task<CommitObservation> ObservationAsync(ConfigRoot config, string sessionId, string? agentId, string? cwd, TimeProvider time) {
         if (!await CoversAsync(config, sessionId, cwd, time)) return new CommitObservation.Uncovered();
 
-        return agentId is null ? new CommitObservation.Covered(CommitInbox.Of(config, SessionId.Parse(sessionId)!)) : new CommitObservation.Subagent();
+        return agentId is null ? new CommitObservation.Covered(SessionCommits.Of(config, SessionId.Parse(sessionId)!)) : new CommitObservation.Subagent();
     }
 
     public static async Task<bool> CoversAsync(ConfigRoot config, string sessionId, string? cwd, TimeProvider time) =>
@@ -73,7 +73,7 @@ static class GitHook {
         var repo    = await RepositoryDetection.DetectRepositoryAsync(new(), config, dir, time, detectPullRequest: false);
         var message = body.Trim();
 
-        CommitInbox.Of(config, session).Append(new ObservedCommit {
+        SessionCommits.Of(config, session).Append(new ObservedCommit {
             Sha      = sha,
             Owner    = repo?.Owner,
             RepoName = repo?.RepoName,

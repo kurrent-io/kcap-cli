@@ -143,13 +143,13 @@ public class ShutdownTranscriptSpoolTests {
         using var tmp = new TempDir();
         var spoolDir       = tmp.PathTo("shut-commits-spool");
         var transcriptPath = tmp.CreateDir("shut-commits").CreateFile("transcript.jsonl", "{\"line\":0}\n");
-        var inbox          = new CommitInbox(tmp.PathTo("commits.jsonl"));
+        var commits        = new SessionCommits(tmp.PathTo("commits.jsonl"));
 
-        inbox.Append(new ObservedCommit { Sha = "aaa", Message = "Fix watcher" });
+        commits.Append(new ObservedCommit { Sha = "aaa", Message = "Fix watcher" });
 
         var spool  = new TranscriptSpool(spoolDir, time: TimeProvider.System);
         var result = await Watch.SpoolUndeliveredTranscriptTailAsync(
-            spool, transcriptPath, Sid, agentId: null, vendor: "claude", linesProcessed: 1, commits: new CommitObservation.Covered(inbox), ct: CancellationToken.None);
+            spool, transcriptPath, Sid, agentId: null, vendor: "claude", linesProcessed: 1, commits: new CommitObservation.Covered(commits), ct: CancellationToken.None);
 
         await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.Appended);
     }

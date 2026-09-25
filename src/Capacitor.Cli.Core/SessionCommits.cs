@@ -9,13 +9,13 @@ namespace Capacitor.Cli.Core;
 /// sends them. The commit never waits on the network, and a commit made while the watcher is down
 /// is still here when it comes back.
 /// </summary>
-public sealed class CommitInbox(string path) {
+public sealed class SessionCommits(string path) {
     const FileShare Shared = FileShare.ReadWrite | FileShare.Delete;
 
-    public static CommitInbox Of(ConfigRoot config, SessionId session) => new(config.Path("commits", $"{session}.jsonl"));
+    public static SessionCommits Of(ConfigRoot config, SessionId session) => new(config.Path("commits", $"{session}.jsonl"));
 
     /// <summary>
-    /// Not deleted when the session ends: a resumed session's watcher reads its inbox again.
+    /// Not deleted when the session ends: a resumed session's watcher reads it again.
     /// </summary>
     public static void ReapOlderThan(ConfigRoot config, TimeSpan age, TimeProvider time) {
         try {

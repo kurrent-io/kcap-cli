@@ -49,10 +49,10 @@ public abstract record CommitObservation {
     }
 
     /// <summary>
-    /// A main session the hook covers. Batches carry the commits the hook filed in its inbox,
+    /// A main session the hook covers. Batches carry the commits the hook filed for it,
     /// and the server takes them instead of reading the transcript's git commands.
     /// </summary>
-    public sealed record Covered(CommitInbox Inbox) : CommitObservation {
+    public sealed record Covered(SessionCommits Commits) : CommitObservation {
         long Read { get; init; }
 
         ImmutableList<ObservedCommit> Held { get; init; } = [];
@@ -63,7 +63,7 @@ public abstract record CommitObservation {
         public override ObservedCommit[]? Pending => Lapsed && Held.IsEmpty ? null : [.. Held];
 
         public override CommitObservation Collect() {
-            var (filed, next) = Inbox.ReadFrom(Read);
+            var (filed, next) = Commits.ReadFrom(Read);
 
             return this with { Read = next, Held = Held.AddRange(filed) };
         }

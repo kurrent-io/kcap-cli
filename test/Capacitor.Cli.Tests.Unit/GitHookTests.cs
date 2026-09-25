@@ -20,7 +20,7 @@ public class GitHookTests {
 
     void Claim() => Sessions.Claim(Environment.ProcessId, Session);
 
-    IReadOnlyList<ObservedCommit> Filed() => CommitInbox.Of(Config.Root, Session).ReadFrom(0).Commits;
+    IReadOnlyList<ObservedCommit> Filed() => SessionCommits.Of(Config.Root, Session).ReadFrom(0).Commits;
 
     [Test]
     public async Task A_commit_is_filed_under_the_claimed_session_with_its_message_redacted() {
