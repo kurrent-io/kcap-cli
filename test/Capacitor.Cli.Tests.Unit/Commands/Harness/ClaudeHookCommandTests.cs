@@ -563,6 +563,69 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.SpoolFiles.Any()).IsTrue(); // still durably spooled for retry
     }
 
+    // ── SessionStart next-work lane: capability advertise + response render ───────────────────
+
+    const string NextWorkAck =
+        """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
+
+    [Test, NotInParallel]
+    public async Task session_start_advertises_next_work_and_renders_it_after_the_guidelines() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root) {
+            RespondJson = """{"top_clusters":[{"text":"Run the fast suite first","category":"pattern"}],"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"t","arms_not_current":[]}}"""
+        };
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains("1. Review PR #42 — Priya is waiting");
+        await Assert.That(ctx.IndexOf("<next-work-data>", StringComparison.Ordinal))
+            .IsGreaterThan(ctx.IndexOf("## Known patterns", StringComparison.Ordinal));
+    }
+
+    /// <summary>The same response that renders above renders nothing under the opt-out, and the
+    /// capability is never sent — so the absence is the opt-out's doing, not the fixture's.</summary>
+    [Test, NotInParallel]
+    public async Task disable_nextwork_nudge_suppresses_both_the_capability_and_the_render() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisableNextWorkNudge = true }) { RespondJson = NextWorkAck };
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
+        await Assert.That(body["next_work"]).IsNull();
+        await Assert.That(body["coordination_notices"]?.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(stdout).DoesNotContain("next-work-data");
+        await Assert.That(stdout).DoesNotContain("Review PR #42");
+    }
+
+    [Test, NotInParallel]
+    public async Task a_failed_session_start_posts_the_next_work_capability_but_never_spools_it() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""");
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]?.GetValue<string>()).IsEqualTo("v1");
+
+        var files = fx.SpoolFiles.ToList();
+        await Assert.That(files.Count).IsEqualTo(1);
+        var spooled = JsonNode.Parse(JsonNode.Parse((await File.ReadAllTextAsync(files[0])).Split('\n')[0])!["body"]!.GetValue<string>())!;
+        await Assert.That(spooled["session_id"]!.GetValue<string>()).IsEqualTo(Sid);
+        await Assert.That(spooled["next_work"]).IsNull();
+    }
+
     // ── SessionStart coordination-notices lane: capability advertise + response render ───────
 
     [Test, NotInParallel]

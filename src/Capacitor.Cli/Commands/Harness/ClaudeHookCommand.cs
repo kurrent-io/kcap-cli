@@ -684,14 +684,18 @@ public sealed class ClaudeHookCommand(
             // /hooks/session-start/{vendor} with origin=historical and never reaches here. Suppressed by
             // the disable_coordination_notices opt-out, read from the EFFECTIVE profile (honoured for
             // KCAP_URL users too, unlike the memory read above). Fail-open.
+            // The next-work capability follows the same live-only rule: a replay must not make the
+            // server run the feed for rows nobody will render.
             var coordinationNoticesDisabled = activeProfile?.DisableCoordinationNotices is true;
+            var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true;
             var postBody = body;
-            if (!coordinationNoticesDisabled) {
+            if (!coordinationNoticesDisabled || !nextWorkDisabled) {
                 try {
                     var node = JsonNode.Parse(body);
                     if (node is not null) {
-                        node["coordination_notices"] = CoordinationNoticesEmitter.CapabilityVersion;
-                        postBody                      = node.ToJsonString();
+                        if (!coordinationNoticesDisabled) node["coordination_notices"] = CoordinationNoticesEmitter.CapabilityVersion;
+                        if (!nextWorkDisabled) node["next_work"] = NextWorkEmitter.CapabilityVersion;
+                        postBody = node.ToJsonString();
                     }
                 } catch {
                     // Best effort — never fail the hook building the capability field.
@@ -719,8 +723,8 @@ public sealed class ClaudeHookCommand(
             HttpResponseMessage? resp = null;
             try {
                 if (remaining > TimeSpan.Zero) {
-                    // postBody carries the coordination-notices capability; the spool below uses the
-                    // capability-free `body` so a replay never claims notices it cannot render.
+                    // postBody carries the live-only capabilities; the spool below uses the
+                    // capability-free `body` so a replay never claims what it cannot render.
                     using var content = new StringContent(postBody, Encoding.UTF8, "application/json");
                     resp = await client.PostOnceAsync($"{Url}/hooks/session-start", content, clock.Time, remaining, CancellationToken.None);
                 }
@@ -783,6 +787,7 @@ public sealed class ClaudeHookCommand(
                     // Scoped to guidelines here; the memory read above keeps its existing behaviour.
                     var disabled        = activeProfile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
+                    var nextWorkFragment = NextWorkEmitter.BuildFragment(responseNode, nextWorkDisabled);
                     // update_check=false opts out of ALL kcap update nudging, including the
                     // in-agent one — skip emission entirely rather than let a server that still
                     // sends `version` sneak the fragment past a locally-disabled preference.
@@ -810,7 +815,7 @@ public sealed class ClaudeHookCommand(
                     var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Claude, harnesses);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge,
+                        lessonsFragment, nextWorkFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge,
                         firstRunNotice);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
