@@ -63,7 +63,7 @@ public class EvalObligationRulesTests {
 
             await Assert.That(result.Outcome).IsEqualTo(v.GetProperty("expected_outcome").GetString()).Because(name);
             var expected = v.GetProperty("expected");
-            if (expected.ValueKind == JsonValueKind.Null) {
+            if (expected.IsNull) {
                 await Assert.That(result.Obligations).IsNull().Because(name);
                 continue;
             }

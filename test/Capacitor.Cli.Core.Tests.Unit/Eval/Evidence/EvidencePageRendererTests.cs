@@ -103,7 +103,7 @@ public class EvidencePageRendererTests {
     public async Task The_row_ref_map_equals_the_contract_fixture() {
         using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "eval-evidence", "contract.json")));
         var expected = fixture.RootElement.GetProperty("row_ref_fields").EnumerateObject()
-            .ToDictionary(p => p.Name, p => p.Value.ValueKind == JsonValueKind.Null ? null : p.Value.GetString());
+            .ToDictionary(p => p.Name, p => p.Value.IsNull ? null : p.Value.GetString());
 
         await Assert.That(EvidencePageRenderer.RowRefFields.Keys.Order(StringComparer.Ordinal).ToList()).IsEquivalentTo(expected.Keys.Order(StringComparer.Ordinal).ToList());
         foreach (var (tool, path) in expected) await Assert.That(EvidencePageRenderer.RowRefFields[tool]).IsEqualTo(path);

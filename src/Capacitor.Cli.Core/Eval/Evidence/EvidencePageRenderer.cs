@@ -53,13 +53,13 @@ public static class EvidencePageRenderer {
             foreach (var property in root.EnumerateObject()) {
                 if (property.NameEquals("next_cursor")) continue;
 
-                if (array is not null && property.NameEquals(array) && property.Value.ValueKind == JsonValueKind.Array) {
+                if (array is not null && property.NameEquals(array) && property.Value.IsArray) {
                     w.WriteStartArray(property.Name);
                     var index = 0;
                     foreach (var row in property.Value.EnumerateArray()) {
                         // Every element after the first is preceded by one comma.
                         var start = (int)Position(w) + (index++ > 0 ? 1 : 0);
-                        if (row.ValueKind != JsonValueKind.Object) { row.WriteTo(w); continue; }
+                        if (!row.IsObject) { row.WriteTo(w); continue; }
                         w.WriteStartObject();
                         if (ResolveRef(row, refPath!) is { } rowRef) w.WriteString("cite", Cite(rowRef));
                         foreach (var field in row.EnumerateObject()) field.WriteTo(w);

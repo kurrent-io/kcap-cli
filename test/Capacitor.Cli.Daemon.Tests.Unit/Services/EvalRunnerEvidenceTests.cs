@@ -18,11 +18,11 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class EvalRunnerEvidenceTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome]       public required TempHome       Home   { get; init; }
+    [TempDir]        public required TempDir        Tmp    { get; init; }
 
     readonly EvidenceServerStub _stub = new();
-    readonly TempDir _tmp = new();
 
-    public void Dispose() { _stub.Dispose(); _tmp.Dispose(); }
+    public void Dispose() => _stub.Dispose();
 
     static string Root => EvidenceServerStub.RootSource;
     static string Sid  => EvidenceServerStub.SessionId;
@@ -38,7 +38,7 @@ public class EvalRunnerEvidenceTests : IDisposable {
         public void StopApplication() { }
     }
 
-    string RunRoot => _tmp.PathTo("runs");
+    string RunRoot => Tmp.PathTo("runs");
 
     /// <summary>The system clock, until told to fail: then every read of the time is an OperationCanceledException that no
     /// phase budget and no shutdown caused.</summary>
@@ -82,7 +82,7 @@ public class EvalRunnerEvidenceTests : IDisposable {
         $$"""{"category":"safety","question_id":"q1","outcome":"assessed","score":4,"verdict":"pass","finding":"ok","evidence":null,"recommendation":null,"retain_fact":{{(retain is null ? "null" : "\"" + retain + "\"")}},"citations":[{{string.Join(",", citations.Select(c => "\"" + c + "\""))}}]}""";
 
     FakeClaudeOnPath Claude(string verdict, string before = "", string retroBefore = "") {
-        var dir = _tmp.PathTo("claude");
+        var dir = Tmp.PathTo("claude");
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "verdict.json"), Envelope(verdict));
         File.WriteAllText(Path.Combine(dir, "retro.json"), Envelope(Retro));
@@ -105,7 +105,7 @@ public class EvalRunnerEvidenceTests : IDisposable {
 
     bool NoRunDirectory() => !Directory.Exists(RunRoot) || Directory.GetDirectories(RunRoot, EvidenceRunContext.DirectoryPrefix + "*").Length == 0;
 
-    string[] Prompts() => Directory.GetFiles(_tmp.PathTo("claude"), "prompt-*");
+    string[] Prompts() => Directory.GetFiles(Tmp.PathTo("claude"), "prompt-*");
 
     [Test]
     [Arguments(1L, "evidence_one_shot")]

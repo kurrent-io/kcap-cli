@@ -34,7 +34,7 @@ public static class JudgeLedgerReader {
         e.GetProperty("args").GetRawText(), e.Str("source"), e.GetProperty("text").GetString()!,
         [.. e.GetProperty("revisions").EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetInt64(), a[2].GetInt64()))],
         [.. e.GetProperty("turns").EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetInt32()))],
-        [.. e.GetProperty("bodies").EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetString()!, a[2].ValueKind == JsonValueKind.Number ? a[2].GetInt32() : (int?)null))],
+        [.. e.GetProperty("bodies").EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetString()!, a[2].IsNumber ? a[2].GetInt32() : (int?)null))],
         [.. e.GetProperty("detail").EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetInt64(), a[2].GetInt32(), a[3].GetInt32()))],
         e.GetProperty("cites").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString()!, StringComparer.Ordinal),
         e.GetProperty("has_next").GetBoolean(), e.Str("next"));
@@ -45,7 +45,7 @@ public static class JudgeLedgerReader {
     static JudgeLedgerHeader ReadHeader(JsonElement e) => new(
         e.GetProperty("eval_run_id").GetString()!, e.GetProperty("question_id").GetString()!, e.GetProperty("scope_version").GetString()!,
         ReadBudgets(e.GetProperty("budgets")),
-        e.GetProperty("soft_deadline").ValueKind == JsonValueKind.Null ? null : e.GetProperty("soft_deadline").GetDateTimeOffset(),
+        e.GetProperty("soft_deadline").IsNull ? null : e.GetProperty("soft_deadline").GetDateTimeOffset(),
         e.GetProperty("started_at").GetDateTimeOffset());
 
     static JudgeLedgerCall ReadCall(JsonElement e) => new(

@@ -44,7 +44,7 @@ public static class EvidenceCanonicalContent {
         return bodies;
     }
 
-    static bool IsAbsent(JsonElement e, string property) => e.Prop(property) is not { } v || v.ValueKind == JsonValueKind.Null;
+    static bool IsAbsent(JsonElement e, string property) => e.Prop(property) is not { } v || v.IsNull;
 
     static (string Ref, string Field, int? Ordinal)? Descriptor(JsonElement e, string property) =>
         e.Obj(property) is { } d && d.Str("ref") is { } r && d.Str("field") is { } f ? (r, f, d.Num("ordinal") is { } o ? (int)o : null) : null;

@@ -49,7 +49,7 @@ public class EvidenceTraceAssemblerTests : IDisposable {
         var entryElement = JsonDocument.Parse(trace.TraceJson).RootElement[0].GetProperty("entries")[0];
         await Assert.That(entryElement.TryGetProperty("arguments[0]", out _)).IsFalse();
         var arguments = FirstCall(trace.TraceJson).GetProperty("arguments");
-        await Assert.That(arguments.ValueKind).IsEqualTo(JsonValueKind.Object);
+        await Assert.That(arguments.IsObject).IsTrue();
         await Assert.That(arguments.GetProperty("cmd").GetString()).IsEqualTo("rm -rf /");
     }
 

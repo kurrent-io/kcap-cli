@@ -493,7 +493,7 @@ public static partial class EvalService {
         try {
             using var doc = JsonDocument.Parse(StripCodeFences(rawResponse.Trim()));
             return doc.RootElement.Arr("citations") is { } citations
-                ? [.. citations.EnumerateArray().Where(c => c.ValueKind == JsonValueKind.String).Select(c => c.GetString()!)]
+                ? [.. citations.EnumerateArray().Where(c => c.IsString).Select(c => c.GetString()!)]
                 : [];
         } catch (JsonException) {
             return [];

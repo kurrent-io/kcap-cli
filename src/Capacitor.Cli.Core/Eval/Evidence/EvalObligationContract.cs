@@ -51,7 +51,7 @@ public static class EvalObligationContract {
 
     /// <summary>The parsed entries, or null when the value is not an array this contract accepts: drop the array, keep the verdict.</summary>
     public static IReadOnlyList<EvalReportedObligation>? TryParse(JsonElement obligations) {
-        if (obligations.ValueKind != JsonValueKind.Array || obligations.GetArrayLength() > MaxObligations) return null;
+        if (!obligations.IsArray || obligations.GetArrayLength() > MaxObligations) return null;
 
         var result = new List<EvalReportedObligation>(obligations.GetArrayLength());
         foreach (var entry in obligations.EnumerateArray()) {
@@ -62,7 +62,7 @@ public static class EvalObligationContract {
     }
 
     static EvalReportedObligation? ParseEntry(JsonElement entry) {
-        if (entry.ValueKind != JsonValueKind.Object) return null;
+        if (!entry.IsObject) return null;
 
         string? title = null, origin = null, status = null, anchor = null, note = null;
         List<string>? citations = null;
@@ -76,20 +76,20 @@ public static class EvalObligationContract {
                     if (!Text(value, out title) || string.IsNullOrWhiteSpace(title)) return null;
                     break;
                 case "note":
-                    if (value.ValueKind == JsonValueKind.Null) break;
+                    if (value.IsNull) break;
                     if (!Text(value, out note)) return null;
                     break;
                 case "origin":
-                    if (value.ValueKind != JsonValueKind.String || !Origins.Contains(origin = value.GetString()!)) return null;
+                    if (!value.IsString || !Origins.Contains(origin = value.GetString()!)) return null;
                     break;
                 case "status":
-                    if (value.ValueKind != JsonValueKind.String || !Statuses.Contains(status = value.GetString()!)) return null;
+                    if (!value.IsString || !Statuses.Contains(status = value.GetString()!)) return null;
                     break;
                 case "anchor":
                     if (!Token(value, out anchor)) return null;
                     break;
                 case "citations":
-                    if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() > MaxCitations) return null;
+                    if (!value.IsArray || value.GetArrayLength() > MaxCitations) return null;
                     citations = [];
                     foreach (var c in value.EnumerateArray()) {
                         if (!Token(c, out var token)) return null;
@@ -106,14 +106,14 @@ public static class EvalObligationContract {
     // The cap is on the bytes as encoded — between the quotes, escapes included — which is what bounds the payload.
     static bool Text(JsonElement value, out string? text) {
         text = null;
-        if (value.ValueKind != JsonValueKind.String || EncodedBytes(value) > MaxTextBytes) return false;
+        if (!value.IsString || EncodedBytes(value) > MaxTextBytes) return false;
         text = value.GetString();
         return text is not null;
     }
 
     static bool Token(JsonElement value, out string? token) {
         token = null;
-        if (value.ValueKind != JsonValueKind.String || EncodedBytes(value) is < 1 or > MaxTokenBytes) return false;
+        if (!value.IsString || EncodedBytes(value) is < 1 or > MaxTokenBytes) return false;
         token = value.GetString();
         return !string.IsNullOrEmpty(token);
     }

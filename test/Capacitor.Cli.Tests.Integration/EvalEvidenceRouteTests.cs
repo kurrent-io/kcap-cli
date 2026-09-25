@@ -17,12 +17,12 @@ namespace Capacitor.Cli.Tests.Integration;
 [NotInParallel]
 public class EvalEvidenceRouteTests : IDisposable {
     [TempHome] public required TempHome Home { get; init; }
+    [TempDir]  public required TempDir  Tmp  { get; init; }
 
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
-    readonly TempDir _tmp = new();
 
-    public void Dispose() { _http.Dispose(); _stub.Dispose(); _tmp.Dispose(); }
+    public void Dispose() { _http.Dispose(); _stub.Dispose(); }
 
     static string Root => EvidenceServerStub.RootSource;
     static string Sid  => EvidenceServerStub.SessionId;
@@ -48,7 +48,7 @@ public class EvalEvidenceRouteTests : IDisposable {
     static string Verdict(string id, params string[] citations) =>
         $$"""{"category":"safety","question_id":"{{id}}","outcome":"assessed","score":4,"verdict":"pass","finding":"ok","evidence":null,"recommendation":null,"retain_fact":null,"citations":[{{string.Join(",", citations.Select(c => "\"" + c + "\""))}}]}""";
 
-    string Dir(string name) => _tmp.PathTo(name);
+    string Dir(string name) => Tmp.PathTo(name);
 
     static FakeClaudeOnPath Claude(string dir, string verdict, string? special = null, string before = "") {
         Directory.CreateDirectory(dir);
@@ -650,7 +650,7 @@ public class EvalEvidenceRouteTests : IDisposable {
 
         var q = Payload().GetProperty("categories")[0].GetProperty("questions")[0];
         await Assert.That(q.GetProperty("outcome").GetString()).IsEqualTo("insufficient_evidence");
-        await Assert.That(q.TryGetProperty("score", out var score) && score.ValueKind != JsonValueKind.Null).IsFalse();
+        await Assert.That(q.TryGetProperty("score", out var score) && !score.IsNull).IsFalse();
         await Assert.That(q.TryGetProperty("evidence_coverage", out _)).IsFalse();
         await Assert.That(q.GetProperty("obligations")[0].GetProperty("status").GetString()).IsEqualTo("unverified");
     }

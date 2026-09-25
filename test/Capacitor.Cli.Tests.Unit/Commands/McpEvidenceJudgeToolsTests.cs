@@ -11,17 +11,18 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// cursor, ledger every page with spans that locate its events, charge their budgets before reading arguments, keep
 /// refusals correctable, end every later call after a moved scope, and re-check admission before serving cached bytes.</summary>
 public class McpEvidenceJudgeToolsTests : IDisposable {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
-    readonly TempDir _tmp = new();
     readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
 
-    public void Dispose() { _http.Dispose(); _stub.Dispose(); _tmp.Dispose(); }
+    public void Dispose() { _http.Dispose(); _stub.Dispose(); }
 
     static string Root => EvidenceServerStub.RootSource;
     const string Lane = $"AgentSubsession-{EvidenceServerStub.SessionId}-a1";
 
-    string LedgerPath => _tmp.PathTo("q1.ledger.jsonl");
+    string LedgerPath => Tmp.PathTo("q1.ledger.jsonl");
 
     McpEvidenceJudgeTools Tools(int maxToolCalls = 48, long byteBudget = 600_000, IReadOnlyList<JudgeLedgerPage>? seeded = null, HttpClient? http = null) {
         var soft   = _time.GetUtcNow().AddMinutes(8);
@@ -31,7 +32,7 @@ public class McpEvidenceJudgeToolsTests : IDisposable {
         var run = new EvidenceRunFile("run", "safety/q1", EvidenceServerStub.SessionId, "v1", "tok", _time.GetUtcNow().AddMinutes(30),
             [new EvidenceRunSource(Root, "root", true, 0, 9, 2), new EvidenceRunSource(Lane, "subagent", true, 0, 4, 1)],
             header.Budgets, soft, LedgerPath, seeded ?? []);
-        var runPath = _tmp.PathTo("q1.run.json");
+        var runPath = Tmp.PathTo("q1.run.json");
         using (var stream = File.Create(runPath)) run.WriteTo(stream);
         _stub.CursorPage("tok", EvidenceServerStub.Manifest("v1", "tok", null, null, null));
         return McpEvidenceJudgeTools.Open(runPath, http ?? _http, _stub.Url, _time);

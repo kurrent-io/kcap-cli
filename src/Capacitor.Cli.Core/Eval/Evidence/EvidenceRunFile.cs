@@ -51,7 +51,7 @@ public sealed record EvidenceRunFile(
             [.. e.GetProperty("sources").EnumerateArray().Select(s => new EvidenceRunSource(
                 s.GetProperty("source_id").GetString()!, s.GetProperty("kind").GetString()!, s.GetProperty("available").GetBoolean(),
                 s.GetProperty("first_revision").GetInt64(), s.GetProperty("revision_cutoff").GetInt64(),
-                s.GetProperty("turn_count").ValueKind == JsonValueKind.Number ? s.GetProperty("turn_count").GetInt32() : null))],
+                s.GetProperty("turn_count").IsNumber ? s.GetProperty("turn_count").GetInt32() : null))],
             JudgeLedgerReader.ReadBudgets(e.GetProperty("budgets")), e.GetProperty("soft_deadline").GetDateTimeOffset(),
             e.GetProperty("ledger_path").GetString()!,
             [.. e.GetProperty("seeded_pages").EnumerateArray().Select(JudgeLedgerReader.ReadPage)]);

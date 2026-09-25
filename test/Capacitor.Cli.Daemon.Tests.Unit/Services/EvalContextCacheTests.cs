@@ -15,12 +15,12 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class EvalContextCacheTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome]       public required TempHome       Home   { get; init; }
+    [TempDir]        public required TempDir        Tmp    { get; init; }
 
     readonly EvidenceServerStub _stub = new();
-    readonly TempDir _tmp = new();
     readonly FakeTimeProvider _time = new(DateTimeOffset.UtcNow);
 
-    public void Dispose() { _stub.Dispose(); _tmp.Dispose(); }
+    public void Dispose() => _stub.Dispose();
 
     sealed class NoopLifetime : IHostApplicationLifetime {
         public CancellationToken ApplicationStarted  => CancellationToken.None;
@@ -29,7 +29,7 @@ public class EvalContextCacheTests : IDisposable {
         public void StopApplication() { }
     }
 
-    string RunRoot => _tmp.PathTo("runs");
+    string RunRoot => Tmp.PathTo("runs");
 
     int RunDirectories() => Directory.Exists(RunRoot) ? Directory.GetDirectories(RunRoot, EvidenceRunContext.DirectoryPrefix + "*").Length : 0;
 
