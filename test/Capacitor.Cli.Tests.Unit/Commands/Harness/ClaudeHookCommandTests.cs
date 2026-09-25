@@ -27,6 +27,8 @@ public class ClaudeHookCommandTests {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    [TempDir] public required TempDir Tmp { get; init; }
+
     const string Sid = "9dc2775376454e4691ecc2d69973c152";
 
     /// <summary>A hook clock frozen <paramref name="elapsed"/> into its ceiling, so a near-exhausted
@@ -563,21 +565,18 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.SpoolFiles.Any()).IsTrue(); // still durably spooled for retry
     }
 
-    // ── SessionStart next-work lane: capability advertise + response render ───────────────────
-
     const string NextWorkAck =
         """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
 
     [Test, NotInParallel]
     public async Task session_start_advertises_next_work_and_renders_it_after_the_guidelines() {
-        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root) {
             RespondJson = """{"top_clusters":[{"text":"Run the fast suite first","category":"pattern"}],"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"t","arms_not_current":[]}}"""
         };
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         var posted     = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
@@ -595,12 +594,11 @@ public class ClaudeHookCommandTests {
     /// capability is never sent — so the absence is the opt-out's doing, not the fixture's.</summary>
     [Test, NotInParallel]
     public async Task disable_nextwork_nudge_suppresses_both_the_capability_and_the_render() {
-        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, profile: new Profile { DisableNextWorkNudge = true }) { RespondJson = NextWorkAck };
         var sid = Guid.NewGuid().ToString("N");
 
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
-            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
         await Assert.That(exit).IsEqualTo(0);
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
@@ -613,10 +611,9 @@ public class ClaudeHookCommandTests {
 
     [Test, NotInParallel]
     public async Task a_failed_session_start_posts_the_next_work_capability_but_never_spools_it() {
-        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
 
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""");
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]?.GetValue<string>()).IsEqualTo("v1");
@@ -633,10 +630,9 @@ public class ClaudeHookCommandTests {
     /// read off a frozen clock, so the value is exact.</summary>
     [Test, NotInParallel]
     public async Task the_next_work_budget_is_the_remaining_hook_time_less_the_post_reserve() {
-        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
 
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""",
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
             elapsed: TimeSpan.FromMilliseconds(500));
 
         // 5s ceiling − 500ms elapsed − 1.5s hook safety = 3000ms remaining; less the 1000ms reserve.
@@ -651,11 +647,10 @@ public class ClaudeHookCommandTests {
     /// notices are unaffected.</summary>
     [Test, NotInParallel]
     public async Task too_little_hook_time_withholds_the_next_work_capability_and_its_budget() {
-        using var absent = new TempDir();
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
 
         // 3500 − 1001 = 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(absent)}}","source":"startup"}""",
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
             elapsed: TimeSpan.FromMilliseconds(1001));
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
