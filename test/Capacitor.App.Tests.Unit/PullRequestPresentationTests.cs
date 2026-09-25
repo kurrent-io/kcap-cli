@@ -157,6 +157,26 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.Rows.Single().AvatarUrl).IsNull();
     });
 
+    /// Every pending marker reads one clock, so the sidebar and reader never fade out of step, and
+    /// only the marker fades — the status text beside it stays readable.
+    [Test]
+    public Task Pending_markers_share_one_phase_and_leave_the_text_steady() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.PageItem = section => section == "checks"
+            ? new PullRequestCheckDto { Id = "check", Availability = "available", Name = "build", Outcome = "pending", HeadSha = new string('a', 40) } : null;
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("checks");
+        await h.SettleAsync();
+        await Assert.That(h.Model.ChecksStatus.IsPulsing).IsTrue();
+        var markers = new Control[] { h.Card, h.Reader }.SelectMany(root => root.GetVisualDescendants().OfType<Visual>())
+            .Where(visual => PulseClock.GetIsActive(visual) && visual.IsEffectivelyVisible).ToArray();
+        await Assert.That(markers.Length).IsGreaterThanOrEqualTo(3);
+        await WorkspaceFixtures.WaitUntilAsync(() => markers.Select(marker => marker.Opacity).Distinct().Count() == 1, what: "one shared pulse phase");
+        var texts = h.Card.GetVisualDescendants().OfType<PullRequestStatusLabel>()
+            .Select(label => label.FindControl<TextBlock>("StatusText")!).Where(text => text.Text == h.Model.ChecksStatus.Text);
+        foreach (var text in texts) await Assert.That(text.GetSelfAndVisualAncestors().OfType<Visual>().TakeWhile(v => v != h.Card).All(v => v.Opacity == 1)).IsTrue();
+    });
+
     [Test]
     public Task Row_details_leave_out_what_the_source_did_not_report() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();

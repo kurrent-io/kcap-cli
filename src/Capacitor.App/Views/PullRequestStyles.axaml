@@ -131,7 +131,7 @@
     <Style Selector="Ellipse.prTabDot.success"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapSuccessBrush}" /></Style>
     <Style Selector="Ellipse.prTabDot.warning"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapWarningBrush}" /></Style>
     <Style Selector="Ellipse.prTabDot.danger"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapDangerBrush}" /></Style>
-    <Style Selector="Ellipse.prTabDot.pulsing"><Setter Property="IsVisible" Value="True" /></Style>
+    <Style Selector="Ellipse.prTabDot.pending"><Setter Property="IsVisible" Value="True" /></Style>
     <Style Selector="TextBlock.prMuted">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         <Setter Property="FontSize" Value="13" />

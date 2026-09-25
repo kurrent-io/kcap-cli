@@ -42,7 +42,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="7">
                             <TextBlock Text="Checks" />
                             <Ellipse Classes="prTabDot" Classes.success="{Binding ChecksStatus.IsSuccess}" Classes.warning="{Binding ChecksStatus.IsWarning}"
-                                     Classes.danger="{Binding ChecksStatus.IsDanger}" Classes.pulsing="{Binding ChecksStatus.IsPulsing}" />
+                                     Classes.danger="{Binding ChecksStatus.IsDanger}" Classes.pending="{Binding ChecksStatus.IsPulsing}" views:PulseClock.IsActive="{Binding ChecksStatus.IsPulsing}" />
                         </StackPanel>
                     </TabStripItem>
                     <TabStripItem x:Name="ReviewsTab" ToolTip.Tip="{Binding ReviewStatus.Tip}"
@@ -50,7 +50,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="7">
                             <TextBlock Text="Reviews" />
                             <Ellipse Classes="prTabDot" Classes.success="{Binding ReviewStatus.IsSuccess}" Classes.warning="{Binding ReviewStatus.IsWarning}"
-                                     Classes.danger="{Binding ReviewStatus.IsDanger}" Classes.pulsing="{Binding ReviewStatus.IsPulsing}" />
+                                     Classes.danger="{Binding ReviewStatus.IsDanger}" Classes.pending="{Binding ReviewStatus.IsPulsing}" views:PulseClock.IsActive="{Binding ReviewStatus.IsPulsing}" />
                         </StackPanel>
                     </TabStripItem>
                     <TabStripItem Content="Activity" />

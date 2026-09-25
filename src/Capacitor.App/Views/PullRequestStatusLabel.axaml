@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.PullRequestStatusLabel"
              x:DataType="vm:PullRequestStatus">
     <UserControl.Styles>
@@ -14,7 +15,7 @@
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
     </UserControl.Styles>
     <!-- Same icon column as work-item parts and subagents: 12×16 slot, nudged up half a pixel against the 13/16 text. -->
-    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" ToolTip.Tip="{Binding Tip}" Classes.pulsing="{Binding IsPulsing}">
+    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" ToolTip.Tip="{Binding Tip}">
         <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
             <Panel Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"
                    IsVisible="{Binding UsesDiscIcon}">
@@ -34,8 +35,9 @@
                          HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsWarning}" />
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
                          HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
-                <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapMutedBrush}"
-                        HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
+                <Border Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapMutedBrush}"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}"
+                        views:PulseClock.IsActive="{Binding IsPulsing}" />
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
                          HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsNeutralDisc}" />
                 <Path Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
