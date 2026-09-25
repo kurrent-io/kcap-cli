@@ -443,6 +443,30 @@ class McpFlowsServer(
                 return BuildToolResult(id, JsonSerializer.Serialize(result, McpJsonContext.Default.ReviewerVendorsResult));
             }
 
+            if (toolName is "list_flow_definitions") {
+                var lookup = await GetBoundedAsync(client, apiRoot + "/api/flows/definitions", clock);
+                if (lookup.Response is null)
+                    return BuildToolResult(id, $"Error: listing flow definitions (GET /api/flows/definitions) {lookup.How}; nothing was started — retry the call, or start a built-in definition by id.", isError: true);
+
+                using var definitionsResp = lookup.Response;
+                var definitionsBody       = await definitionsResp.Content.ReadAsStringAsync();
+
+                if (definitionsResp.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
+
+                // A server that predates the route 404s at the routing layer: a capability the driver
+                // works around, not a failed call.
+                if (definitionsResp.StatusCode == HttpStatusCode.NotFound)
+                    return BuildToolResult(id, ServerCannotListDefinitions);
+
+                if (!definitionsResp.IsSuccessStatusCode)
+                    return BuildToolResult(id, FormatFlowStartError((int)definitionsResp.StatusCode, definitionsBody, wasDynamicStart: false), isError: true);
+
+                return FormatFlowDefinitions(definitionsBody) is { } listing
+                    ? BuildToolResult(id, listing)
+                    : BuildToolResult(id, "Error: unreadable flow definition list from GET /api/flows/definitions.", isError: true);
+            }
+
             using var httpResponse = toolName switch {
                 "get_review_flow_status" or "get_flow_status" => await client.GetAsync(BuildFlowUrl(apiRoot, arguments)),
                 "close_review_flow"      or "close_flow"      => await client.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null),
@@ -1345,13 +1369,22 @@ class McpFlowsServer(
     /// <summary>A null response comes with the actionable error text in its place.</summary>
     static async Task<(HttpResponseMessage? Response, string Failure)> GetForLookupAsync(
             HttpClient client, string url, string route, FlowRetryClock clock) {
+        var (response, how) = await GetBoundedAsync(client, url, clock);
+
+        return response is not null
+            ? (response, "")
+            : (null, $"Error: the flow lookup (GET {route}) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+    }
+
+    /// <summary>One GET under <see cref="PerGetTimeout"/>, so a server that stops answering cannot hold the
+    /// serial tool loop open; a null response comes with how it failed.</summary>
+    static async Task<(HttpResponseMessage? Response, string How)> GetBoundedAsync(HttpClient client, string url, FlowRetryClock clock) {
         using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
         try {
             return (await client.GetAsync(url, getCts.Token), "");
         } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
             // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
-            var how = ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}";
-            return (null, $"Error: the flow lookup (GET {route}) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+            return (null, ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}");
         }
     }
 
@@ -1468,6 +1501,55 @@ class McpFlowsServer(
     /// sidecar branches in McpFlowResultServer) so the advice can never drift between tools.</summary>
     internal const string ServerCatchingUpGuidance =
         "The server is catching up after a read-model rebuild — try again in a few minutes, or ask the user what to do.";
+
+    /// <summary>What an older server's 404 on the definitions route means for the driver: the built-ins
+    /// still start, nothing else can be discovered.</summary>
+    internal const string ServerCannotListDefinitions =
+        "This server cannot list flow definitions (GET /api/flows/definitions returned 404). " +
+        "The built-in definitions are spec-review and code-review; for any other flow, ask the user for its definition id.";
+
+    /// <summary>Renders GET /api/flows/definitions for the driver, each entry led by the id it passes to
+    /// start_flow. Null when the body is not the expected shape.</summary>
+    internal static string? FormatFlowDefinitions(string body) {
+        JsonNode? root;
+        try { root = JsonNode.Parse(body); } catch (JsonException) { return null; }
+
+        if (root is not JsonObject obj || obj["definitions"] is not JsonArray definitions) return null;
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"flow_definitions ({definitions.Count}):");
+
+        foreach (var node in definitions) {
+            if (node is not JsonObject definition || Str(definition, "id") is not { } definitionId) continue;
+
+            var participants = definition["participants"] as JsonArray ?? new JsonArray();
+            var single       = Bool(definition, "is_single_participant") ?? participants.Count == 1;
+            var version      = definition["version"] is JsonValue v && v.TryGetValue(out int ver) ? $" (v{ver})" : "";
+
+            sb.AppendLine(single
+                ? $"- {definitionId}{version} — single participant: start_flow runs round 1 and accepts vendor/model overrides"
+                : $"- {definitionId}{version} — {participants.Count} participants: start_flow is round-less, address each role with send_to_participant");
+
+            if (Str(definition, "description") is { Length: > 0 } description)
+                sb.AppendLine($"  {description.ReplaceLineEndings(" ").Trim()}");
+
+            foreach (var participant in participants.OfType<JsonObject>()) {
+                var role   = Str(participant, "role") ?? "?";
+                var vendor = Str(participant, "vendor") ?? "vendor unset (the request or your saved flows.reviewer_vendor preference decides)";
+                var model  = Str(participant, "model") ?? "default";
+                sb.AppendLine($"  {role}: {vendor}, model {model}");
+            }
+        }
+
+        sb.Append(definitions.Count == 0
+            ? "No flow definition is runnable on this server. Ask the user for one to publish, or compose one inline with definition_yaml."
+            : "Pass a listed id as definition_id to start_flow (spec-review and code-review also work as kind on start_review_flow).");
+
+        return sb.ToString();
+
+        static string? Str(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue(out string? s) ? s : null;
+        static bool?   Bool(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue(out bool b) ? b : null;
+    }
 
     /// <summary>Renders an exhausted settlement elapsed deadline as tool-error text, in the same
     /// "Error (code): message" shape <see cref="FormatFlowStartError"/> uses for a coded rejection —
@@ -2434,6 +2516,17 @@ class McpFlowsServer(
             "driver_vendor (the harness running THIS session, or absent when it cannot be determined — treat absent as unknown, and do not claim a different model), " +
             "and diagnostics counts. This does NOT start a review — it only reports availability; use start_review_flow to run one. " +
             "Availability is a snapshot: a vendor listed here can still be rejected by start_review_flow if the daemon dropped in between.",
+            new("object", new(), []),
+            McpToolAnnotations.Read
+        ),
+        new(
+            "list_flow_definitions",
+            "List the flow definitions this server can start right now — the catalog start_flow resolves definition_id against, operator-published flows included. " +
+            "Call it before start_flow whenever the user has not named a definition, or named one you have not seen listed. " +
+            "Read-only and side-effect-free: this does NOT start anything. " +
+            "Each entry gives the id to pass as definition_id, its version and description, whether it is single-participant (start_flow runs round 1 and accepts vendor/model overrides) or multi-participant (start_flow is round-less; address each role with send_to_participant), and per participant its role, authored vendor (unset means the request or your saved preference decides) and model. " +
+            "Disabled or deleted definitions are not listed, and start_flow refuses them. " +
+            "A server_catching_up error means the catalog is temporarily unreadable — retry shortly rather than treating the list as empty; an empty list is authoritative.",
             new("object", new(), []),
             McpToolAnnotations.Read
         )

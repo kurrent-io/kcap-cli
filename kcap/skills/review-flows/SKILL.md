@@ -46,6 +46,7 @@ Once the user has explicitly opted into a flow (see above), pick the `kind`:
 
 - Spec or design document → `kind: "spec-review"`
 - Code changes or a pull request → `kind: "code-review"`
+- Any other catalog definition → the `agent-flows` skill; its read-only `list_flow_definitions` shows every definition this server can start.
 
 ## Choosing the reviewer vendor
 
