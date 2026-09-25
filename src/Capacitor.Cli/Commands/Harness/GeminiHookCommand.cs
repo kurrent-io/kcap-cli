@@ -297,8 +297,6 @@ sealed class GeminiHookCommand(
             ["home_dir"]        = home.Path
         };
 
-        PreviousSession.Stamp(forwarded, config, () => ProcessHelpers.GetCodingAgentPid("gemini", allowFallback: false));
-
         if (cwd is not null) {
             forwarded["cwd"] = cwd;
 

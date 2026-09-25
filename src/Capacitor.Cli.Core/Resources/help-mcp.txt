@@ -108,12 +108,12 @@ mcp memory:
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
 mcp workitems:
-  Exposes ten tools for agents to attach the current session (and its
-  continuation chain) to an SDLC work item, to DECLARE that work item's
-  structure — its breakdown (parent -> parts) and dependencies (blocks /
-  blocked-by) — and to record the loose ends a session leaves unfinished.
-  Breakdown and relations are declared, never inferred, so an item whose
-  structure nobody declares has an empty topology. Requires `kcap login`.
+  Exposes ten tools for agents to attach the current session to an SDLC
+  work item, to DECLARE that work item's structure — its breakdown
+  (parent -> parts) and dependencies (blocks / blocked-by) — and to record
+  the loose ends a session leaves unfinished. Breakdown and relations are
+  declared, never inferred, so an item whose structure nobody declares has
+  an empty topology. Requires `kcap login`.
 
     Tools:
       declare_work_item        Attach the current session to a work item by
