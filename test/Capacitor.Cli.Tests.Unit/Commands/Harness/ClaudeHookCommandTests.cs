@@ -14,6 +14,7 @@ using WireMock.ResponseBuilders;
 using WireMock.Server;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
@@ -1279,6 +1280,87 @@ public class ClaudeHookCommandTests {
         await Assert.That(stdout.ToString()).IsEmpty();
     }
 
+    // ── Completion nudge on Stop ────────────────────────────────────────────────────────────
+
+    static string StopWith(string lastMessage, bool stopHookActive = false) =>
+        new JsonObject {
+            ["hook_event_name"] = "Stop", ["session_id"] = Sid, ["cwd"] = "/tmp",
+            ["stop_hook_active"] = stopHookActive, ["last_assistant_message"] = lastMessage
+        }.ToJsonString();
+
+    const string WrapUpMessage = "## Summary\nFixed the parser and opened PR #12.";
+
+    [Test]
+    public async Task stop_writes_the_block_decision_when_the_ack_the_profile_and_the_message_agree() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"completion_nudge":true}""" };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var stdout = new StringWriter { NewLine = "\n" };
+
+        var exit = await fx.HandleAsync(StopWith(WrapUpMessage), stdout: stdout);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout.ToString()).IsEqualTo(ClaudeCompletionNudge.BlockDecision + "\n");
+    }
+
+    [Test]
+    public async Task stop_forwards_stop_hook_active_to_the_server() {
+        using var fx = new Fixture(Config.Root);
+
+        await fx.HandleAsync(StopWith(WrapUpMessage, stopHookActive: true), stdout: new StringWriter());
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/stop|", StringComparison.Ordinal));
+        await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["stop_hook_active"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("{}")]
+    [Arguments("not json")]
+    public async Task stop_writes_nothing_when_the_ack_does_not_ask_for_a_nudge(string? ack) {
+        using var fx = new Fixture(Config.Root) { RespondJson = ack };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var stdout = new StringWriter();
+
+        var exit = await fx.HandleAsync(StopWith(WrapUpMessage), stdout: stdout);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout.ToString()).IsEmpty();
+    }
+
+    [Test]
+    public async Task stop_writes_nothing_when_the_profile_opts_out_of_next_work() {
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisableNextWorkNudge = true }) { RespondJson = """{"completion_nudge":true}""" };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var stdout = new StringWriter();
+
+        await fx.HandleAsync(StopWith(WrapUpMessage), stdout: stdout);
+
+        await Assert.That(stdout.ToString()).IsEmpty();
+    }
+
+    /// <summary>The ack and the message both ask for the block, so only the missing tools stop it.</summary>
+    [Test]
+    public async Task stop_writes_nothing_when_the_workitems_tools_are_not_registered() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"completion_nudge":true}""" };
+        var stdout = new StringWriter();
+
+        await fx.HandleAsync(StopWith(WrapUpMessage), stdout: stdout);
+
+        await Assert.That(stdout.ToString()).IsEmpty();
+    }
+
+    [Test]
+    public async Task stop_writes_nothing_when_the_last_message_is_not_a_wrap_up() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"completion_nudge":true}""" };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var stdout = new StringWriter();
+
+        await fx.HandleAsync(StopWith("Not complete yet — waiting on your answer?"), stdout: stdout);
+
+        await Assert.That(stdout.ToString()).IsEmpty();
+    }
+
     // ── Server-rejected credential (HTTP 401) ───────────────────────────────────────────────
     // A 401 is not a transient failure the user can wait out. Exiting non-zero makes Claude
     // render its opaque "non-blocking status code" banner, which says nothing about recording
@@ -1420,14 +1502,14 @@ public class ClaudeHookCommandTests {
         /// bounded by the same clock a test measures elapsed time on; <paramref name="elapsed"/>
         /// freezes the budget partway into its ceiling instead, for the paths that give up on the
         /// arithmetic alone.</summary>
-        public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default, HookClock? clock = null) {
+        public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default, HookClock? clock = null, TextWriter? stdout = null) {
             StubMemoryServer();
 
             clock ??= elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
             _clock = clock;
 
             return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
-                Client, AuthStatus.Ok, Spool, new StringReader(stdin));
+                Client, AuthStatus.Ok, Spool, new StringReader(stdin), stdout);
         }
 
         /// <summary>Registered per call, not in the constructor, so a test can set the body, status

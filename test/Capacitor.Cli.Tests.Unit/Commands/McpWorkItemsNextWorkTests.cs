@@ -260,6 +260,18 @@ public class McpWorkItemsNextWorkTests {
         await Assert.That(Result(response).Text).Contains("#1 [1/blocks_others] Review PR #42");
     }
 
+    /// <summary>The server records that next work was presented for this session, so the call must
+    /// name the session the MCP server runs in without the agent passing it.</summary>
+    [Test, NotInParallel]
+    public async Task Dispatch_names_the_session_the_server_runs_in() {
+        using var session = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "9dc27753-7645-4e46-91ec-c2d69973c152");
+        using var nested  = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+
+        var (h, _) = await DispatchAsync("{}", () => ValueTask.FromResult<string?>(null));
+
+        await Assert.That(h.Url).IsEqualTo("http://x/api/next-work?session_id=9dc2775376454e4691ecc2d69973c152");
+    }
+
     [Test]
     public async Task Dispatch_prefers_an_explicit_repo_hash_and_never_resolves_the_checkout() {
         var resolved = false;
