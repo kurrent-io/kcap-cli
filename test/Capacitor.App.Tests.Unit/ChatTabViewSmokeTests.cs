@@ -1410,6 +1410,83 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// Pins the reader at the bottom across a series answer, by click and by Enter. Either is an
+    /// input inside the list, and the card swaps to the next question in the same layout pass; that
+    /// growth is the card's, not the reader scrolling, so following has to carry on and land the
+    /// whole next question in view. The next question genuinely has to be taller — a shorter one
+    /// clamps back to the bottom on its own and this test proves nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Answering_a_series_question_keeps_the_reader_at_the_bottom() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var prose = string.Join("\\n\\n", Enumerable.Range(1, 60).Select(i => $"Paragraph {i} of a long reply that wraps across the column."));
+            var tall = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + prose + "\"}]}}";
+            var tags = string.Join(",", Enumerable.Range(1, 8).Select(i =>
+                $$$"""{"label":"Tag {{{i}}}","description":"A longer description of tag {{{i}}} that wraps across the column and adds height."}"""));
+            var question = $$$"""{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]},{"question":"Tags","multiSelect":true,"options":[{{{tags}}}]}]}""";
+            var ask = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q-tool","name":"AskUserQuestion","input":{{{question}}}}]}}""";
+            var path = Tmp.CreateFile("series.jsonl", [tall, tall, tall, .. Enumerable.Repeat(UserLine, 20), ask]);
+            await host.LoadAsync(path);
+            await Assert.That(host.AtBottom()).IsTrue();
+
+            host.Permissions.Add(PermissionEntries.Entry("q1", "a1", "claude", ClaudeElicitation.ToolName, question, toolUseId: "q-tool"));
+            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 1, what: "the card");
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+
+            var card = (QuestionCardViewModel)host.Chat.PendingCards.Single();
+            var option = Option(host, "A");
+            // Headless pointer events do not focus, so the focus a real click gives the button is applied by hand.
+            option.Focus(NavigationMethod.Pointer);
+            Click(host, option);
+            await WaitUntilAsync(() => card.CurrentIndex == 1, what: "the next question");
+            host.Settle();
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+
+            var back = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "Back");
+            back.Focus(NavigationMethod.Tab);
+            host.Press(PhysicalKey.Enter);
+            await WaitUntilAsync(() => card.CurrentIndex == 0, what: "the first question again");
+            host.Settle();
+            Option(host, "A").Focus(NavigationMethod.Tab);
+            Dispatcher.UIThread.RunJobs();
+            host.Press(PhysicalKey.Enter);
+            await WaitUntilAsync(() => card.CurrentIndex == 1, what: "the next question by keyboard");
+            host.Settle();
+            host.Settle();
+
+            await Assert.That(host.AtBottom()).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
+    /// Page Up from a focused option reaches the ScrollViewer, which pages the list: that is the
+    /// reader's own move, so following stops where they paged instead of snapping back to the card.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Paging_up_from_a_focused_option_leaves_the_reader_where_they_paged() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("page.jsonl", Enumerable.Repeat(UserLine, 60).ToArray()));
+            host.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 1, what: "the card");
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+            var start = host.Scroll.Offset.Y;
+
+            Option(host, "A").Focus(NavigationMethod.Tab);
+            Dispatcher.UIThread.RunJobs();
+            host.Press(PhysicalKey.PageUp);
+            host.Settle();
+
+            await Assert.That(host.AtBottom()).IsFalse();
+            await Assert.That(host.Scroll.Offset.Y).IsLessThan(start - host.Scroll.Viewport.Height / 2);
+            await host.CloseAsync();
+        });
+    }
+
     /// The chip strip's whole wiring: it is collapsed with an empty tray, a staged file renders a
     /// chip carrying its name and size, and the chip's own button takes that file back out.
     [Test]
