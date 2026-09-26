@@ -116,6 +116,38 @@ public class KiroCrewSessionEndWatchTests {
         await Assert.That(Watch(Sid).IsFinished()).IsFalse();
     }
 
+    /// <summary>A session that moves to another chat stays live even after the chat it was first seen in
+    /// moves on or disappears.</summary>
+    [Test]
+    public async Task A_session_resumed_in_another_chat_is_not_ended() {
+        Map(Sid);
+        var watch = Watch(Sid);
+        await Assert.That(watch.IsFinished()).IsFalse();
+
+        Tmp.CreateFile(["crew", "session_map.json"],
+            $"{{\"{Chat}\": {{\"sid\": \"{Next}\"}}, \"dashboard:chat-9\": {{\"sid\": \"{Sid}\"}}}}");
+        await Assert.That(watch.IsFinished()).IsFalse();
+
+        Tmp.CreateFile(["crew", "session_map.json"], $"{{\"dashboard:chat-9\": {{\"sid\": \"{Sid}\"}}}}");
+        for (var i = 0; i < 4; i++) await Assert.That(watch.IsFinished()).IsFalse();
+    }
+
+    /// <summary>An unreadable read breaks a run of absent reads, so absences interleaved with unreadable
+    /// reads never add up to an end.</summary>
+    [Test]
+    public async Task Absences_interleaved_with_unreadable_reads_do_not_end_a_chat() {
+        Map(Sid);
+        var watch = Watch(Sid);
+        await Assert.That(watch.IsFinished()).IsFalse();
+
+        for (var i = 0; i < 4; i++) {
+            Tmp.CreateFile(["crew", "session_map.json"], "{}");
+            await Assert.That(watch.IsFinished()).IsFalse();
+            Tmp.CreateFile(["crew", "session_map.json"], "{\"half");
+            await Assert.That(watch.IsFinished()).IsFalse();
+        }
+    }
+
     /// <summary>A session not found as a sub-agent early on stops being searched for, so a long-lived
     /// session does not rescan Crew's history every check.</summary>
     [Test]

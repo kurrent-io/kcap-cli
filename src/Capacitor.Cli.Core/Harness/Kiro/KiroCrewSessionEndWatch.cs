@@ -23,8 +23,9 @@ public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId
     /// within this many checks is not one and stops being searched for.</summary>
     const int SubagentSearchChecks = 12;
 
-    /// <summary>A chat entry that is missing or unreadable, rather than naming another session, has to
-    /// stay that way this many checks running before it counts: Crew rewrites the map in place.</summary>
+    /// <summary>A chat entry that is missing or has no readable session, rather than naming another one,
+    /// has to stay that way this many readable checks running before it counts: Crew rewrites the map
+    /// in place.</summary>
     const int AbsentChatChecks = 3;
 
     readonly Guid? _session = Guid.TryParse(sessionId, out var id) ? id : null;
@@ -79,31 +80,35 @@ public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId
     }
 
     bool ChatMovedOn(Guid session) {
-        if (KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return false;
-
-        if (_chatKey is null) {
-            var discarded = false;
-
-            foreach (var (key, node) in map) {
-                if (node is not JsonObject entry) continue;
-
-                if (KiroCrewRecords.GuidOf(entry, "sid") == session) {
-                    _chatKey = key;
-
-                    return false;
-                }
-
-                discarded |= KiroCrewRecords.GuidOf(entry, "discarded_sid") == session;
-            }
-
-            // Replaced before this watcher first looked, and current in no chat.
-            return discarded;
-        }
-
-        if (map[_chatKey] is JsonObject current && KiroCrewRecords.GuidOf(current, "sid") is { } sid) {
+        if (KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) {
             _absentChat = 0;
 
-            return sid != session;
+            return false;
+        }
+
+        var discarded = false;
+
+        foreach (var (key, node) in map) {
+            if (node is not JsonObject entry) continue;
+
+            // Current in any chat means live, even if the chat it was first seen in moved on.
+            if (KiroCrewRecords.GuidOf(entry, "sid") == session) {
+                _chatKey    = key;
+                _absentChat = 0;
+
+                return false;
+            }
+
+            discarded |= KiroCrewRecords.GuidOf(entry, "discarded_sid") == session;
+        }
+
+        // Never seen as current: replaced before this watcher first looked.
+        if (_chatKey is null) return discarded;
+
+        if (map[_chatKey] is JsonObject current && KiroCrewRecords.GuidOf(current, "sid") is not null) {
+            _absentChat = 0;
+
+            return true;
         }
 
         return ++_absentChat >= AbsentChatChecks;
