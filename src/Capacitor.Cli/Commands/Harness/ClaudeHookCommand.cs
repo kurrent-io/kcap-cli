@@ -10,6 +10,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -989,6 +990,22 @@ public sealed class ClaudeHookCommand(
 
             return 1;
         }
+
+        if (command == "stop") {
+            string? ack = null;
+            try { ack = await response.Content.ReadAsStringAsync(); } catch { }
+
+            // The block's reason names kcap-workitems tools, so without them it is never sent.
+            var nextWorkDisabled = activeProfile?.DisableNextWorkNudge is true
+                                || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses);
+            JsonNode? payload = null;
+            try { payload = JsonNode.Parse(body); } catch { }
+
+            if (ClaudeCompletionNudge.ShouldBlock(ack, nextWorkDisabled, payload))
+                writer.WriteLine(ClaudeCompletionNudge.BlockDecision);
+        }
+
+        response.Dispose();
 
         switch (command) {
             case "subagent-start": {

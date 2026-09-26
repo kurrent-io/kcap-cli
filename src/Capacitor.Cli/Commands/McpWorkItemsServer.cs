@@ -151,7 +151,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         "declare_loose_end — one call per concrete item, and never a 'none'. When the user asks what to " +
         "work on next, or you are about to propose new work, call get_next_work first and answer from it, " +
         "citing its because-clauses; tracker queries and memory are context for that answer, not a " +
-        "substitute for it.";
+        "substitute for it. " + NextWorkEmitter.CompletionInstruction;
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(

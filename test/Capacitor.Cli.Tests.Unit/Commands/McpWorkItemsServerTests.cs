@@ -232,6 +232,10 @@ public class McpWorkItemsServerTests {
         await Assert.That(instructions).Contains("unfinished");
     }
 
+    [Test]
+    public async Task Server_instructions_ask_for_loose_ends_and_next_work_at_completion() =>
+        await Assert.That(McpWorkItemsServer.ServerInstructions).EndsWith("When the user's task is complete and you are about to report it: declare any remaining loose ends with declare_loose_end (one call per item, never \"none\"), then call get_next_work and tell the user, in a few lines, what to consider working on next and why.");
+
     // ── declared breakdown + relations ───────────────────────────────────────
 
     [Test]
