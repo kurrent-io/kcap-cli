@@ -249,7 +249,7 @@ public partial class App : Application {
 
             // The lane is constructed first — every daemon mutation routes through this one instance, and its dependencies need neither a resolved profile nor a live service.
             var laneRunner = new ProcessRunner(_time);
-            var laneProbe  = new LoginShellProbe(laneRunner, Environment.GetEnvironmentVariable);
+            var laneProbe  = TerminalPathProbe.Create(laneRunner, Environment.GetEnvironmentVariable);
             var channel    = new OutcomeChannel();
             var lane = new DaemonMutationLane(
                 _daemonStore, laneProbe, channel, ResolveCliOverride,
@@ -660,7 +660,7 @@ public partial class App : Application {
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback),
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -748,7 +748,7 @@ public partial class App : Application {
             vm = new SettingsViewModel(settings, service, ops,
                 async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, _time, OneShotProbeTimeout, ct)).Reachable,
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
-                ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
+                ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS() || OperatingSystem.IsWindows(), startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
@@ -806,6 +806,19 @@ public partial class App : Application {
 
     static async Task<bool> RelaunchForSettingsAsync(
             IClassicDesktopStyleApplicationLifetime desktop, TimeProvider time, CancellationToken ct) {
+        // Windows has no bundle to reopen: a second copy of this executable is the relaunch, as
+        // `open -n` starts a second instance on macOS.
+        if (OperatingSystem.IsWindows()) {
+            if (Environment.ProcessPath is not { } exe) return false;
+            try {
+                using var next = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
+            } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) {
+                return false;
+            }
+            desktop.TryShutdown();
+            return true;
+        }
+
         if (InstallLocation.BundleRoot(Environment.ProcessPath) is not { } bundle) return false;
         var result = await new ProcessRunner(time).RunAsync("/usr/bin/open", ["-n", bundle],
             new RunOptions(Timeout: TimeSpan.FromSeconds(10)), ct);
@@ -906,8 +919,9 @@ public partial class App : Application {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimInstaller = CliPathInstallers.Create(runner, probe);
         var shimApplicable = await ResolveShimApplicableAsync(
-            OperatingSystem.IsMacOS(), shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
+            shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(
             action => Dispatcher.UIThread.Post(action),
             _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time);
@@ -934,7 +948,7 @@ public partial class App : Application {
             RunMutation: lane.RunAsync,
             Observation: new OneShotObservation(_daemonStore, _time, OneShotProbeTimeout),
             AppState: new AppStateStore(_config.Path("app-state.json")),
-            ShimInstaller: new PathShimInstaller(runner, probe),
+            ShimInstaller: shimInstaller,
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
             DetectionFeed: probe => AgentsStepViewModel.BuildDetectionFeed(probe, _userHome),
@@ -970,14 +984,14 @@ public partial class App : Application {
     }
 
     /// The shim step's applicability, without paying for an answer that cannot matter: the probe
-    /// costs a login-shell spawn, and on every non-macOS machine (and every machine with no
-    /// resolved absolute CLI) <see cref="ShimStepViewModel.ComputeApplicable"/> is already false.
+    /// costs a login-shell spawn, and on every machine with no installer for its OS (and every machine with
+    /// no resolved absolute CLI) <see cref="ShimStepViewModel.ComputeApplicable"/> is already false.
     internal static async Task<bool> ResolveShimApplicableAsync(
-            bool isMacOs, string? shimTarget, Func<CancellationToken, Task<bool?>> probeKcapOnPath, CancellationToken ct) {
-        if (!isMacOs || shimTarget is null) return false;
+            bool hasInstaller, string? shimTarget, Func<CancellationToken, Task<bool?>> probeKcapOnPath, CancellationToken ct) {
+        if (!hasInstaller || shimTarget is null) return false;
 
         return ShimStepViewModel.ComputeApplicable(
-            isMacOs, shimTarget, await ProbeKcapOnPathSafelyAsync(probeKcapOnPath, ct).ConfigureAwait(true));
+            hasInstaller, shimTarget, await ProbeKcapOnPathSafelyAsync(probeKcapOnPath, ct).ConfigureAwait(true));
     }
 
     // A probe failure reads as unknown, never as "offer it anyway" — ComputeApplicable's own null
@@ -1187,7 +1201,7 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
-            Action<FeedbackCategory>? openFeedback = null) {
+            Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1235,7 +1249,8 @@ public partial class App : Application {
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
-            openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn);
+            openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
+            settingsAction: settingsAction);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
@@ -1255,7 +1270,7 @@ public partial class App : Application {
             ResolvedProfile? profile, Func<bool> requiresAppRestart) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
         var runner  = new ProcessRunner(_time);
-        var probe   = new LoginShellProbe(runner, Environment.GetEnvironmentVariable);
+        var probe   = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
         var canonicalServer = ServerIdentity.Canonicalize(profile?.ServerUrl);
         // Shared with the probe above (not re-resolved) — the PATH overlay on `install`
         // must reflect the SAME probe outcome that the controller's preconditions/PathDegraded see.
@@ -1274,7 +1289,7 @@ public partial class App : Application {
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
-            lifecycle.PhaseClosed, probe, new PathShimInstaller(runner, probe), store, surface, shimTarget,
+            lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe), store, surface, shimTarget,
             _shutdown.Token, autoActionsPermanentlyClosed);
 
         // The delegate below and the claims store must share one root: TryConsume takes the config

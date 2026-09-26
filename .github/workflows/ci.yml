@@ -254,3 +254,98 @@ jobs:
         with:
           name: app-osx-arm64-unsigned
           path: releases/KurrentCapacitor-osx-arm64-Portable.zip
+
+  app-bundle-windows:
+    name: App bundle (win-x64)
+    runs-on: windows-latest
+    env:
+      DOTNET_ROLL_FORWARD: Major
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+
+      - name: Install tools
+        run: |
+          dotnet tool install -g minver-cli --version 8.0.0
+          dotnet tool install -g vpk --version 1.2.0
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          FULL="$(minver --tag-prefix v)"
+          echo "VERSION=${FULL%%+*}" >> "$GITHUB_OUTPUT"
+          echo "computed $FULL"
+
+      - name: Publish daemon
+        run: >
+          dotnet publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj -c Release -r win-x64
+          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }} -o publish/daemon/
+
+      - name: Compute daemon digest
+        id: daemon-digest
+        run: |
+          set -euo pipefail
+          source scripts/lib/hash.sh
+          DIGEST="$(sha256_of publish/daemon/kcap-daemon.exe)"
+          echo "DIGEST=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "$DIGEST" > publish/daemon.sha256
+
+      - name: Publish CLI
+        run: >
+          dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release -r win-x64
+          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
+          -p:KcapDaemonDigest=${{ steps.daemon-digest.outputs.DIGEST }} -o publish/cli/
+
+      - name: Publish app
+        run: >
+          dotnet publish src/Capacitor.App/Capacitor.App.csproj -c Release -r win-x64 --self-contained
+          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }} -o publish/app/
+
+      - name: Assemble pack directory
+        run: cp publish/cli/kcap.exe publish/daemon/kcap-daemon.exe publish/app/
+
+      - name: Pack (unsigned)
+        run: >
+          vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
+          --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor.exe"
+          --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico
+          --channel win-x64 --outputDir releases
+
+      - name: Assert the bundle
+        run: |
+          set -euo pipefail
+          mkdir -p extracted
+          unzip -q releases/KurrentCapacitor-win-x64-Portable.zip -d extracted
+          bash scripts/assert-app-cli-version.sh extracted/current/kcap.exe "${{ steps.version.outputs.VERSION }}"
+          bash scripts/assert-bundle-digest.sh extracted publish/daemon.sha256
+          extracted/current/kcap-daemon.exe --version
+          aliases="$(bash scripts/promote-desktop-aliases.sh releases/releases.win-x64.json "${{ steps.version.outputs.VERSION }}")"
+          grep -qx beta <<<"$aliases"
+
+      # The app must survive its own startup: a missing native library or a platform-only call
+      # on the startup path ends the process within seconds.
+      - name: Smoke the packed app
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
+          New-Item -ItemType Directory -Force $cfg | Out-Null
+          $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
+          $p = Start-Process 'extracted/current/Kurrent Capacitor.exe' -PassThru
+          Start-Sleep 15
+          if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+
+      - name: Upload unsigned bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-win-x64-unsigned
+          path: releases/KurrentCapacitor-win-x64-Setup.exe

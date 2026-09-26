@@ -79,7 +79,7 @@
         <DataTemplate DataType="vm:ShimStepViewModel">
             <StackPanel Spacing="14">
                 <TextBlock Classes="kcapSubtitle"
-                           Text="Puts kcap on your PATH so it works from any terminal. Installing prompts once for your admin password."
+                           Text="{Binding Disclosure}"
                            TextWrapping="Wrap" />
 
                 <Button x:Name="InstallShimButton" Classes="kcapPrimary" Content="Install" Command="{Binding InstallCommand}"

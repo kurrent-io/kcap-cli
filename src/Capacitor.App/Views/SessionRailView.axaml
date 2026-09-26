@@ -137,7 +137,7 @@
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                         BorderThickness="1" CornerRadius="7" Padding="11,7">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Right" Text="⌘N" FontSize="11"
+                        <TextBlock x:Name="RailNewSessionShortcut" DockPanel.Dock="Right" Text="{x:Static views:ShortcutLabels.NewSession}" FontSize="11"
                                    Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <TextBlock Text="+" FontSize="15" FontWeight="SemiBold"
@@ -224,6 +224,19 @@
                                                 Click="OnHelpFlyoutItemClick"
                                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                 Padding="10,8" FontSize="13.5" />
+                                        <StackPanel x:Name="RailAppMenuItems" Spacing="2" IsVisible="{Binding AppMenuInWindow}">
+                                            <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}" />
+                                            <Button x:Name="RailHelpSettingsButton" Classes="kcapGhost" Content="Settings…"
+                                                    Command="{Binding OpenSettingsCommand}" Click="OnHelpFlyoutItemClick"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpChangelogButton" Classes="kcapGhost" Content="Changelog"
+                                                    Command="{Binding OpenChangelogCommand}" Click="OnHelpFlyoutItemClick"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <TextBlock x:Name="RailAppVersionText" Text="{Binding AppVersionLabel}"
+                                                       Foreground="{StaticResource KcapFaintBrush}" FontSize="12" Margin="10,6,10,4" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </Flyout>
                             </Button.Flyout>

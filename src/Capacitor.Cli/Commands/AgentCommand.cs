@@ -43,16 +43,13 @@ internal sealed class AgentCommand(
         // `agent` was the daemon verb before it was renamed to `daemon`. The two groups still
         // share start/stop, so those dispatch below; the rest only ever meant the daemon, and
         // answering them with a bare usage line is how a healthy daemon reads as dead
-        // mid-diagnosis. Signposted ahead of the platform guard because `kcap daemon` works on
-        // Windows even though this group does not.
+        // mid-diagnosis.
         if (DaemonOnlySubcommands.Contains(sub)) {
             await Console.Error.WriteLineAsync($"kcap agent: unknown subcommand '{sub}'");
             await Console.Error.WriteLineAsync($"`{sub}` manages the daemon — run `kcap daemon {sub}`.");
 
             return 1;
         }
-
-        if (NotSupportedOnWindows(out var rc)) return rc;
 
         switch (sub) {
             case "start":  return await RunAsync(rest, baseUrl);
@@ -518,18 +515,5 @@ internal sealed class AgentCommand(
     static (ushort Cols, ushort Rows) TermSize() {
         try { return ((ushort)Math.Max(1, Console.WindowWidth), (ushort)Math.Max(1, Console.WindowHeight)); }
         catch { return (120, 40); }
-    }
-
-    static bool NotSupportedOnWindows(out int rc) {
-        if (OperatingSystem.IsWindows()) {
-            Console.Error.WriteLine("kcap agent is not supported on Windows yet.");
-            rc = 1;
-
-            return true;
-        }
-
-        rc = 0;
-
-        return false;
     }
 }

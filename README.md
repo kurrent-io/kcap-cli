@@ -13,7 +13,7 @@
 
 - [Why Capacitor](#why-capacitor)
 - [Requirements](#requirements)
-- [Getting started](#getting-started) — [Install](#1-install-the-cli) · [Desktop app](#desktop-app-macos) · [Setup](#2-run-setup) · [Import](#3-import-existing-sessions-optional) · [Dashboard](#4-open-the-dashboard) · [MCP servers](#sessions-and-flows-mcp-servers-for-agents)
+- [Getting started](#getting-started) — [Install](#1-install-the-cli) · [Desktop app](#desktop-app-macos) ([Windows](#desktop-app-windows)) · [Setup](#2-run-setup) · [Import](#3-import-existing-sessions-optional) · [Dashboard](#4-open-the-dashboard) · [MCP servers](#sessions-and-flows-mcp-servers-for-agents)
 - [What it records](#what-it-records)
 - [CLI commands](#cli-commands)
   - Approvals: [policy](#approval-policy)
@@ -47,7 +47,7 @@
   | Linux | x64, ARM64 |
   | Linux (Alpine/musl) | x64, ARM64 |
   | Windows | x64 |
-- Desktop app: macOS 15 (Sequoia) or later on Apple silicon.
+- Desktop app: macOS 15 (Sequoia) or later on Apple silicon, or Windows 10 or later on x64.
 
 ## Getting started
 
@@ -106,6 +106,12 @@ The **Notifications** tab in Settings controls permission requests, questions, a
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
+
+### Desktop app (Windows)
+
+Download `Kurrent-Capacitor-<version>-win-x64-Setup.exe` from the [GitHub release](https://github.com/kurrent-io/kcap-cli/releases) (Windows 10 or later, x64) and run it. It installs per user into `%LocalAppData%\KurrentCapacitor` with no administrator prompt and adds a Start-menu entry. Like the macOS app it bundles its own `kcap` CLI and daemon. The first run offers to add the app's folder to your user PATH, so `kcap` works from any new terminal, and to install the daemon as a background service (a per-user Scheduled Task that starts at sign-in).
+
+Windows draws no application menu, so **Settings…**, **Changelog** and the app version sit in the help button in the session rail's footer, next to Documentation and the report items. Closing the window keeps the app running in the notification area — quit from the tray icon's menu. Updates arrive through the app the same way as on macOS, from the Windows feed.
 
 ### 2. Run setup
 
@@ -1037,13 +1043,15 @@ kcap daemon service uninstall              # stop and remove the service
 
 `install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
 
+On **Windows** the service is a per-user Scheduled Task scoped to your account, so installing it needs no administrator rights. It runs the daemon in a windowless console (`conhost --headless`) at sign-in, and the task's wrapper restarts the daemon five seconds after any non-zero exit — a crash, or the daemon's own `kcap daemon restart` — the way systemd's `Restart=on-failure` does; an exit 0 is a deliberate stop. `service stop` and `service uninstall` end the task and then the daemon itself, since ending a task leaves its child processes running. The wrapper also carries the installing shell's `HOME` when it is an absolute path, so a Git Bash or redirected home resolves the same daemons directory for the daemon as for the CLI.
+
 `status --json` prints a machine-readable snapshot (service/job/daemon pids, binary paths, and transaction-marker state) instead of the human summary, and exits non-zero if the underlying service state can't be determined — for scripts that need to decide whether to attach, start, or repair a service without parsing human-readable text.
 
 `ensure` is the flow-driven ladder: from a fresh status read it installs when there is no unit (baking the born-`prompt` consent directive — the daemon is installed `prompt`, so nothing runs unattended on someone else's say-so) or starts when the unit is present but stopped, and reports "already enabled" when the daemon is running — on launchd that additionally requires the running service job to own the validated daemon pid, the same ownership the verified start polls for. On macOS/launchd both arms run the verified transaction exactly as an app-managed start does, so a gate refusal exits with the coded verify exit plus one `start_gate_reason=<token>` line, and `ensure` maps the token to a machine-readable `recovery_surface=takeover|reinstall|attention` (never guessed from prose) — the flow can then offer the right next step. A gated-install viability abort with the engine's coded `package_inconsistent` reason routes to `recovery_surface=reinstall`, and an attributed boot refusal (e.g. `consent_seed_unwritable`) routes through its own table (`storage`/`takeover`/`attention`); refused launchd transactions serialize `"verified":true`, since the verified transaction did run. On Windows/Linux the ladder degrades to plain install/start (no gates, no rollback), and `ensure --json` reports `"verified":false` so the flow's copy can say so. On macOS a resolvable profile is required: a unit baked without one could never pass the start gate's identity half, so `ensure` refuses with `no_profile_configured` rather than report a dead-end install. `ensure` never mutates into an ambiguous state: an unreadable probe, an active transaction, an orphaned label (including a running one whose unit file has disappeared) or a stale marker all fail closed to attention with a coded reason — the ambiguity checks precede even the "already enabled" arm.
 
-`start --verify` polls the started service until it answers a well-formed local-socket hello **and** the OS-reported job pid matches the daemon's own validated pid, rolling back (stopping the service again, plist retained) and exiting non-zero with a coded stderr token (e.g. `verify_readiness_timeout`) if that never happens within the poll budget — useful for scripted installs that need to know the daemon is actually up before proceeding. **`--verify` is macOS/launchd only in this release** — `start --verify` is rejected on Linux/Windows, same as `install --verify` below.
+`start --verify` polls the started service until it answers a well-formed local-socket hello **and** the OS-reported job pid matches the daemon's own validated pid, rolling back (stopping the service again, plist retained) and exiting non-zero with a coded stderr token (e.g. `verify_readiness_timeout`) if that never happens within the poll budget — useful for scripted installs that need to know the daemon is actually up before proceeding. **`--verify` runs on macOS (launchd) and Windows (Scheduled Task) in this release** — `start --verify` is rejected on Linux, same as `install --verify` below. On Windows the job pid is the daemon the task's own wrapper started, and a `--retire` reads the retired unit's profile from its wrapper.
 
-`install --verify` (fresh installs only — a service that's already installed exits with the coded `verify_contended`, since clearing an existing label is `--replace`'s job) additionally requires the started daemon's reported version, protocol version, and reported name to match the installing CLI's own expectations, and rechecks the unit file on disk against a fingerprint taken at write time — so a foreign writer replacing the file between install and the recheck is detected (`verify_restore_verification`) rather than silently accepted. On any failure it rolls back by uninstalling the unit it just wrote (never a foreign one) and exits with a coded stderr token. **`--verify` is macOS/launchd only in this release** — `install --verify` is rejected on Linux/Windows.
+`install --verify` (fresh installs only — a service that's already installed exits with the coded `verify_contended`, since clearing an existing label is `--replace`'s job) additionally requires the started daemon's reported version, protocol version, and reported name to match the installing CLI's own expectations, and rechecks the unit file on disk against a fingerprint taken at write time — so a foreign writer replacing the file between install and the recheck is detected (`verify_restore_verification`) rather than silently accepted. On any failure it rolls back by uninstalling the unit it just wrote (never a foreign one) and exits with a coded stderr token. `install --verify` is rejected on Linux; on Windows there is no unit fingerprint recheck, since `schtasks /Create` registers the task outright rather than loading a file it may later re-read.
 
 `install --replace --verify` (requires `--verify`) takes over an existing label/unit instead of refusing on contention: it clears a foreign or already-loaded label, stops a validated live owner if one is running, then installs and verifies as above — one transaction, rolling back to a verified-safe absent state on any failure rather than leaving a half-replaced unit.
 

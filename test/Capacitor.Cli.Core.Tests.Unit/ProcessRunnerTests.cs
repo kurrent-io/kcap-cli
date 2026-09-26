@@ -215,4 +215,16 @@ public class ProcessRunnerTests {
             await Task.Delay(10);
         }
     }
+
+    /// A GUI parent on Windows gives every console child its own window unless told not to, so each
+    /// CLI call from the desktop app would flash a terminal.
+    [Test]
+    public async Task Children_are_started_without_a_console_window() {
+        var psi = ProcessRunner.StartInfo("kcap", ["--version"], new RunOptions(EnvOverlay: new Dictionary<string, string> { ["X"] = "1" }));
+
+        await Assert.That(psi.CreateNoWindow).IsTrue();
+        await Assert.That(psi.UseShellExecute).IsFalse();
+        await Assert.That(psi.ArgumentList).IsEquivalentTo(["--version"]);
+        await Assert.That(psi.Environment["X"]).IsEqualTo("1");
+    }
 }
