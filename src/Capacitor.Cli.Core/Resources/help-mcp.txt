@@ -110,13 +110,14 @@ mcp memory:
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
 mcp workitems:
-  Exposes eleven tools for agents to attach the current session (and its
+  Exposes fourteen tools for agents to attach the current session (and its
   continuation chain) to an SDLC work item, to DECLARE that work item's
   structure — its breakdown (parent -> parts) and dependencies (blocks /
-  blocked-by) — to record the loose ends a session leaves unfinished, and
-  to read what the user should work on next.
-  Breakdown and relations are declared, never inferred, so an item whose
-  structure nobody declares has an empty topology. Requires `kcap login`.
+  blocked-by) — to record the loose ends a session leaves unfinished, to
+  read what the user should work on next, and to dismiss or restore
+  next-work suggestions. Breakdown and relations are declared, never
+  inferred, so an item whose structure nobody declares has an empty
+  topology. Requires `kcap login`.
 
     Tools:
       declare_work_item        Attach the current session to a work item by
@@ -125,9 +126,10 @@ mcp workitems:
       get_session_work_items   List the work items the current session is
                                 attached to.
       get_next_work            What the user should work on next, ranked, each
-                                row with a because-clause and evidence
-                                (repo_hash defaults to this checkout; limit
-                                default 5, max 20).
+                                row with a because-clause, evidence, and a
+                                target_key for dismiss_next_work (repo_hash
+                                defaults to this checkout; limit default 5,
+                                max 20).
       declare_loose_end        Record one concrete piece of unfinished work
                                 (text) in the user's next-work ledger; the
                                 server refuses none-class text.
@@ -146,6 +148,15 @@ mcp workitems:
                                 survives (work_item_id, into_work_item_id).
       detach_work_item         Durably detach a session from a work item it
                                 was wrongly attached to.
+      dismiss_next_work        Record that the user turned down a presented
+                                next-work suggestion (target_key; repo_hash
+                                defaults to this checkout), so it stops being
+                                offered.
+      restore_next_work        Undo a dismissal so the suggestion can be
+                                offered again (repo_hash defaults to this
+                                checkout).
+      list_dismissed_next_work List the suggestions the user has dismissed,
+                                most recent first.
 
   Registered for every supported harness by `kcap setup` / `kcap plugin
   install` (Claude Code reads it from the plugin's `.mcp.json`).
