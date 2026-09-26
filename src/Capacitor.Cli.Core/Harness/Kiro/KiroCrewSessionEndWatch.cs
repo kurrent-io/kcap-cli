@@ -15,25 +15,40 @@ namespace Capacitor.Cli.Core.Harness.Kiro;
 /// what it has seen between checks.
 /// </remarks>
 public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId) {
-    /// <summary>Bounds each check's search for the session's own sub-agent directory; once found it is
-    /// the only directory read.</summary>
+    /// <summary>Bounds each search for the session's own sub-agent directory; once found it is the only
+    /// directory read.</summary>
     const int SubagentScanLimit = 64;
+
+    /// <summary>Crew records a sub-agent within seconds of spawning it, so a session not found as one
+    /// within this many checks is not one and stops being searched for.</summary>
+    const int SubagentSearchChecks = 12;
+
+    /// <summary>A chat entry that is missing or unreadable, rather than naming another session, has to
+    /// stay that way this many checks running before it counts: Crew rewrites the map in place.</summary>
+    const int AbsentChatChecks = 3;
 
     readonly Guid? _session = Guid.TryParse(sessionId, out var id) ? id : null;
 
     string? _subagentDir;
+    int     _subagentSearches;
     string? _chatKey;
+    int     _absentChat;
 
     /// <summary>Whether Crew has finished with the session. False whenever Crew's files say nothing
     /// about it, so a plain Kiro session is never ended here.</summary>
     public bool IsFinished() {
         if (_session is not { } session || !crew.IsPresent()) return false;
 
-        return SubagentFinished(session) || ChatMovedOn(session);
+        return ChatMovedOn(session) || SubagentFinished(session);
     }
 
     bool SubagentFinished(Guid session) {
-        _subagentDir ??= FindSubagentDir(session);
+        if (_chatKey is not null) return false;
+
+        if (_subagentDir is null && _subagentSearches < SubagentSearchChecks) {
+            _subagentSearches++;
+            _subagentDir = FindSubagentDir(session);
+        }
 
         return _subagentDir is { } dir
             && KiroCrewRecords.Read(Path.Combine(dir, "tombstone.json")) is { } tombstone
@@ -67,6 +82,8 @@ public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId
         if (KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return false;
 
         if (_chatKey is null) {
+            var discarded = false;
+
             foreach (var (key, node) in map) {
                 if (node is not JsonObject entry) continue;
 
@@ -76,15 +93,19 @@ public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId
                     return false;
                 }
 
-                // Moved on before this watcher first looked.
-                if (KiroCrewRecords.GuidOf(entry, "discarded_sid") == session) return true;
+                discarded |= KiroCrewRecords.GuidOf(entry, "discarded_sid") == session;
             }
 
-            return false;
+            // Replaced before this watcher first looked, and current in no chat.
+            return discarded;
         }
 
-        // The chat was dropped from the map, or now names another session.
-        return map[_chatKey] is not JsonObject current
-            || KiroCrewRecords.GuidOf(current, "sid") != session;
+        if (map[_chatKey] is JsonObject current && KiroCrewRecords.GuidOf(current, "sid") is { } sid) {
+            _absentChat = 0;
+
+            return sid != session;
+        }
+
+        return ++_absentChat >= AbsentChatChecks;
     }
 }

@@ -72,14 +72,25 @@ public class KiroCrewSessionEndWatchTests {
         await Assert.That(Watch(Sid).IsFinished()).IsTrue();
     }
 
+    /// <summary>Crew rewrites the map in place, so a chat briefly missing or unreadable is not an end;
+    /// one still gone after several checks is.</summary>
     [Test]
-    public async Task A_chat_session_is_finished_once_crew_drops_the_chat() {
+    [Arguments("{}")]
+    [Arguments("{\"dashboard:chat-2-1790266418\": {}}")]
+    public async Task A_chat_entry_gone_ends_the_session_only_once_it_stays_gone(string rewritten) {
         Map(Sid);
         var watch = Watch(Sid);
         await Assert.That(watch.IsFinished()).IsFalse();
 
-        Tmp.CreateFile(["crew", "session_map.json"], "{}");
+        Tmp.CreateFile(["crew", "session_map.json"], rewritten);
+        await Assert.That(watch.IsFinished()).IsFalse();
 
+        Map(Sid);
+        await Assert.That(watch.IsFinished()).IsFalse();
+
+        Tmp.CreateFile(["crew", "session_map.json"], rewritten);
+        await Assert.That(watch.IsFinished()).IsFalse();
+        await Assert.That(watch.IsFinished()).IsFalse();
         await Assert.That(watch.IsFinished()).IsTrue();
     }
 
@@ -91,6 +102,29 @@ public class KiroCrewSessionEndWatchTests {
         await Assert.That(watch.IsFinished()).IsFalse();
 
         Tmp.CreateFile(["crew", "session_map.json"], "{\"dashboard:chat-2-1790266418\": {\"sid\"");
+
+        for (var i = 0; i < 5; i++) await Assert.That(watch.IsFinished()).IsFalse();
+    }
+
+    /// <summary>A session current in one chat is live, whatever another chat's discarded entry says and
+    /// in whichever order the map lists them.</summary>
+    [Test]
+    public async Task A_session_current_in_any_chat_is_not_ended_by_a_stale_discard() {
+        Tmp.CreateFile(["crew", "session_map.json"],
+            $"{{\"dashboard:chat-1\": {{\"sid\": \"{Next}\", \"discarded_sid\": \"{Sid}\"}}, \"{Chat}\": {{\"sid\": \"{Sid}\"}}}}");
+
+        await Assert.That(Watch(Sid).IsFinished()).IsFalse();
+    }
+
+    /// <summary>A session not found as a sub-agent early on stops being searched for, so a long-lived
+    /// session does not rescan Crew's history every check.</summary>
+    [Test]
+    public async Task A_session_not_found_as_a_sub_agent_early_stops_being_searched_for() {
+        var watch = Watch(Child);
+        Tmp.CreateDir("crew", "subagents");
+        for (var i = 0; i < 12; i++) await Assert.That(watch.IsFinished()).IsFalse();
+
+        Subagent("tombstone.json", Child);
 
         await Assert.That(watch.IsFinished()).IsFalse();
     }

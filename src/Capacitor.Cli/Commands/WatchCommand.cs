@@ -904,6 +904,14 @@ partial class WatchCommand(
         // loop was in when the request arrived has already spent some of it.
         var shutdownStarted = Volatile.Read(ref shutdownRequestedAt) is var requestedAt and not 0 ? requestedAt : time.GetTimestamp();
 
+        // The Kiro hook posted session-start before this watcher spawned, so a session Crew finished
+        // below the buffering threshold still sends its lines and its end rather than staying open.
+        if (Volatile.Read(ref crewFinished) == 1 && !state.ThresholdReached) {
+            state.ThresholdReached = true;
+            state.BufferedLines.Clear();
+            state.BufferedLineNumbers.Clear();
+        }
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
