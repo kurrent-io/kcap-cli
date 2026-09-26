@@ -176,6 +176,25 @@ public class KiroCrewSessionEndWatchTests {
         await Assert.That(watch.IsFinished()).IsTrue();
     }
 
+    /// <summary>A session's metadata caught mid-write on the first check does not fix the search to the
+    /// watch's start: a later readable read still reaches a sub-agent spawned long before.</summary>
+    [Test]
+    public async Task An_unreadable_first_metadata_read_does_not_strand_an_old_sub_agent() {
+        var spawned = DateTimeOffset.UtcNow.AddHours(-3);
+        Tmp.CreateFile(["sessions", "cli", $"{Child}.json"], "{\"session_id\"");
+        Subagent("state.json", Child);
+        Directory.SetLastWriteTimeUtc(Tmp.PathTo("crew", "subagents", "65eed35b"), spawned.UtcDateTime.AddSeconds(-5));
+        var watch = Watch(Child);
+        await Assert.That(watch.IsFinished()).IsFalse();
+
+        Tmp.CreateFile(["sessions", "cli", $"{Child}.json"],
+            $"{{\"session_id\": \"{Child}\", \"created_at\": \"{spawned.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}");
+        Subagent("tombstone.json", Child);
+        Directory.SetLastWriteTimeUtc(Tmp.PathTo("crew", "subagents", "65eed35b"), spawned.UtcDateTime.AddSeconds(-5));
+
+        await Assert.That(watch.IsFinished()).IsTrue();
+    }
+
     /// <summary>A session not found as a sub-agent early on stops being searched for, so a long-lived
     /// session does not rescan Crew's history every check.</summary>
     [Test]

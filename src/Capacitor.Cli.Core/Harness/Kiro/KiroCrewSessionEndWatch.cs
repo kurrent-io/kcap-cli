@@ -63,10 +63,12 @@ public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionsD
         List<DirectoryInfo> dirs;
 
         try {
-            _searchFrom ??= ((KiroCrewRecords.SessionCreatedAt(sessionsDir, session) ?? time.GetUtcNow()) - SubagentRecency).UtcDateTime;
+            // Cached only once read: a metadata file caught mid-write must not pin the bound to now.
+            _searchFrom ??= (KiroCrewRecords.SessionCreatedAt(sessionsDir, session) - SubagentRecency)?.UtcDateTime;
+            var from = _searchFrom ?? (time.GetUtcNow() - SubagentRecency).UtcDateTime;
 
             dirs = new DirectoryInfo(crew.SubagentsDir).EnumerateDirectories()
-                .Where(d => d.LastWriteTimeUtc >= _searchFrom)
+                .Where(d => d.LastWriteTimeUtc >= from)
                 .ToList();
         } catch {
             return null;
