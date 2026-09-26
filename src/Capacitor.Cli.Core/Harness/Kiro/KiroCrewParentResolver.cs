@@ -1,5 +1,4 @@
 using System.Collections.Frozen;
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -123,7 +122,7 @@ public static class KiroCrewParentResolver {
 
         foreach (var candidate in new[] { KiroCrewRecords.GuidOf(entry, "sid"), KiroCrewRecords.GuidOf(entry, "discarded_sid") }) {
             if (candidate is not { } id || id == record.Session) continue;
-            if (CreatedAt(sessionsDir, id) is not { } at || at > record.Started) continue;
+            if (KiroCrewRecords.SessionCreatedAt(sessionsDir, id) is not { } at || at > record.Started) continue;
             if (created is { } newest && at <= newest) continue;
 
             parent  = id;
@@ -133,10 +132,4 @@ public static class KiroCrewParentResolver {
         return parent?.ToString("D");
     }
 
-    static DateTimeOffset? CreatedAt(string sessionsDir, Guid session) =>
-        KiroCrewRecords.Read(Path.Combine(sessionsDir, $"{session:D}.json")) is { } meta
-     && KiroCrewRecords.StringOf(meta, "created_at") is { } raw
-     && DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)
-            ? at
-            : null;
 }

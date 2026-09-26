@@ -14,13 +14,13 @@ namespace Capacitor.Cli.Core.Harness.Kiro;
 /// longer names it as that chat's current session. One instance watches one session and remembers
 /// what it has seen between checks.
 /// </remarks>
-public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId, TimeProvider time) {
+public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionsDir, string sessionId, TimeProvider time) {
     /// <summary>Crew creates a sub-agent's directory as it spawns the sub-agent, just before its session
-    /// starts, so only directories touched since shortly before this watch began are searched — however
-    /// many other sub-agents a busy Crew has.</summary>
+    /// starts, so only directories touched since shortly before the session was created are searched,
+    /// however many other sub-agents a busy Crew has and however late this watch began.</summary>
     static readonly TimeSpan SubagentRecency = TimeSpan.FromMinutes(10);
 
-    readonly DateTime _searchFrom = (time.GetUtcNow() - SubagentRecency).UtcDateTime;
+    DateTime? _searchFrom;
 
     /// <summary>Crew records a sub-agent within seconds of spawning it, so a session not found as one
     /// within this many checks is not one and stops being searched for.</summary>
@@ -63,6 +63,8 @@ public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId
         List<DirectoryInfo> dirs;
 
         try {
+            _searchFrom ??= ((KiroCrewRecords.SessionCreatedAt(sessionsDir, session) ?? time.GetUtcNow()) - SubagentRecency).UtcDateTime;
+
             dirs = new DirectoryInfo(crew.SubagentsDir).EnumerateDirectories()
                 .Where(d => d.LastWriteTimeUtc >= _searchFrom)
                 .ToList();

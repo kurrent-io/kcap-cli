@@ -489,32 +489,6 @@ partial class WatchCommand(
                 break;
         }
 
-        // Crew keeps one kiro-cli process for a whole chat and its in-process sub-agents, so the
-        // parent-pid watchdog alone would leave a finished sub-agent or a replaced chat session open.
-        if (WatchesCrewEnd(vendor, agentId, harnesses.Of<KiroHarness>().Crew.IsPresent())) {
-            var crewEnd = new KiroCrewSessionEndWatch(harnesses.Of<KiroHarness>().Crew, sessionId, time);
-
-            // Checks once at once, so the session's chat is learned before Crew can drop it.
-            _ = Task.Run(async () => {
-                for (var first = true; !cts.Token.IsCancellationRequested; first = false) {
-                    if (!first) {
-                        try {
-                            await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
-                        } catch (OperationCanceledException) {
-                            return;
-                        }
-                    }
-
-                    if (crewEnd.IsFinished()) {
-                        Log(time, "Kiro Crew is finished with this session; shutting down watcher");
-                        Interlocked.Exchange(ref crewFinished, 1);
-                        cts.Cancel();
-
-                        return;
-                    }
-                }
-            }, cts.Token);
-        }
 
         // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
         // already committed server-side — the below-threshold buffering (which exists to avoid
@@ -699,6 +673,34 @@ partial class WatchCommand(
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
         Log(time, $"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
+
+        // Crew keeps one kiro-cli process for a whole chat and its in-process sub-agents, so the
+        // parent-pid watchdog alone would leave a finished sub-agent or a replaced chat session open.
+        // Armed only once connected: a cancel before then skips the final drain and end POST.
+        if (WatchesCrewEnd(vendor, agentId, harnesses.Of<KiroHarness>().Crew.IsPresent())) {
+            var crewEnd = new KiroCrewSessionEndWatch(harnesses.Of<KiroHarness>().Crew, harnesses.Of<KiroHarness>().Paths.SessionsDir, sessionId, time);
+
+            // Checks once at once, so the session's chat is learned before Crew can drop it.
+            _ = Task.Run(async () => {
+                for (var first = true; !cts.Token.IsCancellationRequested; first = false) {
+                    if (!first) {
+                        try {
+                            await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
+                        } catch (OperationCanceledException) {
+                            return;
+                        }
+                    }
+
+                    if (crewEnd.IsFinished()) {
+                        Log(time, "Kiro Crew is finished with this session; shutting down watcher");
+                        Interlocked.Exchange(ref crewFinished, 1);
+                        cts.Cancel();
+
+                        return;
+                    }
+                }
+            }, cts.Token);
+        }
 
         // seed the Cursor byte frontier to the TRUE byte
         // offset of the resumed line on this INITIAL registration too, not only on a later

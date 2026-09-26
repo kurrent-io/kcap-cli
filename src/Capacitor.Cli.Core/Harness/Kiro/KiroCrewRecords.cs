@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace Capacitor.Cli.Core.Harness.Kiro;
@@ -21,6 +22,14 @@ static class KiroCrewRecords {
             return null;
         }
     }
+
+    /// <summary>When a Kiro session was created, from its <c>{sid}.json</c>.</summary>
+    public static DateTimeOffset? SessionCreatedAt(string sessionsDir, Guid session) =>
+        Read(Path.Combine(sessionsDir, $"{session:D}.json")) is { } meta
+     && StringOf(meta, "created_at") is { } raw
+     && DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)
+            ? at
+            : null;
 
     public static string? StringOf(JsonObject obj, string key) =>
         obj[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
