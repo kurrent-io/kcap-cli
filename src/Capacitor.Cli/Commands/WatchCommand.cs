@@ -81,6 +81,19 @@ partial class WatchCommand(
         ParentAlreadyDead
     }
 
+    /// <summary>Whether a watcher also watches for Kiro Crew finishing with its session: a Kiro session
+    /// watcher on a machine where Crew has run.</summary>
+    internal static bool WatchesCrewEnd(string vendor, string? agentId, bool crewPresent) =>
+        vendor == "kiro" && agentId is null && crewPresent;
+
+    /// <summary>The session-end reason the watcher posts for how it came to stop, or null when it posts none.</summary>
+    internal static string? DecideEndReason(bool parentExited, bool crewFinished, bool wedgedCeiling, bool idle) =>
+        parentExited  ? "parent_exited"
+      : crewFinished  ? "crew_finished"
+      : wedgedCeiling ? "parent_dead_ceiling"
+      : idle          ? "idle_timeout"
+      :                 null;
+
     /// <summary>
     /// Decides whether the parent-exit watchdog should run. Pure so the three
     /// outcomes — including the dead-at-startup case that caused stuck sessions —
@@ -316,6 +329,8 @@ partial class WatchCommand(
         var parentExited = 0;
         // set by the staged parent-dead recovery loop when it ends a wedged watcher on the ceiling.
         var wedgedCeilingExit = 0;
+        // set when Kiro Crew is finished with a session its still-running kiro-cli process hosts.
+        var crewFinished = 0;
 
         // Handle SIGTERM/SIGINT for graceful shutdown.
         //
@@ -473,6 +488,7 @@ partial class WatchCommand(
 
                 break;
         }
+
 
         // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
         // already committed server-side — the below-threshold buffering (which exists to avoid
@@ -657,6 +673,34 @@ partial class WatchCommand(
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
         Log(time, $"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
+
+        // Crew keeps one kiro-cli process for a whole chat and its in-process sub-agents, so the
+        // parent-pid watchdog alone would leave a finished sub-agent or a replaced chat session open.
+        // Armed only once connected: a cancel before then skips the final drain and end POST.
+        if (WatchesCrewEnd(vendor, agentId, harnesses.Of<KiroHarness>().Crew.IsPresent())) {
+            var crewEnd = new KiroCrewSessionEndWatch(harnesses.Of<KiroHarness>().Crew, harnesses.Of<KiroHarness>().Paths.SessionsDir, sessionId, time);
+
+            // Checks once at once, so the session's chat is learned before Crew can drop it.
+            _ = Task.Run(async () => {
+                for (var first = true; !cts.Token.IsCancellationRequested; first = false) {
+                    if (!first) {
+                        try {
+                            await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
+                        } catch (OperationCanceledException) {
+                            return;
+                        }
+                    }
+
+                    if (crewEnd.IsFinished()) {
+                        Log(time, "Kiro Crew is finished with this session; shutting down watcher");
+                        Interlocked.Exchange(ref crewFinished, 1);
+                        cts.Cancel();
+
+                        return;
+                    }
+                }
+            }, cts.Token);
+        }
 
         // seed the Cursor byte frontier to the TRUE byte
         // offset of the resumed line on this INITIAL registration too, not only on a later
@@ -865,6 +909,14 @@ partial class WatchCommand(
         // loop was in when the request arrived has already spent some of it.
         var shutdownStarted = Volatile.Read(ref shutdownRequestedAt) is var requestedAt and not 0 ? requestedAt : time.GetTimestamp();
 
+        // The Kiro hook posted session-start before this watcher spawned, so a session Crew finished
+        // below the buffering threshold still sends its lines and its end rather than staying open.
+        if (Volatile.Read(ref crewFinished) == 1 && !state.ThresholdReached) {
+            state.ThresholdReached = true;
+            state.BufferedLines.Clear();
+            state.BufferedLineNumbers.Clear();
+        }
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
@@ -959,10 +1011,11 @@ partial class WatchCommand(
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        var endReason = Volatile.Read(ref parentExited)      == 1 ? "parent_exited"
-                      : Volatile.Read(ref wedgedCeilingExit) == 1 ? "parent_dead_ceiling"
-                      : idleExit                                  ? "idle_timeout"
-                      :                                             null;
+        var endReason = DecideEndReason(
+            parentExited:  Volatile.Read(ref parentExited)      == 1,
+            crewFinished:  Volatile.Read(ref crewFinished)      == 1,
+            wedgedCeiling: Volatile.Read(ref wedgedCeilingExit) == 1,
+            idle:          idleExit);
 
         // Task 11 (D1): Cursor's idle-ceiling exit must NOT synthesize session-end here —
         // unlike Codex/Antigravity, end synthesis for Cursor has exactly one owner (the

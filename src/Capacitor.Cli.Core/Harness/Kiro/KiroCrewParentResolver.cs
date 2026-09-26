@@ -1,5 +1,4 @@
 using System.Collections.Frozen;
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -24,9 +23,6 @@ public static class KiroCrewParentResolver {
     /// <summary>The most children the server takes on one session-start; more go out in further batches.</summary>
     public const int MaxChildrenPerStart = 64;
 
-    /// <summary>Crew's records are a few KB; anything far larger is not one and is not parsed.</summary>
-    const long MaxRecordBytes = 1024 * 1024;
-
     /// <summary>The parent's dashed session id, or null when the session is not a Crew sub-agent or Crew
     /// has not recorded it yet. Scans at most <see cref="LiveScanLimit"/> sub-agents.</summary>
     public static string? ParentOf(KiroCrewPaths crew, string sessionsDir, string sessionId) {
@@ -35,7 +31,7 @@ public static class KiroCrewParentResolver {
         foreach (var record in SubagentRecords(crew, LiveScanLimit)) {
             if (record.Session != child) continue;
 
-            return ParentFor(record, ReadObject(crew.SessionMapJson), sessionsDir);
+            return ParentFor(record, KiroCrewRecords.Read(crew.SessionMapJson), sessionsDir);
         }
 
         return null;
@@ -51,7 +47,7 @@ public static class KiroCrewParentResolver {
     public static IReadOnlyList<string> ChildrenOf(KiroCrewPaths crew, string sessionsDir, string sessionId) {
         if (!Guid.TryParse(sessionId, out var parent) || !crew.IsPresent()) return [];
 
-        var map      = ReadObject(crew.SessionMapJson);
+        var map      = KiroCrewRecords.Read(crew.SessionMapJson);
         var children = new List<string>();
 
         foreach (var record in SubagentRecords(crew, LiveScanLimit)) {
@@ -66,7 +62,7 @@ public static class KiroCrewParentResolver {
     public static IReadOnlyDictionary<Guid, string> AllParents(KiroCrewPaths crew, string sessionsDir) {
         if (!crew.IsPresent()) return FrozenDictionary<Guid, string>.Empty;
 
-        var map     = ReadObject(crew.SessionMapJson);
+        var map     = KiroCrewRecords.Read(crew.SessionMapJson);
         var parents = new Dictionary<Guid, string>();
 
         foreach (var record in SubagentRecords(crew, int.MaxValue)) {
@@ -79,11 +75,11 @@ public static class KiroCrewParentResolver {
 
     /// <summary>Whether the session is, or was, a Crew chat's own session rather than a sub-agent's.</summary>
     public static bool IsChatSession(KiroCrewPaths crew, string sessionId) {
-        if (!Guid.TryParse(sessionId, out var id) || ReadObject(crew.SessionMapJson) is not { } map) return false;
+        if (!Guid.TryParse(sessionId, out var id) || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return false;
 
         foreach (var (_, node) in map) {
             if (node is not JsonObject entry) continue;
-            if (GuidOf(entry, "sid") == id || GuidOf(entry, "discarded_sid") == id) return true;
+            if (KiroCrewRecords.GuidOf(entry, "sid") == id || KiroCrewRecords.GuidOf(entry, "discarded_sid") == id) return true;
         }
 
         return false;
@@ -111,10 +107,10 @@ public static class KiroCrewParentResolver {
     }
 
     static SubagentRecord? RecordFrom(string path) =>
-        ReadObject(path) is { } obj
-     && GuidOf(obj, "session_id") is { } session
-     && StringOf(obj, "parent_session") is { Length: > 0 } chat
-     && EpochOf(obj, "started") is { } started
+        KiroCrewRecords.Read(path) is { } obj
+     && KiroCrewRecords.GuidOf(obj, "session_id") is { } session
+     && KiroCrewRecords.StringOf(obj, "parent_session") is { Length: > 0 } chat
+     && KiroCrewRecords.EpochOf(obj, "started") is { } started
             ? new SubagentRecord(session, chat, started)
             : null;
 
@@ -124,9 +120,9 @@ public static class KiroCrewParentResolver {
         Guid?           parent  = null;
         DateTimeOffset? created = null;
 
-        foreach (var candidate in new[] { GuidOf(entry, "sid"), GuidOf(entry, "discarded_sid") }) {
+        foreach (var candidate in new[] { KiroCrewRecords.GuidOf(entry, "sid"), KiroCrewRecords.GuidOf(entry, "discarded_sid") }) {
             if (candidate is not { } id || id == record.Session) continue;
-            if (CreatedAt(sessionsDir, id) is not { } at || at > record.Started) continue;
+            if (KiroCrewRecords.SessionCreatedAt(sessionsDir, id) is not { } at || at > record.Started) continue;
             if (created is { } newest && at <= newest) continue;
 
             parent  = id;
@@ -136,41 +132,4 @@ public static class KiroCrewParentResolver {
         return parent?.ToString("D");
     }
 
-    static DateTimeOffset? CreatedAt(string sessionsDir, Guid session) =>
-        ReadObject(Path.Combine(sessionsDir, $"{session:D}.json")) is { } meta
-     && StringOf(meta, "created_at") is { } raw
-     && DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)
-            ? at
-            : null;
-
-    /// <summary>Reads a file an agent may be rewriting: shared read-write, so the reader never blocks
-    /// Crew's own write on Windows, and anything unparseable (a half-written file) is simply absent.</summary>
-    static JsonObject? ReadObject(string path) {
-        try {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length > MaxRecordBytes) return null;
-
-            using var reader = new StreamReader(stream);
-
-            return JsonNode.Parse(reader.ReadToEnd()) as JsonObject;
-        } catch {
-            return null;
-        }
-    }
-
-    static string? StringOf(JsonObject obj, string key) =>
-        obj[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
-
-    static Guid? GuidOf(JsonObject obj, string key) =>
-        Guid.TryParse(StringOf(obj, key), out var g) ? g : null;
-
-    static DateTimeOffset? EpochOf(JsonObject obj, string key) {
-        if (obj[key] is not JsonValue v || !v.TryGetValue<double>(out var seconds) || double.IsNaN(seconds) || double.IsInfinity(seconds)) return null;
-
-        try {
-            return DateTimeOffset.FromUnixTimeMilliseconds((long)(seconds * 1000));
-        } catch (ArgumentOutOfRangeException) {
-            return null;
-        }
-    }
 }
