@@ -126,9 +126,10 @@ mcp workitems:
       get_session_work_items   List the work items the current session is
                                 attached to.
       get_next_work            What the user should work on next, ranked, each
-                                row with a because-clause and evidence
-                                (repo_hash defaults to this checkout; limit
-                                default 5, max 20).
+                                row with a because-clause, evidence, and a
+                                target_key for dismiss_next_work (repo_hash
+                                defaults to this checkout; limit default 5,
+                                max 20).
       declare_loose_end        Record one concrete piece of unfinished work
                                 (text) in the user's next-work ledger; the
                                 server refuses none-class text.
@@ -148,10 +149,12 @@ mcp workitems:
       detach_work_item         Durably detach a session from a work item it
                                 was wrongly attached to.
       dismiss_next_work        Record that the user turned down a presented
-                                next-work suggestion (target_key, optional
-                                repo_hash), so it stops being offered.
+                                next-work suggestion (target_key; repo_hash
+                                defaults to this checkout), so it stops being
+                                offered.
       restore_next_work        Undo a dismissal so the suggestion can be
-                                offered again.
+                                offered again (repo_hash defaults to this
+                                checkout).
       list_dismissed_next_work List the suggestions the user has dismissed,
                                 most recent first.
 
