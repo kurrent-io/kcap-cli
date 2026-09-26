@@ -2,7 +2,7 @@ using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.Kiro;
 
-/// <summary>Crew state shaped like a real run: dashboard chat <c>chat-2</c> and its sub-agent <c>65eed35b</c>.</summary>
+/// <summary>Crew's session map and sub-agent records, written in the shapes Crew writes them.</summary>
 public class KiroCrewSessionEndWatchTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
@@ -13,7 +13,7 @@ public class KiroCrewSessionEndWatchTests {
 
     KiroCrewPaths Crew => new(Tmp.Path, null);
 
-    KiroCrewSessionEndWatch Watch(string session) => new(Crew, session);
+    KiroCrewSessionEndWatch Watch(string session) => new(Crew, session, TimeProvider.System);
 
     void Map(string sid, string? discarded = null) =>
         Tmp.CreateFile(["crew", "session_map.json"],
@@ -148,6 +148,17 @@ public class KiroCrewSessionEndWatchTests {
         }
     }
 
+    /// <summary>However many other sub-agents a busy Crew spawned since, a recent one is still found.</summary>
+    [Test]
+    public async Task A_recent_sub_agent_is_found_behind_many_newer_ones() {
+        Subagent("tombstone.json", Child);
+        Directory.SetLastWriteTimeUtc(Tmp.PathTo("crew", "subagents", "65eed35b"), DateTime.UtcNow.AddMinutes(-2));
+
+        for (var i = 0; i < 100; i++) Subagent("state.json", Guid.NewGuid().ToString("D"), id: $"new{i:D3}");
+
+        await Assert.That(Watch(Child).IsFinished()).IsTrue();
+    }
+
     /// <summary>A session not found as a sub-agent early on stops being searched for, so a long-lived
     /// session does not rescan Crew's history every check.</summary>
     [Test]
@@ -167,6 +178,6 @@ public class KiroCrewSessionEndWatchTests {
         Subagent("tombstone.json", Child);
 
         await Assert.That(Watch("11111111-2222-3333-4444-555555555555").IsFinished()).IsFalse();
-        await Assert.That(new KiroCrewSessionEndWatch(new KiroCrewPaths(Tmp.PathTo("nowhere"), null), Child).IsFinished()).IsFalse();
+        await Assert.That(new KiroCrewSessionEndWatch(new KiroCrewPaths(Tmp.PathTo("nowhere"), null), Child, TimeProvider.System).IsFinished()).IsFalse();
     }
 }

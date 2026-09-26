@@ -14,10 +14,13 @@ namespace Capacitor.Cli.Core.Harness.Kiro;
 /// longer names it as that chat's current session. One instance watches one session and remembers
 /// what it has seen between checks.
 /// </remarks>
-public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId) {
-    /// <summary>Bounds each search for the session's own sub-agent directory; once found it is the only
-    /// directory read.</summary>
-    const int SubagentScanLimit = 64;
+public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId, TimeProvider time) {
+    /// <summary>Crew creates a sub-agent's directory as it spawns the sub-agent, just before its session
+    /// starts, so only directories touched since shortly before this watch began are searched — however
+    /// many other sub-agents a busy Crew has.</summary>
+    static readonly TimeSpan SubagentRecency = TimeSpan.FromMinutes(10);
+
+    readonly DateTime _searchFrom = (time.GetUtcNow() - SubagentRecency).UtcDateTime;
 
     /// <summary>Crew records a sub-agent within seconds of spawning it, so a session not found as one
     /// within this many checks is not one and stops being searched for.</summary>
@@ -61,8 +64,7 @@ public sealed class KiroCrewSessionEndWatch(KiroCrewPaths crew, string sessionId
 
         try {
             dirs = new DirectoryInfo(crew.SubagentsDir).EnumerateDirectories()
-                .OrderByDescending(d => d.LastWriteTimeUtc)
-                .Take(SubagentScanLimit)
+                .Where(d => d.LastWriteTimeUtc >= _searchFrom)
                 .ToList();
         } catch {
             return null;

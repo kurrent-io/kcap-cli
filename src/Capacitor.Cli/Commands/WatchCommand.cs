@@ -492,14 +492,17 @@ partial class WatchCommand(
         // Crew keeps one kiro-cli process for a whole chat and its in-process sub-agents, so the
         // parent-pid watchdog alone would leave a finished sub-agent or a replaced chat session open.
         if (WatchesCrewEnd(vendor, agentId, harnesses.Of<KiroHarness>().Crew.IsPresent())) {
-            var crewEnd = new KiroCrewSessionEndWatch(harnesses.Of<KiroHarness>().Crew, sessionId);
+            var crewEnd = new KiroCrewSessionEndWatch(harnesses.Of<KiroHarness>().Crew, sessionId, time);
 
+            // Checks once at once, so the session's chat is learned before Crew can drop it.
             _ = Task.Run(async () => {
-                while (!cts.Token.IsCancellationRequested) {
-                    try {
-                        await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
-                    } catch (OperationCanceledException) {
-                        return;
+                for (var first = true; !cts.Token.IsCancellationRequested; first = false) {
+                    if (!first) {
+                        try {
+                            await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
+                        } catch (OperationCanceledException) {
+                            return;
+                        }
                     }
 
                     if (crewEnd.IsFinished()) {
