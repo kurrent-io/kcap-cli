@@ -1616,6 +1616,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<bool> TryStopByPidRecordAsync(string agentId) {
         if (FindPidRecord(agentId) is not { } record) return false;
 
+        return await StopByPidRecordAsync(record);
+    }
+
+    async Task<bool> StopByPidRecordAsync(AgentPidRecord record) {
         var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _time, _shutdownCts.Token);
         if (confirmedGone) {
             // Phase B2-b (sequenced-settlement design §4.2.4) Hook C: ledger-append the positive per-id
@@ -1623,8 +1627,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // source record. A crash between the two leaves a committed entry + leftover record; the next
             // boot's OrphanReaper record pass re-derives it and Upsert (idempotent on the source-stable
             // (AgentId, OldEpoch) key) collapses onto the committed entry, then completes the delete.
-            _resolvedLedger?.Upsert(agentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
-            _pidRecords?.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
+            _resolvedLedger?.Upsert(record.AgentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
+            _pidRecords?.Delete(record.AgentId); // delete ONLY on confirmed death (spec §6.4(2))
         }
 
         return confirmedGone;
