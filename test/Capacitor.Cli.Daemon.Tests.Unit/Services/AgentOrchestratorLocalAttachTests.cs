@@ -1222,7 +1222,7 @@ public class AgentOrchestratorLocalAttachTests {
     public async Task Stopping_a_prior_incarnation_flow_survivor_without_force_is_refused_before_reaping() {
         // Not in _agents — this daemon incarnation never saw it — but its persisted PID record
         // says it was a review-flow participant. The refusal must fire off the RECORD's Kind
-        // before TryStopByPidRecordAsync (and its live-process reap) ever runs.
+        // before StopByPidRecordAsync (and its live-process reap) ever runs.
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.WritePidRecordForTest(new AgentPidRecord(
@@ -1240,7 +1240,7 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test]
     public async Task Stopping_a_prior_incarnation_flow_survivor_with_force_bypasses_the_kind_gate() {
-        // --force must reach TryStopByPidRecordAsync itself (kept policy-free) rather than being
+        // --force must reach StopByPidRecordAsync itself (kept policy-free) rather than being
         // turned back by the new gate above it.
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
@@ -1259,6 +1259,82 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(reply.Text).IsEqualTo("ghost-flow-2\tstopped");
         await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost-flow-2")).IsFalse();
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_an_absent_agent_reports_missing(bool force) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var reply = await StopV2AndReadReply(orch, force, "finished-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("finished-agent\tmissing");
+    }
+
+    [Test]
+    public async Task Legacy_stop_of_an_absent_agent_keeps_its_error_response() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var reply = await StopAndReadReply(orch, "finished-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).IsEqualTo("no such agent finished-agent");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_an_agent_with_a_corrupt_record_reports_failed(bool quarantined) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var agentsDir = Path.Combine(orch.PidRecordRootForTest, "agents");
+        Directory.CreateDirectory(agentsDir);
+        var path = Path.Combine(agentsDir, AgentFileNames.For("corrupt-agent") + ".json");
+        File.WriteAllText(path, "{ broken record");
+        if (quarantined) orch.PidRecordsForTest();
+
+        var reply = await StopV2AndReadReply(orch, force: true, "corrupt-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("corrupt-agent\tfailed");
+        await Assert.That(File.Exists(path) || File.Exists(path + ".corrupt")).IsTrue();
+    }
+
+    [Test]
+    public async Task Stopping_an_agent_with_an_unreadable_record_directory_reports_failed() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        Directory.CreateDirectory(orch.PidRecordRootForTest);
+        File.WriteAllText(Path.Combine(orch.PidRecordRootForTest, "agents"), "obstructed directory");
+
+        var reply = await StopV2AndReadReply(orch, force: true, "unknown-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("unknown-agent\tfailed");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_a_survivor_with_unconfirmed_identity_reports_failed_and_retains_its_record(bool force) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        using var dummy = DummyProcess.StartSleep(30);
+        await Assert.That(ProcessIdentity.MatchesTri(dummy.Pid, "")).IsNull();
+        orch.WritePidRecordForTest(new AgentPidRecord(
+            "unconfirmed-agent", dummy.Pid, "", PidIdentityKind.IdentityUnavailable, "Default", "codex",
+            "", "", orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
+
+        var reply = await StopV2AndReadReply(orch, force, "unconfirmed-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("unconfirmed-agent\tfailed");
+        await Assert.That(ProcessIdentity.IsAlive(dummy.Pid)).IsTrue();
+        await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "unconfirmed-agent")).IsTrue();
     }
 
     [Test]

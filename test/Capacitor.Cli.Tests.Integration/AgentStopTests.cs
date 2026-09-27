@@ -44,6 +44,53 @@ public class AgentStopTests {
     }
 
     [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    public async Task Stop_all_accepts_a_confirmed_agent_that_finished_before_dispatch(bool force, bool yes) {
+        string[] args = ["stop", "--all", .. force ? new[] { "--force" } : [], .. yes ? new[] { "-y" } : []];
+        var (stdout, stderr, exitCode, stops) = await RunCliAsync(args, Table,
+            id => LocalFrame.StopAck($"{id}\t{(id == "plain-1" ? "missing" : "stopped")}"));
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(stderr).DoesNotContain("Failed to stop");
+        await Assert.That(stderr).DoesNotContain("no such agent");
+        await Assert.That(stdout).Contains("Already stopped plain-1.");
+        await Assert.That(stops.Select(s => s.Id)).IsEquivalentTo(
+            force ? new[] { "plain-1", "plain-2", "review-1" } : ["plain-1", "plain-2"]);
+    }
+
+    [Test]
+    [Arguments("plain-1\tfailed")]
+    [Arguments("other-agent\tmissing")]
+    [Arguments("plain-1\tmissing\textra")]
+    public async Task Stop_all_rejects_unconfirmed_or_mismatched_stop_results(string ack) {
+        var (_, _, exitCode, _) = await RunCliAsync(["stop", "--all", "-y"], Table,
+            id => id == "plain-1" ? LocalFrame.StopAck(ack) : LocalFrame.StopAck($"{id}\tstopped"));
+
+        await Assert.That(exitCode).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Stop_all_does_not_ignore_an_older_daemons_ambiguous_missing_error() {
+        var (_, stderr, exitCode, _) = await RunCliAsync(["stop", "--all", "-y"], Table,
+            id => LocalFrame.Error($"no such agent {id}"));
+
+        await Assert.That(exitCode).IsEqualTo(1);
+        await Assert.That(stderr).Contains("no such agent");
+    }
+
+    [Test]
+    public async Task A_single_missing_agent_still_fails() {
+        var (_, stderr, exitCode, _) = await RunCliAsync(["stop", AgentId], "",
+            id => LocalFrame.StopAck($"{id}\tmissing"));
+
+        await Assert.That(exitCode).IsEqualTo(1);
+        await Assert.That(stderr).Contains($"no such agent {AgentId}");
+    }
+
+    [Test]
     public async Task Stop_all_dispatches_the_confirmed_stops_concurrently() {
         var (_, _, exitCode, stops) = await RunCliAsync(["stop", "--all", "-y"], Table, stopRepliesAfter: 2);
 

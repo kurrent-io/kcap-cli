@@ -216,12 +216,12 @@ internal sealed class AgentCommand(
         }
 
         // An empty StopV2 id expands to the daemon's current set, including unconfirmed agents.
-        var results = await Task.WhenAll(targets.Select(id => SendStopAsync(sock, id, name, force)));
+        var results = await Task.WhenAll(targets.Select(id => SendStopAsync(sock, id, name, force, missingIsStopped: all)));
 
         return results.Any(code => code != 0) ? 1 : 0;
     }
 
-    static async Task<int> SendStopAsync(string sock, string agentId, string daemonName, bool force) {
+    static async Task<int> SendStopAsync(string sock, string agentId, string daemonName, bool force, bool missingIsStopped) {
         try {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));
@@ -246,6 +246,14 @@ internal sealed class AgentCommand(
                         switch (status) {
                             case "stopped": Console.WriteLine($"Stopped {id}."); break;
                             case "skipped": Console.WriteLine($"Skipped {id} — review agent; pass --force to stop it."); skipped++; break;
+                            case "missing" when id == agentId && parts.Length == 2:
+                                if (missingIsStopped) {
+                                    Console.WriteLine($"Already stopped {id}.");
+                                } else {
+                                    Console.Error.WriteLine($"kcap: no such agent {id}");
+                                    failed++;
+                                }
+                                break;
                             default:        Console.Error.WriteLine($"Failed to stop {id} — see `kcap daemon logs`."); failed++; break;
                         }
                     }
