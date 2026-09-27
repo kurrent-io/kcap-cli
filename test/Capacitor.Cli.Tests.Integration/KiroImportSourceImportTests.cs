@@ -92,7 +92,7 @@ public class KiroImportSourceImportTests : IDisposable {
         var root = WriteSession();
         var crew = new KiroCrewPaths(root, null);
 
-        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}"}}""");
+        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}", "discarded_sid": "99999999-8888-7777-6666-555555555555"}}""");
 
         var spawnedAt = new DateTimeOffset(2026, 6, 10, 21, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         var children  = Enumerable.Range(0, KiroCrewParentResolver.MaxChildrenPerStart + 1).Select(_ => Guid.NewGuid().ToString("D")).ToList();
@@ -122,6 +122,8 @@ public class KiroImportSourceImportTests : IDisposable {
             .ToList();
 
         await Assert.That(starts.Count).IsEqualTo(2);
+        await Assert.That(starts.Select(e => System.Text.Json.Nodes.JsonNode.Parse(e.RequestMessage.Body!)!["previous_session_id"]?.GetValue<string>() ?? ""))
+            .IsEquivalentTo(["99999999-8888-7777-6666-555555555555", "99999999-8888-7777-6666-555555555555"]);
         await Assert.That(named).IsEquivalentTo(children);
     }
 }

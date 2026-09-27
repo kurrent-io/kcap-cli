@@ -151,11 +151,24 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         await Assert.That(body["subagent_session_ids"]!.AsArray().Select(n => n!.GetValue<string>())).IsEquivalentTo([Child]);
     }
 
+    /// <summary>A chat Crew moved to a new session names the session it replaced, so the two are chained.</summary>
+    [Test]
+    public async Task A_crew_chat_that_moved_on_names_its_previous_session() {
+        const string earlier = "8bd763b1-280e-47c3-bd4d-79438fc4a37b";
+        Home.CreateFile([".kiro", "crew", "session_map.json"],
+            $"{{\"{Chat}\": {{\"sid\": \"{Parent}\", \"discarded_sid\": \"{earlier}\", \"provider\": \"acp\"}}}}");
+
+        var body = await SpawnAsync(Parent);
+
+        await Assert.That(body["previous_session_id"]?.GetValue<string>()).IsEqualTo(earlier);
+    }
+
     [Test]
     public async Task A_plain_kiro_session_names_no_parent() {
         var body = await SpawnAsync(Child);
 
         await Assert.That(body["parent_session_id"]).IsNull();
         await Assert.That(body["subagent_session_ids"]).IsNull();
+        await Assert.That(body["previous_session_id"]).IsNull();
     }
 }

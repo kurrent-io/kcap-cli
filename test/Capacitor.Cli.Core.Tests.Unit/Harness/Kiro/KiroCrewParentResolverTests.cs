@@ -146,6 +146,22 @@ public class KiroCrewParentResolverTests {
     }
 
     [Test]
+    public async Task A_chats_current_session_names_the_session_it_replaced() {
+        SeedSessionMap(sid: Parent, discarded: Earlier);
+
+        await Assert.That(KiroCrewParentResolver.PreviousOf(Crew, Parent)).IsEqualTo(Earlier);
+        await Assert.That(KiroCrewParentResolver.PreviousOf(Crew, Earlier)).IsNull();
+        await Assert.That(KiroCrewParentResolver.PreviousOf(Crew, Child)).IsNull();
+    }
+
+    [Test]
+    public async Task A_chat_that_never_moved_names_no_previous_session() {
+        SeedSessionMap(sid: Parent);
+
+        await Assert.That(KiroCrewParentResolver.PreviousOf(Crew, Parent)).IsNull();
+    }
+
+    [Test]
     public async Task A_parent_names_the_children_it_spawned() {
         SeedSessionMap();
         SeedKiroSession(Parent, ChildStartedAt.AddMinutes(-5));

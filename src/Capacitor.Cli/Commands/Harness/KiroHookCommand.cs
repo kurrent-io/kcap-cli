@@ -297,6 +297,10 @@ sealed class KiroHookCommand(
             forwarded["parent_session_id"] = parent;
         }
 
+        if (KiroCrewParentResolver.PreviousOf(harnesses.Of<KiroHarness>().Crew, dashedSessionId) is { } previous) {
+            forwarded["previous_session_id"] = previous;
+        }
+
         // Newest first, so a cap on one payload keeps the children most likely still unlinked.
         if (await ResolveCrewChildrenAsync(dashedSessionId, budget) is { Count: > 0 } children) {
             forwarded["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(children.Take(KiroCrewParentResolver.MaxChildrenPerStart));

@@ -73,6 +73,22 @@ public static class KiroCrewParentResolver {
         return parents;
     }
 
+    /// <summary>
+    /// The dashed id of the Kiro session a Crew chat ran before this one, or null. Crew keeps only the
+    /// chat's latest move, so this is known only while the session is its chat's current one.
+    /// </summary>
+    public static string? PreviousOf(KiroCrewPaths crew, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var id) || !crew.IsPresent() || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return null;
+
+        foreach (var (_, node) in map) {
+            if (node is not JsonObject entry || KiroCrewRecords.GuidOf(entry, "sid") != id) continue;
+
+            return KiroCrewRecords.GuidOf(entry, "discarded_sid") is { } previous && previous != id ? previous.ToString("D") : null;
+        }
+
+        return null;
+    }
+
     /// <summary>Whether the session is, or was, a Crew chat's own session rather than a sub-agent's.</summary>
     public static bool IsChatSession(KiroCrewPaths crew, string sessionId) {
         if (!Guid.TryParse(sessionId, out var id) || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return false;

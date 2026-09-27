@@ -244,6 +244,7 @@ internal sealed class KiroImportSource : IImportSource {
 
         if (Guid.TryParse(lifecycleId, out var self)) {
             if (_crewParents.TryGetValue(self, out var parent)) startPayload["parent_session_id"] = parent;
+            if (KiroCrewParentResolver.PreviousOf(_crew, lifecycleId) is { } previous) startPayload["previous_session_id"] = previous;
 
             childBatches = _crewChildren[self].Select(c => c.ToString("D")).Chunk(KiroCrewParentResolver.MaxChildrenPerStart).ToList();
             if (childBatches.Count > 0) startPayload["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(childBatches[0]);
