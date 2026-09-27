@@ -819,13 +819,7 @@ public class AgentOrchestratorLocalAttachTests {
         }
     }
 
-    /// <summary>
-    /// Pins the one hop nothing else exercises: <see cref="LocalControlServer"/> decoding a raw
-    /// StopV2 frame off a real socket and forwarding its force flag to the orchestrator. The codec
-    /// round-trip (FrameCodecTests) and the handler (StopV2AndReadReply above) are each covered in
-    /// isolation; only a real connection proves the server's frame switch wires them together.
-    /// </summary>
-    static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, bool force, string agentId) {
+    static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, LocalFrame request) {
         using var daemons = new TempDaemonStore();
         using var cts = new CancellationTokenSource(WaitHarness.Bounded);
 
@@ -850,7 +844,7 @@ public class AgentOrchestratorLocalAttachTests {
             await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
             await using var stream = new NetworkStream(sock, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, LocalFrame.StopV2(force, agentId), cts.Token);
+            await FrameCodec.WriteAsync(stream, request, cts.Token);
 
             return await FrameCodec.ReadAsync(stream, cts.Token);
         } finally {
@@ -861,7 +855,7 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test, ExcludeOn(OS.Windows)] // Unix-domain socket path
     public async Task Local_socket_stopv2_without_force_refuses_a_protected_agent_end_to_end() {
-        var resp = await StopV2OverRealSocketAsync("test-stopv2-refuse", force: false, "flow-1");
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-refuse", LocalFrame.StopV2(force: false, "flow-1"));
 
         await Assert.That(resp!.Type).IsEqualTo(FrameType.Error);
         await Assert.That(resp.Text).Contains("--force");
@@ -869,10 +863,19 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test, ExcludeOn(OS.Windows)] // Unix-domain socket path
     public async Task Local_socket_stopv2_with_force_stops_a_protected_agent_end_to_end() {
-        var resp = await StopV2OverRealSocketAsync("test-stopv2-force", force: true, "flow-1");
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-force", LocalFrame.StopV2(force: true, "flow-1"));
 
         await Assert.That(resp!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(resp.Text).IsEqualTo("flow-1\tstopped");
+    }
+
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Local_socket_malformed_stopv2_returns_a_protocol_error() {
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-invalid", new LocalFrame(FrameType.StopV2));
+
+        await Assert.That(resp).IsNotNull();
+        await Assert.That(resp!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(resp.Text).Contains("malformed StopV2");
     }
 
     [Test]
@@ -1182,16 +1185,20 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
-    public async Task Stopping_a_flow_participant_with_force_succeeds() {
+    [Arguments("agent_exited", "agent_stopped")]
+    [Arguments("reviewer_ttl_expired", "reviewer_ttl_expired")]
+    public async Task Stopping_a_flow_participant_with_force_preserves_end_attribution(string reason, string expected) {
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+        orch.GetAgentForTest("flow-1")!.PendingEndReason = reason;
 
         var reply = await StopV2AndReadReply(orch, force: true, "flow-1");
 
         await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(reply.Text).IsEqualTo("flow-1\tstopped");
         await Assert.That(orch.GetAgentForTest("flow-1")!.Status).IsEqualTo("Completed");
+        await Assert.That(orch.GetAgentForTest("flow-1")!.PendingEndReason).IsEqualTo(expected);
     }
 
     [Test]

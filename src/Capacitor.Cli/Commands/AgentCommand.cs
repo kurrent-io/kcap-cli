@@ -161,7 +161,7 @@ internal sealed class AgentCommand(
             return 1;
         }
 
-        string target;
+        string[] targets;
 
         if (all) {
             var agents = await FetchAgentsAsync(sock);
@@ -174,7 +174,7 @@ internal sealed class AgentCommand(
             }
 
             var (stoppable, protectedIds) = PartitionByProtection(agents);
-            var targets = force ? agents.Select(a => a.Id).ToArray() : stoppable;
+            targets = force ? agents.Select(a => a.Id).ToArray() : stoppable;
 
             if (targets.Length == 0) {
                 Console.WriteLine(protectedIds.Length > 0
@@ -208,16 +208,17 @@ internal sealed class AgentCommand(
                     return 0;
                 }
             }
-
-            target = "";
         } else {
             var resolved = await ResolveOrReportAsync(sock, args[0]);
             if (resolved is null) return 1;
 
-            target = resolved;
+            targets = [resolved];
         }
 
-        return await SendStopAsync(sock, target, name, force);
+        // An empty StopV2 id expands to the daemon's current set, including unconfirmed agents.
+        var results = await Task.WhenAll(targets.Select(id => SendStopAsync(sock, id, name, force)));
+
+        return results.Any(code => code != 0) ? 1 : 0;
     }
 
     static async Task<int> SendStopAsync(string sock, string agentId, string daemonName, bool force) {
@@ -321,8 +322,9 @@ internal sealed class AgentCommand(
 
         Console.WriteLine($"{"AGENT",-34} {"STATUS",-10} {"KIND",-12} REPO");
         foreach (var a in agents) {
+            var flow = a.FlowRunId.Length > 0 ? $"  [flow {a.FlowRunId}]" : "";
             var role = a.FlowRole.Length > 0 ? $"  [{a.FlowRole}]" : "";
-            Console.WriteLine($"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {a.Repo}{role}");
+            Console.WriteLine($"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {a.Repo}{flow}{role}");
         }
 
         return 0;
@@ -362,15 +364,17 @@ internal sealed class AgentCommand(
 
             if (resp.Text.Length == 0) return [];
 
-            // Exactly 3 columns is an older daemon; exactly 6 is a current one. Any other width
-            // means the row was corrupted in transit — most plausibly a delimiter inside a
-            // free-form field — and a shifted kind column would misreport what `stop --all` is
-            // about to do. Refuse the whole table rather than consent to a guess.
+            // Older daemons send 3 columns; current ones send 6. Shifted columns can hide a
+            // protected kind, and an empty id would turn a targeted stop into stop-all.
             string[] rows = [.. resp.Text.Split('\n').Where(l => l.Length > 0)];
 
-            if (rows.Any(l => l.Split('\t').Length is not (3 or 6))) {
+            if (rows.Any(l => {
+                    var cells = l.Split('\t');
+
+                    return cells.Length is not (3 or 6) || string.IsNullOrWhiteSpace(cells[0]);
+                })) {
                 await Console.Error.WriteLineAsync(
-                    "kcap: daemon sent a malformed agent table (unexpected column count); refusing to act on it");
+                    "kcap: daemon sent a malformed agent table (unexpected column count or empty id); refusing to act on it");
 
                 return null;
             }

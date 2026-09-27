@@ -68,7 +68,7 @@ internal static class LocalAgentClient {
 
                             break;
                         case FrameType.AttachedReadOnly:
-                            readOnly = true;
+                            Volatile.Write(ref readOnly, true);
                             var (_, reason, roSnapshot) = FrameCodec.AttachedReadOnly(f);
                             if (roSnapshot.Length > 0) TerminalRawMode.WriteStdout(roSnapshot, roSnapshot.Length);
 
@@ -107,7 +107,7 @@ internal static class LocalAgentClient {
                 while (!ct.IsCancellationRequested && !outPump.IsCompleted) {
                     await Task.Delay(ResizePollGap, time, ct);
                     var cur = TrySize();
-                    if (cur != last) { last = cur; if (!readOnly) await Send(SizeFrame()); }
+                    if (cur != last) { last = cur; if (!Volatile.Read(ref readOnly)) await Send(SizeFrame()); }
                 }
             } catch (Exception ex) when (ex is OperationCanceledException or IOException) {
                 /* shutting down */
@@ -126,7 +126,7 @@ internal static class LocalAgentClient {
                     if (n <= 0) { inputClosed = true; break; }
 
                     var (forward, detach) = scanner.Process(buf.AsSpan(0, n));
-                    if (forward.Length > 0 && !readOnly) await Send(LocalFrame.Stdin(forward));
+                    if (forward.Length > 0 && !Volatile.Read(ref readOnly)) await Send(LocalFrame.Stdin(forward));
                     if (detach) { detached = true; await Send(LocalFrame.Detach()); break; }
                 }
             } catch (Exception ex) when (ex is OperationCanceledException or IOException) {

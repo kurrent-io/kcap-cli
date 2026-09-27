@@ -48,7 +48,16 @@ internal sealed partial class LocalControlServer(
                 case FrameType.List:   await orchestrator.HandleLocalListAsync(stream, ct); break;
                 case FrameType.Stop:   await orchestrator.HandleLocalStopAsync(first.Text, stream, ct); break;
                 case FrameType.StopV2: {
-                    var (force, id) = FrameCodec.StopV2(first);
+                    (bool force, string id) stop;
+                    try {
+                        stop = FrameCodec.StopV2(first);
+                    } catch (InvalidDataException ex) {
+                        await FrameCodec.WriteAsync(stream, LocalFrame.Error($"malformed StopV2 request: {ex.Message}"), ct);
+
+                        break;
+                    }
+
+                    var (force, id) = stop;
                     await orchestrator.HandleLocalStopV2Async(force, id, stream, ct);
 
                     break;
