@@ -485,7 +485,7 @@ public class PiRpcHostedAgentRuntimeTests {
         var read = new List<AcpEventEnvelope>();
         while (rt.Envelopes.TryRead(out var env)) read.Add(env);
 
-        await Assert.That(read).IsNotEmpty();
+        await Assert.That(read.Any(e => e is { Kind: AcpEventKind.AssistantText, Text: "final words" })).IsTrue();
     }
 
     // ---- Terminal ----
