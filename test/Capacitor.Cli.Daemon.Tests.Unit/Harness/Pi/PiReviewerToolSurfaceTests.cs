@@ -14,7 +14,7 @@ public class PiReviewerToolSurfaceTests {
         var tools = PiReviewerToolSurface.For([ResultChannel]);
 
         await Assert.That(tools.Select(t => t.PiName)).IsEquivalentTo(
-            new[] { "read_file", "list_directory", "search_files", "submit_review_result", "send_flow_message" },
+            new[] { "read_file", "list_directory", "search_files", "git_log", "git_show", "git_diff", "submit_review_result", "send_flow_message" },
             TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
@@ -73,6 +73,6 @@ public class PiReviewerToolSurfaceTests {
         var tools = PiReviewerToolSurface.For([ResultChannel]);
 
         await Assert.That(PiReviewerToolSurface.AllowlistArg(tools))
-            .IsEqualTo("read_file,list_directory,search_files,submit_review_result,send_flow_message");
+            .IsEqualTo("read_file,list_directory,search_files,git_log,git_show,git_diff,submit_review_result,send_flow_message");
     }
 }

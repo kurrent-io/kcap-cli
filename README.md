@@ -1359,10 +1359,13 @@ Enabled by default; `KCAP_PI_UNATTENDED_REVIEWER=0` in the daemon's environment 
 A Pi reviewer runs in a daemon-owned worktree with none of your interactive Pi configuration reaching
 it — no extensions, no skills, no prompt templates, and no `AGENTS.md`/`SYSTEM.md`; an explicit
 system prompt replaces Pi's own. It can inspect the worktree with `read_file`, `list_directory` and
-`search_files` and report a verdict through the injected result channel; it has no shell and cannot
+`search_files`, read the repository's history with `git_log`, `git_show` and `git_diff`, and report a
+verdict through the injected result channel; it has no shell and cannot
 write anywhere, in or out of the worktree — a path outside the worktree is refused by the tool
 itself, not merely left untrusted. It runs offline, so a repository cannot trigger a package install
-either.
+either. The git tools run only git's own diff machinery, never an external diff or textconv
+program, and ignore system and global git config. A Pi reviewer still cannot borrow your checkout,
+so uncommitted work reaches it only through the context you submit.
 
 It authenticates as **you**: whatever Pi provider credentials and default model your account already
 has, or `KCAP_PI_MODEL` to pick a specific one — the same override a hosted Pi agent uses.

@@ -38,6 +38,10 @@ public static class PiReviewerExtension {
         const SEARCH_BUDGET_MS = 10000;
         const MAX_GLOB_LENGTH = 1024;
         const MAX_GLOB_DOUBLE_STARS = 8;
+        const MAX_GIT_OUTPUT_BYTES = 262144;
+        const GIT_TIMEOUT_MS = 20000;
+        const MAX_GIT_LOG_COUNT = 200;
+        const MAX_REV_LENGTH = 256;
 
         """;
 
@@ -120,6 +124,58 @@ public static class PiReviewerExtension {
           return match(0, 0);
         }
 
+        // A revision comes from the model and lands in git's argv. --end-of-options already stops it
+        // being read as an option; this refuses the rest of what no revision needs.
+        function checkRev(rev: unknown, what: string): string {
+          const text = String(rev ?? "");
+          if (!text) throw new Error(what + " is required");
+          if (text.length > MAX_REV_LENGTH || text.startsWith("-") || /[\s\x00-\x1f\x7f]/.test(text))
+            throw new Error(what + " is not a revision");
+          return text;
+        }
+
+        // Git runs on the operator's own config for this repository, never on system or global config
+        // or an inherited GIT_* variable, and with every hook into an external program switched off.
+        function runGit(root: string, args: string[]): Promise<string> {
+          const env: Record<string, string> = {
+            PATH: process.env.PATH || "/usr/bin:/bin",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_TERMINAL_PROMPT: "0",
+            GIT_OPTIONAL_LOCKS: "0",
+            LC_ALL: "C",
+          };
+          const argv = ["-C", root, "--no-pager", "--literal-pathspecs",
+            "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "color.ui=never", ...args];
+
+          return new Promise<string>((res, rej) => {
+            const child = spawn("git", argv, { env, stdio: ["ignore", "pipe", "pipe"] });
+            const out: Buffer[] = [];
+            let outBytes = 0, err = "", truncated = false, settled = false;
+
+            const finish = (fn: () => void) => { if (!settled) { settled = true; clearTimeout(timer); fn(); } };
+            const timer = setTimeout(() => {
+              child.kill("SIGKILL");
+              finish(() => rej(new Error("git timed out")));
+            }, GIT_TIMEOUT_MS);
+
+            child.stdout.on("data", (d: Buffer) => {
+              if (truncated) return;
+              const room = MAX_GIT_OUTPUT_BYTES - outBytes;
+              if (d.length > room) { out.push(d.subarray(0, room)); outBytes += room; truncated = true; child.kill("SIGKILL"); return; }
+              out.push(d); outBytes += d.length;
+            });
+            child.stderr.on("data", (d: Buffer) => { if (err.length < 4096) err += d.toString("utf8"); });
+            child.on("error", (e: any) => finish(() => rej(new Error("git could not run: " + ((e && e.message) || String(e))))));
+            child.on("close", (code: number | null) => finish(() => {
+              const text = Buffer.concat(out).toString("utf8");
+              if (truncated) res(text + "\n[output truncated at 256 KB; narrow it with path or a smaller range]");
+              else if (code === 0) res(text.length ? text : "(no output)");
+              else rej(new Error(err.trim() || "git exited with code " + code));
+            }));
+          });
+        }
+
         export default async function (pi: any) {
           const manifestPath = process.env.KCAP_PI_REVIEWER_MANIFEST;
           if (!manifestPath) fail("KCAP_PI_REVIEWER_MANIFEST is not set");
@@ -141,6 +197,16 @@ public static class PiReviewerExtension {
             const inside = rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
             if (!inside) throw new Error("path is outside the repository under review");
             return target;
+          }
+
+          // A pathspec only filters what git prints, so it is checked lexically: it may name a file a
+          // revision deleted, which a realpath check would refuse.
+          function pathspec(userPath: unknown): string[] {
+            if (userPath === undefined || userPath === null || userPath === "") return [];
+            const rel = relative(rootReal, resolve(rootReal, String(userPath)));
+            if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel))
+              throw new Error("path is outside the repository under review");
+            return ["--", rel === "" ? "." : rel];
           }
 
           const fileTools: Record<string, any> = {
@@ -286,6 +352,64 @@ public static class PiReviewerExtension {
                 }
 
                 return textResult((matches.length ? matches.join("\n") : "no matches") + truncated);
+              },
+            },
+
+            git_log: {
+              description: "List commits in the repository under review, newest first, as: hash date author subject. Read-only.",
+              parameters: {
+                type: "object",
+                properties: {
+                  range: { type: "string", description: "A revision or range, e.g. main..HEAD or abc123. Defaults to HEAD." },
+                  path: { type: "string", description: "Only commits touching this repository-relative path." },
+                  max_count: { type: "integer", minimum: 1, maximum: MAX_GIT_LOG_COUNT },
+                },
+              },
+              async run(params: any) {
+                const range = params.range === undefined || params.range === "" ? "HEAD" : checkRev(params.range, "range");
+                const count = Math.min(MAX_GIT_LOG_COUNT, Math.max(1, Number(params.max_count ?? 50) | 0));
+                return textResult(await runGit(rootReal, ["log", "--no-ext-diff", "--no-textconv", "--date=short",
+                  "--format=%h %ad %an %s", "-n", String(count), "--end-of-options", range, ...pathspec(params.path)]));
+              },
+            },
+
+            git_show: {
+              description: "Show one commit's message and patch, or a file as it was at a revision (rev:path, e.g. HEAD~1:src/a.cs). Read-only.",
+              parameters: {
+                type: "object",
+                properties: {
+                  rev: { type: "string", description: "A commit, or rev:path for a file's content at that revision." },
+                  path: { type: "string", description: "Limit a commit's patch to this repository-relative path." },
+                  stat_only: { type: "boolean", description: "List changed files instead of the patch." },
+                },
+                required: ["rev"],
+              },
+              async run(params: any) {
+                const rev = checkRev(params.rev, "rev");
+                const mode = params.stat_only === true ? ["--stat", "--format=%H %ad %an%n%n%B"] : ["--patch", "--stat"];
+                return textResult(await runGit(rootReal, ["show", "--no-ext-diff", "--no-textconv", "--date=short",
+                  ...mode, "--end-of-options", rev, ...pathspec(params.path)]));
+              },
+            },
+
+            git_diff: {
+              description: "Diff two revisions, or a revision against the checked-out files when head is omitted. Use base...head for a branch's changes since it forked. Read-only.",
+              parameters: {
+                type: "object",
+                properties: {
+                  base: { type: "string", description: "A revision, or a base..head / base...head range." },
+                  head: { type: "string", description: "Optional second revision." },
+                  path: { type: "string", description: "Limit the diff to this repository-relative path." },
+                  stat_only: { type: "boolean", description: "List changed files instead of the patch." },
+                },
+                required: ["base"],
+              },
+              async run(params: any) {
+                const revs = [checkRev(params.base, "base")];
+                if (params.head !== undefined && params.head !== "") revs.push(checkRev(params.head, "head"));
+                const mode = params.stat_only === true ? ["--stat"] : ["--patch", "--stat"];
+                return textResult(await runGit(rootReal, ["diff", "--no-ext-diff", "--no-textconv",
+                  ...mode, "--end-of-options", ...revs, ...pathspec(params.path)]));
               },
             },
           };

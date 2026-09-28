@@ -72,7 +72,8 @@ public class PiReviewerLaunchTests {
             File.WriteAllText(Path.Combine(dir, "ready.json"), activeJson);
         };
 
-    const string AllFive = """{"active":["list_directory","read_file","search_files","send_flow_message","submit_review_result"]}""";
+    const string AllActive =
+        """{"active":["git_diff","git_log","git_show","list_directory","read_file","search_files","send_flow_message","submit_review_result"]}""";
 
     // ── BuildPsi: the reviewer launch vector ──
 
@@ -83,7 +84,7 @@ public class PiReviewerLaunchTests {
         await Assert.That(psi.ArgumentList).IsEquivalentTo(new[] {
             "--mode", "rpc",
             "--no-approve", "--no-extensions", "-e", Paths.Extension,
-            "--tools", "read_file,list_directory,search_files,submit_review_result,send_flow_message",
+            "--tools", "read_file,list_directory,search_files,git_log,git_show,git_diff,submit_review_result,send_flow_message",
             "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--system-prompt", Paths.SystemPrompt, "--append-system-prompt", "",
             "--offline",
@@ -247,7 +248,7 @@ public class PiReviewerLaunchTests {
     [Test]
     public async Task The_first_prompt_is_written_only_after_the_tool_surface_is_confirmed() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
 
         var start = await Factory(config, process).StartAsync(Ctx(isReviewFlow: true, prompt: "review this"), CancellationToken.None);
 
@@ -259,7 +260,7 @@ public class PiReviewerLaunchTests {
 
     [Test]
     [Arguments("""{"active":["read_file"]}""")]
-    [Arguments("""{"active":["list_directory","read_file","search_files","send_flow_message","submit_review_result","bash"]}""")]
+    [Arguments("""{"active":["git_diff","git_log","git_show","list_directory","read_file","search_files","send_flow_message","submit_review_result","bash"]}""")]
     public async Task A_tool_surface_mismatch_refuses_the_launch_and_sends_no_prompt(string ready) {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
         var (config, process) = ReadyConfigAndProcess(ready);
@@ -274,7 +275,7 @@ public class PiReviewerLaunchTests {
     [Test]
     public async Task A_child_that_never_answers_is_refused_as_an_extension_failure_without_its_stderr() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
         process.AutoStateResponse = null;
         process.Diagnostics = "Failed to load extension: secret-looking text";
 
@@ -288,7 +289,7 @@ public class PiReviewerLaunchTests {
     [Test]
     public async Task A_guard_that_wins_before_StartAsync_returns_throws_its_coded_reason() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
         var ready = process.OnWrite!;
         process.OnWrite = json => {
             ready(json);
@@ -310,7 +311,7 @@ public class PiReviewerLaunchTests {
     [Test]
     public async Task The_launch_directory_is_removed_when_the_runtime_is_disposed() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
 
         var start = await Factory(config, process).StartAsync(Ctx(isReviewFlow: true), CancellationToken.None);
         await Assert.That(Directory.EnumerateDirectories(LaunchRoot(config))).Count().IsEqualTo(1);
