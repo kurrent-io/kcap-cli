@@ -118,6 +118,25 @@ public class ClaudeChatRulesTests {
 
         var quoted = P("""{"type":"user","message":{"content":"why does <pasted_content id=\"a\"> never close with </pasted_content id=\"b\">?"}}""");
         await Assert.That(quoted.Single().Text).IsEqualTo("why does <pasted_content id=\"a\"> never close with </pasted_content id=\"b\">?");
+
+        var matching = P("""{"type":"user","message":{"content":"why does <pasted_content id=\"a\">x</pasted_content id=\"a\">?"}}""");
+        await Assert.That(matching.Single().Text).IsEqualTo("why does <pasted_content id=\"a\">x</pasted_content id=\"a\">?");
+    }
+
+    [Test]
+    public async Task An_embedded_paste_keeps_the_spaces_at_its_edges() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"before\n\n<pasted_content id=\"p\">\n  keep  \n</pasted_content id=\"p\">\nafter"}}""", 1, Received, chat.CreateContext("a1", null));
+        const string expected = "before\n\n  keep  \nafter";
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo(expected);
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { expected });
+    }
+
+    [Test]
+    public async Task Unmatched_paste_openings_stay_in_the_message() {
+        var opens = string.Concat(Enumerable.Repeat("<pasted_content id=\"a\">", 64));
+        var shown = P("{\"type\":\"user\",\"message\":{\"content\":" + System.Text.Json.JsonSerializer.Serialize(opens + " tail") + "}}");
+        await Assert.That(shown.Single().Text).IsEqualTo(opens + " tail");
     }
 
     [Test]
