@@ -307,10 +307,15 @@ Daemon (`test/Capacitor.Cli.Daemon.Tests.Unit/Harness/Pi/`, `Services/`):
 - `PiModelCatalogProbe.Parse`, envelope cases: `success:true` with no `data` → null; `models`
   missing → null; `models` a string → null; `models: []` → empty list (not null); a non-object
   entry inside a valid array is skipped and the rest kept.
-- Probe against a fake `pi` from `tmp.CreateExecutable` that emulates Pi: reads one command line,
-  prints the canned response, then keeps running until stdin EOF and exits on it. Asserts the
-  mapped list, that the response was received before stdin was closed (the fake exits non-zero
-  if it sees EOF before a command), and that the child is gone afterwards (`PidIdentity`).
+- Probe against a fake `pi` from `tmp.CreateExecutable` that emulates Pi's EOF-as-shutdown:
+  it reads one command line, then **waits 500 ms before answering**, and during that wait polls
+  stdin; if EOF arrives before the delay elapses it exits without printing the response (as
+  installed Pi's shutdown can pre-empt an in-flight command), otherwise it prints the canned
+  response and keeps running until EOF. Asserts the mapped list and that the child is gone
+  afterwards (`PidIdentity`). An implementation that closes stdin right after writing the
+  command receives no response from this fake and fails the test with a null catalog, which is
+  what the ordering rule in section 3.2 exists to prevent; the fake's delay is a timing floor
+  for that assertion, not a measurement, and stays well inside the 10 s probe deadline.
 - Fake `pi` that never answers: probe returns null within the deadline (fake `TimeProvider`),
   child killed.
 - The probe's argv carries `--offline`, `--no-extensions` and `--no-session`, and its working
