@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -19,10 +20,10 @@ public class McpKnowledgeServerTests {
 
     const string Doc = "0b9c2f4e-6a1d-4c0e-9d7b-3f2a1e5c8d90";
 
-    McpKnowledgeServer Server() =>
+    McpKnowledgeServer Server(TimeProvider? time = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(),
             NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory),
-            time: TimeProvider.System);
+            time: time ?? TimeProvider.System);
 
     [Test]
     public async Task Reads_default_to_the_working_directorys_repo() {
@@ -135,10 +136,10 @@ public class McpKnowledgeServerTests {
         }
     }
 
-    async Task<string> CallAsync(HttpMessageHandler handler, string tool, string argsJson) {
+    async Task<string> CallAsync(HttpMessageHandler handler, string tool, string argsJson, TimeProvider? time = null) {
         using var client = new HttpClient(handler);
         var request = new JsonObject { ["params"] = new JsonObject { ["name"] = tool, ["arguments"] = JsonNode.Parse(argsJson) } };
-        return await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", "abc123");
+        return await Server(time).HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", "abc123");
     }
 
     [Test]
@@ -191,5 +192,87 @@ public class McpKnowledgeServerTests {
 
         await Assert.That(response).Contains("HTTP 204");
         await Assert.That(response).DoesNotContain("\"isError\":true");
+    }
+
+    [Test]
+    public async Task Every_curate_field_reaches_the_wire_under_its_own_key() {
+        var body = McpKnowledgeServer.BuildCurateBody(Args("""
+            {"curation_key":{"source_repo_hash":"abc123","category":"safety","cluster_id":"c-1"},
+             "operation_id":"op-1","audience_kind":"team","audience_id":"t-1","curated_text":"Rule.",
+             "target_kinds":["injection",""],"applies_to_vendors":["claude"],"applies_to_session_kinds":["hosted"],
+             "applies_to_flow_roles":["reviewer"],"applies_to_platforms":["macos"],"status":"promoted","reason":"r",
+             "target_scope_kind":"project","target_scope_id":"p-1","preserve_audience":true,"preserve_decision":true}
+            """));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo(
+            """{"curation_key":{"source_repo_hash":"abc123","category":"safety","cluster_id":"c-1"},"operation_id":"op-1","audience_kind":"team","audience_id":"t-1","curated_text":"Rule.","target_kinds":["injection",""],"applies_to_vendors":["claude"],"applies_to_session_kinds":["hosted"],"applies_to_flow_roles":["reviewer"],"applies_to_platforms":["macos"],"status":"promoted","reason":"r","target_scope_kind":"project","target_scope_id":"p-1","preserve_audience":true,"preserve_decision":true}""");
+    }
+
+    [Test]
+    public async Task A_blank_status_reaches_the_server_and_a_blank_axis_value_does_not() {
+        var body = McpKnowledgeServer.BuildCurateBody(Args("""
+            {"curation_key":{"source_repo_hash":"r","category":"c","cluster_id":"k"},"operation_id":"o","audience_kind":"everyone","status":""}
+            """));
+
+        await Assert.That(body["status"]!.GetValue<string>()).IsEqualTo("");
+        await Assert.That(() => McpKnowledgeServer.BuildCurateBody(Args("""
+            {"curation_key":{"source_repo_hash":"r","category":"c","cluster_id":"k"},"operation_id":"o","audience_kind":"everyone","applies_to_vendors":[" "]}
+            """))).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Every_transition_field_reaches_the_wire_under_its_own_key() {
+        var body = McpKnowledgeServer.BuildTransitionBody(Args("""
+            {"action":"revoke","operation_id":"op","expected_doc_revision":"12","targets":["skill"],"edited_body":"B",
+             "reason":"why","member_disposition":"release"}
+            """));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo(
+            """{"action":"revoke","operation_id":"op","expected_doc_revision":12,"targets":["skill"],"edited_body":"B","reason":"why","member_disposition":"release"}""");
+    }
+
+    [Test]
+    public async Task A_pending_approval_passes_through_as_a_success() {
+        var handler = new RecordingHandler(HttpStatusCode.Accepted, """{"status":"pending_approval","message":"queued"}""");
+
+        var response = await CallAsync(handler, "curate_fact_cluster",
+            """{"curation_key":{"source_repo_hash":"r","category":"c","cluster_id":"k"},"operation_id":"o","audience_kind":"everyone","status":"promoted"}""");
+
+        await Assert.That(response).Contains("pending_approval");
+        await Assert.That(response).DoesNotContain("\"isError\":true");
+    }
+
+    [Test]
+    public async Task A_refusal_with_no_body_says_so() {
+        var handler = new RecordingHandler(HttpStatusCode.RequestEntityTooLarge, "");
+
+        var response = await CallAsync(handler, "edit_skill_body", $$"""{"doc_id":"{{Doc}}","body":"b","operation_id":"o","expected_doc_revision":3}""");
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains("Error: HTTP 413 (no body)");
+    }
+
+    sealed class HangingHandler : HttpMessageHandler {
+        public TaskCompletionSource Sent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Sent.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
+    [Test]
+    public async Task A_server_that_never_answers_becomes_a_tool_error_when_the_budget_runs_out() {
+        var time    = new FakeTimeProvider();
+        var handler = new HangingHandler();
+
+        var call = CallAsync(handler, "list_skills", "{}", time);
+        await handler.Sent.Task;
+        time.Advance(McpArtefactsServer.RequestBudget);
+        var response = await call;
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains("did not answer in time");
     }
 }

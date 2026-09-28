@@ -57,7 +57,8 @@ public class McpKnowledgeServerStdioTests : IDisposable {
             await Assert.That(list["result"]!["tools"]!.AsArray().Count).IsEqualTo(8);
 
             var call = await SendAsync(proc, RpcRequest(3, "tools/call", new JsonObject { ["name"] = "list_skills", ["arguments"] = new JsonObject() }));
-            await Assert.That(call["result"]?["isError"]).IsNull();
+            await Assert.That(call["result"]).IsNotNull();
+            await Assert.That(call["result"]!["isError"]).IsNull();
 
             var hits = _server.FindLogEntries(Request.Create().WithPath("/api/knowledge/skills").UsingGet());
             await Assert.That(hits.Count).IsEqualTo(1);

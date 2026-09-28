@@ -20,9 +20,6 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
         TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
-    /// <summary>HttpClient's own default, restated because the shared client has none.</summary>
-    static readonly TimeSpan RequestBudget = TimeSpan.FromSeconds(100);
-
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
@@ -133,7 +130,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
 
         if (toolName is null) return BuildErrorResponse(id, -32602, "Missing params.name");
 
-        using var budget = new CancellationTokenSource(RequestBudget, time);
+        using var budget = new CancellationTokenSource(McpArtefactsServer.RequestBudget, time);
         var ct = budget.Token;
 
         try {
@@ -155,7 +152,9 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
 
             if (!response.IsSuccessStatusCode)
-                return BuildToolResult(id, $"Error: HTTP {(int)response.StatusCode} — {body}", isError: true);
+                return BuildToolResult(id, body.Length == 0
+                    ? $"Error: HTTP {(int)response.StatusCode} (no body)"
+                    : $"Error: HTTP {(int)response.StatusCode} — {body}", isError: true);
 
             return BuildToolResult(id, body.Length == 0 ? $"OK: HTTP {(int)response.StatusCode}" : body);
         } catch (ArgumentException ex) {
@@ -273,12 +272,12 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
             ["audience_kind"]            = McpToolArguments.RequireString(args, "audience_kind"),
             ["audience_id"]              = Text(args, "audience_id") ?? "",
             ["curated_text"]             = Text(args, "curated_text"),
-            ["target_kinds"]             = StringArray(args, "target_kinds"),
+            ["target_kinds"]             = StringArray(args, "target_kinds", allowBlank: true),
             ["applies_to_vendors"]       = StringArray(args, "applies_to_vendors"),
             ["applies_to_session_kinds"] = StringArray(args, "applies_to_session_kinds"),
             ["applies_to_flow_roles"]    = StringArray(args, "applies_to_flow_roles"),
             ["applies_to_platforms"]     = StringArray(args, "applies_to_platforms"),
-            ["status"]                   = McpToolArguments.OptionalString(args, "status"),
+            ["status"]                   = Text(args, "status"),
             ["reason"]                   = Text(args, "reason"),
             ["target_scope_kind"]        = McpToolArguments.OptionalString(args, "target_scope_kind"),
             ["target_scope_id"]          = Text(args, "target_scope_id"),
@@ -302,15 +301,19 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
             : throw new ArgumentException($"'{key}' must be a string.");
     }
 
-    /// <summary>A JSON array of non-blank strings, or null when absent. An empty array is kept: on an
-    /// applicability axis <c>[]</c> means everywhere, while absent means unset.</summary>
-    static JsonArray? StringArray(JsonObject? args, string key) {
+    /// <summary>A JSON array of strings, or null when absent. An empty array is kept: on an
+    /// applicability axis <c>[]</c> means everywhere, while absent means unset. Blank entries are
+    /// refused unless <paramref name="allowBlank"/>: the server drops blank promotion targets but
+    /// refuses a blank axis value.</summary>
+    static JsonArray? StringArray(JsonObject? args, string key, bool allowBlank = false) {
         var node = args?[key];
         if (node is null) return null;
         if (node is not JsonArray array) throw new ArgumentException($"'{key}' must be an array of strings.");
         var result = new JsonArray();
         foreach (var element in array) {
-            if (element is not JsonValue v || !v.TryGetValue<string>(out var value) || string.IsNullOrWhiteSpace(value))
+            if (element is not JsonValue v || !v.TryGetValue<string>(out var value))
+                throw new ArgumentException($"'{key}' must contain only strings.");
+            if (!allowBlank && string.IsNullOrWhiteSpace(value))
                 throw new ArgumentException($"'{key}' must contain only non-blank strings.");
             // The non-generic Add(JsonNode?) overload: the generic one needs dynamic code under AOT.
             result.Add((JsonNode?)JsonValue.Create(value));
@@ -318,20 +321,8 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         return result;
     }
 
-    static long? Revision(JsonObject? args) {
-        var node = args?["expected_doc_revision"];
-        if (node is null) return null;
-        if (node is JsonValue v) {
-            if (v.TryGetValue<JsonElement>(out var el)) {
-                if (el.IsNumber && el.TryGetInt64(out var wire)) return wire;
-            } else if (v.TryGetValue<long>(out var built)) {
-                return built;
-            } else if (v.TryGetValue<int>(out var small)) {
-                return small;
-            }
-        }
-        throw new ArgumentException("'expected_doc_revision' must be an integer: the doc_revision get_skill or a write returned.");
-    }
+    static long? Revision(JsonObject? args) =>
+        McpToolArguments.TryReadLong(args, "expected_doc_revision", out var revision) ? revision : null;
 
     static ArgumentException MissingRevision() =>
         new("'expected_doc_revision' is required: pass the doc_revision get_skill or the last write returned.");
@@ -377,7 +368,9 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
     static readonly McpSchemaProperty ScopeIdProperty = new("string", "Repo hash (defaults to the current repository), a project id or slug, or empty for org.");
     static readonly McpSchemaProperty DocIdProperty   = new("string", "The skill's doc_id.");
     static readonly McpSchemaProperty OperationIdProperty =
-        new("string", "A fresh unique id for this change (at most 128 characters); reuse it only to retry the same call.");
+        new("string", "A fresh unique id for this change (at most 128 characters, not starting with the reserved found:, draft: or pin-remove:); reuse it only to retry the same call.");
+    static readonly McpSchemaProperty CurateOperationIdProperty =
+        new("string", "A fresh unique id for this change (not starting with the reserved approve-nomination:); reuse it only to retry the same call.");
     static readonly McpSchemaProperty RevisionProperty =
         new("integer", "The doc_revision get_skill (or the last write) returned; a stale one is refused 409 doc_revision_mismatch naming the current revision.");
 
@@ -430,7 +423,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["expected_doc_revision"] = RevisionProperty,
             }, ["doc_id", "body", "operation_id", "expected_doc_revision"]), McpToolAnnotations.Destructive),
         new("transition_skill",
-            "Move a skill through its lifecycle. approve (a candidate or stale skill with a pending draft; targets from injection | skill | display, display alone and only for human_guidance; optional edited_body), reject (drop a stale skill's pending draft), dismiss (a candidate; optional reason), revoke (a serving skill; member_disposition suppress | release), restore (a revoked skill; always back to forming, so approve a fresh draft to serve again). approve answers 409 draft_basis_stale when members changed since the draft, and 409 explicit_body_required after an exclude or include: pass an edited_body written without the excluded guidance.",
+            "Move a skill through its lifecycle; a status the action does not admit answers 409 invalid_transition. approve: a candidate or stale skill with a pending draft; targets from injection | skill | display (display alone and only for human_guidance; skill is refused on a skill restricted by session kind or flow role, 422 invalid_targets); optional edited_body. approve answers 409 draft_basis_stale when members changed since the draft, 409 explicit_body_required after an exclude or include (pass an edited_body written without the excluded guidance), 422 zero_effective_members when every member is excluded, and 422 body_exceeds_injection_budget when an injection target's body is too long. reject: drop a stale skill's pending draft. dismiss: a candidate; optional reason. revoke: a curated or stale skill; member_disposition suppress | release is required. restore: a revoked skill; always back to forming, so approve a fresh draft to serve again.",
             new("object", new() {
                 ["doc_id"]                = DocIdProperty,
                 ["action"]                = new("string", "approve | reject | dismiss | revoke | restore"),
@@ -442,7 +435,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["member_disposition"]    = new("string", "revoke: suppress | release"),
             }, ["doc_id", "action", "operation_id", "expected_doc_revision"]), McpToolAnnotations.Destructive),
         new("adjust_skill_members",
-            "Change a skill's members, one action per call over 1-64 cluster_uids. exclude / include leave current members out of (or back in) the next draft and approval: immediate, reversible, require expected_doc_revision, and refuse a repeated uid (400 invalid_input); the serving snapshot is unchanged until the next approval. Excluding members already excluded, or including ones that are not, is a no-op success that records nothing, not even its operation_id. add / remove / clear take no expected_doc_revision and accept repeated uids (each distinct uid answers once); they record assignment pins the topic sweep settles later, so the response gives each uid's recorded status and get_skill.assignment_pins shows the outcome. A pin operation_id is keyed across every skill: reusing one for any other doc, action or uids answers 409 operation_id_reused, so use a fresh UUID each time. To move a cluster out of a serving skill: exclude it, approve with edited_body, then remove it; then add it to the destination skill.",
+            "Change a skill's members, one action per call over 1-64 cluster_uids. exclude / include leave current members out of (or back in) the next draft and approval: immediate, reversible, require expected_doc_revision, and refuse a repeated uid (400 invalid_input); the serving snapshot is unchanged until the next approval. Either refuses the whole batch with 422 not_current_member when any uid is not a current member, and exclude answers 422 last_effective_member rather than exclude every member. Excluding members already excluded, or including ones that are not, is a no-op success that records nothing, not even its operation_id. add / remove / clear take no expected_doc_revision and accept repeated uids (each distinct uid answers once); they record assignment pins the topic sweep settles later, so the response gives each uid's recorded status and get_skill.assignment_pins shows the outcome. A pin operation_id is keyed across every skill: reusing one for any other doc, action or uids answers 409 operation_id_reused, so use a fresh UUID each time. To move a cluster out of a serving skill: exclude it, approve with edited_body, then remove it; then add it to the destination skill.",
             new("object", new() {
                 ["doc_id"]                = DocIdProperty,
                 ["action"]                = new("string", "exclude | include | add | remove | clear"),
@@ -451,20 +444,20 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["expected_doc_revision"] = RevisionProperty,
             }, ["doc_id", "action", "cluster_uids", "operation_id"]), McpToolAnnotations.Destructive),
         new("curate_fact_cluster",
-            "Curate a fact cluster by the curation_key a fact read or skill member returned. The payload is full-state: always send audience_kind and audience_id (from the fact's curation), plus the decision facets you set: status promoted | dismissed | revoked, curated_text and target_kinds for a promotion, the applies_to_* axes (omit = unset, [] = everywhere). Omitting status is an audience-only save, or, with preserve_decision and target_scope_kind/target_scope_id or curated_text, a move or text edit that keeps the standing decision. Success is 204, or 202 pending_approval when the promotion was queued for a curator at the target scope. A skill member refuses decision, applicability or home changes with 409 cluster_topic_claimed naming its doc_id (remove-pin it first); curating a member's audience never changes the skill, but drifts the member out to another skill later.",
+            "Curate a fact cluster by the curation_key a fact read or skill member returned. Always send audience_kind and audience_id (from the fact's curation). Each status admits only its own facets, and a stray one is refused 400: promoted requires curated_text and target_kinds and may carry the applies_to_* axes (omit = unset, [] = everywhere); dismissed takes only an optional reason; revoked takes no facet. Omitting status is an audience-only save or, with target_scope_kind/target_scope_id, a move: send no target_kinds, axes or reason; with preserve_decision the standing decision is rebuilt server-side and curated_text is the one facet it may carry, for a text edit. A fact's curation carries target_kinds (an empty list on a dismissed or revoked fact) and may carry axes whatever its status, so copy curated_text, target_kinds and the axes from it only when sending status promoted. Success is 204, or 202 pending_approval when the promotion was queued for a curator at the target scope. A skill member refuses decision, applicability or home changes with 409 cluster_topic_claimed naming its doc_id (remove-pin it first); curating a member's audience never changes the skill, but drifts the member out to another skill later.",
             new("object", new() {
                 ["curation_key"]             = new("object", "{ source_repo_hash, category, cluster_id } exactly as a read returned it."),
-                ["operation_id"]             = OperationIdProperty,
+                ["operation_id"]             = CurateOperationIdProperty,
                 ["audience_kind"]            = new("string", "everyone | team | user"),
                 ["audience_id"]              = new("string", "Empty for everyone (the default); the team or user id otherwise."),
-                ["curated_text"]             = new("string", "The promoted text."),
-                ["target_kinds"]             = Strings("Promotion targets: claude_md | memory | injection."),
-                ["applies_to_vendors"]       = Strings("Vendor restriction; [] = everywhere, omit = unset."),
-                ["applies_to_session_kinds"] = Strings("Session-kind restriction; [] = everywhere, omit = unset."),
-                ["applies_to_flow_roles"]    = Strings("Flow-role restriction; [] = everywhere, omit = unset."),
-                ["applies_to_platforms"]     = Strings("Platform restriction; [] = everywhere, omit = unset."),
+                ["curated_text"]             = new("string", "promoted: the promoted text; with status omitted, only alongside preserve_decision."),
+                ["target_kinds"]             = Strings("Promotion targets: claude_md | memory | injection (promoted only)."),
+                ["applies_to_vendors"]       = Strings("Vendor restriction; [] = everywhere, omit = unset (promoted only)."),
+                ["applies_to_session_kinds"] = Strings("Session-kind restriction; [] = everywhere, omit = unset (promoted only)."),
+                ["applies_to_flow_roles"]    = Strings("Flow-role restriction; [] = everywhere, omit = unset (promoted only)."),
+                ["applies_to_platforms"]     = Strings("Platform restriction; [] = everywhere, omit = unset (promoted only)."),
                 ["status"]                   = new("string", "promoted | dismissed | revoked; omit to keep the decision."),
-                ["reason"]                   = new("string", "Why, for a dismissal."),
+                ["reason"]                   = new("string", "dismissed only: why."),
                 ["target_scope_kind"]        = new("string", "Move home: repo | project | org (with target_scope_id)."),
                 ["target_scope_id"]          = new("string", "The target home's id; empty for org."),
                 ["preserve_audience"]        = new("boolean", "Keep the cluster's current audience rather than the one sent."),
