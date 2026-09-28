@@ -22,7 +22,7 @@ public class PiReviewerGitToolsCertTests {
     public async Task The_git_tools_read_history_the_checked_out_files_cannot_show() {
         RequireGate();
         await using var bench = PiContainmentBench.Create(plantCanaries: false);
-        CommitTwoRevisions(bench.Worktree);
+        CommitTwoRevisions(bench);
 
         var run = await bench.RunAsync(null,
             new PiScriptedStep(Tool: "git_log",  ArgsJson: """{}""", Id: "g1"),
@@ -39,8 +39,8 @@ public class PiReviewerGitToolsCertTests {
     public async Task The_git_tools_refuse_options_and_paths_outside_the_repository() {
         RequireGate();
         await using var bench = PiContainmentBench.Create(plantCanaries: false);
-        CommitTwoRevisions(bench.Worktree);
-        var planted = Path.Combine(bench.Outside, "PLANTED");
+        CommitTwoRevisions(bench);
+        var planted = bench.OutsidePath("PLANTED");
 
         var run = await bench.RunAsync(null,
             new PiScriptedStep(Tool: "git_diff", ArgsJson: $$"""{"base":"--output={{planted}}"}""", Id: "h1"),
@@ -64,15 +64,15 @@ public class PiReviewerGitToolsCertTests {
     public async Task The_git_tools_never_run_a_configured_external_program() {
         RequireGate();
         await using var bench = PiContainmentBench.Create(plantCanaries: false);
-        CommitTwoRevisions(bench.Worktree);
+        CommitTwoRevisions(bench);
 
-        var extRan      = Path.Combine(bench.Outside, "EXT_RAN");
-        var textconvRan = Path.Combine(bench.Outside, "TEXTCONV_RAN");
-        var ext      = Script(bench.Outside, "ext.sh", $"touch '{extRan}'");
-        var textconv = Script(bench.Outside, "textconv.sh", $"touch '{textconvRan}'\ncat \"$1\"");
+        var extRan      = bench.OutsidePath("EXT_RAN");
+        var textconvRan = bench.OutsidePath("TEXTCONV_RAN");
+        var ext      = bench.CreateOutsideExecutable("ext.sh", $"#!/bin/sh\ntouch '{extRan}'\n");
+        var textconv = bench.CreateOutsideExecutable("textconv.sh", $"#!/bin/sh\ntouch '{textconvRan}'\ncat \"$1\"\n");
         Git(bench.Worktree, "config", "diff.external", ext);
         Git(bench.Worktree, "config", "diff.probe.textconv", textconv);
-        File.WriteAllText(Path.Combine(bench.Worktree, ".git", "info", "attributes"), "*.txt diff=probe\n");
+        bench.WriteWorktreeFile(".git/info/attributes", "*.txt diff=probe\n");
 
         var run = await bench.RunAsync(null,
             new PiScriptedStep(Tool: "git_diff", ArgsJson: """{"base":"HEAD~1","head":"HEAD"}""", Id: "e1"),
@@ -97,13 +97,13 @@ public class PiReviewerGitToolsCertTests {
     public async Task A_base_only_diff_never_reads_the_working_tree() {
         RequireGate();
         await using var bench = PiContainmentBench.Create(plantCanaries: false);
-        CommitTwoRevisions(bench.Worktree);
+        CommitTwoRevisions(bench);
 
-        var cleanRan = Path.Combine(bench.Outside, "CLEAN_RAN");
-        var clean    = Script(bench.Outside, "clean.sh", $"touch '{cleanRan}'\ncat");
+        var cleanRan = bench.OutsidePath("CLEAN_RAN");
+        var clean    = bench.CreateOutsideExecutable("clean.sh", $"#!/bin/sh\ntouch '{cleanRan}'\ncat\n");
         Git(bench.Worktree, "config", "filter.probe.clean", clean);
-        File.WriteAllText(Path.Combine(bench.Worktree, ".git", "info", "attributes"), "*.txt filter=probe\n");
-        File.AppendAllText(Path.Combine(bench.Worktree, "inside.txt"), "UNCOMMITTED-LINE\n");
+        bench.WriteWorktreeFile(".git/info/attributes", "*.txt filter=probe\n");
+        bench.WriteWorktreeFile("inside.txt", "INSIDE-FILE\nSECOND-LINE\nUNCOMMITTED-LINE\n");
 
         var run = await bench.RunAsync(null,
             new PiScriptedStep(Tool: "git_diff", ArgsJson: """{"base":"HEAD~1"}""", Id: "w1"),
@@ -118,20 +118,12 @@ public class PiReviewerGitToolsCertTests {
         await Assert.That(File.Exists(cleanRan)).IsTrue();
     }
 
-    static void CommitTwoRevisions(string worktree) {
-        Git(worktree, "init", "-q");
-        Git(worktree, "add", "inside.txt");
-        Git(worktree, "commit", "-q", "-m", "first revision");
-        File.AppendAllText(Path.Combine(worktree, "inside.txt"), "SECOND-LINE\n");
-        Git(worktree, "commit", "-q", "-am", "second revision");
-    }
-
-    static string Script(string dir, string name, string body) {
-        var path = Path.Combine(dir, name);
-        File.WriteAllText(path, $"#!/bin/sh\n{body}\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        return path;
+    static void CommitTwoRevisions(PiContainmentBench bench) {
+        Git(bench.Worktree, "init", "-q");
+        Git(bench.Worktree, "add", "inside.txt");
+        Git(bench.Worktree, "commit", "-q", "-m", "first revision");
+        bench.WriteWorktreeFile("inside.txt", "INSIDE-FILE\nSECOND-LINE\n");
+        Git(bench.Worktree, "commit", "-q", "-am", "second revision");
     }
 
     static void Git(string worktree, params string[] args) {
