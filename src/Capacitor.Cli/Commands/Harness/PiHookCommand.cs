@@ -52,6 +52,10 @@ sealed class PiHookCommand(
     /// ~3.5s of work this leaves once <see cref="HookBudget.Safety"/> is reserved.</summary>
     static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(5);
 
+    /// <summary>Bound on the nudge claim's store work; the claim overlaps the lifecycle POST, so at the
+    /// output site it has almost always resolved.</summary>
+    static readonly TimeSpan NudgeClaimBudget = TimeSpan.FromMilliseconds(750);
+
     public Task<int> Handle(string[] args) => Handle(args, Console.Out);
 
     /// <param name="stdout">Injected so the fragment the extension consumes is assertable without
@@ -166,6 +170,14 @@ sealed class PiHookCommand(
                 reason)
             : Task.FromResult<string?>(null);
 
+        // Pi re-fires session_start for the same file on restart and resume, and the extension keeps
+        // what it is handed, so the nudges are gated by a durable once-per-session claim keyed on the
+        // file (resume deduped, fork eligible). Same contract gate as the memory fetch: an extension
+        // that discards stdout must not spend the claim.
+        var nudgeClaim = MemoryContractOf(args) >= 1
+            ? NudgeLease.TryClaimAsync(config, clock.Time, HarnessId.Pi, file, NudgeClaimBudget)
+            : Task.FromResult(false);
+
         // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
         // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. Only a
         // permanent failure keeps the prior non-zero exit and skips the watcher.
@@ -176,11 +188,13 @@ sealed class PiHookCommand(
         // an injection whose once-per-session lease is already spent. pi.exec hands the extension
         // stdout regardless of exit code, so no commit gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
-        var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            PlansNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Pi, harnesses));
+        var workItemsNudge = await ClaimedBounded(nudgeClaim, budget)
+            ? HarnessNudgeEmitter.Combine(
+                WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
+                PlansNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
+                FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Pi, harnesses))
+            : null;
         await WriteMemoryFragment(stdout, fragment, workItemsNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;
@@ -190,6 +204,19 @@ sealed class PiHookCommand(
             skipTitle: false, vendor: "pi"
         );
         return 0;
+    }
+
+    /// <summary>False when the claim is refused or still undecided when the budget runs out: a claim
+    /// that commits after this gave up costs the session its nudges, never a duplicate.</summary>
+    static async Task<bool> ClaimedBounded(Task<bool> claim, HookBudget budget) {
+        if (claim.IsCompleted) return await claim;
+        if (budget.Remaining is not { Ticks: > 0 } wait) return false;
+
+        try {
+            return await claim.WaitAsync(wait, budget.Time);
+        } catch (TimeoutException) {
+            return false;
+        }
     }
 
     async Task<int> HandleSessionEnd(string sessionId, string file, string? cwd, string? reason) {

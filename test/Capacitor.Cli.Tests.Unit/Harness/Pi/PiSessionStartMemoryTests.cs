@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
 
@@ -124,5 +125,61 @@ public class PiSessionStartMemoryTests {
             TimeSpan.FromSeconds(2), null)).IsNull();
         await Assert.That(await Hook().StartMemoryIndexTask("/abs/file.jsonl", "/scope", disabled: false, guidelinesDisabled: false,
             TimeSpan.Zero, null)).IsNull();
+    }
+
+    // ── The SessionStart nudges fire once per session file ─────────────────────────────────────
+
+    const string NudgeMarker = "declare_work_item";
+
+    /// <summary>A session file Pi would write, and the kcap-workitems bridge the nudge's availability
+    /// gate looks for, so the only thing that can suppress the nudge is the once-per-session claim.</summary>
+    string NewSessionFile() {
+        var bridge = TestHarnesses.Under(Home).Of<PiHarness>().Paths.KcapMcpExtension;
+        Directory.CreateDirectory(Path.GetDirectoryName(bridge)!);
+        File.WriteAllText(bridge, """const KCAP_MCP_SERVERS = ["workitems"];""");
+
+        var id  = Guid.NewGuid();
+        var dir = Directory.CreateDirectory(Path.Combine(Home.Path, "pi-sessions")).FullName;
+        var file = Path.Combine(dir, $"2026-09-28T00-00-00-000Z_{id}.jsonl");
+        File.WriteAllText(file, $$"""{"type":"session","id":"{{id}}","cwd":"{{dir.Replace("\\", "/")}}","timestamp":"2026-09-28T00:00:00.000Z"}""" + "\n");
+        return file;
+    }
+
+    /// <summary>The nudges need no server, so an unpostable URL keeps the lifecycle POST and the memory
+    /// fetch off the network, where each would otherwise spend its retry budget.</summary>
+    async Task<string> SessionStart(string file, string reason, int memoryContract = 1) {
+        var stdout = new StringWriter();
+        await Hook("ftp://unreachable").Handle([
+            "--event", "session-start", "--file", file, "--cwd", Path.GetDirectoryName(file)!,
+            "--reason", reason, "--memory-contract", memoryContract.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        ], stdout);
+        return stdout.ToString();
+    }
+
+    [Test]
+    public async Task A_resumed_session_is_not_nudged_again() {
+        var file = NewSessionFile();
+
+        await Assert.That(await SessionStart(file, "startup")).Contains(NudgeMarker);
+        await Assert.That(await SessionStart(file, "resume")).DoesNotContain(NudgeMarker);
+        await Assert.That(await SessionStart(file, "reload")).DoesNotContain(NudgeMarker);
+    }
+
+    [Test]
+    public async Task A_forked_session_file_is_nudged_afresh() {
+        var original = NewSessionFile();
+        await SessionStart(original, "startup");
+
+        await Assert.That(await SessionStart(NewSessionFile(), "fork")).Contains(NudgeMarker);
+    }
+
+    /// <summary>An extension that does not read stdout would discard the nudge, so it must not spend
+    /// the claim the next, capturing, session_start needs.</summary>
+    [Test]
+    public async Task An_extension_that_discards_stdout_does_not_spend_the_claim() {
+        var file = NewSessionFile();
+
+        await Assert.That(await SessionStart(file, "startup", memoryContract: 0)).DoesNotContain(NudgeMarker);
+        await Assert.That(await SessionStart(file, "resume")).Contains(NudgeMarker);
     }
 }
