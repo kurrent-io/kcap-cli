@@ -74,9 +74,12 @@ New file `Harness/Pi/PiModelCatalogProbe.cs`, a static helper the factory calls:
    extensions (MCP bridges and the like) from starting, which otherwise print to stderr and add
    seconds.
    `WorkingDirectory` is `PiModelCatalogProbe.DirectoryFor(stateDir)` =
-   `<state dir>/pi-probe`, created empty and owner-only beside `PiReviewerLaunchDir.RootFor`.
-   Pi renames a project's `.pi/commands` at startup, so the probe never runs in a repository or
-   in the daemon's own cwd.
+   `<state dir>/pi-probe`, created with a plain `Directory.CreateDirectory` on every platform
+   (the state directory is already the user's own; nothing is written there and no owner-only
+   mode is claimed, so the reviewer launch dir's POSIX-only `CreateOwnerOnly` is not used and
+   Windows hosts probe like any other). Its contents, if any, are deleted before each probe so it
+   is always empty. Pi renames a project's `.pi/commands` at startup, so the probe never runs in
+   a repository or in the daemon's own cwd.
 3. Write `{"type":"get_available_models"}\n`, close stdin.
 4. Read stdout lines until a line parses as JSON with `type == "response"` and
    `command == "get_available_models"`. Ignore every other line (Pi may emit other frames first).
@@ -131,19 +134,27 @@ registration without it.
   `AgentDir`).
 
 The existing tick calls `orchestrator.RefreshAdvertisedCapabilities(reason)`. That pass now also
-re-runs `ProbeVendorModelsAsync` for every catalog-publishing vendor (one Pi spawn today),
-merges the answer into `config.VendorModels` (a null re-probe leaves the previous entry in place
-so a transient failure does not withdraw a working list), and treats a differing catalog like a
-differing capability: it re-registers with the server and pulses `DaemonStatusNotifier` so local
-subscribers receive a new snapshot. An unchanged catalog does nothing.
+re-runs `ProbeVendorModelsAsync` for every catalog-publishing vendor (one Pi spawn today) and
+builds a **new** dictionary: the fresh answer for each vendor that returned one, the previous
+entry for each vendor whose re-probe returned null (a transient failure does not withdraw a
+working list). `config.VendorModels` is never mutated in place: the serializers on the hub and
+on status-IPC subscriber tasks may be enumerating the current instance, so publication is one
+reference swap of the new dictionary, after which the pass re-registers and pulses
+`DaemonStatusNotifier`. Whether the catalog changed is decided by
+`VendorModelCatalogs.Equal(a, b)`: same key set, and per key the same ordered sequence of
+`(Value, Label)` pairs. An unchanged catalog swaps nothing, re-registers nothing and pulses
+nothing.
 
-Baselines follow the existing rule and are wired the same way as the binary ones. Startup
-fingerprints every catalog path before the probe runs and stores the result on
-`DaemonConfig.VendorCatalogBaselines` (`IReadOnlyDictionary<string, CatalogPathStat[]>?`, keyed
-by vendor, beside `UnattendedVendorBaselines`). `VendorCliWatcher.ExecuteAsync` reads it and
-`PrimeBaselines` seeds each watched vendor's catalog fingerprints from it, statting live only for a
-vendor with no recorded entry. A file that changes between the startup probe and the watcher's
-first tick therefore reads as a change on that tick instead of becoming the baseline.
+Baselines follow the existing rule for the whole expanded watch set. Startup computes the watch
+set first (unattended ∪ catalog-publishing, the same expression the watcher uses, factored into
+one static `VendorCliWatcher.WatchSet(config, factories)`), then fingerprints every vendor in it
+before either probe runs: `FingerprintUnattendedVendors` is called with that set rather than
+`UnattendedVendors` alone, so `UnattendedVendorBaselines` records the binary of a catalog-only
+Pi too, and the catalog paths are recorded on `DaemonConfig.VendorCatalogBaselines`
+(`IReadOnlyDictionary<string, CatalogPathStat[]>?`, keyed by vendor). `VendorCliWatcher.
+ExecuteAsync` reads both and `PrimeBaselines` seeds from them, statting live only for a vendor
+with no recorded entry. A binary or file that changes between the startup probe and the
+watcher's first tick therefore reads as a change on that tick instead of becoming the baseline.
 `CatalogPathStat(string Path, bool Exists, long Length, long LastWriteTicks)` is a new record in
 `Services/`.
 
@@ -219,18 +230,25 @@ reading the endpoint; adopting the daemon list there is a follow-on.
 - `MachineOption` gains `IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? VendorModels`,
   filled from the remote `DaemonInfo.VendorModels` for remote machines and from the latest local
   status snapshot for the local machine.
-- `HomeViewModel` derives one observable, the **machine catalog**: `daemon.Snapshots`
-  (local `VendorModels`) combined with `_daemons` and `_machineSelectionChanges`. When the local
-  machine is selected it is the latest local snapshot's dictionary; when a remote machine is
-  selected it is the `VendorModels` of the `DaemonInfo` in the latest `_daemons` emission whose
-  name matches, so a re-registration by that daemon updates the picker while it stays selected.
-  A remote machine missing from the latest emission yields null (unknown), not the last value.
+- `HomeViewModel` derives one observable, the **machine catalog**:
+  `daemon.Snapshots.Select(s => s.Daemon.VendorModels).StartWith(null)` combined with `_daemons`
+  and `_machineSelectionChanges`. `Snapshots` is a replay subject with no initial value, so the
+  `StartWith(null)` is what lets the pipeline emit before the first local status snapshot (the
+  `Harnesses` pipeline does the same). When the local machine is selected the value is the latest
+  local snapshot's dictionary (null before one arrives); when a remote machine is selected it is
+  the `VendorModels` of the daemon that `FindMachine(list, sel.Name, _lastViewerId)` resolves in
+  the latest `_daemons` emission — the same name-and-owner predicate the availability pipeline
+  uses, so a same-named daemon owned by someone else never supplies the list and a re-registration
+  by the selected daemon updates the picker while it stays selected. A remote machine `FindMachine`
+  does not resolve yields null (unknown), not the last value. `FindMachine` populates
+  `MachineOption.VendorModels` from the `DaemonInfo`.
 - The server catalog subscription and the machine catalog are combined into
   `EffectiveModelCatalog` (`IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>`), an
-  `ObservableAsPropertyHelper` on the main thread, replacing the `ModelCatalog` property. Per
-  vendor: machine key present → machine list (even when empty); else server list when non-empty;
-  else no key. `ModelChoicesFor(vendor)` reads it and falls back to
-  `HostedHarnessCatalog.ModelChoicesFor(vendor)` when the key is absent.
+  `ObservableAsPropertyHelper` on the main thread with initial value
+  `ServerVendorModelCatalog.Empty`, replacing the `ModelCatalog` property. Per vendor: machine key
+  present → machine list (even when empty); else server list when non-empty; else no key.
+  `ModelChoicesFor(vendor)` reads it and falls back to `HostedHarnessCatalog.ModelChoicesFor(vendor)`
+  when the key is absent.
 - The agent chip's fourth `MultiBinding` in `LauncherPaneView.axaml` binds
   `EffectiveModelCatalog` instead of `ModelCatalog`; `AgentChipTextConverter` is unchanged, since
   it already resolves the label against that dictionary and falls back to the curated
@@ -275,7 +293,15 @@ Daemon (`test/Capacitor.Cli.Daemon.Tests.Unit/Harness/Pi/`, `Services/`):
   recorded baseline that differs from the file at watcher start fires on the first tick; a
   deleted `auth.json` fires.
 - `RefreshAdvertisedCapabilities`: differing catalog re-registers and pulses the notifier;
-  identical catalog does neither; null re-probe keeps the previous entry.
+  an equal-content re-probe (fresh objects, same values) does neither and leaves the reference
+  untouched; null re-probe keeps the previous entry; a status subscriber serializing while a
+  refresh publishes sees either the old or the new dictionary, never a partial one.
+- `VendorModelCatalogs.Equal`: same keys and ordered pairs → true; reordered models, a changed
+  label, or an extra key → false.
+- Startup baselines: a catalog-only vendor (Pi advertised, reviewer withheld) has its binary and
+  catalog paths recorded, and a binary change before watcher start fires on the first tick.
+- Probe directory: created when missing, emptied when it holds a leftover file, works on Windows
+  (no owner-only gate).
 - `DaemonConnect` and `DaemonStatusDto` round-trip through their source-generated contexts with
   the field null, absent-key, and present-empty, and the serialized property is spelled
   `vendor_models` on both.
@@ -285,6 +311,10 @@ App (`test/Capacitor.App.Tests.Unit/`, beside `HomeViewModelTests`):
 
 - Precedence: daemon list wins over a non-empty server list; empty daemon key wins over both
   fallbacks; absent key falls to server; empty server falls to curated.
+- Before any local snapshot: `EffectiveModelCatalog` is empty, a remote selection shows that
+  machine's list, and the server catalog alone populates the local view.
+- A same-named daemon owned by another user in the `_daemons` emission never supplies the list
+  for the selected remote machine.
 - Selecting a remote machine switches to that machine's list; switching back to local restores
   the local one; a new `_daemons` emission with a changed list for the selected remote machine
   updates `EffectiveModelCatalog` without reselecting; the machine vanishing from the emission
