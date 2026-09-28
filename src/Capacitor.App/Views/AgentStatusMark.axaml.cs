@@ -25,5 +25,8 @@ public partial class AgentStatusMark : UserControl {
         StatusWord.LineHeight = double.NaN;
         Glyph.Width = 16;
         Glyph.Height = 16;
+        // The ring is square on the line box, so its centre sits under the caps. The same
+        // translateY(-1.5px) an icon beside a label uses.
+        Glyph.RenderTransform = new TranslateTransform(0, -1.5);
     }
 }

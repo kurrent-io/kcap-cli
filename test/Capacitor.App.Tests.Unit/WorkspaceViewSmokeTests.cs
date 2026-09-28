@@ -595,7 +595,8 @@ public class WorkspaceViewSmokeTests {
                 await Assert.That(Top(subtitle) - Bottom(title)).IsGreaterThan(4);
                 await Assert.That(Math.Abs(Mid(idleWord) - Mid(subtitle))).IsLessThan(2);
                 await Assert.That(Math.Abs(Baseline(idleWord) - Baseline(subtitle))).IsLessThan(1);
-                await Assert.That(Math.Abs(Mid(glyph) - Mid(idleWord))).IsLessThan(1);
+                var capCentre = Baseline(idleWord) - idleWord.FontSize * 0.36;
+                await Assert.That(Math.Abs(Mid(glyph) - capCentre)).IsLessThan(1);
 
                 var limit = new UsageLimitNoticeDto(
                     UsageLimitKinds.Blocked, "Weekly limit reached", "Pick one", [new UsageLimitOptionDto(1, "Stop")]);
