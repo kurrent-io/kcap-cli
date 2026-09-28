@@ -223,7 +223,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         ? IsRefreshing ? "Refreshing…" : "Reloads the work item, its pull requests and the plan"
         : "Waiting for the session ID";
 
-    public static string RefreshShortcutCaption => $"Refresh this work · {RefreshShortcut.Label}";
+    public static string RefreshShortcutCaption =>
+        RefreshShortcut.FromTerminalLabel is { } fromTerminal
+            ? $"Refresh this work · {RefreshShortcut.Label} or {fromTerminal}"
+            : $"Refresh this work · {RefreshShortcut.Label}";
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     /// The item's own page in the web UI; enabled once a read has named the item.

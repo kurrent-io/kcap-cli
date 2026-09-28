@@ -2,12 +2,18 @@ using Avalonia.Input;
 
 namespace Capacitor.App.Views;
 
-/// Command+R on macOS. Linux and Windows have no Command key, so the same action is Control+R
-/// there. Control+R stays unbound on macOS: the terminal uses it for reverse-i-search.
+/// ⌘R on macOS. Linux and Windows use Ctrl+R, and also Ctrl+Shift+R, which still refreshes
+/// while the terminal has focus. Ctrl+R itself does not: that key is the terminal's
+/// reverse-i-search. macOS leaves Ctrl+R unbound for the same reason.
 static class RefreshShortcut {
     public static bool UsesControl { get; } = !OperatingSystem.IsMacOS();
 
     public static KeyGesture Primary { get; } = new(Key.R, UsesControl ? KeyModifiers.Control : KeyModifiers.Meta);
 
+    public static KeyGesture? FromTerminal { get; } =
+        UsesControl ? new KeyGesture(Key.R, KeyModifiers.Control | KeyModifiers.Shift) : null;
+
     public static string Label { get; } = UsesControl ? "Ctrl+R" : "⌘R";
+
+    public static string? FromTerminalLabel { get; } = UsesControl ? "Ctrl+Shift+R" : null;
 }

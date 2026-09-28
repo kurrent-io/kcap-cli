@@ -78,12 +78,18 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         });
     }
 
-    // Meta is Command. On other platforms Control is the key that reaches the window; on macOS
-    // Control+R is the terminal's reverse-i-search and is left unbound.
+    // Meta is Command. Ctrl+R is added only where there is no Command key, and it yields while
+    // the terminal has focus. Ctrl+Shift+R does not yield. macOS leaves Ctrl+R unbound.
     void BindRefreshShortcuts() {
         var bindings = new List<KeyBinding>();
         Add(new KeyGesture(Key.R, KeyModifiers.Meta));
-        if (RefreshShortcut.UsesControl) Add(new KeyGesture(Key.R, KeyModifiers.Control));
+        if (RefreshShortcut.FromTerminal is { } fromTerminal) {
+            KeyBindings.Add(new KeyBinding {
+                Gesture = RefreshShortcut.Primary,
+                Command = new RefreshUnlessTerminalFocused(this),
+            });
+            Add(fromTerminal);
+        }
 
         void Apply() {
             if ((DataContext as MainWindowViewModel)?.RefreshWorkCommand is not { } command) return;

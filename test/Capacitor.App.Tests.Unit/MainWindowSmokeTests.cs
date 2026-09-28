@@ -13,6 +13,7 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using SvcSystems.UI.Terminal;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
@@ -726,10 +727,11 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// Command+R runs the header refresh. Linux and Windows also bind Control+R, the command key
-    /// there; macOS does not, so the terminal keeps reverse-i-search. The shortcut stays disabled
-    /// on the launcher, before a session id, and while a refresh the user asked for is running.
-    /// A poll does not count as that.
+    /// Command+R runs the header refresh, including while the terminal has focus. Linux and Windows
+    /// also bind Ctrl+R, except while the terminal has focus, where that key stays unhandled so the
+    /// terminal keeps reverse-i-search. Ctrl+Shift+R refreshes there too. The menu stays Ctrl+R and
+    /// stays enabled. The shortcut stays disabled on the launcher, before a session id, and while a
+    /// refresh the user asked for is running. A poll does not count as that.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Refresh_shortcut_runs_the_open_works_refresh_and_follows_the_button() {
@@ -754,11 +756,18 @@ public class MainWindowSmokeTests {
             try {
                 var bindings = window.KeyBindings.Where(k => k.Gesture is { Key: Key.R }).ToArray();
                 bool Bound(KeyModifiers mod) => bindings.Any(k => k.Gesture!.KeyModifiers == mod);
-                bool Can() => bindings[0].Command!.CanExecute(null);
+                bool Can() => bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Meta).Command!.CanExecute(null);
+                var yield = new RefreshUnlessTerminalFocused(window);
 
                 await Assert.That(Bound(KeyModifiers.Meta)).IsTrue();
                 await Assert.That(Bound(KeyModifiers.Control)).IsEqualTo(RefreshShortcut.UsesControl);
-                await Assert.That(bindings.All(k => ReferenceEquals(k.Command, vm.RefreshWorkCommand))).IsTrue();
+                await Assert.That(Bound(KeyModifiers.Control | KeyModifiers.Shift)).IsEqualTo(RefreshShortcut.UsesControl);
+                await Assert.That(bindings.Where(k => k.Gesture!.KeyModifiers != KeyModifiers.Control)
+                    .All(k => ReferenceEquals(k.Command, vm.RefreshWorkCommand))).IsTrue();
+                if (RefreshShortcut.UsesControl) {
+                    await Assert.That(bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Control).Command)
+                        .IsNotSameReferenceAs(vm.RefreshWorkCommand);
+                }
                 await Assert.That(refreshItem.Command).IsSameReferenceAs(vm.RefreshWorkCommand);
                 await Assert.That(refreshItem.Gesture).IsEqualTo(RefreshShortcut.Primary);
                 await Assert.That(Can()).IsFalse();
@@ -779,6 +788,23 @@ public class MainWindowSmokeTests {
 
                 var tip = VisibleTipLines(window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "RefreshButton"));
                 await Assert.That(tip).Contains(WorkContextViewModel.RefreshShortcutCaption);
+
+                await Assert.That(yield.CanExecute(null)).IsTrue();
+                var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
+                workspace.ShowTerminalCommand.Execute().Subscribe();
+                Dispatcher.UIThread.RunJobs();
+                var terminal = window.GetVisualDescendants().OfType<TerminalControl>().Single();
+                await Assert.That(terminal.Focus()).IsTrue();
+                await Assert.That(yield.CanExecute(null)).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(refreshItem.IsEnabled).IsTrue();
+                var passedThrough = new KeyEventArgs { Key = Key.R, KeyModifiers = KeyModifiers.Control };
+                new KeyBinding { Gesture = new KeyGesture(Key.R, KeyModifiers.Control), Command = yield }.TryHandle(passedThrough);
+                await Assert.That(passedThrough.Handled).IsFalse();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                workspace.ShowChatCommand.Execute().Subscribe();
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(yield.CanExecute(null)).IsTrue();
 
                 var gate = source.Gate();
                 var beforePoll = source.Requested.Count;
