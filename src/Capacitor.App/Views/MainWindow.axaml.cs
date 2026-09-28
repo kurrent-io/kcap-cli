@@ -2,6 +2,7 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Controls.Notifications;
+using Avalonia.Input;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using ReactiveUI.Reactive;
@@ -44,6 +45,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
 
     public MainWindow() {
         InitializeComponent();
+        BindRefreshShortcuts();
         Closing += (_, e) => {
             if (CloseInterceptor?.Invoke() == true) e.Cancel = true;
         };
@@ -74,6 +76,33 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
                 })
                 .DisposeWith(disposables);
         });
+    }
+
+    // Meta is Command. Ctrl+R is added only where there is no Command key, and it yields while
+    // the terminal has focus. Ctrl+Shift+R does not yield. macOS leaves Ctrl+R unbound.
+    void BindRefreshShortcuts() {
+        var bindings = new List<KeyBinding>();
+        Add(new KeyGesture(Key.R, KeyModifiers.Meta));
+        if (RefreshShortcut.FromTerminal is { } fromTerminal) {
+            KeyBindings.Add(new KeyBinding {
+                Gesture = RefreshShortcut.Primary,
+                Command = new RefreshUnlessTerminalFocused(this),
+            });
+            Add(fromTerminal);
+        }
+
+        void Apply() {
+            if ((DataContext as MainWindowViewModel)?.RefreshWorkCommand is not { } command) return;
+            foreach (var binding in bindings) binding.Command = command;
+        }
+        Apply();
+        DataContextChanged += (_, _) => Apply();
+
+        void Add(KeyGesture gesture) {
+            var binding = new KeyBinding { Gesture = gesture };
+            bindings.Add(binding);
+            KeyBindings.Add(binding);
+        }
     }
 
     // A toast fired before Loaded, or while the window is hidden (Hide() suspends rendering

@@ -8,6 +8,7 @@ using System.Reactive.Subjects;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests.Readers;
@@ -225,6 +226,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string RefreshTip => HasSession
         ? IsRefreshing ? "Refreshing…" : "Reloads the work item, its pull requests and the plan"
         : "Waiting for the session ID";
+
+    public static string RefreshShortcutCaption =>
+        RefreshShortcut.FromTerminalLabel is { } fromTerminal
+            ? $"Refresh this work · {RefreshShortcut.Label} or {fromTerminal}"
+            : $"Refresh this work · {RefreshShortcut.Label}";
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     /// The item's own page in the web UI; enabled once a read has named the item.
