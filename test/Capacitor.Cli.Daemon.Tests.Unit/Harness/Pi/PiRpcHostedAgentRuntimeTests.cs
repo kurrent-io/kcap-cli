@@ -454,6 +454,20 @@ public class PiRpcHostedAgentRuntimeTests {
         await Assert.That(proc.TerminateCalls).IsGreaterThanOrEqualTo(1);
     }
 
+    [Test]
+    public async Task RequestGracefulStopAsync_lets_a_child_that_exits_on_closed_stdin_exit_cleanly() {
+        var (rt, proc) = NewRuntime(stopGrace: TimeSpan.FromMilliseconds(50));
+        await using var _ = rt;
+        proc.ExitsOnInputClose = true;
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await rt.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        await Assert.That(proc.InputCloseCalls).IsEqualTo(1);
+        await Assert.That(proc.TerminateCalls).IsEqualTo(0);
+        await Assert.That(rt.ExitCode).IsEqualTo(0);
+    }
+
     // ---- Terminal ----
 
     [Test]

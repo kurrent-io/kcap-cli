@@ -859,6 +859,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             _logger.LogDebug(ex, "Pi: failed to send the graceful-stop abort (agentId={AgentId}).", _agentId);
         }
 
+        // Pi ends its session on stdin EOF and exits 0; the kill below is only for a child that does not.
+        await _process.CloseInputAsync(_stopGrace).ConfigureAwait(false);
         await _process.WaitForExitAsync(_stopGrace).ConfigureAwait(false);
 
         if (_process.HasExited) return;

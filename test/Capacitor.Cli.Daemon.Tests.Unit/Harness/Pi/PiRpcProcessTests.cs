@@ -95,6 +95,40 @@ public class PiRpcProcessTests {
         await Assert.That(received).IsEquivalentTo(expected);
     }
 
+    /// <summary>Closing stdin ends a child that reads it to EOF, with its own exit code rather than a
+    /// kill's; a second close is a no-op.</summary>
+    [Test]
+    public async Task CloseInputAsync_lets_a_stdin_reading_child_exit_on_its_own() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/cat as a real long-lived RPC-shaped child; Pi hosting is POSIX-only anyway.");
+
+        await using var proc = new PiRpcProcess(StartCat(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
+
+        await proc.CloseInputAsync(TimeSpan.FromSeconds(5));
+        await proc.CloseInputAsync(TimeSpan.FromSeconds(5));
+        await proc.WaitForExitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(proc.HasExited).IsTrue();
+        await Assert.That(proc.ExitCode).IsEqualTo(0);
+    }
+
+    /// <summary>A write that holds stdin because the child stopped reading cannot make a close hang:
+    /// the close gives up after its timeout and leaves the child to the kill.</summary>
+    [Test]
+    public async Task CloseInputAsync_behind_a_blocked_write_returns_within_its_timeout() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "Uses /bin/sh as a real long-lived, non-reading child; Pi hosting is POSIX-only anyway.");
+
+        await using var proc = new PiRpcProcess(StartNonReadingChild(), NullLogger<PiRpcProcess>.Instance, TimeProvider.System);
+
+        var blocked = SwallowFault(proc.WriteLineAsync(new string('a', 8 * 1024 * 1024), CancellationToken.None));
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        await Assert.That(blocked.IsCompleted).IsFalse()
+            .Because("the write must still hold stdin, or this test proves nothing");
+
+        await proc.CloseInputAsync(TimeSpan.FromMilliseconds(200)).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(proc.HasExited).IsFalse();
+    }
+
     /// <summary><see cref="IAsyncDisposable.DisposeAsync"/> must be idempotent — a second call on the
     /// same instance is a safe no-op, never a throw.</summary>
     [Test]

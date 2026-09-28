@@ -99,6 +99,16 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
 
+    /// <summary>When true, closing stdin ends the child with exit code 0, as real Pi does.</summary>
+    public bool ExitsOnInputClose { get; set; }
+    public int  InputCloseCalls   { get; private set; }
+
+    public Task CloseInputAsync(TimeSpan timeout) {
+        InputCloseCalls++;
+        if (ExitsOnInputClose) EndOfStream(0);
+        return Task.CompletedTask;
+    }
+
     public Task TerminateAsync(TimeSpan? timeout = null) {
         TerminateCalls++;
         if (TerminateOverride is { } o) return o();
