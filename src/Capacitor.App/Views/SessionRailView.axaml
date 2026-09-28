@@ -327,7 +327,9 @@
                                                                                        TextTrimming="CharacterEllipsis"
                                                                                        ToolTip.Tip="{Binding Primary}" />
                                                                             <!-- The age sits on the right. Vendor, status and chips stay on the left
-                                                                                 and wrap rather than overflow the 330px rail. -->
+                                                                                 and wrap rather than overflow the 330px rail. A WrapPanel measures
+                                                                                 each child unconstrained, and the age column is measured first, so
+                                                                                 each has a cap. The tips keep the full text. -->
                                                                             <Grid ColumnDefinitions="*,Auto">
                                                                             <WrapPanel VerticalAlignment="Center">
                                                                                 <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
@@ -345,7 +347,7 @@
                                                                                     <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
                                                                                                     Content="{Binding Vendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=14}" />
                                                                                 </Border>
-                                                                                <views:AgentStatusMark DataContext="{Binding Status}"
+                                                                                <views:AgentStatusMark DataContext="{Binding Status}" MaxWidth="160"
                                                                                                        Margin="0,0,6,0" VerticalAlignment="Center" />
                                                                                 <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
                                                                                         Padding="6,2" Margin="0,0,6,0"
@@ -363,6 +365,8 @@
                                                                                 </Border>
                                                                             </WrapPanel>
                                                                                 <TextBlock Grid.Column="1" Text="{Binding Meta}" Classes="railMeta"
+                                                                                           MaxWidth="180" TextTrimming="CharacterEllipsis"
+                                                                                           ToolTip.Tip="{Binding Meta}"
                                                                                            Margin="8,0,0,0" HorizontalAlignment="Right"
                                                                                            Foreground="{StaticResource KcapFaintBrush}" />
                                                                             </Grid>

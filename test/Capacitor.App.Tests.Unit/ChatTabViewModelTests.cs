@@ -763,6 +763,27 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// The header status reads the card type. Replacing a question with a permission leaves the
+    /// collection nonempty, so the word has to move without waiting for the poll.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Resolving_a_question_beside_a_permission_updates_the_header_status() {
+        await RunOnUiAsync(async () => {
+            var h = Claude(p => p.Add(PermissionEntries.Entry("r1", "a1")));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the permission");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 2, what: "the question");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Answer);
+
+            h.Permissions.Remove("q1");
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the question resolved");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_request_with_an_id_marks_its_row_in_either_order_and_clears_on_resolve() {

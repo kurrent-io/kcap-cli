@@ -1,17 +1,5 @@
 namespace Capacitor.App.ViewModels;
 
-/// One session status. Earlier values outrank later ones: a row resolves to exactly one of these.
-public enum AgentStatusKind {
-    Failed,
-    Answer,
-    NeedsYou,
-    Starting,
-    Working,
-    Idle,
-    Done,
-    Other,
-}
-
 /// Glyph, word, and hover text for one resolved session status. The accessible name is the
 /// tooltip's first line, so a screen reader and a hover agree.
 public sealed record AgentStatusPresentation(

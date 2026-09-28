@@ -479,6 +479,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
                 Reconcile();
                 SyncPendingCardItems();
+                // HasPendingCards stays true when a question is replaced by a permission, so the
+                // header status has to be recomputed from the cards themselves.
+                RefreshAgentStatus();
             })
             .DisposeWith(_disposables);
 

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Avalonia;
@@ -499,12 +501,14 @@ public class MainWindowSmokeTests {
     /// and "Leave this one alone", under one worktree named feature-x. A sibling worktree
     /// adds one more row under that name.
     static (MainWindowViewModel Vm, MainWindow Window) RailWindow(
-            bool awaitingInput = false, int? liveSubagents = null, string? model = null, string? siblingWorktree = null) {
+            bool awaitingInput = false, int? liveSubagents = null, string? model = null, string? siblingWorktree = null,
+            string? firstStatus = null, IReadOnlySet<string>? pendingIds = null, PendingLaunchDto? pending = null) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        if (pending is not null) service.Pending.AddOrUpdate(pending);
         service.Agents.AddOrUpdate(new AgentStatusDto(
-            "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
+            "a1", "agent", "claude", "/dev/alpha/wt/feature-x", firstStatus ?? "Running",
             null, null, null, DateTime.UtcNow, model, null, Title: "Fix the flaky test",
             AwaitingInput: awaitingInput ? true : null, LiveSubagents: liveSubagents));
         service.Agents.AddOrUpdate(new AgentStatusDto(
@@ -525,7 +529,8 @@ public class MainWindowSmokeTests {
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
             resolveRepoRoot, null, null, TimeProvider.System);
         var rail = new SessionRailViewModel(
-            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System, resolveRepoRoot);
+            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System, resolveRepoRoot,
+            agentsWithPending: pendingIds is null ? null : Observable.Return(pendingIds));
         vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
         var window = new MainWindow { DataContext = vm };
@@ -770,6 +775,72 @@ public class MainWindowSmokeTests {
             await Assert.That(seen.MetaAlign).IsEqualTo(VerticalAlignment.Center);
         });
     }
+
+    /// A raw daemon status and an unknown launch stage are open text. The row caps both so they
+    /// stay inside the rail; "Needs you" and a known stage still fit whole.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_status_and_launch_stage_stay_inside_the_row() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            const string longStatus = "synchronizing_remote_workspace_credentials_before_the_session_can_start";
+            const string longStage = "waiting_for_the_runtime_to_finish_its_handshake_and_publish_the_session";
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(
+                    firstStatus: longStatus,
+                    pendingIds: new HashSet<string> { "a2" },
+                    pending: new PendingLaunchDto("p1", "claude", "/dev/alpha", "Pending launch", DateTime.UtcNow, longStage));
+                window.UpdateLayout();
+
+                bool Trimmed(TextBlock block) => NaturalWidth(block) > block.Bounds.Width + 4;
+                double Slack(TextBlock block) => block.Bounds.Width - NaturalWidth(block);
+                double Right(Control control, Visual relative) =>
+                    control.TranslatePoint(new Point(control.Bounds.Width, 0), relative)!.Value.X;
+                double Left(Control control, Visual relative) => control.TranslatePoint(default, relative)!.Value.X;
+                double CenterY(Control control, Visual relative) =>
+                    control.TranslatePoint(new Point(0, control.Bounds.Height / 2), relative)!.Value.Y;
+
+                var longRow = RailRow(window, "Fix the flaky test");
+                var needsYouRow = RailRow(window, "Leave this one alone");
+                var pendingRow = RailRow(window, "Pending launch");
+                var longWord = longRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
+                var needsYouWord = needsYouRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
+                var pendingMeta = pendingRow.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var pendingMark = pendingRow.GetVisualDescendants().OfType<AgentStatusMark>().First();
+                var stageWidth = NaturalWidth(pendingMeta, LaunchStages.Label("session_created"));
+                var result = (
+                    LongTrimmed: Trimmed(longWord),
+                    LongInside: Right(longWord, longRow) <= longRow.Bounds.Width + 1,
+                    NeedsYou: needsYouWord.Text,
+                    NeedsYouSlack: Slack(needsYouWord),
+                    StageWidth: stageWidth,
+                    MetaMax: pendingMeta.MaxWidth,
+                    MetaText: pendingMeta.Text,
+                    MetaTip: ToolTip.GetTip(pendingMeta) as string,
+                    MetaTrimmed: Trimmed(pendingMeta),
+                    MetaInside: Right(pendingMeta, pendingRow) <= pendingRow.Bounds.Width + 1,
+                    MarkClearsMeta: Math.Abs(CenterY(pendingMark, pendingRow) - CenterY(pendingMeta, pendingRow)) > 8
+                        || Right(pendingMark, pendingRow) <= Left(pendingMeta, pendingRow) + 1);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.LongTrimmed).IsTrue();
+            await Assert.That(seen.LongInside).IsTrue();
+            await Assert.That(seen.NeedsYou).IsEqualTo("Needs you");
+            await Assert.That(seen.NeedsYouSlack).IsGreaterThan(-4);
+            await Assert.That(seen.StageWidth).IsLessThanOrEqualTo(seen.MetaMax);
+            await Assert.That(seen.MetaText).IsEqualTo(LaunchStages.Label(longStage));
+            await Assert.That(seen.MetaTip).IsEqualTo(seen.MetaText);
+            await Assert.That(seen.MetaTrimmed).IsTrue();
+            await Assert.That(seen.MetaInside).IsTrue();
+            await Assert.That(seen.MarkClearsMeta).IsTrue();
+        });
+    }
+
+    static double NaturalWidth(TextBlock block, string? text = null) =>
+        new FormattedText(
+            text ?? block.Text ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            new Typeface(block.FontFamily, block.FontStyle, block.FontWeight), block.FontSize, null).Width;
 
     /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
     /// which drops an open workspace back to the launcher (the new-session empty state).
