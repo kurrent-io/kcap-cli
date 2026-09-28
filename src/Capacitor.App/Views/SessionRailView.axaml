@@ -56,6 +56,11 @@
         <Style Selector="WrapPanel#RailDaemonRow > TextBlock">
             <Setter Property="Margin" Value="0,0,5,0" />
         </Style>
+        <!-- Centred on the 11px line, the glyph lands a pixel under the word. The same
+             translateY(-1px) lifts an icon that sits beside a label. -->
+        <Style Selector="Panel.glyph">
+            <Setter Property="RenderTransform" Value="translateY(-1px)" />
+        </Style>
         <!-- Status word and the age share one 11px line. The logo and glyph sit in that line;
              chip padding stays on the chip, not on the age, or the age drops below the line. -->
         <Style Selector="Border.railChip">
