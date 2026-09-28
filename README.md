@@ -267,7 +267,7 @@ The `kcap mcp memory` stdio server lets agents search, save, and update durable 
 
 Beyond registering the servers, `kcap setup` / `kcap plugin install` also installs a small kcap-owned **agent-instructions block** for harnesses that read a user-level instructions file (GitHub Copilot CLI's `~/.copilot/copilot-instructions.md`, and Gemini CLI's + Google Antigravity's shared `~/.gemini/GEMINI.md` today; more rolling out per harness). It's a marker-delimited, non-destructive note (preserves any instructions you've written) that steers the agent to prefer the kcap tools for "why / history / prior-work" questions over native `git`/GitHub/grep — registration alone doesn't make agents route to the tools. Opt out with `--skip-<harness>-instructions`.
 
-Where a harness exposes a per-server trust knob, registration also marks the kcap servers that only read, or that write only to the session's own Capacitor record, auto-approved so the agent doesn't stop to ask before every call: **Gemini** marks `kcap-review`, `kcap-sessions`, `kcap-analytics`, `kcap-workitems` and `kcap-plans` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same five via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The work-launching `kcap-flows` (starts a *paid* hosted reviewer), `kcap-memory` (a save or rescope can widen who sees a memory) and `kcap-artefacts` (can widen who may open a page) are deliberately not pre-approved. Every kcap tool also advertises MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a harness that decides approval from them — Codex's `auto` mode, for one — runs the reads and the additive writes without a prompt whatever the registration says, and asks only before a tool that removes or overwrites something. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
+Where a harness exposes a per-server trust knob, registration also marks the kcap servers that only read, or that write only to the session's own Capacitor record, auto-approved so the agent doesn't stop to ask before every call: **Gemini** marks `kcap-review`, `kcap-sessions`, `kcap-analytics`, `kcap-workitems` and `kcap-plans` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same five via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The work-launching `kcap-flows` (starts a *paid* hosted reviewer), `kcap-memory` (a save or rescope can widen who sees a memory), `kcap-artefacts` (can widen who may open a page) and `kcap-knowledge` (can change facts and skills) are deliberately not pre-approved. Every kcap tool also advertises MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a harness that decides approval from them — Codex's `auto` mode, for one — runs the reads and the additive writes without a prompt whatever the registration says, and asks only before a tool that removes or overwrites something. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
 
 The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — list what a session is already attached to, or record the loose ends a session leaves unfinished. `kcap setup` / `kcap plugin install` **register it for every supported harness** (Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, OpenCode, Antigravity, and Pi). See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
 
@@ -755,6 +755,25 @@ It provides four tools:
 - **`get_plan`** — read a plan back: documents, tasks with status and source, and progress. The recovery call after context compaction; a session with no plan gets an empty result, not an error.
 
 Without `plan_id`, every tool acts on the session's current plan — the one it most recently wrote to; a session on no plan gets one created by `set_plan_tasks`. `session_id` defaults to the session the MCP server runs in (Claude Code's `CLAUDE_CODE_SESSION_ID`, else `KCAP_SESSION_ID` or Codex's `CODEX_THREAD_ID`) when omitted.
+
+### Knowledge MCP server (for agents)
+
+```bash
+kcap mcp knowledge
+```
+
+Stdio MCP server for reading retained facts and curated skills, then fine-tuning them. `kcap setup` and `kcap plugin install` register it with each supported harness. It offers eight tools:
+
+- **`list_skills`** / **`get_skill`** — browse skills and read one skill with its bodies, members, assignment pins, history and `doc_revision`.
+- **`list_facts`** / **`search_facts`** — browse retained facts or search by meaning within a repo, project or org home. Results carry a `curation_key` for writes.
+- **`edit_skill_body`** — edit a pending draft.
+- **`transition_skill`** — approve, reject, dismiss, revoke or restore a skill.
+- **`adjust_skill_members`** — exclude or include members for the next approval, or add, remove or clear assignment pins for the topic sweep to settle.
+- **`curate_fact_cluster`** — curate a fact cluster by its `curation_key`.
+
+Reads default to the current repository and refuse to widen when none resolves. List responses include `next_cursor` for the next page. Writes carry an `operation_id`; skill writes use the `doc_revision` from `get_skill` or the last write as `expected_doc_revision`. Server refusals pass through with their codes and any current revision they return so an agent can recover. To move a cluster out of a serving skill, exclude it, approve a body without it, then remove its pin before adding it to the destination skill.
+
+This server can change knowledge, so it is not pre-approved for unattended reviewers. It requires `kcap login` and a server with `/api/knowledge` endpoints.
 
 ### Artefacts MCP server (for agents)
 

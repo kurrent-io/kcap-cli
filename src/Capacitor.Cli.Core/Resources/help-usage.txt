@@ -89,6 +89,7 @@ MCP servers (stdio):
   mcp plans                          Declare a session's plan document and task list
   mcp analytics                      Governed SQL over org coding-agent analytics (schema + query)
   mcp artefacts                      Publish an HTML page from an agent and get back a link
+  mcp knowledge                      Read facts and skills and fine-tune skills from agents
 
 Plugin:
   plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills]   Register hooks/skills (Claude default; flag picks the vendor)

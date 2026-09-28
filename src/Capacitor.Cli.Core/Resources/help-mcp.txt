@@ -239,11 +239,30 @@ mcp artefacts:
   Reading, version history and takedown live in the web UI. Requires
   `kcap login` and a kcap-server with the /api/artefacts endpoints.
 
+mcp knowledge:
+  Exposes eight tools for agents to read retained facts and curated skills,
+  and to fine-tune skills.
+
+    list_skills           A repo's skills, most recently changed first.
+    get_skill             One skill with bodies, members, pins and doc_revision.
+    list_facts            Retained facts homed at a repo, project or org.
+    search_facts          Facts nearest a query by meaning.
+    edit_skill_body       Replace a pending draft body.
+    transition_skill      approve | reject | dismiss | revoke | restore.
+    adjust_skill_members  exclude | include draft members, or add | remove |
+                          clear assignment pins.
+    curate_fact_cluster   Curate a fact by its curation_key.
+
+  Arguments are the server's field names. Reads default to the current
+  repository. Skill writes take get_skill's doc_revision as
+  expected_doc_revision; refusals pass through with server codes.
+  Requires `kcap login` and a server with /api/knowledge endpoints.
+
 INSTALL
 
   `kcap setup` registers `kcap-sessions`, `kcap-review`, `kcap-memory`,
-  `kcap-flows`, `kcap-workitems`, `kcap-plans`, `kcap-analytics`, and
-  `kcap-artefacts`
+  `kcap-flows`, `kcap-workitems`, `kcap-plans`, `kcap-analytics`,
+  `kcap-artefacts`, and `kcap-knowledge`
   for both Claude Code (via the plugin's `.mcp.json`) and Codex CLI (`kcap setup`
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap
