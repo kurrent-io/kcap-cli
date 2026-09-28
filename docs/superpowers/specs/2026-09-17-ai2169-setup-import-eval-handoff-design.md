@@ -691,7 +691,7 @@ with `Retry-After`. Both bounds shape the batching:
   incomplete and is never committed. Each batch requests `max_rows` equal to its size.
 - **Budget: at most 20 cohort queries per poll, including the first, issued one at a time.** With a
   poll every 30 seconds that is 40 starts a minute, leaving room for the enrichment queries (at most
-  six over the whole run) and a retry. The smallest batch the budget allows is
+  ten over the whole run) and a retry. The smallest batch the budget allows is
   `floor = ceil(N / 20)` where `N` is the cohort size — 25 for 500 ids, 10 for 200, 5 for 100.
   **Serial dispatch is mandatory:** the server also caps queries in flight per user
   (`AnalyticsQueryOptions.MaxConcurrentPerUser`, default 2, configurable down to 1) and answers the
@@ -725,32 +725,42 @@ toward the two-failure stop. Each successful poll recomputes cohort state from i
 Enrichment queries are optional: their failure or truncation degrades summary content, never poll
 success or stop logic.
 
+**Baseline.** The first snapshot's rows: an eval present there is pre-existing, one that turns
+non-null in a later poll completed during this watch. Every summarized session carries one of the
+two labels.
+
 **Stop rules**, evaluated in order after each successful poll, its state committed first. K is
 `foreground_succeeded_ids.length`: the sessions that imported while the user watched, and the ones
 the watch waits on.
 
 1. K > 0 and every foreground session has a completed eval → summarize all of them, ordered by
-   `evaluated_at`, ties by `session_id`. An eval already present at the first snapshot counts.
-2. K = 0 and three distinct cohort sessions completed an eval after the first snapshot → summarize
-   those three, same ordering. Evals present at the first snapshot never satisfy this rule: on a
-   re-import they belong to an earlier run, and stopping on them ends the watch on the first poll
-   with nothing this import produced.
+   `evaluated_at`, ties by `session_id`. A pre-existing eval counts.
+2. K = 0 and three distinct cohort sessions completed during this watch → summarize those three,
+   same ordering. Pre-existing evals never satisfy this rule: on a re-import they belong to an
+   earlier run, and stopping on them ends the watch on the first poll with nothing this import
+   produced.
 3. **All-cohort-complete**: every id in `session_ids` has a completed eval. Requires `cohort: "exact"`
-   with a non-empty list; never fires in partial-exact mode, and never on an empty list. Sessions
-   that never evaluate are covered by the deadline, not inferred.
+   with a non-empty list; never fires in partial-exact mode, and never on an empty list. Summarizes
+   the foreground sessions, or with K = 0 the three newest by `evaluated_at`. It may fire on the
+   first snapshot over pre-existing evals alone: a fully evaluated cohort has nothing left to wait
+   for, and the labels disclose it. Sessions that never evaluate are covered by the deadline, not
+   inferred.
 4. Immediately on the second consecutive failed poll.
 5. Deadline on a monotonic 10-minute clock: no new poll or query starts after it; an in-flight query
    overruns by at most its own duration (`query_analytics` exposes no cancellation). A poll completing
    at or after the deadline still commits first and is checked against rules 1–4; a second
    consecutive failure in it is reported as the deadline's stop, mentioning the failures. The
    deadline summary covers the foreground sessions that completed and names the pending ones; with
-   none complete, it falls back to up to three cohort sessions with the newest `evaluated_at`, each
-   labelled as evaluated before or outside this watch.
+   none complete, it falls back to up to three cohort sessions with the newest `evaluated_at`.
 
 No idle early-stop: quiet polls are normal. Cadence: first snapshot immediately, then every 30
 seconds, with progress (arrived / N, foreground evaluated / K) said after each.
 
-**Summary content.** Per session: link, vendor and model, length, `overall_score` and judge model,
+**Detail budget.** Two enrichment queries per detailed session, ten per run. A foreground pass
+takes whole chains, so K may exceed five: the first five sessions in summary order get detail, the
+rest a one-line entry of link, label and `overall_score`.
+
+**Summary content.** Per detailed session: link, baseline label, vendor and model, length, `overall_score` and judge model,
 strongest and weakest category, the two weakest questions, and the `kcap-sessions` title when one
 exists. Then one cohort line from the last committed poll: arrived, evaluated, mean `overall_score`.
 

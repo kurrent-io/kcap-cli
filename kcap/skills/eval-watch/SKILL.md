@@ -144,31 +144,38 @@ Progress = cohort ids that arrived / cohort size, and foreground ids evaluated /
 from the batch rows only — never a separate count, never repo- or tenant-wide. Cadence: first
 snapshot immediately, then every 30 seconds. Say the progress after each poll.
 
+**Baseline**: the first snapshot's rows. An eval present there is *pre-existing*; one whose
+`eval_run_id` was null or absent there and non-null in a later poll *completed during this watch*.
+Every summary labels each session with one of those two phrases.
+
 **Stop**, evaluated in this order after each poll whose results have already committed:
 1. K > 0 and every foreground session has a completed eval → summarize all of them, ordered by
-   `evaluated_at` then `session_id`. An eval that was already present at the first snapshot counts:
-   the wait is for these sessions to be evaluated, whenever that happened.
-2. K = 0 and three distinct cohort sessions have an eval that completed after the first snapshot
-   (no row, or a null `eval_run_id`, at the first snapshot; non-null later) → summarize those
-   three, ordered by `evaluated_at` then `session_id`. Evals present at the first snapshot never
-   satisfy this rule: on a re-import they belong to an earlier run, and stopping on them would end
-   the watch before this import produced anything.
-3. `cohort: exact`, non-empty, and every id in `session_ids` has a completed eval → summarize what
-   completed. Never fires for `partial_exact` or an empty cohort.
+   `evaluated_at` then `session_id`. A pre-existing eval counts: the wait is for these sessions to
+   be evaluated, whenever that happened.
+2. K = 0 and three distinct cohort sessions completed during this watch → summarize those three,
+   ordered by `evaluated_at` then `session_id`. Pre-existing evals never satisfy this rule: on a
+   re-import they belong to an earlier run, and stopping on them would end the watch before this
+   import produced anything.
+3. `cohort: exact`, non-empty, and every id in `session_ids` has a completed eval → summarize the
+   foreground sessions, or with K = 0 the three with the newest `evaluated_at` (ties by
+   `session_id`). This rule may fire on the first snapshot with nothing but pre-existing evals:
+   a cohort that is already fully evaluated has nothing left to wait for, and the labels say so.
+   Never fires for `partial_exact` or an empty cohort.
 4. Two consecutive failed polls → stop, reporting the failures.
 5. 10 minutes since the first snapshot → stop. No new poll starts after the deadline, but a poll
    already dispatched before it finishes normally, and its outcome is still checked against rules
    1–4 first. On a deadline stop, summarize the foreground sessions that did complete and name the
    ones still pending, with whether each has arrived; if none of them completed, summarize instead
-   up to three cohort sessions with the newest `evaluated_at` (ties by `session_id`), each labelled
-   as evaluated before or outside this watch.
+   up to three cohort sessions with the newest `evaluated_at` (ties by `session_id`).
 
 No idle early-stop — quiet polls are normal and are not a reason to stop early. Evals take minutes
 per session, and the foreground sessions are the newest, so they are usually the last to complete.
 
-**Per-session detail** (one session per query, at most 2 queries per summarized session and 10
-across the whole run). Both pass `max_rows` explicitly — a query left at the agent's guess
-truncates on the category list and throws the detail away:
+**Per-session detail** (one session per query, 2 queries per detailed session, at most 10 across
+the whole run). A foreground pass takes whole session chains, so K can exceed five: the first five
+sessions in summary order get detail; every later one gets a one-line entry — link, label and
+`overall_score` — and no detail query. Both queries pass `max_rows` explicitly — a query left at
+the agent's guess truncates on the category list and throws the detail away:
 
     -- max_rows: 25
     SELECT category, ROUND(AVG(score), 2) AS mean FROM v_an_eval_scores
@@ -181,10 +188,10 @@ Strongest = highest mean, weakest = lowest, ties alphabetical by category. A tru
 detail query, or a session with no assessed rows, → summarize that session by `overall_score` alone
 and say so; this never affects poll success or the stop rules above.
 
-**What a session summary says**, one short paragraph each: the link (section 7), then vendor and
-model, length (`duration_min`, rounded, and `event_count`), `overall_score` out of 5 and the
-judge model, strongest and weakest category with their means, and the two weakest questions with
-their scores. When the `kcap-sessions` MCP is available, call `get_session_summary` once per
+**What a detailed session summary says**, one short paragraph each: the link (section 7), the
+baseline label, then vendor and model, length (`duration_min`, rounded, and `event_count`),
+`overall_score` out of 5 and the judge model, strongest and weakest category with their means, and
+the two weakest questions with their scores. When the `kcap-sessions` MCP is available, call `get_session_summary` once per
 summarized session and lead with its title or first sentence when it returns one; an empty summary
 is left out silently, never called "no summary".
 
