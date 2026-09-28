@@ -393,20 +393,23 @@ public static class PiReviewerExtension {
             },
 
             git_diff: {
-              description: "Diff two revisions, or a revision against the checked-out files when head is omitted. Use base...head for a branch's changes since it forked. Read-only.",
+              description: "Diff two revisions; base alone is compared with HEAD. Use base...head for a branch's changes since it forked. Read-only.",
               parameters: {
                 type: "object",
                 properties: {
                   base: { type: "string", description: "A revision, or a base..head / base...head range." },
-                  head: { type: "string", description: "Optional second revision." },
+                  head: { type: "string", description: "Second revision; defaults to HEAD unless base is already a range." },
                   path: { type: "string", description: "Limit the diff to this repository-relative path." },
                   stat_only: { type: "boolean", description: "List changed files instead of the patch." },
                 },
                 required: ["base"],
               },
               async run(params: any) {
-                const revs = [checkRev(params.base, "base")];
-                if (params.head !== undefined && params.head !== "") revs.push(checkRev(params.head, "head"));
+                // Always two revisions, never the working tree: comparing against checked-out files runs
+                // any clean filter the repository's config names.
+                const base = checkRev(params.base, "base");
+                const head = params.head !== undefined && params.head !== "" ? checkRev(params.head, "head") : null;
+                const revs = head !== null ? [base, head] : base.includes("..") ? [base] : [base, "HEAD"];
                 const mode = params.stat_only === true ? ["--stat"] : ["--patch", "--stat"];
                 return textResult(await runGit(rootReal, ["diff", "--no-ext-diff", "--no-textconv",
                   ...mode, "--end-of-options", ...revs, ...pathspec(params.path)]));

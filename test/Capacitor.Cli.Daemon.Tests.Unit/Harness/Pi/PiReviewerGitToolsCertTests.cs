@@ -90,6 +90,34 @@ public class PiReviewerGitToolsCertTests {
         await Assert.That(File.Exists(textconvRan)).IsTrue();
     }
 
+    /// <summary>Comparing a revision with checked-out files runs the clean filter the repository's
+    /// config names, so a base-only diff must compare with HEAD instead. The direct git call is the
+    /// positive control: the same repository runs the filter for a working-tree diff.</summary>
+    [Test]
+    public async Task A_base_only_diff_never_reads_the_working_tree() {
+        RequireGate();
+        await using var bench = PiContainmentBench.Create(plantCanaries: false);
+        CommitTwoRevisions(bench.Worktree);
+
+        var cleanRan = Path.Combine(bench.Outside, "CLEAN_RAN");
+        var clean    = Script(bench.Outside, "clean.sh", $"touch '{cleanRan}'\ncat");
+        Git(bench.Worktree, "config", "filter.probe.clean", clean);
+        File.WriteAllText(Path.Combine(bench.Worktree, ".git", "info", "attributes"), "*.txt filter=probe\n");
+        File.AppendAllText(Path.Combine(bench.Worktree, "inside.txt"), "UNCOMMITTED-LINE\n");
+
+        var run = await bench.RunAsync(null,
+            new PiScriptedStep(Tool: "git_diff", ArgsJson: """{"base":"HEAD~1"}""", Id: "w1"),
+            new PiScriptedStep(Tool: "git_diff", ArgsJson: """{"base":"HEAD~1..HEAD","path":"inside.txt"}""", Id: "w2"),
+            new PiScriptedStep(Text: "done"));
+
+        await Assert.That(run.ToolResults).Contains(r => r.Contains("+SECOND-LINE"));
+        await Assert.That(string.Join("\n", run.ToolResults)).DoesNotContain("UNCOMMITTED-LINE");
+        await Assert.That(File.Exists(cleanRan)).IsFalse();
+
+        Git(bench.Worktree, "diff", "HEAD");
+        await Assert.That(File.Exists(cleanRan)).IsTrue();
+    }
+
     static void CommitTwoRevisions(string worktree) {
         Git(worktree, "init", "-q");
         Git(worktree, "add", "inside.txt");
