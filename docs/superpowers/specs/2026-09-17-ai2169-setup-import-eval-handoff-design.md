@@ -79,8 +79,8 @@ offer the flow.
 - After a small foreground pass (about five sessions), the rest imports in a **detached background
   process**, independent of any later choice the user makes in setup.
 - Setup then **hands the user to a coding agent of their choice** — any of the nine vendors — running
-  a prompt that follows the import and the evals, summarizes the first three completed evals, links
-  to the results and offers the guided tour.
+  a prompt that follows the import and the evals, waits for the foreground sessions to be
+  evaluated, summarizes their evals, links to the results and offers the guided tour.
 
 ## Non-goals
 
@@ -661,19 +661,23 @@ cwd repository and refuses to widen silently (`McpAnalyticsServer.BuildQueryBody
 repositories and includes repo-less sessions, whose `repo_hash` is null.
 
 - Cohort state, **one query per batch** carrying arrival and completion together:
-  `SELECT s.session_id, s.repo_hash, e.eval_run_id, e.evaluated_at, e.overall_score, e.judge_model
+  `SELECT s.session_id, s.repo_hash, s.vendor, s.model, s.duration_min, s.event_count,
+  e.eval_run_id, e.evaluated_at, e.overall_score, e.judge_model
   FROM v_an_sessions s LEFT JOIN v_an_eval_summaries e ON e.session_id = s.session_id
   WHERE s.session_id IN (…)`. A row means the session arrived; a non-null `eval_run_id` means it
-  completed. `repo_hash` is kept per session for the links.
+  completed. `repo_hash` is kept per session for the links; the session columns feed the summary's
+  facts line at no extra query.
 - Displayed import progress: the number of cohort ids present over the number listed — derived from
   the batch rows, no separate query, never a tenant-wide count.
 - Per-category detail, one session per query and **aggregated server-side** so no row cap can slice
-  it: `SELECT category, AVG(score) AS mean FROM v_an_eval_scores WHERE session_id = '<id>' GROUP BY
-  category` (one row per category) and `SELECT question_id, score FROM v_an_eval_scores WHERE
-  session_id = '<id>' ORDER BY score ASC, question_id ASC LIMIT 2`. Strongest = highest mean,
-  weakest = lowest, ties alphabetical by category. A session with no score rows is summarized by
-  `overall_score` alone. Titles may be enriched through the `kcap-sessions` MCP when present, else
-  the id suffices.
+  it: `SELECT category, ROUND(AVG(score), 2) AS mean FROM v_an_eval_scores WHERE session_id = '<id>'
+  AND outcome = 'assessed' GROUP BY category` (one row per category, `max_rows` 25) and
+  `SELECT question_id, score FROM v_an_eval_scores WHERE session_id = '<id>' AND outcome = 'assessed'
+  ORDER BY score ASC, question_id ASC LIMIT 2` (`max_rows` 2). Both caps are stated in the skill:
+  an unstated cap is the agent's guess, and a guess below the category count truncates the query
+  and discards the detail. Strongest = highest mean, weakest = lowest, ties alphabetical by
+  category. A session with no assessed rows is summarized by `overall_score` alone. Titles may be
+  enriched through the `kcap-sessions` MCP when present, else the id suffices.
 - There is deliberately no repo-wide or tenant-wide read and no unlisted-arrival narration:
   identifying non-cohort rows would need exactly the scan this contract forbids.
 
@@ -721,23 +725,34 @@ toward the two-failure stop. Each successful poll recomputes cohort state from i
 Enrichment queries are optional: their failure or truncation degrades summary content, never poll
 success or stop logic.
 
-**Stop rules**, evaluated after each successful poll, its state committed first:
+**Stop rules**, evaluated in order after each successful poll, its state committed first. K is
+`foreground_succeeded_ids.length`: the sessions that imported while the user watched, and the ones
+the watch waits on.
 
-1. Three distinct cohort sessions with completed evals → summarize the deterministic first three
-   (ordered by `evaluated_at`, ties by `session_id`; the same rule for pre-snapshot rows, so more than
-   three arriving at once always select the same three).
-2. **All-cohort-complete**: every id in `session_ids` has a completed eval. Requires `cohort: "exact"`
+1. K > 0 and every foreground session has a completed eval → summarize all of them, ordered by
+   `evaluated_at`, ties by `session_id`. An eval already present at the first snapshot counts.
+2. K = 0 and three distinct cohort sessions completed an eval after the first snapshot → summarize
+   those three, same ordering. Evals present at the first snapshot never satisfy this rule: on a
+   re-import they belong to an earlier run, and stopping on them ends the watch on the first poll
+   with nothing this import produced.
+3. **All-cohort-complete**: every id in `session_ids` has a completed eval. Requires `cohort: "exact"`
    with a non-empty list; never fires in partial-exact mode, and never on an empty list. Sessions
    that never evaluate are covered by the deadline, not inferred.
-3. Immediately on the second consecutive failed poll.
-4. Deadline on a monotonic 10-minute clock: no new poll or query starts after it; an in-flight query
+4. Immediately on the second consecutive failed poll.
+5. Deadline on a monotonic 10-minute clock: no new poll or query starts after it; an in-flight query
    overruns by at most its own duration (`query_analytics` exposes no cancellation). A poll completing
-   at or after the deadline still commits first; a third completion in it wins over the deadline
-   summary; a second consecutive failure in it is reported as the deadline's stop, mentioning the
-   failures.
+   at or after the deadline still commits first and is checked against rules 1–4; a second
+   consecutive failure in it is reported as the deadline's stop, mentioning the failures. The
+   deadline summary covers the foreground sessions that completed and names the pending ones; with
+   none complete, it falls back to up to three cohort sessions with the newest `evaluated_at`, each
+   labelled as evaluated before or outside this watch.
 
 No idle early-stop: quiet polls are normal. Cadence: first snapshot immediately, then every 30
-seconds.
+seconds, with progress (arrived / N, foreground evaluated / K) said after each.
+
+**Summary content.** Per session: link, vendor and model, length, `overall_score` and judge model,
+strongest and weakest category, the two weakest questions, and the `kcap-sessions` title when one
+exists. Then one cohort line from the last committed poll: arrived, evaluated, mean `overall_score`.
 
 **Links.** `server_url` with any trailing slash trimmed; `repo_hash` (16 hex) and session ids (the
 grammar above) need no encoding.

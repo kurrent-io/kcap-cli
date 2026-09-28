@@ -5,9 +5,10 @@ description: >-
   "Follow my kcap import" (the prompt `kcap setup` hands to your agent), "watch my
   import", "how is my import going", "are my evals done yet". Reads the handoff file
   setup wrote, polls Capacitor analytics for exactly the sessions that import
-  created, summarizes the first three completed evals, links to the results and
-  offers the guided tour. Not for browsing evals in general — that is the analytics
-  or guided-tour skill.
+  created, waits for the sessions that imported while the user watched to be
+  evaluated, summarizes their evals, links to the results and offers the guided
+  tour. Not for browsing evals in general — that is the analytics or guided-tour
+  skill.
 ---
 
 # Eval watch
@@ -102,10 +103,12 @@ if kcap uses a custom config directory — then prompt again.
 
 ## 5. Watch the cohort
 
-Cohort = `session_ids` (`cohort: unknown` or empty → CLOSE with links, no query). Open with:
-"Watching N sessions from this import (K landed before the handoff)" — K is
-`foreground_succeeded_ids.length`; for `partial_exact` add "the 500 most recent; older ones may
-land and evaluate unobserved"; if `unattributed_on_disk` > 0 add the sentence from section 7.
+Cohort = `session_ids` (`cohort: unknown` or empty → CLOSE with links, no query). Foreground =
+`foreground_succeeded_ids`, the sessions that imported while the user watched setup; they are the
+sessions this watch waits on. Open with: "Watching N sessions from this import; waiting for the K
+that imported first to be evaluated" — K is `foreground_succeeded_ids.length`; for `partial_exact`
+add "the 500 most recent; older ones may land and evaluate unobserved"; if `unattributed_on_disk`
+> 0 add the sentence from section 7.
 
 Every query uses `query_analytics` with `scope: 'global'` (the MCP defaults to the caller's cwd
 repo and will not widen on its own), **ONE call at a time — never two in flight** — and names only
@@ -117,7 +120,8 @@ not in `session_ids`, drop that row before using the response for anything.
 batch size `floor` exactly — no probing at a smaller size first. Every batch passes `max_rows`
 equal to its own size:
 
-    SELECT s.session_id, s.repo_hash, e.eval_run_id, e.evaluated_at, e.overall_score, e.judge_model
+    SELECT s.session_id, s.repo_hash, s.vendor, s.model, s.duration_min, s.event_count,
+           e.eval_run_id, e.evaluated_at, e.overall_score, e.judge_model
     FROM v_an_sessions s LEFT JOIN v_an_eval_summaries e ON e.session_id = s.session_id
     WHERE s.session_id IN ('<id>', '<id>', ...)
 
@@ -136,35 +140,56 @@ next poll; otherwise wait 60 seconds. Never poll sooner than the 30-second caden
 403 with `analytics_not_in_plan` → CLOSE immediately with the plan sentence (section 6); no
 polling, no retry, no wait.
 
-Progress = cohort ids that arrived / cohort size, computed from the batch rows only — never a
-separate count, never repo- or tenant-wide. Cadence: first snapshot immediately, then every 30
-seconds.
+Progress = cohort ids that arrived / cohort size, and foreground ids evaluated / K, both computed
+from the batch rows only — never a separate count, never repo- or tenant-wide. Cadence: first
+snapshot immediately, then every 30 seconds. Say the progress after each poll.
 
 **Stop**, evaluated in this order after each poll whose results have already committed:
-1. Three distinct cohort sessions have a completed eval → summarize the first three, ordered by
-   `evaluated_at` then `session_id` (the same tie-break applies to rows already present at the very
-   first snapshot, so more than three arriving at once always picks the same three).
-2. `cohort: exact`, non-empty, and every id in `session_ids` has a completed eval → summarize what
+1. K > 0 and every foreground session has a completed eval → summarize all of them, ordered by
+   `evaluated_at` then `session_id`. An eval that was already present at the first snapshot counts:
+   the wait is for these sessions to be evaluated, whenever that happened.
+2. K = 0 and three distinct cohort sessions have an eval that completed after the first snapshot
+   (no row, or a null `eval_run_id`, at the first snapshot; non-null later) → summarize those
+   three, ordered by `evaluated_at` then `session_id`. Evals present at the first snapshot never
+   satisfy this rule: on a re-import they belong to an earlier run, and stopping on them would end
+   the watch before this import produced anything.
+3. `cohort: exact`, non-empty, and every id in `session_ids` has a completed eval → summarize what
    completed. Never fires for `partial_exact` or an empty cohort.
-3. Two consecutive failed polls → stop, reporting the failures.
-4. 10 minutes since the first snapshot → stop. No new poll starts after the deadline, but a poll
+4. Two consecutive failed polls → stop, reporting the failures.
+5. 10 minutes since the first snapshot → stop. No new poll starts after the deadline, but a poll
    already dispatched before it finishes normally, and its outcome is still checked against rules
-   1–3 first: a third distinct completion in that final poll wins over the deadline summary, and if
-   that final poll is itself the second consecutive failure, report it as the deadline stop while
-   still naming the failures.
+   1–4 first. On a deadline stop, summarize the foreground sessions that did complete and name the
+   ones still pending, with whether each has arrived; if none of them completed, summarize instead
+   up to three cohort sessions with the newest `evaluated_at` (ties by `session_id`), each labelled
+   as evaluated before or outside this watch.
 
-No idle early-stop — quiet polls are normal and are not a reason to stop early.
+No idle early-stop — quiet polls are normal and are not a reason to stop early. Evals take minutes
+per session, and the foreground sessions are the newest, so they are usually the last to complete.
 
-**Per-session detail** (one session per query, at most 6 queries across the whole run — enough for
-the three sessions rule 1 summarizes):
+**Per-session detail** (one session per query, at most 2 queries per summarized session and 10
+across the whole run). Both pass `max_rows` explicitly — a query left at the agent's guess
+truncates on the category list and throws the detail away:
 
-    SELECT category, AVG(score) AS mean FROM v_an_eval_scores WHERE session_id = '<id>' GROUP BY category
-    SELECT question_id, score FROM v_an_eval_scores WHERE session_id = '<id>' ORDER BY score ASC, question_id ASC LIMIT 2
+    -- max_rows: 25
+    SELECT category, ROUND(AVG(score), 2) AS mean FROM v_an_eval_scores
+    WHERE session_id = '<id>' AND outcome = 'assessed' GROUP BY category
+    -- max_rows: 2
+    SELECT question_id, score FROM v_an_eval_scores
+    WHERE session_id = '<id>' AND outcome = 'assessed' ORDER BY score ASC, question_id ASC LIMIT 2
 
 Strongest = highest mean, weakest = lowest, ties alphabetical by category. A truncated or failed
-detail query, or a session with no score rows, → summarize that session by `overall_score` alone
-and say so; this never affects poll success or the stop rules above. When the `kcap-sessions` MCP is
-available, use it to enrich a session's title; otherwise the session id is enough.
+detail query, or a session with no assessed rows, → summarize that session by `overall_score` alone
+and say so; this never affects poll success or the stop rules above.
+
+**What a session summary says**, one short paragraph each: the link (section 7), then vendor and
+model, length (`duration_min`, rounded, and `event_count`), `overall_score` out of 5 and the
+judge model, strongest and weakest category with their means, and the two weakest questions with
+their scores. When the `kcap-sessions` MCP is available, call `get_session_summary` once per
+summarized session and lead with its title or first sentence when it returns one; an empty summary
+is left out silently, never called "no summary".
+
+**Cohort facts**, one line after the summaries, from the last committed poll's rows only: sessions
+arrived out of N, sessions evaluated, and the mean `overall_score` across the evaluated ones.
 
 ## 6. When little or nothing completes
 
