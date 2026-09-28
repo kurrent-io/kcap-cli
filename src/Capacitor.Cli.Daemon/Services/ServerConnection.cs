@@ -1000,7 +1000,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             agentId, "session-end");
 
         await SafeShutdownStepAsync(
-            () => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId), cancellationToken: ct),
+            () => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, reason), cancellationToken: ct),
             agentId, "unregister");
     }
 

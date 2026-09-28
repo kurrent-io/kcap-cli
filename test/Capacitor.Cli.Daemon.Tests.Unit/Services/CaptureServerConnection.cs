@@ -315,7 +315,6 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// launch-catch + read-loop cleanup.</summary>
     public List<string> AgentUnregisteredCalls { get; } = [];
 
-    /// <summary>The stop code each unregister carried, keyed by agent id.</summary>
     public Dictionary<string, string?> AgentUnregisteredStopReasons { get; } = [];
 
     /// <summary>Every dropped-input report, in call order — the only place a drop reason becomes
