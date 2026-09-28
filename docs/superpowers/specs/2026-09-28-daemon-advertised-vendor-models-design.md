@@ -80,18 +80,24 @@ New file `Harness/Pi/PiModelCatalogProbe.cs`, a static helper the factory calls:
    Windows hosts probe like any other). Its contents, if any, are deleted before each probe so it
    is always empty. Pi renames a project's `.pi/commands` at startup, so the probe never runs in
    a repository or in the daemon's own cwd.
-3. Write `{"type":"get_available_models"}\n`, close stdin.
+3. Write `{"type":"get_available_models"}\n` and flush. Stdin stays **open**: Pi's RPC loop
+   treats stdin EOF as a shutdown request and does not await an in-flight command first, so
+   closing before the response arrives races shutdown against the answer.
 4. Read stdout lines until a line parses as JSON with `type == "response"` and
    `command == "get_available_models"`. Ignore every other line (Pi may emit other frames first).
+   Only then close stdin.
 5. Deadline: 10 seconds from spawn, measured on `TimeProvider`. On expiry, `ProcessTree.Kill`
    the child (the daemon never uses `Process.Kill(bool)`), return null, log once at Warning with
    the reason.
-6. On the response: `success != true` → null. Otherwise map `data.models[]` to
+6. On the response: `success != true` → null. `success == true` with `data` missing, `models`
+   missing, or `models` not an array → null as well: an invalid envelope never establishes
+   emptiness, and null lets consumers fall through, whereas `[]` would suppress both fallback
+   catalogs. A present, empty `models` array → `[]`. Otherwise map `data.models[]` to
    `VendorModelOption($"{provider}/{id}", $"{name} · {provider}")`. An entry missing `id` or
-   `provider` is skipped; a missing `name` falls back to `id`. Pi's order is kept (it is the order
-   Pi cycles with Ctrl+P).
-7. Wait for exit after the response with a short grace (2 seconds), then `ProcessTree.Kill` if
-   still running. Exit code is not consulted: the response is the result.
+   `provider`, or that is not an object, is skipped; a missing `name` falls back to `id`. Pi's
+   order is kept (it is the order Pi cycles with Ctrl+P).
+7. After closing stdin, wait for exit with a short grace (2 seconds), then `ProcessTree.Kill`
+   if still running. Exit code is not consulted: the response is the result.
 
 Parsing lives in a pure static `PiModelCatalogProbe.Parse(string responseLine)` so the fixture
 tests need no process.
@@ -145,16 +151,19 @@ reference swap of the new dictionary, after which the pass re-registers and puls
 `(Value, Label)` pairs. An unchanged catalog swaps nothing, re-registers nothing and pulses
 nothing.
 
-Baselines follow the existing rule for the whole expanded watch set. Startup computes the watch
-set first (unattended ∪ catalog-publishing, the same expression the watcher uses, factored into
-one static `VendorCliWatcher.WatchSet(config, factories)`), then fingerprints every vendor in it
-before either probe runs: `FingerprintUnattendedVendors` is called with that set rather than
-`UnattendedVendors` alone, so `UnattendedVendorBaselines` records the binary of a catalog-only
-Pi too, and the catalog paths are recorded on `DaemonConfig.VendorCatalogBaselines`
-(`IReadOnlyDictionary<string, CatalogPathStat[]>?`, keyed by vendor). `VendorCliWatcher.
-ExecuteAsync` reads both and `PrimeBaselines` seeds from them, statting live only for a vendor
-with no recorded entry. A binary or file that changes between the startup probe and the
-watcher's first tick therefore reads as a change on that tick instead of becoming the baseline.
+Baselines follow the existing rule and are recorded before any probe runs, for **every
+advertised factory**, not just the eventual watch set: `FingerprintUnattendedVendors` is called
+with `SupportedVendors`, so `UnattendedVendorBaselines` records the binary of a catalog-only Pi
+and of a producer that only reveals itself by returning a catalog, and every factory's
+`CatalogFingerprintPaths` are recorded on `DaemonConfig.VendorCatalogBaselines`
+(`IReadOnlyDictionary<string, CatalogPathStat[]>?`, keyed by vendor; an empty path list records
+an empty array). A baseline for a vendor the watcher never watches is inert. The watch set
+itself is computed after the probe, by one static `VendorCliWatcher.WatchSet(config, factories)`
+(unattended ∪ non-empty `CatalogFingerprintPaths` ∪ key in `VendorModels`), and
+`VendorCliWatcher.ExecuteAsync` reads both baseline tables, `PrimeBaselines` seeding from them
+and statting live only for a vendor with no recorded entry. A binary or file that changes
+between the startup probe and the watcher's first tick therefore reads as a change on that tick
+instead of becoming the baseline.
 `CatalogPathStat(string Path, bool Exists, long Length, long LastWriteTicks)` is a new record in
 `Services/`.
 
@@ -249,6 +258,15 @@ reading the endpoint; adopting the daemon list there is a follow-on.
   present → machine list (even when empty); else server list when non-empty; else no key.
   `ModelChoicesFor(vendor)` reads it and falls back to `HostedHarnessCatalog.ModelChoicesFor(vendor)`
   when the key is absent.
+- **Selected-model revalidation.** `SelectedModel` is a session value; `SetVendor` clears it
+  only on a vendor change. `EffectiveModelCatalog` now also revalidates it on every emission,
+  using the previous and next values (`Scan`/pairwise): when `SelectedModel` is non-empty, the
+  previous catalog had a key for `SelectedVendor` that contained it, and the next catalog has a
+  key for `SelectedVendor` that does not, `SelectedModel` resets to `""`. This covers a machine
+  switch to a same-vendor machine with a disjoint list and a live refresh that withdraws the
+  model. A model the previous catalog did not list (a typed custom id, or one picked before any
+  catalog arrived) is never cleared by a catalog change: the daemon is the authority at launch,
+  and clearing a custom id on every emission would make the custom row unusable.
 - The agent chip's fourth `MultiBinding` in `LauncherPaneView.axaml` binds
   `EffectiveModelCatalog` instead of `ModelCatalog`; `AgentChipTextConverter` is unchanged, since
   it already resolves the label against that dictionary and falls back to the curated
@@ -281,8 +299,13 @@ Daemon (`test/Capacitor.Cli.Daemon.Tests.Unit/Harness/Pi/`, `Services/`):
   with `provider/id` values and `name · provider` labels; entry missing `id` skipped; missing
   `name` falls back to id; `success:false` → null; wrong `command` → not a response; non-JSON
   line → not a response.
-- Probe against a fake `pi` from `tmp.CreateExecutable` that prints a canned response after
-  reading stdin: returns the mapped list and the child is gone afterwards (`PidIdentity`).
+- `PiModelCatalogProbe.Parse`, envelope cases: `success:true` with no `data` → null; `models`
+  missing → null; `models` a string → null; `models: []` → empty list (not null); a non-object
+  entry inside a valid array is skipped and the rest kept.
+- Probe against a fake `pi` from `tmp.CreateExecutable` that emulates Pi: reads one command line,
+  prints the canned response, then keeps running until stdin EOF and exits on it. Asserts the
+  mapped list, that the response was received before stdin was closed (the fake exits non-zero
+  if it sees EOF before a command), and that the child is gone afterwards (`PidIdentity`).
 - Fake `pi` that never answers: probe returns null within the deadline (fake `TimeProvider`),
   child killed.
 - The probe's argv carries `--offline`, `--no-extensions` and `--no-session`, and its working
@@ -299,7 +322,9 @@ Daemon (`test/Capacitor.Cli.Daemon.Tests.Unit/Harness/Pi/`, `Services/`):
 - `VendorModelCatalogs.Equal`: same keys and ordered pairs → true; reordered models, a changed
   label, or an extra key → false.
 - Startup baselines: a catalog-only vendor (Pi advertised, reviewer withheld) has its binary and
-  catalog paths recorded, and a binary change before watcher start fires on the first tick.
+  catalog paths recorded, and a binary change before watcher start fires on the first tick; a
+  producer with empty `CatalogFingerprintPaths` that returns a catalog has its binary recorded
+  and is in the watch set.
 - Probe directory: created when missing, emptied when it holds a leftover file, works on Windows
   (no owner-only gate).
 - `DaemonConnect` and `DaemonStatusDto` round-trip through their source-generated contexts with
@@ -321,6 +346,10 @@ App (`test/Capacitor.App.Tests.Unit/`, beside `HomeViewModelTests`):
   falls back to the server catalog.
 - Chip label resolves from the daemon list through `EffectiveModelCatalog` (converter test with
   a machine-only entry).
+- Selected-model revalidation: Pi model A picked from machine 1's list, switch to machine 2
+  whose Pi list lacks A → `SelectedModel` is `""`; a live refresh that drops A → `""`; a typed
+  custom id survives both a machine switch and a refresh; a model picked before any catalog
+  arrived survives the first catalog emission.
 
 Server (kcap-server unit suites beside `DaemonRegistry` and the dialog):
 
