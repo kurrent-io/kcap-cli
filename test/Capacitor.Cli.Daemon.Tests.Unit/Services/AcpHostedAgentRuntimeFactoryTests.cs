@@ -1181,10 +1181,8 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         await fake.DisposeAsync();
     }
 
-    /// <summary>Test plan 3b: an allowlist entry that is flow-starting (recursion guard), unknown, or a
-    /// non-auto-approvable write server (kcap-memory) fails the launch BEFORE spawn — the reviewer
-    /// runs under the auto-approve bridge, so a write server must never reach it. Matches the
-    /// authoritative read-only reviewer policy the orchestrator enforces for Codex.</summary>
+    /// <summary>An unattended reviewer refuses flow-starting, unknown and write-capable MCP
+    /// servers before spawn because its bridge can call allowed tools without a prompt.</summary>
     [Test]
     [Arguments("kcap-flows")]
     [Arguments("KCAP-FLOWS")]
@@ -1193,6 +1191,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     [Arguments("kcap-plans")]
     [Arguments("kcap-artefacts")]
     [Arguments("kcap-analytics")]
+    [Arguments("kcap-knowledge")]
     [Arguments("totally-unknown")]
     public async Task ReviewFlow_NonAutoApprovableAllowlistEntry_ThrowsBeforeSpawn(string entry) {
         var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));

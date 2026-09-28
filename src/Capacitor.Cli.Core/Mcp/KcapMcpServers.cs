@@ -4,8 +4,8 @@ namespace Capacitor.Cli.Core.Mcp;
 /// <paramref name="AutoApprove"/> marks a server safe to run without a per-call prompt where the
 /// harness has a per-server trust knob (see <see cref="McpConfigShape.Trust"/>): every tool either
 /// reads, or writes only to the session's own Capacitor record, the destination the hooks already
-/// post to unprompted. kcap-flows launches a paid hosted agent, and kcap-memory and kcap-artefacts
-/// can widen who may see something, so those rely on each tool's annotations instead: a harness
+/// post to unprompted. kcap-flows launches a paid hosted agent; kcap-memory, kcap-artefacts
+/// and kcap-knowledge can change shared content or its audience, so they rely on each tool's annotations instead: a harness
 /// that reads them still runs the reads and additive writes unprompted and gates the destructive
 /// ones. <paramref name="ToolTimeout"/> is how long one of
 /// the server's tool calls may block; a harness with a per-server tool timeout has it written into
@@ -43,19 +43,15 @@ public static class KcapMcpServers {
             "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. Sandboxed with no network access, so everything is inlined; private until you set visibility."),
         new("kcap-analytics", ["mcp", "analytics"], NeedsProjectCwd: true,
             "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with read-only SQL. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide.", AutoApprove: true),
+        new("kcap-knowledge", ["mcp", "knowledge"], NeedsProjectCwd: true,
+            "Read retained facts and curated skills, and fine-tune skills by editing drafts, changing lifecycle or membership, and curating facts. Repo-aware: defaults to the current repo."),
     ];
 
-    /// <summary>Codex receives the full set. Kept as a named per-harness seam so a future
-    /// divergence has a home, but today it is the whole `All` list — `kcap-workitems` is now
-    /// registered everywhere (its session id resolves from an explicit arg / `CLAUDE_CODE_SESSION_ID` / `KCAP_SESSION_ID` /
-    /// `CODEX_THREAD_ID`, and its breakdown/relation tools need no session id at all). Flows is
-    /// never auto-approved.</summary>
+    /// <summary>Codex receives every canonical server. Flows is never auto-approved.</summary>
     public static IReadOnlyList<KcapMcpServer> ForCodex => All;
 
-    /// <summary>The bare (pre-stamp) set for every non-Claude JSON harness (Cursor, Copilot,
-    /// OpenCode, Kiro, Gemini, Antigravity) — the full `All` list, `kcap-workitems` included.
-    /// <see cref="ForHarness"/> derives each harness's actual registration from this by stamping
-    /// the flows entry with that harness's driver vendor.</summary>
+    /// <summary>The bare set for JSON harnesses; <see cref="ForHarness"/> stamps flows with
+    /// the driving vendor when a harness registers it.</summary>
     public static IReadOnlyList<KcapMcpServer> ForCursor => All;
 
     /// <summary>The server set one JSON harness registers, with its <c>kcap-flows</c> entry stamped
