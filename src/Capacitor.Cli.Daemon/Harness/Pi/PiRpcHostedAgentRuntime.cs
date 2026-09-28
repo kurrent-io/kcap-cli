@@ -360,6 +360,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// from the translator and silently stop matching.</para>
     /// </summary>
     void HandleEvent(PiRpcFrame frame) {
+        _ceiling?.Activity();
+
         switch (frame.Type) {
             case "agent_start":
                 _ceiling?.AgentStarted();
