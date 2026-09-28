@@ -17,7 +17,7 @@ public static partial class WrapUpSignals {
     private static partial Regex LeadingMarker();
 
     [GeneratedRegex(
-        @"all tests pass|tests are green|ci is green|opened PR|PR #|ready for review|ready to merge",
+        @"all tests pass|tests are green|ci is green|opened PR|PR #|(?<!\bnot\s|\bnot yet\s|n't\s|\bnot\s(?:yet|quite)\s)ready (?:for review|to merge)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Phrase();
 

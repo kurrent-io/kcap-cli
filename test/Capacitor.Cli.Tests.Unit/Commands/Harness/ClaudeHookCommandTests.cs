@@ -1280,8 +1280,6 @@ public class ClaudeHookCommandTests {
         await Assert.That(stdout.ToString()).IsEmpty();
     }
 
-    // ── Completion nudge on Stop ────────────────────────────────────────────────────────────
-
     static string StopWith(string lastMessage, bool stopHookActive = false) =>
         new JsonObject {
             ["hook_event_name"] = "Stop", ["session_id"] = Sid, ["cwd"] = "/tmp",

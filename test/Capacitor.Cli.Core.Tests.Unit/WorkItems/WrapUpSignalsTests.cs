@@ -33,6 +33,8 @@ public class WrapUpSignalsTests {
         "Which of the two approaches do you prefer?",
         "I'm done reading the spec; starting on the projector now",
         "Summary of what remains is below — want me to continue?**",
+        "I am not ready for review yet; the migration still fails.",
+        "This isn't ready to merge until the flaky test is fixed.",
         "",
         "   ",
     ];

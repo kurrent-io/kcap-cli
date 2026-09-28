@@ -16,10 +16,25 @@ public class ClaudeTranscriptTailTests {
     const string StopSummary = """{"type":"system","subtype":"stop_hook_summary"}""";
 
     [Test]
-    public async Task Returns_the_last_text_block_of_the_most_recent_assistant_line() {
-        var path = Tmp.CreateFile("t.jsonl", string.Join("\n", Assistant("first"), User, Assistant("draft", "## Summary\nAll done."), ToolUse, StopSummary) + "\n");
+    public async Task Returns_every_text_block_of_the_most_recent_assistant_line() {
+        var path = Tmp.CreateFile("t.jsonl", string.Join("\n", Assistant("first"), User, Assistant("## Summary", "All done."), ToolUse, StopSummary) + "\n");
 
-        await Assert.That(ClaudeTranscriptTail.LastAssistantText(path, 4000)).IsEqualTo("## Summary\nAll done.");
+        await Assert.That(ClaudeTranscriptTail.LastAssistantText(path, 4000)).IsEqualTo("## Summary\n\nAll done.");
+    }
+
+    [Test]
+    public async Task Reads_string_content() {
+        var path = Tmp.CreateFile("t.jsonl", """{"type":"assistant","message":{"role":"assistant","content":"Done. All tests pass."}}""" + "\n");
+
+        await Assert.That(ClaudeTranscriptTail.LastAssistantText(path, 4000)).IsEqualTo("Done. All tests pass.");
+    }
+
+    [Test]
+    public async Task Skips_a_subagents_record() {
+        const string Sidechain = """{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"Subagent: done."}]}}""";
+        var path = Tmp.CreateFile("t.jsonl", Assistant("Main agent still working") + "\n" + Sidechain + "\n");
+
+        await Assert.That(ClaudeTranscriptTail.LastAssistantText(path, 4000)).IsEqualTo("Main agent still working");
     }
 
     [Test]

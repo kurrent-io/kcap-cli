@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 public static class ClaudeTranscriptTail {
     public const int TailBytes = 256 * 1024;
 
-    /// <summary>The most recent assistant text block, keeping its last <paramref name="maxChars"/>
+    /// <summary>The most recent main-agent assistant text, keeping its last <paramref name="maxChars"/>
     /// characters — the end of a closing message is what says whether it asks a question. Null when
     /// the file is missing, unreadable, or holds no assistant text within the tail.</summary>
     public static string? LastAssistantText(string? path, int maxChars) {
@@ -47,19 +47,27 @@ public static class ClaudeTranscriptTail {
         return null;
     }
 
+    /// <summary>The whole text of a main-agent assistant record — every text block in order, or the
+    /// content itself when it is a string. A subagent's record (<c>isSidechain</c>) is not the agent
+    /// the user is talking to.</summary>
     static string? TextOf(string line) {
         if (string.IsNullOrWhiteSpace(line)) return null;
 
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
-            if (root.Str("type") != "assistant" || root.Obj("message")?.Arr("content") is not { } content) return null;
+            if (root.Str("type") != "assistant") return null;
+            if (root.TryGetProperty("isSidechain", out var side) && side.ValueKind == JsonValueKind.True) return null;
+            if (root.Obj("message") is not { } message || !message.TryGetProperty("content", out var content)) return null;
 
-            string? last = null;
+            if (content.ValueKind == JsonValueKind.String) return content.GetString()?.Trim() is { Length: > 0 } whole ? whole : null;
+            if (content.ValueKind != JsonValueKind.Array) return null;
+
+            var texts = new List<string>();
             foreach (var block in content.EnumerateArray()) {
-                if (block.Str("type") == "text" && block.Str("text")?.Trim() is { Length: > 0 } text) last = text;
+                if (block.Str("type") == "text" && block.Str("text")?.Trim() is { Length: > 0 } text) texts.Add(text);
             }
-            return last;
+            return texts.Count == 0 ? null : string.Join("\n\n", texts);
         } catch {
             return null;
         }
