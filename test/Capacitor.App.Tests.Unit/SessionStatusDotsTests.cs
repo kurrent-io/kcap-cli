@@ -4,8 +4,7 @@ using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The one busy predicate the chat pane and the rail share: running, and either mid-turn or with
-/// subagents the daemon still counts. Null counts as zero on both facts.
+/// The shared session verdict: who counts as working, and the one status word every surface shows.
 public class SessionStatusDotsTests {
     [Test]
     [Arguments("Running", false, null, true)]
@@ -29,5 +28,62 @@ public class SessionStatusDotsTests {
 
         await Assert.That(row.LiveSubagents).IsNull();
         await Assert.That(SessionStatusDots.IsWorking(row.Status, row.AwaitingInput, row.LiveSubagents)).IsFalse();
+    }
+
+    static readonly RepoIdentity Repo = new("path:/repo", "repo");
+
+    static AgentRow Local(string id, string status = "Running", bool? awaiting = null, int? subagents = null, string? title = null) =>
+        AgentRow.FromLocal(
+            new(id, "agent", "claude", "/repo", status, null, null, null, DateTime.UtcNow, null, null,
+                Title: title, AwaitingInput: awaiting, LiveSubagents: subagents),
+            Repo);
+
+    [Test]
+    public async Task One_verdict_ranks_failed_then_needs_you_then_working_then_idle() {
+        var failed = SessionStatusDots.ForRow(Local("a", status: "Failed", awaiting: true), pending: false);
+        await Assert.That(failed.Kind).IsEqualTo(AgentStatusKind.Failed);
+        await Assert.That(failed.Label).IsEqualTo("Failed");
+
+        var pending = SessionStatusDots.ForRow(Local("a", awaiting: false, subagents: 2), pending: true);
+        await Assert.That(pending.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+        await Assert.That(pending.AccessibleName).IsEqualTo("Needs you.");
+        await Assert.That(pending.Tip).Contains("Pending response");
+        await Assert.That(pending.Tip).Contains("2 subagents running");
+        await Assert.That(pending.Pulses).IsFalse();
+
+        var working = SessionStatusDots.ForRow(Local("a", awaiting: true, subagents: 1), pending: false);
+        await Assert.That(working.Kind).IsEqualTo(AgentStatusKind.Working);
+        await Assert.That(working.Tip).Contains("Waiting for input.");
+        await Assert.That(working.Pulses).IsTrue();
+
+        var idle = SessionStatusDots.ForRow(Local("a", awaiting: true), pending: false);
+        await Assert.That(idle.Kind).IsEqualTo(AgentStatusKind.Idle);
+        await Assert.That(idle.AccessibleName).IsEqualTo("Idle. Waiting for input.");
+        await Assert.That(idle.Pulses).IsFalse();
+
+        var done = SessionStatusDots.ForRow(Local("a", status: "Completed"), pending: false);
+        await Assert.That(done.Kind).IsEqualTo(AgentStatusKind.Done);
+        await Assert.That(done.Label).IsEqualTo("Done");
+    }
+
+    [Test]
+    public async Task A_collapsed_group_names_how_many_share_the_dominant_status() {
+        var idle = Local("a", awaiting: true, title: "First");
+        var also = Local("b", awaiting: true, title: "Second");
+        var rollup = SessionStatusDots.Rollup([idle, also], new HashSet<string>());
+        await Assert.That(rollup).IsNotNull();
+        await Assert.That(rollup!.Label).IsEqualTo("Idle");
+        await Assert.That(rollup.AccessibleName).IsEqualTo("2 sessions idle");
+        await Assert.That(rollup.Tip).Contains("First —");
+        await Assert.That(rollup.Tip).Contains("Second —");
+
+        var mixed = SessionStatusDots.Rollup(
+            [Local("a", status: "Failed", title: "Broken"), Local("b", awaiting: true, title: "Waiting")],
+            new HashSet<string>());
+        await Assert.That(mixed!.Label).IsEqualTo("Failed");
+        await Assert.That(mixed.AccessibleName).IsEqualTo("1 session failed");
+        await Assert.That(mixed.Tip).Contains("Waiting —");
+
+        await Assert.That(SessionStatusDots.Rollup([Local("a")], new HashSet<string>())).IsNull();
     }
 }

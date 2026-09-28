@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
@@ -544,5 +545,54 @@ public class WorkspaceViewSmokeTests {
                 await vm.TeardownAsync();
             }
         });
+    }
+
+    /// The header mark is the session status: a word, the same sentence for the screen reader
+    /// and the tooltip's first line, and the extra fact only on hover.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Header_status_names_working_idle_and_needs_you() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, daemon, _) = await ShowPtyAsync();
+            try {
+                daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = false });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await AssertStatus(window, "Working", "Working.", window.FindResource("KcapPurpleBrush")!);
+                var workingTip = ToolTip.GetTip(StatusMark(window)) as string;
+                await Assert.That(workingTip).Contains("Working for");
+                await Assert.That(Visible(window, "ChatActivityNote")).IsFalse();
+
+                daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = true });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await AssertStatus(window, "Idle", "Idle. Waiting for input.", window.FindResource("KcapWarningBrush")!);
+
+                var limit = new UsageLimitNoticeDto(
+                    UsageLimitKinds.Blocked, "Weekly limit reached", "Pick one", [new UsageLimitOptionDto(1, "Stop")]);
+                daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = false, UsageLimit = limit });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await AssertStatus(window, "Needs you", "Needs you.", window.FindResource("KcapWarningBrush")!);
+                await Assert.That(ToolTip.GetTip(StatusMark(window)) as string).Contains("Weekly limit reached");
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                await vm.TeardownAsync();
+            }
+        });
+    }
+
+    static AgentStatusMark StatusMark(Window window) =>
+        window.GetVisualDescendants().OfType<AgentStatusMark>().Single(mark => mark.Name == "WorkspaceStatus");
+
+    static async Task AssertStatus(Window window, string word, string accessibleName, object brush) {
+        var mark = StatusMark(window);
+        await Assert.That(mark.IsEffectivelyVisible).IsTrue();
+        var text = mark.FindControl<TextBlock>("StatusWord")!;
+        await Assert.That(text.Text).IsEqualTo(word);
+        await Assert.That(text.Foreground).IsSameReferenceAs(brush);
+        await Assert.That(AutomationProperties.GetName(mark)).IsEqualTo(accessibleName);
+        await Assert.That((ToolTip.GetTip(mark) as string)!.Split('\n')[0]).IsEqualTo(accessibleName);
     }
 }

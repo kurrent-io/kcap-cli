@@ -17,12 +17,12 @@
                     <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
                                Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding Title}" />
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                        <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding StatusDot}" />
-                        <TextBlock x:Name="RemoteStatus" Text="{Binding StatusText}" FontSize="13"
-                                   Foreground="{StaticResource KcapMutedBrush}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <views:AgentStatusMark x:Name="RemoteStatus" DataContext="{Binding Chat.AgentStatus}"
+                                               VerticalAlignment="Center" />
                         <TextBlock x:Name="RemoteSubtitle" Text="{Binding RepoLabelText}" FontSize="13"
-                                   Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                                   Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
                     </StackPanel>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">

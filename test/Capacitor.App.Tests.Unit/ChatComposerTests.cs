@@ -137,11 +137,11 @@ public class ChatComposerTests {
             var (daemon, _, _, chat, _, _) = await BuildAttachedAsync();
             await Assert.That(chat.ModelLabel).IsEqualTo("Claude Opus 5");
             await Assert.That(chat.StatusText).IsEqualTo("Running");
-            await Assert.That(chat.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running"));
+            await Assert.That(chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Other);
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { AwaitingInput = true });
-            await Assert.That(chat.StatusText).IsEqualTo("Waiting for input");
-            await Assert.That(chat.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running", true));
+            await Assert.That(chat.StatusText).IsEqualTo("Idle");
+            await Assert.That(chat.AgentStatus.AccessibleName).IsEqualTo("Idle. Waiting for input.");
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { Status = "Failed" });
             await Assert.That(chat.StatusText).IsEqualTo("Failed");

@@ -37,13 +37,13 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
     public bool NeedsYou => _needsYou.Value;
 
     readonly ObservableAsPropertyHelper<bool> _showsHeaderBadge;
-    /// Collapsed-header chrome only; expanded, the session rows carry the same badge.
+    /// Collapsed-header status only; expanded, each session row carries its own mark.
     public bool ShowsHeaderBadge => _showsHeaderBadge.Value;
 
-    readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
-    /// Clock when every attention row is a finished turn; one failure or pending permission
-    /// turns the whole group's badge into "!".
-    public bool ShowsIdleBadge => _showsIdleBadge.Value;
+    readonly ObservableAsPropertyHelper<AgentStatusPresentation?> _headerStatus;
+    /// Dominant child status while the group is collapsed. Null when expanded, or when every
+    /// child is settled or only carrying the daemon's own word.
+    public AgentStatusPresentation? HeaderStatus => _headerStatus.Value;
 
     readonly ObservableAsPropertyHelper<bool> _holdsSelected;
     public bool HoldsSelected => _holdsSelected.Value;
@@ -128,17 +128,16 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
         _needsYou = needsYou
             .ToProperty(this, x => x.NeedsYou, initialValue: false)
             .DisposeWith(_disposables);
-        _showsHeaderBadge = needsYou.CombineLatest(
-                sessionsVisible,
-                (needs, visible) => needs && !visible)
-            .ToProperty(this, x => x.ShowsHeaderBadge, initialValue: false)
+        var header = sessionsCache.Connect().QueryWhenChanged()
+            .CombineLatest(agentsWithPending, sessionsVisible, (q, set, visible) =>
+                visible ? null : SessionStatusDots.Rollup(q.Items, set))
+            .Replay(1).RefCount();
+        _headerStatus = header
+            .ToProperty(this, x => x.HeaderStatus, initialValue: null)
             .DisposeWith(_disposables);
-
-        _showsIdleBadge = sessionsCache.Connect().QueryWhenChanged()
-            .CombineLatest(agentsWithPending, (q, set) =>
-                q.Items.Any(SessionStatusDots.WaitsOnUser)
-                && !q.Items.Any(r => r.Status == "Failed" || set.Contains(r.Id)))
-            .ToProperty(this, x => x.ShowsIdleBadge, initialValue: false)
+        _showsHeaderBadge = header
+            .Select(status => status is not null)
+            .ToProperty(this, x => x.ShowsHeaderBadge, initialValue: false)
             .DisposeWith(_disposables);
 
         _holdsSelected = sessionsCache.Connect().QueryWhenChanged()

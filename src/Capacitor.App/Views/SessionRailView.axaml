@@ -5,9 +5,6 @@
              xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
              x:Class="Capacitor.App.Views.SessionRailView"
              x:DataType="vm:MainWindowViewModel">
-    <UserControl.Resources>
-        <StreamGeometry x:Key="IdleClockIcon">M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zM12.75 7h-1.5v5.25h4.2v-1.5H12.75z</StreamGeometry>
-    </UserControl.Resources>
     <!-- DataContext is INHERITED from the window (never assigned here), so Rail is null on any
          window built without one — every Rail.* binding below carries a fallback for that. -->
     <UserControl.Styles>
@@ -20,8 +17,6 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="7" />
-            <!-- 32 is the attention badge (20) plus the header's vertical padding; without a
-                 floor the collapsed header grows onto the badge and the rail jumps. -->
             <Setter Property="MinHeight" Value="32" />
         </Style>
         <Style Selector="Button.holdsSelected">
@@ -35,33 +30,6 @@
         </Style>
         <Style Selector="Button.selected TextBlock.rowTitle">
             <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-        <Style Selector="Border.attentionBadge">
-            <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
-            <Setter Property="CornerRadius" Value="999" />
-            <Setter Property="Padding" Value="4" />
-            <Setter Property="Width" Value="20" />
-            <Setter Property="Height" Value="20" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Border.attentionBadge > Panel">
-            <Setter Property="Width" Value="12" />
-            <Setter Property="Height" Value="12" />
-        </Style>
-        <Style Selector="Border.attentionBadge > Panel > TextBlock">
-            <Setter Property="FontSize" Value="10.5" />
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Border.attentionBadge PathIcon.idleMark">
-            <Setter Property="Width" Value="12" />
-            <Setter Property="Height" Value="12" />
-            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style Selector="TextBlock.footerValue">
             <Setter Property="FontSize" Value="12" />
@@ -298,12 +266,8 @@
                                                                         VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding CountText}" FontSize="12"
                                                                            Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
-                                                                <Border Classes="attentionBadge" IsVisible="{Binding ShowsHeaderBadge}">
-                                                                    <Panel>
-                                                                        <TextBlock Text="!" IsVisible="{Binding !ShowsIdleBadge}" />
-                                                                        <PathIcon Classes="idleMark" Data="{StaticResource IdleClockIcon}"
-                                                                                  IsVisible="{Binding ShowsIdleBadge}" />
-                                                                    </Panel>
+                                                                <Border IsVisible="{Binding ShowsHeaderBadge}">
+                                                                    <views:AgentStatusMark DataContext="{Binding HeaderStatus}" />
                                                                 </Border>
                                                             </StackPanel>
                                                             <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
@@ -339,65 +303,49 @@
                                                                     <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
                                                                             HorizontalContentAlignment="Stretch"
                                                                             Padding="8,6" Margin="0,2,0,0"
-                                                                            ToolTip.Tip="{Binding Tooltip}"
+                                                                            ToolTip.Tip="{Binding Status.Tip}"
                                                                             Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}"
                                                                             Classes="railRow" Classes.selected="{Binding IsSelected}">
-                                                                        <DockPanel>
-                                                                            <Border DockPanel.Dock="Right" Classes="attentionBadge" Margin="8,0,0,0"
-                                                                                    IsVisible="{Binding NeedsYou}">
-                                                                                <Panel>
-                                                                                    <TextBlock Text="!" IsVisible="{Binding !ShowsIdleBadge}" />
-                                                                                    <PathIcon Classes="idleMark" Data="{StaticResource IdleClockIcon}"
-                                                                                              IsVisible="{Binding ShowsIdleBadge}" />
-                                                                                </Panel>
-                                                                            </Border>
-                                                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                                                                <Ellipse Grid.Column="0" Width="7" Height="7" Fill="{Binding StatusDot}"
-                                                                                         Classes.pulsing="{Binding DotPulses}"
-                                                                                         IsVisible="{Binding ShowsStatusDot}"
-                                                                                         VerticalAlignment="Top" Margin="0,4,0,0" />
-                                                                                <StackPanel Grid.Column="1" Spacing="3">
-                                                                                    <!-- Title stands alone on its line; a plain TextBlock in this vertical
-                                                                                         StackPanel is width-bounded, so CharacterEllipsis engages. When the
-                                                                                         row has no title the chips line below is the row's identity. -->
-                                                                                    <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
-                                                                                               Classes="rowTitle" IsVisible="{Binding HasTitle}"
-                                                                                               Foreground="{StaticResource KcapTextBrush}"
+                                                                        <StackPanel Spacing="3">
+                                                                            <!-- Title stands alone on its line; a plain TextBlock in this vertical
+                                                                                 StackPanel is width-bounded, so CharacterEllipsis engages. When the
+                                                                                 row has no title the chips line below is the row's identity. -->
+                                                                            <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
+                                                                                       Classes="rowTitle" IsVisible="{Binding HasTitle}"
+                                                                                       Foreground="{StaticResource KcapTextBrush}"
+                                                                                       TextTrimming="CharacterEllipsis"
+                                                                                       ToolTip.Tip="{Binding Primary}" />
+                                                                            <!-- WrapPanel, not a fixed row: status + chips + meta wrap rather than
+                                                                                 overflow the 310px rail. Each chip is width-capped and trims. -->
+                                                                            <WrapPanel>
+                                                                                <views:AgentStatusMark DataContext="{Binding Status}"
+                                                                                                       Margin="0,0,6,3" VerticalAlignment="Bottom" />
+                                                                                <Border Classes="railChip" IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
+                                                                                        Padding="6,2" Margin="0,0,6,3"
+                                                                                        Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
+                                                                                    <TextBlock Text="{Binding Vendor}" Classes="railChipLabel"
+                                                                                               FontWeight="SemiBold"
                                                                                                TextTrimming="CharacterEllipsis"
-                                                                                               ToolTip.Tip="{Binding Primary}" />
-                                                                                    <!-- WrapPanel, not a fixed row: chips + meta wrap to a second line rather
-                                                                                         than overflow the 310px rail when a vendor token, model id, or daemon
-                                                                                         name is unusually long. Each label is also individually width-capped and
-                                                                                         trims, so no single chip can push a line past the rail either. -->
-                                                                                    <WrapPanel>
-                                                                                        <Border Classes="railChip" IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
-                                                                                                Padding="6,2" Margin="0,0,6,3"
-                                                                                                Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
-                                                                                            <TextBlock Text="{Binding Vendor}" Classes="railChipLabel"
-                                                                                                       FontWeight="SemiBold"
-                                                                                                       TextTrimming="CharacterEllipsis"
-                                                                                                       Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
-                                                                                        </Border>
-                                                                                        <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
-                                                                                                Padding="6,2" Margin="0,0,6,3"
-                                                                                                Background="{StaticResource KcapInfoDimBrush}">
-                                                                                            <TextBlock Text="{Binding Model}" Classes="railChipLabel"
-                                                                                                       Foreground="{StaticResource KcapInfoBrush}"
-                                                                                                       TextTrimming="CharacterEllipsis" />
-                                                                                        </Border>
-                                                                                        <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                                                                                Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
-                                                                                                CornerRadius="3" Padding="4,2" Margin="0,0,6,3">
-                                                                                            <TextBlock Text="{Binding MachineBadge}" Classes="railChipLabel"
-                                                                                                       TextTrimming="CharacterEllipsis"
-                                                                                                       Foreground="{StaticResource KcapFaintBrush}" />
-                                                                                        </Border>
-                                                                                        <TextBlock Text="{Binding Meta}" Classes="railMeta"
-                                                                                                   Foreground="{StaticResource KcapFaintBrush}" />
-                                                                                    </WrapPanel>
-                                                                                </StackPanel>
-                                                                            </Grid>
-                                                                        </DockPanel>
+                                                                                               Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
+                                                                                </Border>
+                                                                                <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
+                                                                                        Padding="6,2" Margin="0,0,6,3"
+                                                                                        Background="{StaticResource KcapInfoDimBrush}">
+                                                                                    <TextBlock Text="{Binding Model}" Classes="railChipLabel"
+                                                                                               Foreground="{StaticResource KcapInfoBrush}"
+                                                                                               TextTrimming="CharacterEllipsis" />
+                                                                                </Border>
+                                                                                <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                                                        Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
+                                                                                        CornerRadius="3" Padding="4,2" Margin="0,0,6,3">
+                                                                                    <TextBlock Text="{Binding MachineBadge}" Classes="railChipLabel"
+                                                                                               TextTrimming="CharacterEllipsis"
+                                                                                               Foreground="{StaticResource KcapFaintBrush}" />
+                                                                                </Border>
+                                                                                <TextBlock Text="{Binding Meta}" Classes="railMeta"
+                                                                                           Foreground="{StaticResource KcapFaintBrush}" />
+                                                                            </WrapPanel>
+                                                                        </StackPanel>
                                                                     </Button>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>

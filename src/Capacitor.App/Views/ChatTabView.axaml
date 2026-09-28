@@ -274,11 +274,9 @@
         </Border>
 
         <StackPanel x:Name="ChatActivityNote" Grid.Row="3" Orientation="Horizontal" Spacing="8" Margin="22,6,22,4"
-                    IsVisible="{Binding ActivityNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <Border Classes="toolRunning toolStatus" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
-                    Background="{StaticResource KcapWarningBrush}" />
+                    IsVisible="{Binding ShowsActivityNote}">
             <TextBlock Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
-                       VerticalAlignment="Center" />
+                       VerticalAlignment="Center" TextWrapping="Wrap" />
         </StackPanel>
 
         <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="4" Margin="22,4,22,18"

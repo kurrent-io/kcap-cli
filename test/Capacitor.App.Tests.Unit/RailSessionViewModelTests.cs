@@ -117,23 +117,23 @@ public class RailSessionViewModelTests {
         });
     }
 
-    /// The daemon's own verdict that the agent finished its turn lights the same pip a pending
-    /// ask does, and the tooltip says which it is.
+    /// A finished turn is Idle; a live turn is Working; an unknown turn keeps the daemon's word.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Awaiting_input_sets_the_pip_and_names_it_in_the_tooltip() {
+    public async Task Awaiting_input_is_idle_and_a_live_turn_is_working() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var waiting = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             using var working = new RailSessionViewModel(Row(awaitingInput: false), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             using var older   = new RailSessionViewModel(Row(awaitingInput: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(waiting.NeedsYou).IsTrue();
-            await Assert.That(waiting.ShowsIdleBadge).IsTrue();
-            await Assert.That(waiting.StatusDot).IsSameReferenceAs(SessionStatusDots.For("Running", true));
-            await Assert.That(waiting.Tooltip).Contains("waiting for input");
-            await Assert.That(working.NeedsYou).IsFalse();
-            await Assert.That(working.ShowsIdleBadge).IsFalse();
-            await Assert.That(working.Tooltip).DoesNotContain("waiting for input");
-            await Assert.That(older.NeedsYou).IsFalse();
+            await Assert.That(waiting.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
+            await Assert.That(waiting.Status.Label).IsEqualTo("Idle");
+            await Assert.That(waiting.Status.AccessibleName).IsEqualTo("Idle. Waiting for input.");
+            await Assert.That(waiting.Tooltip).Contains("Waiting for input");
+            await Assert.That(working.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(working.Status.Label).IsEqualTo("Working");
+            await Assert.That(working.Tooltip).DoesNotContain("Waiting for input");
+            await Assert.That(older.Status.Kind).IsEqualTo(AgentStatusKind.Other);
+            await Assert.That(older.Status.Label).IsEqualTo("Running");
         });
     }
 
@@ -144,8 +144,8 @@ public class RailSessionViewModelTests {
     public async Task Awaiting_input_on_a_flow_participant_does_not_set_the_pip() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(kind: "review-flow", awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(row.NeedsYou).IsFalse();
-            await Assert.That(row.Tooltip).DoesNotContain("waiting for input");
+            await Assert.That(row.Status.Kind).IsNotEqualTo(AgentStatusKind.Idle);
+            await Assert.That(row.Tooltip).DoesNotContain("Waiting for input");
         });
     }
 
@@ -200,24 +200,23 @@ public class RailSessionViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var pending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
             using var row = new RailSessionViewModel(Row(status: "Running"), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(row.NeedsYou).IsFalse();
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Other);
             pending.OnNext(new HashSet<string> { "a1" });
-            await Assert.That(row.NeedsYou).IsTrue();
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+            await Assert.That(row.Tooltip).Contains("Pending response");
             pending.OnNext(new HashSet<string>());
-            await Assert.That(row.NeedsYou).IsFalse();
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Other);
 
             using var failed = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(failed.NeedsYou).IsTrue();
-            await Assert.That(failed.ShowsIdleBadge).IsFalse();
+            await Assert.That(failed.Status.Kind).IsEqualTo(AgentStatusKind.Failed);
+            await Assert.That(failed.Status.Label).IsEqualTo("Failed");
 
-            // A pending permission outranks the finished turn: the "!" replaces the clock.
             using var idle = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(idle.ShowsIdleBadge).IsTrue();
+            await Assert.That(idle.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
             pending.OnNext(new HashSet<string> { "a1" });
-            await Assert.That(idle.NeedsYou).IsTrue();
-            await Assert.That(idle.ShowsIdleBadge).IsFalse();
+            await Assert.That(idle.Status.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
             pending.OnNext(new HashSet<string>());
-            await Assert.That(idle.ShowsIdleBadge).IsTrue();
+            await Assert.That(idle.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
         });
     }
 
@@ -246,69 +245,45 @@ public class RailSessionViewModelTests {
             using var none  = new RailSessionViewModel(Row(liveSubagents: 0), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             using var older = new RailSessionViewModel(Row(liveSubagents: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
 
-            await Assert.That(two.DotPulses).IsTrue();
+            await Assert.That(two.Status.Pulses).IsTrue();
+            await Assert.That(two.Status.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(two.Meta).EndsWith(" · 2 subagents");
             await Assert.That(two.Tooltip).Contains("2 subagents running");
-            await Assert.That(one.DotPulses).IsTrue();
+            await Assert.That(one.Status.Pulses).IsTrue();
             await Assert.That(one.Meta).EndsWith(" · 1 subagent");
             await Assert.That(one.Tooltip).Contains("1 subagent running");
-            await Assert.That(none.DotPulses).IsFalse();
+            await Assert.That(none.Status.Pulses).IsFalse();
             await Assert.That(none.Meta).DoesNotContain("subagent");
             await Assert.That(none.Tooltip).DoesNotContain("subagent");
-            await Assert.That(older.DotPulses).IsFalse();
+            await Assert.That(older.Status.Pulses).IsFalse();
             await Assert.That(older.Meta).DoesNotContain("subagent");
             await Assert.That(older.Tooltip).DoesNotContain("subagent");
         });
     }
 
-    /// The wait badge and the pip answer for the parent alone, so a row can read as both waiting
-    /// on the user and busy.
+    /// One verdict: live subagents are Working, and the tip still says the turn is waiting.
+    /// A pending response outranks that.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Live_subagents_leave_the_wait_badge_and_the_pip_as_they_are() {
+    public async Task Live_subagents_are_working_until_a_pending_response_outranks_them() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var pending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
             using var waiting = new RailSessionViewModel(Row(id: "a1", awaitingInput: true, liveSubagents: 2), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             using var busy    = new RailSessionViewModel(Row(id: "a2", awaitingInput: false, liveSubagents: 2), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
+            using var idle    = new RailSessionViewModel(Row(id: "a3", awaitingInput: true, liveSubagents: 0), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
 
-            await Assert.That(waiting.NeedsYou).IsTrue();
-            await Assert.That(waiting.ShowsIdleBadge).IsTrue();
-            await Assert.That(waiting.DotPulses).IsTrue();
-            await Assert.That(waiting.Tooltip).Contains("waiting for input");
+            await Assert.That(waiting.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(waiting.Status.Pulses).IsTrue();
+            await Assert.That(waiting.Tooltip).Contains("Waiting for input");
             await Assert.That(waiting.Tooltip).Contains("2 subagents running");
             pending.OnNext(new HashSet<string> { "a1" });
-            await Assert.That(waiting.ShowsIdleBadge).IsFalse();
+            await Assert.That(waiting.Status.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+            await Assert.That(waiting.Status.Pulses).IsFalse();
 
-            await Assert.That(busy.NeedsYou).IsFalse();
-            await Assert.That(busy.ShowsIdleBadge).IsFalse();
-            await Assert.That(busy.DotPulses).IsTrue();
-        });
-    }
-
-    /// The badge takes over for a row that needs attention, except that live subagents keep the
-    /// pulsing dot beside it — the one state the pulse exists to show.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Live_subagents_keep_the_dot_visible_beside_the_wait_badge() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var pending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
-            using var waiting     = new RailSessionViewModel(Row(awaitingInput: true, liveSubagents: 2), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            using var waitingOnly = new RailSessionViewModel(Row(awaitingInput: true, liveSubagents: 0), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            using var busy        = new RailSessionViewModel(Row(awaitingInput: false, liveSubagents: 0), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-
-            await Assert.That(waiting.NeedsYou).IsTrue();
-            await Assert.That(waiting.ShowsIdleBadge).IsTrue();
-            await Assert.That(waiting.ShowsStatusDot).IsTrue();
-            await Assert.That(waitingOnly.NeedsYou).IsTrue();
-            await Assert.That(waitingOnly.ShowsStatusDot).IsFalse();
-            await Assert.That(busy.NeedsYou).IsFalse();
-            await Assert.That(busy.ShowsStatusDot).IsTrue();
-
-            using var pendingCard = new RailSessionViewModel(Row(id: "a3", liveSubagents: 2), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { }, TimeProvider.System);
-            await Assert.That(pendingCard.ShowsStatusDot).IsTrue();
-            pending.OnNext(new HashSet<string> { "a3" });
-            await Assert.That(pendingCard.NeedsYou).IsTrue();
-            await Assert.That(pendingCard.ShowsStatusDot).IsTrue();
+            await Assert.That(busy.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(busy.Status.Pulses).IsTrue();
+            await Assert.That(idle.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
+            await Assert.That(idle.Status.Pulses).IsFalse();
         });
     }
 
@@ -321,10 +296,13 @@ public class RailSessionViewModelTests {
             var pendingRow = AgentRow.FromPending(new PendingLaunchDto("p1", "claude", "/repo", "t", DateTime.UtcNow, "spawned"), Repo);
             using var pending = new RailSessionViewModel(pendingRow, new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
 
-            await Assert.That(remote.DotPulses).IsFalse();
+            await Assert.That(remote.Status.Pulses).IsFalse();
+            await Assert.That(remote.Status.Label).IsEqualTo("Running");
             await Assert.That(remote.Meta).DoesNotContain("subagent");
             await Assert.That(remote.Tooltip).DoesNotContain("subagent");
-            await Assert.That(pending.DotPulses).IsTrue();
+            await Assert.That(pending.Status.Kind).IsEqualTo(AgentStatusKind.Starting);
+            await Assert.That(pending.Status.Pulses).IsTrue();
+            await Assert.That(pending.Tooltip).Contains("Process started");
         });
     }
 }
