@@ -166,6 +166,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     int _firstRoundSettled;
 
     readonly Task _pumpTask;
+
+    static readonly TimeSpan PumpDrainFloor = TimeSpan.FromSeconds(1);
     readonly Task _handshakeTask;
 
     int _commandSeq;
@@ -859,11 +861,28 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             _logger.LogDebug(ex, "Pi: failed to send the graceful-stop abort (agentId={AgentId}).", _agentId);
         }
 
+        var started = _time.GetTimestamp();
+
+        TimeSpan Remaining() {
+            var left = _stopGrace - _time.GetElapsedTime(started);
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+
         // Pi ends its session on stdin EOF and exits 0; the kill below is only for a child that does not.
         await _process.CloseInputAsync(_stopGrace).ConfigureAwait(false);
-        await _process.WaitForExitAsync(_stopGrace).ConfigureAwait(false);
+        await _process.WaitForExitAsync(Remaining()).ConfigureAwait(false);
 
-        if (_process.HasExited) return;
+        if (_process.HasExited) {
+            // The frames Pi wrote before exiting are still in the pipe, and the terminate that follows
+            // a stop cancels the pump that reads them.
+            try {
+                await _pumpTask.WaitAsync(Remaining() + PumpDrainFloor, _time).ConfigureAwait(false);
+            } catch (TimeoutException) {
+                _logger.LogDebug("Pi: the read pump did not drain after a graceful exit (agentId={AgentId}).", _agentId);
+            }
+
+            return;
+        }
 
         await TerminateAsync(_stopGrace).ConfigureAwait(false);
     }

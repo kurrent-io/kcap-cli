@@ -103,9 +103,15 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
     public bool ExitsOnInputClose { get; set; }
     public int  InputCloseCalls   { get; private set; }
 
+    /// <summary>Lines the child writes to stdout as it exits on input close.</summary>
+    public IReadOnlyList<string> LinesOnInputClose { get; set; } = [];
+
     public Task CloseInputAsync(TimeSpan timeout) {
         InputCloseCalls++;
-        if (ExitsOnInputClose) EndOfStream(0);
+        if (!ExitsOnInputClose) return Task.CompletedTask;
+
+        foreach (var line in LinesOnInputClose) Push(line);
+        EndOfStream(0);
         return Task.CompletedTask;
     }
 

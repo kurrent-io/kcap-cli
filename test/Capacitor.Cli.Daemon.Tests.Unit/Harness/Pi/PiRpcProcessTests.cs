@@ -12,6 +12,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 /// pin exactly that difference, plus the lifecycle contracts shared with every other real-process
 /// wrapper in this daemon (idempotent dispose, terminate-after-dispose, confirmed exit after kill).
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class PiRpcProcessTests {
     static Process StartCat() =>
         Process.Start(new ProcessStartInfo("/bin/cat") {

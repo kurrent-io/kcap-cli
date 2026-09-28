@@ -468,6 +468,26 @@ public class PiRpcHostedAgentRuntimeTests {
         await Assert.That(rt.ExitCode).IsEqualTo(0);
     }
 
+    /// <summary>A stop is followed by a terminate that cancels the read pump, so the stop must not
+    /// return before the pump has read what Pi wrote on its way out.</summary>
+    [Test]
+    public async Task RequestGracefulStopAsync_returns_after_reading_what_pi_wrote_before_exiting() {
+        var (rt, proc) = NewRuntime(stopGrace: TimeSpan.FromSeconds(5));
+        await using var _ = rt;
+        proc.ExitsOnInputClose  = true;
+        proc.LinesOnInputClose = [PiRpcRuntimeFakes.AssistantText("final words")];
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        while (rt.Envelopes.TryRead(out var _)) { }
+
+        await rt.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        var read = new List<AcpEventEnvelope>();
+        while (rt.Envelopes.TryRead(out var env)) read.Add(env);
+
+        await Assert.That(read).IsNotEmpty();
+    }
+
     // ---- Terminal ----
 
     [Test]
