@@ -152,6 +152,8 @@ public class KiroCrewParentResolverTests {
         await Assert.That(KiroCrewParentResolver.PreviousOf(Crew, Parent)).IsEqualTo(Earlier);
         await Assert.That(KiroCrewParentResolver.PreviousOf(Crew, Earlier)).IsNull();
         await Assert.That(KiroCrewParentResolver.PreviousOf(Crew, Child)).IsNull();
+        await Assert.That(KiroCrewParentResolver.NextOf(Crew, Earlier)).IsEqualTo(Parent);
+        await Assert.That(KiroCrewParentResolver.NextOf(Crew, Parent)).IsNull();
     }
 
     [Test]

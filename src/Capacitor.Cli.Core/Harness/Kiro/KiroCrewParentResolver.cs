@@ -89,6 +89,20 @@ public static class KiroCrewParentResolver {
         return null;
     }
 
+    /// <summary>The dashed id of the Kiro session that replaced this one in its Crew chat, or null. Known
+    /// only for the chat's latest move.</summary>
+    public static string? NextOf(KiroCrewPaths crew, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var id) || !crew.IsPresent() || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return null;
+
+        foreach (var (_, node) in map) {
+            if (node is not JsonObject entry || KiroCrewRecords.GuidOf(entry, "discarded_sid") != id) continue;
+
+            return KiroCrewRecords.GuidOf(entry, "sid") is { } next && next != id ? next.ToString("D") : null;
+        }
+
+        return null;
+    }
+
     /// <summary>Whether the session is, or was, a Crew chat's own session rather than a sub-agent's.</summary>
     public static bool IsChatSession(KiroCrewPaths crew, string sessionId) {
         if (!Guid.TryParse(sessionId, out var id) || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return false;
