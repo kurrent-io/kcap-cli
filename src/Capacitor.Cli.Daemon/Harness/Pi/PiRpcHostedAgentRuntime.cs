@@ -80,6 +80,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     const int SentPromptMemory = 16;
 
     static readonly TimeSpan DefaultStopGrace = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan PumpDrainFloor   = TimeSpan.FromSeconds(1);
 
     /// <summary>Backs an omitted <c>readyDeadline</c> — see rule (a) on why the deadline is never
     /// allowed to be absent. Generous rather than tight: it bounds a PATHOLOGY (a child that
@@ -859,9 +860,28 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             _logger.LogDebug(ex, "Pi: failed to send the graceful-stop abort (agentId={AgentId}).", _agentId);
         }
 
-        await _process.WaitForExitAsync(_stopGrace).ConfigureAwait(false);
+        var started = _time.GetTimestamp();
 
-        if (_process.HasExited) return;
+        TimeSpan Remaining() {
+            var left = _stopGrace - _time.GetElapsedTime(started);
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+
+        // Pi ends its session on stdin EOF and exits 0; the kill below is only for a child that does not.
+        await _process.CloseInputAsync(_stopGrace).ConfigureAwait(false);
+        await _process.WaitForExitAsync(Remaining()).ConfigureAwait(false);
+
+        if (_process.HasExited) {
+            // The frames Pi wrote before exiting are still in the pipe, and the terminate that follows
+            // a stop cancels the pump that reads them.
+            try {
+                await _pumpTask.WaitAsync(Remaining() + PumpDrainFloor, _time).ConfigureAwait(false);
+            } catch (TimeoutException) {
+                _logger.LogDebug("Pi: the read pump did not drain after a graceful exit (agentId={AgentId}).", _agentId);
+            }
+
+            return;
+        }
 
         await TerminateAsync(_stopGrace).ConfigureAwait(false);
     }
