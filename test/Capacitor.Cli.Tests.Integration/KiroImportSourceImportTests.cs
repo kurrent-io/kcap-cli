@@ -92,7 +92,7 @@ public class KiroImportSourceImportTests : IDisposable {
         var root = WriteSession();
         var crew = new KiroCrewPaths(root, null);
 
-        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}"}}""");
+        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}", "discarded_sid": "99999999-8888-7777-6666-555555555555"}}""");
 
         var spawnedAt = new DateTimeOffset(2026, 6, 10, 21, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         var children  = Enumerable.Range(0, KiroCrewParentResolver.MaxChildrenPerStart + 1).Select(_ => Guid.NewGuid().ToString("D")).ToList();
@@ -122,6 +122,36 @@ public class KiroImportSourceImportTests : IDisposable {
             .ToList();
 
         await Assert.That(starts.Count).IsEqualTo(2);
+        await Assert.That(starts.Select(e => System.Text.Json.Nodes.JsonNode.Parse(e.RequestMessage.Body!)!["previous_session_id"]?.GetValue<string>() ?? ""))
+            .IsEquivalentTo(["99999999-8888-7777-6666-555555555555", "99999999-8888-7777-6666-555555555555"]);
         await Assert.That(named).IsEquivalentTo(children);
+    }
+
+    /// <summary>A chat's replaced session, imported, names the session that replaced it, since a
+    /// parallel import may record it after its replacement.</summary>
+    [Test]
+    public async Task ImportSession_of_a_replaced_crew_session_names_its_replacement() {
+        var root = WriteSession();
+        var crew = new KiroCrewPaths(root, null);
+        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "99999999-8888-7777-6666-555555555555", "discarded_sid": "{{{DashedSid}}}"}}""");
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":1}"""));
+        foreach (var route in new[] { "/hooks/session-start/kiro", "/hooks/set-title", "/hooks/session-end/kiro" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new KiroImportSource(Config.Root, root, crew, new GitProviderRouter(), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+        await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var start = System.Text.Json.Nodes.JsonNode.Parse(_server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/kiro").UsingPost())[0].RequestMessage.Body!)!;
+
+        await Assert.That(start["next_session_id"]?.GetValue<string>()).IsEqualTo("99999999-8888-7777-6666-555555555555");
+        await Assert.That(start["previous_session_id"]).IsNull();
     }
 }
