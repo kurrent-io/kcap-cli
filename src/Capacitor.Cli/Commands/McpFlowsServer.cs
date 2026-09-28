@@ -1892,6 +1892,7 @@ class McpFlowsServer(
         if (roundNumber.HasValue) { sb.Append("round_number: "); sb.AppendLine(roundNumber.Value.ToString()); }
         sb.Append("status: ");      AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
         sb.Append("result_kind: "); AppendLine(sb, resultKind);
+        AppendStopDetail(sb, node, "round_result_detail");
         if (TryGetString(node, "requested_reviewer_vendor") is { } requestedVendor) {
             sb.Append("requested_reviewer_vendor: "); AppendLine(sb, requestedVendor);
         }
@@ -1938,6 +1939,7 @@ class McpFlowsServer(
             sb.Append("round_id: ");    AppendLine(sb, roundId);
             sb.Append("status: ");      AppendLine(sb, status);
             sb.Append("result_kind: "); AppendLine(sb, resultKind);
+            AppendStopDetail(sb, node, "result_detail");
             if (requestedVendor is not null) { sb.Append("requested_reviewer_vendor: "); AppendLine(sb, requestedVendor); }
             if (appliedVendor is not null) { sb.Append("applied_reviewer_vendor: "); AppendLine(sb, appliedVendor); }
             if (vendorSource is not null) { sb.Append("reviewer_vendor_source: "); AppendLine(sb, vendorSource); }
@@ -1997,6 +1999,7 @@ class McpFlowsServer(
 
             if (!string.IsNullOrEmpty(lastResultKind)) {
                 sb.Append("result_kind: "); AppendLine(sb, lastResultKind);
+                AppendStopDetail(sb, node, "round_result_detail");
             }
 
             if (!string.IsNullOrEmpty(lastResultText)) {
@@ -2013,6 +2016,14 @@ class McpFlowsServer(
             pendingIds = [];
             return body;
         }
+    }
+
+    /// <summary>The daemon's code for why it ended the reviewer, beside a result text of
+    /// <c>participant_died</c> — which stays exactly that, because drivers match it.</summary>
+    static void AppendStopDetail(StringBuilder sb, JsonObject node, string key) {
+        if (TryGetString(node, key) is not { } detail) return;
+
+        sb.Append("stop_detail: "); AppendLine(sb, detail);
     }
 
     static void AppendParticipants(StringBuilder sb, JsonObject node) {

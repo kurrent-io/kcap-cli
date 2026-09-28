@@ -5407,10 +5407,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // catch covers the residual race where shutdown fires mid-call.
         // PrivateLocal agents were never registered, so never unregister them (deny-all).
         if (!agent.IsPrivate && !_shutdownCts.IsCancellationRequested) {
-            try { await _server.AgentUnregisteredAsync(agentId); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
+            try { await _server.AgentUnregisteredAsync(agentId, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
         }
+    }
+
+    /// <summary>The code of the runtime's own termination verdict — the part before any colon, since
+    /// some verdicts append free text the server must not echo to a driver. Null when nothing reaped it.</summary>
+    internal static string? StopReasonCode(AgentInstance agent) {
+        if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict) return null;
+
+        var colon = verdict.Reason.IndexOf(':');
+        var code  = (colon < 0 ? verdict.Reason : verdict.Reason[..colon]).Trim();
+
+        return code.Length == 0 ? null : code;
     }
 
     /// <summary>How long the whole shutdown report may take, across every agent. A shutdown that waits
