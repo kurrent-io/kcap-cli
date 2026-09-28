@@ -35,9 +35,12 @@
             <Setter Property="Height" Value="12" />
         </Style>
     </UserControl.Styles>
-    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+    <!-- A DockPanel, not a horizontal StackPanel, so the word is width-bounded and trims when a
+         raw daemon status outgrows its column; the tooltip carries the full text. -->
+    <DockPanel VerticalAlignment="Center">
         <!-- The ring's stroke is centered on its edge, so a margin keeps it inside the box. -->
-        <Panel x:Name="Glyph" Classes="glyph" VerticalAlignment="Center" ClipToBounds="False"
+        <Panel x:Name="Glyph" Classes="glyph" DockPanel.Dock="Left" Margin="0,0,5,0"
+               VerticalAlignment="Center" ClipToBounds="False"
                Classes.pulsing="{Binding Pulses}">
             <Ellipse Stretch="Uniform" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5" Margin="1"
                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsPulse}" />
@@ -59,6 +62,6 @@
         </Panel>
         <TextBlock x:Name="StatusWord" Classes="statusWord" Text="{Binding Label}"
                    Classes.inflight="{Binding IsInFlight}" Classes.warning="{Binding IsWarning}"
-                   Classes.danger="{Binding IsDanger}" />
-    </StackPanel>
+                   Classes.danger="{Binding IsDanger}" TextTrimming="CharacterEllipsis" />
+    </DockPanel>
 </UserControl>
