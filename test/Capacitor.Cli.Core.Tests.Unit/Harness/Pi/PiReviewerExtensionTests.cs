@@ -53,11 +53,25 @@ public class PiReviewerExtensionTests {
     }
 
     [Test]
-    public async Task The_only_process_it_spawns_is_a_manifest_server() {
-        // One spawn site, in the shared client, fed only by manifest fields.
-        await Assert.That(CountOf(Ts, "spawn(")).IsEqualTo(1);
+    public async Task It_spawns_only_a_manifest_server_and_git_without_a_shell() {
+        // The shared client's spawn is fed only by manifest fields; the other runs the literal git
+        // executable, so a model-supplied argument can never name the program or reach a shell.
+        await Assert.That(CountOf(Ts, "spawn(")).IsEqualTo(2);
+        await Assert.That(Ts).Contains("spawn(\"git\", argv, ");
+        await Assert.That(Ts).DoesNotContain("shell:");
         await Assert.That(Ts).DoesNotContain("exec(");
         await Assert.That(Ts).DoesNotContain("execSync(");
+    }
+
+    [Test]
+    public async Task Every_git_command_ends_options_before_a_model_supplied_revision() {
+        foreach (var command in new[] { "\"log\"", "\"show\"", "\"diff\"" }) {
+            var at   = Ts.IndexOf("runGit(rootReal, [" + command, StringComparison.Ordinal);
+            var call = Ts[at..Ts.IndexOf(']', at)];
+            await Assert.That(at).IsGreaterThan(0);
+            await Assert.That(call).Contains("\"--no-ext-diff\", \"--no-textconv\"");
+            await Assert.That(call).Contains("\"--end-of-options\"");
+        }
     }
 
     [Test]
