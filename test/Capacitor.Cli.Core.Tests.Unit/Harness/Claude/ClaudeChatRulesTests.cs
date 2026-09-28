@@ -194,7 +194,6 @@ public class ClaudeChatRulesTests {
             await Assert.That(P($$$"""{"type":"{{{type}}}","message":{"content":"x"}}""")).IsEmpty().Because(type);
 
         await Assert.That(P("""{"type":"attachment","message":{"content":"x"}}""")).IsEmpty();
-        await Assert.That(P("""{"type":"attachment","attachment":{"type":"queued_command","prompt":"go","commandMode":"prompt"}}""")).IsEmpty();
 
         await Assert.That(P("not json")).IsEmpty();
         await Assert.That(P("[1,2]")).IsEmpty();
@@ -331,7 +330,8 @@ public class ClaudeChatRulesTests {
         await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
 
         var prompt = R("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"go do x"}}""");
-        await Assert.That(prompt.Envelopes).IsEmpty();
+        await Assert.That(prompt.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(prompt.SubmittedInputs.Single()).IsEqualTo("go do x");
         await Assert.That(prompt.Subagents).IsEmpty();
     }
 

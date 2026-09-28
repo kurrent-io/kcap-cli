@@ -51,7 +51,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly CancellationToken _lifetimeToken;
     readonly AvaloniaList<ChatItemViewModel> _items = new();
     readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
+    /// The send the channel has not answered yet. It is tracked like a queued message but kept out
+    /// of the strip: the composer still holds its text, and one prompt must not show in both.
+    QueuedChatMessage? _sending;
     QueuedChatMessage? _lastSent;
+
+    IEnumerable<QueuedChatMessage> Tracked => _sending is { } sending ? _queuedMessages.Append(sending) : _queuedMessages;
     readonly Dictionary<string, ToolCallItem> _pendingTools = new(StringComparer.Ordinal);
     // Every tool id with a result, not only the running ones: a replayed request can arrive after
     // the transcript's initial load, and then only this set can tell that its tool is done.
@@ -586,8 +591,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var chipIds = files.Select(f => f.Id).ToList();
             var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
             _lastSent = queued;
-            _queuedMessages.Add(queued);
-            RefreshQueue();
+            _sending = queued;
             ChatSendOutcome outcome;
             try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
             catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
@@ -595,12 +599,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 LogOnce($"send: {ex.Message}");
                 outcome = ChatSendOutcome.Unconfirmed;
             }
+            finally { _sending = null; }
             if (_lifetimeToken.IsCancellationRequested) return;
             if (outcome != ChatSendOutcome.Rejected) _history.Record(snapshot);
-            if (outcome == ChatSendOutcome.Rejected || (outcome == ChatSendOutcome.Accepted && _openFeed is null))
-                _queuedMessages.Remove(queued);
-            else if (outcome == ChatSendOutcome.Unconfirmed)
-                queued.MarkUnconfirmed();
+            var waits = !queued.Acknowledged && outcome switch {
+                ChatSendOutcome.Accepted    => _openFeed is not null,
+                ChatSendOutcome.Unconfirmed => true,
+                _                           => false,
+            };
+            if (waits) {
+                if (outcome == ChatSendOutcome.Unconfirmed) queued.MarkUnconfirmed();
+                _queuedMessages.Add(queued);
+            }
             RefreshQueue();
             if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
             if (queued.Acknowledged) ConfirmDelivery(queued);
@@ -647,8 +657,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             // An item with no id is unkeyed, not identified as nobody's: keying it would collide
             // with every other such item and could disqualify an own send from its real match.
             if (item.DispatchId == Guid.Empty || !listed.Add(item.DispatchId)) continue;
-            if (_queuedMessages.Any(q => q.DispatchId == item.DispatchId)) continue;
-            var own = _queuedMessages.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
+            if (Tracked.Any(q => q.DispatchId == item.DispatchId)) continue;
+            var own = Tracked.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
             if (own is not null) own.MarkQueued(item.DispatchId);
             else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
         }
@@ -669,7 +679,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _status = info.Status;
         _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)
-            foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
+            foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
         _subagents.SessionOver = info.Ended;
@@ -750,7 +760,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void RebaseQueuedMessages(long? offset) {
         _inputGeneration++;
-        foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.Rebase(_inputGeneration, offset);
+        foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.Rebase(_inputGeneration, offset);
         RefreshQueue();
     }
 
@@ -845,7 +855,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
-        foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline && !q.IsForeign))
+        foreach (var queued in Tracked.Where(q => !q.HasBaseline && !q.IsForeign))
             queued.Rebase(_inputGeneration, read.SnapshotOffset ?? CurrentOffset ?? 0);
         RefreshQueue();
         if (read.Lines.Count == 0) {
@@ -859,7 +869,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         foreach (var (projected, offset) in read.Lines) {
             _subagents.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
-                var acknowledged = _queuedMessages.FirstOrDefault(q => q.Matches(text, _inputGeneration, offset));
+                var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
                 acknowledged.Acknowledged = true;
                 _queuedMessages.Remove(acknowledged);

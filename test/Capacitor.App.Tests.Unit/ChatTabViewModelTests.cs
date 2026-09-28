@@ -1364,9 +1364,9 @@ public class ChatTabViewModelTests {
             File.AppendAllText(path, UserLine + "\n");
             h.Chat.ComposerText = "hello";
             var send = h.Chat.SendCommand.Execute().ToTask();
-            await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
             input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
+            await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
             h.Chat.ComposerText = "hello";
             send = h.Chat.SendCommand.Execute().ToTask();
             input.Pending!.SetResult(ChatSendOutcome.Accepted);
@@ -1380,6 +1380,60 @@ public class ChatTabViewModelTests {
             await h.TickAsync();
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
             await h.TeardownAsync();
+        });
+    }
+
+    /// The channel holds an attachment send while the daemon fetches the files: until the channel
+    /// takes it, the prompt is in the composer and nowhere else.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_attachment_send_waiting_on_the_channel_shows_only_in_the_composer() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var uploader = new HoldingUploader();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, uploader: uploader);
+            try {
+                var path = Tmp.CreateFile("pasted.jsonl", []);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "look at this";
+                h.Chat.Tray.AddAll([new StagedAttachment("shot.png", "image/png", new byte[] { 1 })]);
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                await uploader.Started.Task;
+                uploader.Release.SetResult(new UploadOutcome(UploadKind.Uploaded, ["file-1"], null));
+                await WaitUntilAsync(() => input.Pending is not null, what: "the send reaching the channel");
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("look at this");
+
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// A prompt Claude Code takes up mid-turn is recorded only as a queued_command attachment:
+    /// that record is its echo, and the chat shows it as the user's turn.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_taken_up_mid_turn_leaves_the_queue_and_shows_as_a_user_turn() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("absorbed.jsonl", []);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "also check the toggle";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
+
+                File.AppendAllText(path, """{"type":"attachment","attachment":{"type":"queued_command","prompt":"also check the toggle","commandMode":"prompt","origin":{"kind":"human"}}}""" + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Single().Text).IsEqualTo("also check the toggle");
+            } finally { await h.TeardownAsync(); }
         });
     }
 
