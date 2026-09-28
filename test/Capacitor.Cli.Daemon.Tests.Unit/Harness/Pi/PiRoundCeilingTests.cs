@@ -90,6 +90,20 @@ public class PiRoundCeilingTests {
     }
 
     [Test]
+    public async Task A_late_accepted_response_restarts_the_deadline() {
+        var r = new Rig();
+        r.Ceiling.PromptWriting("1");
+        r.Time.Advance(Limit - TimeSpan.FromSeconds(1));
+        r.Ceiling.Response("1", accepted: true);
+
+        r.Time.Advance(Limit - TimeSpan.FromSeconds(1));
+        await Assert.That(r.Expired).IsEqualTo(0);
+
+        r.Time.Advance(TimeSpan.FromSeconds(2));
+        await Assert.That(r.Expired).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Activity_with_no_work_outstanding_does_not_arm() {
         var r = new Rig();
         r.Ceiling.Activity();

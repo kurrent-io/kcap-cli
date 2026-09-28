@@ -45,7 +45,8 @@ internal sealed class PiRoundCeiling(TimeSpan limit, TimeProvider time, Action o
         lock (_lock) {
             if (!_inFlight.Remove(id)) return;
             if (accepted) _owed++;
-            Reconcile();
+            if (WorkOutstanding) Arm();
+            else Disarm();
         }
     }
 
