@@ -19,7 +19,8 @@ public abstract class ChatInput : ReactiveObject, IDisposable {
     public virtual void ConfirmLastSend() { }
     public virtual bool CanInterrupt => false;
     public virtual Task InterruptAsync(CancellationToken ct) => Task.CompletedTask;
-    /// One raw key, not a paste. A usage-limit menu reads a digit; bracketed paste would land as text.
-    public virtual Task<bool> SendKeyAsync(byte key, CancellationToken ct) => Task.FromResult(false);
+    /// Raw keys in one write, not a paste: a terminal menu reads keystrokes, and bracketed paste would
+    /// land as text.
+    public virtual Task<bool> SendKeysAsync(byte[] keys, CancellationToken ct) => Task.FromResult(false);
     public abstract void Dispose();
 }

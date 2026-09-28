@@ -212,7 +212,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer, planActivity);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer, planActivity) {
+                    ShowTerminal = () => ActiveTab = WorkspaceTab.Terminal,
+                };
             })
             .DisposeWith(_disposables);
 
