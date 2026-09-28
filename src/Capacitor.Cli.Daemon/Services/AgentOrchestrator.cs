@@ -3135,7 +3135,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             ? new ConsentDialogDetector()
             : null;
         var screen = agent is { Vendor: "claude", Runtime.EmitsTerminalOutput: true }
-            ? new ClaudeScreenWatcher()
+            ? new ClaudeScreenWatcher(agent.CurrentCols, agent.CurrentRows)
             : null;
 
         try {
@@ -3204,6 +3204,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Publishes a change in the menus on the live screen. The scrape runs on the PTY read
     /// and must not wait, and only a real change pulses status.</summary>
     void NoteScreen(AgentInstance agent, ClaudeScreenWatcher screen, byte[] data) {
+        screen.Resize(agent.CurrentCols, agent.CurrentRows);
         var (usageLimit, dialog) = screen.Observe(data);
         if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
         agent.UsageLimit     = usageLimit;

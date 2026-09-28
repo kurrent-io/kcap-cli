@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core.LocalIpc;
 /// surface has to show. Equality is by value: a status pulse rebuilds this object, and a surface
 /// must not treat an unchanged dialog as a new one.
 public sealed class TerminalDialogDto : IEquatable<TerminalDialogDto> {
-    public TerminalDialogDto(string heading, string body, List<string>? options, int selected, string screen) {
+    public TerminalDialogDto(string heading, string body, IReadOnlyList<string>? options, int selected, string screen) {
         Heading  = heading;
         Body     = body;
         Options  = options ?? [];
@@ -16,7 +16,7 @@ public sealed class TerminalDialogDto : IEquatable<TerminalDialogDto> {
 
     public string Heading { get; }
     public string Body { get; }
-    public List<string> Options { get; }
+    public IReadOnlyList<string> Options { get; }
     public int Selected { get; }
     public string Screen { get; }
 

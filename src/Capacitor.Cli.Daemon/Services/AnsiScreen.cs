@@ -6,9 +6,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Stripping those sequences and keeping the bytes leaves a menu on the scrollback after the
 /// screen has overwritten it, so a match has to be read off the cells the cursor last wrote.
 internal sealed class AnsiScreen {
-    readonly int _cols;
-    readonly int _rows;
-    readonly char[] _cells;
+    int _cols;
+    int _rows;
+    char[] _cells;
     readonly Decoder _decoder = Encoding.UTF8.GetDecoder();
     char[] _decoded = new char[4096];
 
@@ -28,6 +28,25 @@ internal sealed class AnsiScreen {
         _rows  = rows;
         _cells = new char[cols * rows];
         Array.Fill(_cells, ' ');
+    }
+
+    public int Cols => _cols;
+    public int Rows => _rows;
+
+    /// Follows the PTY to a new size. Cursor moves are relative to the width the TUI drew for, so
+    /// a grid of any other size misplaces every redraw. Keeps the top-left overlap; the TUI
+    /// repaints on the resize anyway.
+    public void Resize(int cols, int rows) {
+        if (cols == _cols && rows == _rows) return;
+        var cells = new char[cols * rows];
+        Array.Fill(cells, ' ');
+        for (var row = 0; row < Math.Min(rows, _rows); row++)
+            Array.Copy(_cells, row * _cols, cells, row * cols, Math.Min(cols, _cols));
+        (_cols, _rows, _cells) = (cols, rows, cells);
+        _row      = Math.Min(_row, rows - 1);
+        _col      = Math.Min(_col, cols - 1);
+        _savedRow = Math.Min(_savedRow, rows - 1);
+        _savedCol = Math.Min(_savedCol, cols - 1);
     }
 
     public void Write(ReadOnlySpan<byte> bytes) {
