@@ -3,15 +3,16 @@ using Capacitor.App.Services;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Recording IAppNotifier — every Notify call is appended to Notified (assertable order) and
-/// also pushed through Messages, mirroring AppNotifier's real shape. Shared by
-/// AgentActionServiceTests and TrayViewModelTests.
+/// Recording IAppNotifier — every Notify call is appended to Notified and also pushed through
+/// Messages. Services notify from pool threads, so Notified is a locked snapshot.
 sealed class RecordingNotifier : IAppNotifier {
+    readonly Lock _lock = new();
     readonly Subject<string> _messages = new();
+    readonly List<string> _notified = [];
     public IObservable<string> Messages => _messages;
-    public readonly List<string> Notified = [];
+    public IReadOnlyList<string> Notified { get { lock (_lock) return [.. _notified]; } }
     public void Notify(string message) {
-        Notified.Add(message);
+        lock (_lock) _notified.Add(message);
         _messages.OnNext(message);
     }
 }
