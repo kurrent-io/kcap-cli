@@ -1593,7 +1593,8 @@ public class ChatTabViewSmokeTests {
     }
 
     /// The banner names the one run with its pulsing dot while it lasts, stacks above the queue
-    /// banner, and the activity note sits directly above the composer.
+    /// banner, and the activity note sits directly above the composer — all inside the one
+    /// composer band.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_subagents_banner_is_hidden_at_zero_and_names_the_run_above_the_queue_banner() {
@@ -1603,6 +1604,9 @@ public class ChatTabViewSmokeTests {
             var queued = host.View.FindControl<Border>("QueuedMessagesBanner")!;
             var note = host.View.FindControl<StackPanel>("ChatActivityNote")!;
             var composer = host.View.FindControl<Border>("ComposerCard")!;
+            var band = host.View.FindControl<Border>("ComposerBand")!;
+            foreach (Control part in new Control[] { banner, queued, note, composer })
+                await Assert.That(part.GetVisualAncestors().Contains(band)).IsTrue().Because($"{part.Name} belongs in the composer band");
             await Assert.That(banner.IsVisible).IsFalse();
             await Assert.That(Grid.GetRow(banner)).IsLessThan(Grid.GetRow(queued));
             await Assert.That(Grid.GetRow(queued)).IsLessThan(Grid.GetRow(note));
