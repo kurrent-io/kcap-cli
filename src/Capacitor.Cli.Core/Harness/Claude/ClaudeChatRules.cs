@@ -132,8 +132,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     }
 
     /// Removes the blocks Claude Code injects around a user turn: reminders and slash-command
-    /// echoes.
-    internal static string StripWrappers(string text) => Wrappers().Replace(text, "").Trim();
+    /// echoes are dropped, a paste keeps its text.
+    internal static string StripWrappers(string text) => Wrappers().Replace(PastedContent().Replace(text, "$2"), "").Trim();
 
     /// The command when the whole message is a bash-input tag; null when the tag is quoted
     /// inside other text or the command is blank.
@@ -193,6 +193,10 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     [GeneratedRegex(@"<(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>.*?</\1>", RegexOptions.Singleline)]
     private static partial Regex Wrappers();
+
+    // The close repeats the open's id, which keeps a quoted tag from pairing with a real one.
+    [GeneratedRegex(@"<pasted_content id=""([^""]*)"">\s*(.*?)\s*</pasted_content id=""\1"">", RegexOptions.Singleline)]
+    private static partial Regex PastedContent();
 
     [GeneratedRegex(@"<bash-input>(.*?)</bash-input>", RegexOptions.Singleline)]
     private static partial Regex BashInput();
