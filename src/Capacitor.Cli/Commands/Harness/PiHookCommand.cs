@@ -52,8 +52,7 @@ sealed class PiHookCommand(
     /// ~3.5s of work this leaves once <see cref="HookBudget.Safety"/> is reserved.</summary>
     static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(5);
 
-    /// <summary>Bound on the nudge claim's store work; the claim overlaps the lifecycle POST, so at the
-    /// output site it has almost always resolved.</summary>
+    /// <summary>Upper bound on the nudge claim's store work, further capped by what the hook budget has left.</summary>
     static readonly TimeSpan NudgeClaimBudget = TimeSpan.FromMilliseconds(750);
 
     public Task<int> Handle(string[] args) => Handle(args, Console.Out);
@@ -170,14 +169,6 @@ sealed class PiHookCommand(
                 reason)
             : Task.FromResult<string?>(null);
 
-        // Pi re-fires session_start for the same file on restart and resume, and the extension keeps
-        // what it is handed, so the nudges are gated by a durable once-per-session claim keyed on the
-        // file (resume deduped, fork eligible). Same contract gate as the memory fetch: an extension
-        // that discards stdout must not spend the claim.
-        var nudgeClaim = MemoryContractOf(args) >= 1
-            ? NudgeLease.TryClaimAsync(config, clock.Time, HarnessId.Pi, file, NudgeClaimBudget)
-            : Task.FromResult(false);
-
         // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
         // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. Only a
         // permanent failure keeps the prior non-zero exit and skips the watcher.
@@ -188,7 +179,12 @@ sealed class PiHookCommand(
         // an injection whose once-per-session lease is already spent. pi.exec hands the extension
         // stdout regardless of exit code, so no commit gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
-        var workItemsNudge = await ClaimedBounded(nudgeClaim, budget)
+        // Pi re-fires session_start for the same file on restart and resume, and the extension keeps
+        // what it is handed, so the nudges are gated by a durable once-per-session claim keyed on the
+        // file (resume deduped, fork eligible). Taken only now, after the POST: pi.exec discards all
+        // stdout from a hook it times out, so a claim taken earlier could be spent on output that
+        // never arrives. Same contract gate as the memory fetch.
+        var workItemsNudge = MemoryContractOf(args) >= 1 && await ClaimNudgesAsync(file, budget)
             ? HarnessNudgeEmitter.Combine(
                 WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
                 PlansNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
@@ -206,18 +202,12 @@ sealed class PiHookCommand(
         return 0;
     }
 
-    /// <summary>False when the claim is refused or still undecided when the budget runs out: a claim
-    /// that commits after this gave up costs the session its nudges, never a duplicate.</summary>
-    static async Task<bool> ClaimedBounded(Task<bool> claim, HookBudget budget) {
-        if (claim.IsCompleted) return await claim;
-        if (budget.Remaining is not { Ticks: > 0 } wait) return false;
-
-        try {
-            return await claim.WaitAsync(wait, budget.Time);
-        } catch (TimeoutException) {
-            return false;
-        }
-    }
+    /// <summary>False on a repeat, an unavailable store, or no budget left. A claim that runs out of
+    /// budget is left uncompleted, so it expires and a later start still delivers.</summary>
+    Task<bool> ClaimNudgesAsync(string file, HookBudget budget) =>
+        budget.Remaining is { Ticks: > 0 } left
+            ? NudgeLease.TryClaimAsync(config, clock.Time, HarnessId.Pi, file, left < NudgeClaimBudget ? left : NudgeClaimBudget)
+            : Task.FromResult(false);
 
     async Task<int> HandleSessionEnd(string sessionId, string file, string? cwd, string? reason) {
         // Kill watcher + inline-drain BEFORE the POST so the server computes

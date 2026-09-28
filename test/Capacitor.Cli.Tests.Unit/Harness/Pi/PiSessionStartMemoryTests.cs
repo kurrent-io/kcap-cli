@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.SessionStartMemory;
@@ -25,8 +26,8 @@ public class PiSessionStartMemoryTests {
     // cannot see, TUnit injecting it after construction.
     // The server URL is the resolution's, so a test proving the url guard fires hands in the bad one
     // here rather than as an argument.
-    PiHookCommand Hook(string serverUrl = "http://localhost:5100") =>
-        new(Config.Root, Resolutions.At(serverUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(serverUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+    PiHookCommand Hook(string serverUrl = "http://localhost:5100", TimeProvider? time = null) =>
+        new(Config.Root, Resolutions.At(serverUrl, Config.Root), new HookClock(time ?? TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(serverUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
     static string Render(string? fragment) => PiHookCommand.RenderMemoryOutput(fragment);
 
     // Byte-identical to pre-feature behaviour on every no-index path (opt-out, failure, spent lease):
@@ -127,8 +128,6 @@ public class PiSessionStartMemoryTests {
             TimeSpan.Zero, null)).IsNull();
     }
 
-    // ── The SessionStart nudges fire once per session file ─────────────────────────────────────
-
     const string NudgeMarker = "declare_work_item";
 
     /// <summary>A session file Pi would write, and the kcap-workitems bridge the nudge's availability
@@ -147,9 +146,9 @@ public class PiSessionStartMemoryTests {
 
     /// <summary>The nudges need no server, so an unpostable URL keeps the lifecycle POST and the memory
     /// fetch off the network, where each would otherwise spend its retry budget.</summary>
-    async Task<string> SessionStart(string file, string reason, int memoryContract = 1) {
+    async Task<string> SessionStart(string file, string reason, int memoryContract = 1, PiHookCommand? hook = null) {
         var stdout = new StringWriter();
-        await Hook("ftp://unreachable").Handle([
+        await (hook ?? Hook("ftp://unreachable")).Handle([
             "--event", "session-start", "--file", file, "--cwd", Path.GetDirectoryName(file)!,
             "--reason", reason, "--memory-contract", memoryContract.ToString(System.Globalization.CultureInfo.InvariantCulture)
         ], stdout);
@@ -180,6 +179,20 @@ public class PiSessionStartMemoryTests {
         var file = NewSessionFile();
 
         await Assert.That(await SessionStart(file, "startup", memoryContract: 0)).DoesNotContain(NudgeMarker);
+        await Assert.That(await SessionStart(file, "resume")).Contains(NudgeMarker);
+    }
+
+    /// <summary>pi.exec discards everything a hook it timed out wrote, so a start that reaches the claim
+    /// with no budget left must leave it for the next start rather than spend it on output that may
+    /// never arrive.</summary>
+    [Test]
+    public async Task A_start_with_no_budget_left_leaves_the_claim_for_the_next_start() {
+        var file = NewSessionFile();
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var late = Hook("ftp://unreachable", time);
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        await Assert.That(await SessionStart(file, "startup", hook: late)).DoesNotContain(NudgeMarker);
         await Assert.That(await SessionStart(file, "resume")).Contains(NudgeMarker);
     }
 }
