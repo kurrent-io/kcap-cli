@@ -422,9 +422,10 @@ unfollowed; no temp file is left behind on any path.
 ```
 
 - `cohort: "exact"` — `session_ids` is the complete run candidate set in candidate order (§1).
-- `cohort: "partial_exact"` — the candidate set exceeded **500**; `session_ids` holds every foreground
-  session plus the first candidates in candidate order to fill 500, so the cut is deterministic
-  across chains, routed sessions and probe errors alike. The skill watches exactly those and says so.
+- `cohort: "partial_exact"` — the candidate set exceeded **500**; `session_ids` holds the foreground
+  sessions first, then the first other candidates in candidate order, 500 in all — a foreground set
+  past 500 is itself cut there — so the cut is deterministic across chains, routed sessions and
+  probe errors alike. The skill watches exactly those and says so.
 - `cohort: "unknown"` — `Certainty == Incomplete` with `RunCandidateIds == null`; `session_ids` is
   empty and meaningless; the skill queries nothing and closes with links.
 - `foreground_succeeded_ids` is the completed pass's `ImportRunPartition.SucceededIds`, verbatim —
@@ -902,7 +903,7 @@ its child) lists that parent; `handoff_suppressed` takes each value of the §4 t
 built for that row, `null` whenever `handoff_offered` is true, and the precedence cases — failed
 import **and** cached denial → `import_failed`; empty cohort **and** cached denial →
 `no_new_sessions`; all-skipped pass with nothing left → `nothing_landed` — resolve as the table says;
->500 candidates → foreground sessions plus the first candidates to fill 500, `partial_exact`; two concurrent runs → two files;
+>500 candidates → foreground sessions first, then candidates in order, 500 in all, `partial_exact`; two concurrent runs → two files;
 >7-day files pruned on write; write failure warns and continues.
 
 **Handoff gating and picker**: each row of the §4 table has a fixture and the first matching row wins;

@@ -48,7 +48,7 @@ public class ImportHandoffFileTests {
     }
 
     /// <summary>A foreground chain is taken whole, so a member can sit past the cap in candidate
-    /// order; the watch waits on every foreground session, so each must be in the cohort it queries.</summary>
+    /// order; the watch waits on the foreground sessions, so they take cohort slots ahead of the rest.</summary>
     [Test]
     public async Task Foreground_sessions_past_the_cap_are_kept_in_the_cohort() {
         var file = Compose(Outcome(candidates: 600, "c000", "c001", "c599"));
