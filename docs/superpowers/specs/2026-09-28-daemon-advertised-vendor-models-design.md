@@ -26,7 +26,7 @@ list would either offer models that fail at launch or omit ones that work.
 | Decision | Choice |
 |---|---|
 | Source of truth | The daemon asks the installed Pi process for its model list and advertises it. |
-| Probe mechanism | `pi --mode rpc --no-extensions --no-session`, one `get_available_models` command on stdin. Never table-parsing `--list-models`, never reading Pi's config files. |
+| Probe mechanism | `pi --mode rpc --offline --no-extensions --no-session` in an empty daemon-owned directory, one `get_available_models` command on stdin. Never table-parsing `--list-models`, never reading Pi's config files. |
 | Model id on the wire | `provider/id` (e.g. `anthropic/claude-opus-5`). |
 | Label | Pi's `name` followed by the provider, e.g. `Claude Opus 5 · anthropic`. |
 | Wire shape | One optional dictionary, vendor token → model options, on both daemon advertisement paths (server `DaemonConnect` and local status IPC). |
@@ -65,11 +65,18 @@ is untouched.
 New file `Harness/Pi/PiModelCatalogProbe.cs`, a static helper the factory calls:
 
 1. Skip when `IsAvailable()` is false (return null without spawning).
-2. `ProcessStartInfo(config.PiPath, ["--mode", "rpc", "--no-extensions", "--no-session"])`,
-   redirected stdin/stdout/stderr, `PiLaunchEnvironment.Apply(env)` so the kcap extension stands
-   down even if extension discovery were ever re-enabled. `--no-extensions` also keeps third-party
+2. `ProcessStartInfo(config.PiPath, ["--mode", "rpc", "--offline", "--no-extensions",
+   "--no-session"])`, redirected stdin/stdout/stderr, `PiLaunchEnvironment.Apply(env)` so the
+   kcap extension stands down even if extension discovery were ever re-enabled. `--offline`
+   (equivalently `PI_OFFLINE=1`) stops Pi's startup network operations: `--no-extensions` alone
+   still runs a configured npm package install, with lifecycle scripts, before RPC is served
+   (`docs/probes/2026-09-21-pi-reviewer/findings.md` §8). `--no-extensions` keeps third-party
    extensions (MCP bridges and the like) from starting, which otherwise print to stderr and add
    seconds.
+   `WorkingDirectory` is `PiModelCatalogProbe.DirectoryFor(stateDir)` =
+   `<state dir>/pi-probe`, created empty and owner-only beside `PiReviewerLaunchDir.RootFor`.
+   Pi renames a project's `.pi/commands` at startup, so the probe never runs in a repository or
+   in the daemon's own cwd.
 3. Write `{"type":"get_available_models"}\n`, close stdin.
 4. Read stdout lines until a line parses as JSON with `type == "response"` and
    `command == "get_available_models"`. Ignore every other line (Pi may emit other frames first).
@@ -101,7 +108,8 @@ config.VendorModels = await ProbeVendorModelsAsync(runtimeFactories, config.Supp
 `ProbeVendorModelsAsync` runs `ProbeModelsAsync` for every advertised factory concurrently and
 folds non-null answers into a `Dictionary<string, VendorModelOption[]>` keyed by vendor token,
 ordinal. A vendor whose probe returned null is not a key. The result is stored on
-`DaemonConfig.VendorModels` (`IReadOnlyDictionary<string, VendorModelOption[]>?`), null only
+`DaemonConfig.VendorModels` as `Dictionary<string, VendorModelOption[]>?`, the same concrete type
+the two wire records declare, so the config value is passed through without conversion. Null only
 before startup has run.
 
 Startup cost is one Pi spawn, about 1.5 seconds on a warm machine, run concurrently with the
@@ -115,9 +123,10 @@ registration without it.
 - **Watch set.** Unattended vendors ∪ vendors whose factory has non-empty
   `CatalogFingerprintPaths` or is in `config.VendorModels`. Pi is normally both; the union
   matters when Pi is installed but its reviewer capability is withheld (build too old).
-- **Per-vendor fingerprint.** Alongside the binary stat, a stat of each `CatalogFingerprintPaths`
-  entry (`FileInfo` existence, length, last-write ticks; a missing file is a distinct value, not
-  a transient). A change in any of them counts as that vendor changing. The Pi factory returns
+- **Per-vendor fingerprint.** Alongside the binary stat, a `CatalogPathStat` of each
+  `CatalogFingerprintPaths` entry (existence, length, last-write ticks; a missing file is a
+  distinct value, not a transient, since deleting `auth.json` does change the catalog). A change
+  in any of them counts as that vendor changing. The Pi factory returns
   `PiPaths.AuthJson` and `PiPaths.ModelsJson` (two new members on `PiPaths`, both under
   `AgentDir`).
 
@@ -128,8 +137,15 @@ so a transient failure does not withdraw a working list), and treats a differing
 differing capability: it re-registers with the server and pulses `DaemonStatusNotifier` so local
 subscribers receive a new snapshot. An unchanged catalog does nothing.
 
-Baseline rule is unchanged: fingerprints are recorded when the advertisement was computed, so a
-file that changes between startup probe and watcher start reads as a change on the first tick.
+Baselines follow the existing rule and are wired the same way as the binary ones. Startup
+fingerprints every catalog path before the probe runs and stores the result on
+`DaemonConfig.VendorCatalogBaselines` (`IReadOnlyDictionary<string, CatalogPathStat[]>?`, keyed
+by vendor, beside `UnattendedVendorBaselines`). `VendorCliWatcher.ExecuteAsync` reads it and
+`PrimeBaselines` seeds each watched vendor's catalog fingerprints from it, statting live only for a
+vendor with no recorded entry. A file that changes between the startup probe and the watcher's
+first tick therefore reads as a change on that tick instead of becoming the baseline.
+`CatalogPathStat(string Path, bool Exists, long Length, long LastWriteTicks)` is a new record in
+`Services/`.
 
 ## 4. Wire (kcap-cli)
 
@@ -141,8 +157,10 @@ file that changes between startup probe and watcher start reads as a change on t
 Dictionary<string, VendorModelOption[]>? VendorModels = null,
 ```
 
-serialized as `vendorModels` under the record's existing naming. `ServerConnection.
-DaemonConnectCoreAsync` passes `_config.VendorModels`. Old servers ignore the field.
+serialized as `vendor_models`: the hub protocol is configured with `SnakeCaseLower` and
+`CapacitorJsonContext` uses the same policy, so the server contract binds `vendor_models` and a
+serialization test pins that spelling. `ServerConnection.DaemonConnectCoreAsync` passes
+`_config.VendorModels`. Old servers ignore the field.
 
 ### 4.2 Local status IPC
 
@@ -152,9 +170,9 @@ DaemonConnectCoreAsync` passes `_config.VendorModels`. Old servers ignore the fi
 Dictionary<string, VendorModelOption[]>? VendorModels = null
 ```
 
-Same additive rule as `SupportedVendors`: null from an older daemon means unknown. The source
-generator context (`StatusIpcJsonContext`) needs the dictionary and array types registered.
-`DaemonStatusIpc.Snapshot` passes `config.VendorModels`.
+serialized as `vendor_models` (`StatusIpcJsonContext` is `SnakeCaseLower`). Same additive rule
+as `SupportedVendors`: null from an older daemon means unknown. The context needs the dictionary
+and array types registered. `DaemonStatusIpc.Snapshot` passes `config.VendorModels`.
 
 ### 4.3 Remote registry DTO
 
@@ -201,18 +219,23 @@ reading the endpoint; adopting the daemon list there is a follow-on.
 - `MachineOption` gains `IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? VendorModels`,
   filled from the remote `DaemonInfo.VendorModels` for remote machines and from the latest local
   status snapshot for the local machine.
-- `HomeViewModel` keeps a live `_localVendorModels` from `daemon.Snapshots` (like
-  `_currentLocalVendors`), and a `_remoteVendorModels` set by `SelectMachineAsync`.
-- `ModelChoicesFor(vendor)`:
-
-  ```
-  machine list (local or selected remote) has key vendor → that list (even when empty)
-  else server catalog has non-empty list for vendor     → server list
-  else                                                   → HostedHarnessCatalog.ModelChoicesFor(vendor)
-  ```
-
-- `ModelLabelFor` for the agent chip resolves through the same three sources in the same order.
-- A snapshot that changes the local catalog raises `ModelCatalog` so the chip re-renders and the
+- `HomeViewModel` derives one observable, the **machine catalog**: `daemon.Snapshots`
+  (local `VendorModels`) combined with `_daemons` and `_machineSelectionChanges`. When the local
+  machine is selected it is the latest local snapshot's dictionary; when a remote machine is
+  selected it is the `VendorModels` of the `DaemonInfo` in the latest `_daemons` emission whose
+  name matches, so a re-registration by that daemon updates the picker while it stays selected.
+  A remote machine missing from the latest emission yields null (unknown), not the last value.
+- The server catalog subscription and the machine catalog are combined into
+  `EffectiveModelCatalog` (`IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>`), an
+  `ObservableAsPropertyHelper` on the main thread, replacing the `ModelCatalog` property. Per
+  vendor: machine key present → machine list (even when empty); else server list when non-empty;
+  else no key. `ModelChoicesFor(vendor)` reads it and falls back to
+  `HostedHarnessCatalog.ModelChoicesFor(vendor)` when the key is absent.
+- The agent chip's fourth `MultiBinding` in `LauncherPaneView.axaml` binds
+  `EffectiveModelCatalog` instead of `ModelCatalog`; `AgentChipTextConverter` is unchanged, since
+  it already resolves the label against that dictionary and falls back to the curated
+  `HostedHarnessCatalog.ModelLabelFor`. Any change to the local snapshot, the selected machine,
+  the registry list or the server catalog re-emits the property, so the chip re-renders and the
   next flyout open reads the new rows (`RebuildRows` runs per open, unchanged).
 - The Pi rows render Label as the title; the search box matches on both Value and Label, so
   `opus`, `anthropic` and `github-copilot/` all narrow the list. The typed-term custom row stays.
@@ -244,12 +267,18 @@ Daemon (`test/Capacitor.Cli.Daemon.Tests.Unit/Harness/Pi/`, `Services/`):
   reading stdin: returns the mapped list and the child is gone afterwards (`PidIdentity`).
 - Fake `pi` that never answers: probe returns null within the deadline (fake `TimeProvider`),
   child killed.
+- The probe's argv carries `--offline`, `--no-extensions` and `--no-session`, and its working
+  directory is the empty probe directory under the state dir, not the daemon's cwd (assert on the
+  built `ProcessStartInfo`, and on the fake `pi` recording its cwd).
 - `VendorCliWatcher`: a changed catalog fingerprint path fires one refresh naming the vendor; an
-  unchanged path fires none; a vendor in the catalog set but not unattended is watched.
+  unchanged path fires none; a vendor in the catalog set but not unattended is watched; a
+  recorded baseline that differs from the file at watcher start fires on the first tick; a
+  deleted `auth.json` fires.
 - `RefreshAdvertisedCapabilities`: differing catalog re-registers and pulses the notifier;
   identical catalog does neither; null re-probe keeps the previous entry.
 - `DaemonConnect` and `DaemonStatusDto` round-trip through their source-generated contexts with
-  the field null, absent-key, and present-empty.
+  the field null, absent-key, and present-empty, and the serialized property is spelled
+  `vendor_models` on both.
 - `DaemonStatusIpc`: a subscriber receives a second snapshot after a catalog refresh.
 
 App (`test/Capacitor.App.Tests.Unit/`, beside `HomeViewModelTests`):
@@ -257,8 +286,11 @@ App (`test/Capacitor.App.Tests.Unit/`, beside `HomeViewModelTests`):
 - Precedence: daemon list wins over a non-empty server list; empty daemon key wins over both
   fallbacks; absent key falls to server; empty server falls to curated.
 - Selecting a remote machine switches to that machine's list; switching back to local restores
-  the local one.
-- Chip label resolves from the daemon list.
+  the local one; a new `_daemons` emission with a changed list for the selected remote machine
+  updates `EffectiveModelCatalog` without reselecting; the machine vanishing from the emission
+  falls back to the server catalog.
+- Chip label resolves from the daemon list through `EffectiveModelCatalog` (converter test with
+  a machine-only entry).
 
 Server (kcap-server unit suites beside `DaemonRegistry` and the dialog):
 
