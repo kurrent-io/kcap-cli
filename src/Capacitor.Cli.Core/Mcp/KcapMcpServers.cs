@@ -5,8 +5,9 @@ namespace Capacitor.Cli.Core.Mcp;
 /// harness has a per-server trust knob (see <see cref="McpConfigShape.Trust"/>): every tool either
 /// reads, or writes only to the session's own Capacitor record, the destination the hooks already
 /// post to unprompted. kcap-flows launches a paid hosted agent; kcap-memory, kcap-artefacts
-/// and kcap-knowledge can change shared content or its audience, so they rely on each tool's annotations instead: a harness
-/// that reads them still runs the reads and additive writes unprompted and gates the destructive
+/// and kcap-knowledge can change shared content or its audience, so they rely on each tool's
+/// annotations instead: a harness that reads them still runs the reads and additive writes
+/// unprompted and gates the destructive
 /// ones. <paramref name="ToolTimeout"/> is how long one of
 /// the server's tool calls may block; a harness with a per-server tool timeout has it written into
 /// the registration, so the harness never aborts a call the server itself bounds.</summary>

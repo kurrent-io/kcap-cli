@@ -86,6 +86,21 @@ public class McpKnowledgeServerTests {
     }
 
     [Test]
+    public async Task Sparse_transition_and_member_writes_omit_unsupplied_fields() {
+        var transition = McpKnowledgeServer.BuildTransitionBody(Args("""
+            {"action":"restore","operation_id":"op","expected_doc_revision":7}
+            """));
+        await Assert.That(transition.ToJsonString()).IsEqualTo(
+            """{"action":"restore","operation_id":"op","expected_doc_revision":7}""");
+
+        var members = McpKnowledgeServer.BuildAdjustMembersBody(Args("""
+            {"action":"add","cluster_uids":["u"],"operation_id":"op"}
+            """));
+        await Assert.That(members.ToJsonString()).IsEqualTo(
+            """{"action":"add","cluster_uids":["u"],"operation_id":"op"}""");
+    }
+
+    [Test]
     public async Task Body_and_transition_writes_require_the_revision_token() {
         await Assert.That(() => McpKnowledgeServer.BuildEditBody(Args("""{"body":"x","operation_id":"op"}""")))
             .Throws<ArgumentException>();
@@ -195,6 +210,25 @@ public class McpKnowledgeServerTests {
     }
 
     [Test]
+    public async Task Unauthorized_reads_return_the_login_notice() {
+        var response = await CallAsync(new RecordingHandler(HttpStatusCode.Unauthorized), "list_skills", "{}");
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains("kcap login");
+    }
+
+    [Test]
+    public async Task Unknown_tools_return_a_tool_error_without_sending_a_request() {
+        var handler = new RecordingHandler();
+
+        var response = await CallAsync(handler, "missing_tool", "{}");
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains("Unknown tool: missing_tool");
+        await Assert.That(handler.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task A_no_content_success_says_so() {
         var handler = new RecordingHandler(HttpStatusCode.NoContent, "");
 
@@ -280,7 +314,7 @@ public class McpKnowledgeServerTests {
 
         var call = CallAsync(handler, "list_skills", "{}", time);
         await handler.Sent.Task;
-        time.Advance(McpArtefactsServer.RequestBudget);
+        time.Advance(McpKnowledgeServer.RequestBudget);
         var response = await call;
 
         await Assert.That(response).Contains("\"isError\":true");

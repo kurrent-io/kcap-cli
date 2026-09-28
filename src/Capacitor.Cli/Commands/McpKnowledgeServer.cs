@@ -46,7 +46,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
             try {
                 if (client is null) {
                     client = await http.ForSessionAsync();
-                    McpArtefactsServer.LiftClientTimeout(client);
+                    client.Timeout = Timeout.InfiniteTimeSpan;
                 }
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, await repository.GetHashAsync());
             } catch (Exception ex) {
@@ -112,6 +112,8 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         return 0;
     }
 
+    internal static readonly TimeSpan RequestBudget = TimeSpan.FromSeconds(100);
+
     const string ServerInstructions =
         "Use these tools to read the team's retained facts and curated skills, and to fine-tune a skill. " +
         "Every fact and skill member carries its curation_key and curation: the address and the current state a " +
@@ -133,7 +135,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
 
         if (toolName is null) return BuildErrorResponse(id, -32602, "Missing params.name");
 
-        using var budget = new CancellationTokenSource(McpArtefactsServer.RequestBudget, time);
+        using var budget = new CancellationTokenSource(RequestBudget, time);
         var ct = budget.Token;
 
         try {
@@ -237,26 +239,32 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         ["expected_doc_revision"] = Revision(args) ?? throw MissingRevision(),
     };
 
-    internal static JsonObject BuildTransitionBody(JsonObject? args) => new() {
-        ["action"]                = McpToolArguments.RequireString(args, "action"),
-        ["operation_id"]          = McpToolArguments.RequireString(args, "operation_id"),
-        ["expected_doc_revision"] = Revision(args) ?? throw MissingRevision(),
-        ["targets"]               = StringArray(args, "targets"),
-        ["edited_body"]           = Text(args, "edited_body"),
-        ["reason"]                = Text(args, "reason"),
-        ["member_disposition"]    = McpToolArguments.OptionalString(args, "member_disposition"),
-    };
+    internal static JsonObject BuildTransitionBody(JsonObject? args) {
+        var body = new JsonObject {
+            ["action"]                = McpToolArguments.RequireString(args, "action"),
+            ["operation_id"]          = McpToolArguments.RequireString(args, "operation_id"),
+            ["expected_doc_revision"] = Revision(args) ?? throw MissingRevision(),
+        };
+        if (StringArray(args, "targets") is { } targets) body["targets"] = targets;
+        if (Text(args, "edited_body") is { } editedBody) body["edited_body"] = editedBody;
+        if (Text(args, "reason") is { } reason) body["reason"] = reason;
+        if (McpToolArguments.OptionalString(args, "member_disposition") is { } disposition) body["member_disposition"] = disposition;
+        return body;
+    }
 
     /// <summary>Only <c>exclude</c> / <c>include</c> take the token, and the server refuses one
     /// missing there, so it rides along when given rather than being required here.</summary>
-    internal static JsonObject BuildAdjustMembersBody(JsonObject? args) => new() {
-        ["action"]                = McpToolArguments.RequireString(args, "action"),
-        ["cluster_uids"]          = StringArray(args, "cluster_uids") is { Count: > 0 } uids
-                                        ? uids
-                                        : throw new ArgumentException("'cluster_uids' must be a non-empty array of cluster uids."),
-        ["operation_id"]          = McpToolArguments.RequireString(args, "operation_id"),
-        ["expected_doc_revision"] = Revision(args),
-    };
+    internal static JsonObject BuildAdjustMembersBody(JsonObject? args) {
+        var body = new JsonObject {
+            ["action"]       = McpToolArguments.RequireString(args, "action"),
+            ["cluster_uids"] = StringArray(args, "cluster_uids") is { Count: > 0 } uids
+                                   ? uids
+                                   : throw new ArgumentException("'cluster_uids' must be a non-empty array of cluster uids."),
+            ["operation_id"] = McpToolArguments.RequireString(args, "operation_id"),
+        };
+        if (Revision(args) is { } revision) body["expected_doc_revision"] = revision;
+        return body;
+    }
 
     internal static JsonObject BuildCurateBody(JsonObject? args) {
         if (args?["curation_key"] is not JsonObject key)
