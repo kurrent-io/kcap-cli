@@ -1593,8 +1593,7 @@ public class ChatTabViewSmokeTests {
     }
 
     /// The banner names the one run with its pulsing dot while it lasts, stacks above the queue
-    /// banner, and the activity note sits directly above the composer — all inside the one
-    /// composer band.
+    /// banner, and the activity note sits directly above the composer.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_subagents_banner_is_hidden_at_zero_and_names_the_run_above_the_queue_banner() {
