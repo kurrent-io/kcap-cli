@@ -1990,6 +1990,55 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Pins the hook card's precedence: while a card asks the question, the screen's copy of the
+    /// same dialog is not offered, and it comes back once the card is gone and the dialog is not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_card_hides_the_terminal_dialog_it_raised() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
+            try {
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+
+                await Assert.That(h.Chat.HasTerminalMenu).IsFalse();
+                await Assert.That(h.Chat.TerminalMenuChoices).IsEmpty();
+
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.TerminalMenuChoices).Count().IsEqualTo(2);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// A usage-limit menu is itself a select dialog, so the screen can report both. The dialog's
+    /// cursor moving under an answered question must not offer the question's choices again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_answered_usage_limit_stays_answered_while_its_dialog_redraws() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit · resets 3:10pm",
+                "What do you want to do?", [new(1, "Stop and wait for limit to reset"), new(2, "Ask your admin for more usage")]);
+            static TerminalDialogDto DialogAt(int selected) =>
+                new("What do you want to do?", "", ["Stop and wait for limit to reset", "Ask your admin for more usage"], selected, "");
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice, TerminalDialog = DialogAt(0) });
+                await Assert.That(h.Chat.TerminalMenuPrompt).IsEqualTo(notice.Prompt);
+
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice, TerminalDialog = DialogAt(1) });
+
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'2' }, CollectionOrdering.Matching);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     sealed class HoldingUploader : IAttachmentUploader {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<UploadOutcome> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

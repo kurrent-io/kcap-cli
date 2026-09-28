@@ -299,14 +299,10 @@
                         <TextBlock Text="{Binding TerminalMenuPrompt}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapTextBrush}"
                                    IsVisible="{Binding TerminalMenuPrompt, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <StackPanel x:Name="TerminalMenuFallback" Spacing="8"
-                                    IsVisible="{Binding TerminalMenuScreen, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <SelectableTextBlock Text="{Binding TerminalMenuScreen}" FontSize="12" TextWrapping="Wrap"
-                                                 FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
-                                                 Foreground="{StaticResource KcapTextBrush}" />
-                            <Button x:Name="TerminalMenuOpenTerminal" Classes="kcapChip" Content="Open Terminal"
-                                    Command="{Binding ShowTerminalCommand}" HorizontalAlignment="Left" />
-                        </StackPanel>
+                        <SelectableTextBlock x:Name="TerminalMenuFallback" Text="{Binding TerminalMenuScreen}" FontSize="12" TextWrapping="Wrap"
+                                             FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
+                                             Foreground="{StaticResource KcapTextBrush}"
+                                             IsVisible="{Binding TerminalMenuScreen, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         <ItemsControl ItemsSource="{Binding TerminalMenuChoices}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate>
@@ -322,6 +318,9 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <Button x:Name="TerminalMenuOpenTerminal" Classes="kcapChip" Content="Open Terminal"
+                                Command="{Binding ShowTerminalCommand}" HorizontalAlignment="Left"
+                                IsVisible="{Binding TerminalMenuTitle, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         <TextBlock Text="{Binding TerminalMenuError}" FontSize="12" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapDangerBrush}"
                                    IsVisible="{Binding TerminalMenuError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

@@ -742,15 +742,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var question = UsageLimitNoticeDto.IsQuestion(limit);
         var shown = !question && dialog is not null && !HasPendingCards;
         if (Equals(_usageLimit, limit) && Equals(_terminalDialog, dialog) && _terminalDialogShown == shown) return;
-        // An answer's own arrow keys redraw the dialog with the cursor elsewhere; that is still the
-        // dialog already answered, and a second click would land on whatever comes next.
-        var sameDialog = shown && _terminalDialogShown && _terminalDialog is { } previous
-            && previous.Heading == dialog!.Heading && previous.Options.SequenceEqual(dialog.Options);
+        // An answer redraws the screen before the menu leaves it: arrow keys move the dialog's cursor,
+        // and a usage-limit menu can carry a dialog of its own that moves too. Either way it is still
+        // the menu already answered, and a second click would land on whatever comes next.
+        var sameMenu = question
+            ? Equals(_usageLimit, limit)
+            : shown && _terminalDialogShown && _terminalDialog is { } previous
+                && previous.Heading == dialog!.Heading && previous.Options.SequenceEqual(dialog.Options);
         _usageLimit = limit;
         _terminalDialog = dialog;
         _terminalDialogShown = shown;
         foreach (var old in _terminalMenuChoices) old.Choose.Dispose();
-        if (!sameDialog) SetTerminalMenuChoiceTaken(false);
+        if (!sameMenu) SetTerminalMenuChoiceTaken(false);
         TerminalMenuError = "";
         List<(string Label, byte[] Keys)> choices = [];
         (TerminalMenuTitle, TerminalMenuHeading, TerminalMenuSummary, TerminalMenuPrompt, TerminalMenuScreen, TerminalMenuHint) =

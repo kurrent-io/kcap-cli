@@ -1,6 +1,6 @@
 using Capacitor.Cli.Core.LocalIpc;
 
-namespace Capacitor.Cli.Daemon.Services;
+namespace Capacitor.Cli.Daemon.Harness.Claude;
 
 /// Reads Claude Code's usage-limit menu off the live PTY screen. The menu is terminal chrome:
 /// the option set depends on the account, and the transcript never records it. A match is a
