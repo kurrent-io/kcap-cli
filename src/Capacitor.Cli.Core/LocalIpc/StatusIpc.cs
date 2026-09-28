@@ -90,7 +90,10 @@ public sealed record AgentStatusDto(
     // A vendor usage limit matched for this live agent. Null from an older daemon, and whenever
     // nothing is matched. A blocked notice that carries options is a question the user answers;
     // it is not AwaitingInput, which means the turn ended and a prompt will be read.
-    UsageLimitNoticeDto? UsageLimit = null);
+    UsageLimitNoticeDto? UsageLimit = null,
+    // A select dialog on the agent's terminal, while it is on screen. Null from an older daemon
+    // and whenever none shows.
+    TerminalDialogDto? TerminalDialog = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

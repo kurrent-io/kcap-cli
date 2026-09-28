@@ -1762,24 +1762,24 @@ public class ChatTabViewModelTests {
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
                 h.Chat.ComposerText = "keep going";
 
-                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
-                await Assert.That(h.Chat.UsageLimitChoices.Select(c => c.Label).ToArray()).IsEquivalentTo(new[] {
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.TerminalMenuChoices.Select(c => c.Label).ToArray()).IsEquivalentTo(new[] {
                     "Stop and wait for limit to reset",
                     "Wait here, then continue automatically shortly",
                     "Ask your admin for more usage",
                 }, CollectionOrdering.Matching);
                 await Assert.That(h.Chat.ComposerHint).Contains("usage limit");
                 await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
-                await h.Chat.UsageLimitChoices[2].Choose.Execute().ToTask();
+                await h.Chat.TerminalMenuChoices[2].Choose.Execute().ToTask();
                 await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'3' }, CollectionOrdering.Matching);
-                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
 
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
-                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
                 await Assert.That(input.Keys.Count).IsEqualTo(1);
 
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
-                await Assert.That(h.Chat.HasUsageLimitQuestion).IsFalse();
+                await Assert.That(h.Chat.HasTerminalMenu).IsFalse();
                 await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
             } finally { await h.TeardownAsync(); }
         });
@@ -1801,8 +1801,8 @@ public class ChatTabViewModelTests {
             try {
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
 
-                var running = h.Chat.UsageLimitChoices[0].Choose.Execute().ToTask();
-                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+                var running = h.Chat.TerminalMenuChoices[0].Choose.Execute().ToTask();
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
                 release.SetResult();
                 await running;
                 await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1' }, CollectionOrdering.Matching);
@@ -1813,15 +1813,15 @@ public class ChatTabViewModelTests {
                     Status = "Running",
                     UsageLimit = new UsageLimitNoticeDto(notice.Kind, "limit still held", notice.Prompt, notice.Options),
                 });
-                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
-                await Assert.That(h.Chat.UsageLimitError).Contains("not attached");
-                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
+                await Assert.That(h.Chat.TerminalMenuError).Contains("not attached");
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
                 await Assert.That(input.Keys.Count).IsEqualTo(1);
 
                 input.Accept = true;
-                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
                 await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1', (byte)'2' }, CollectionOrdering.Matching);
-                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
             } finally { await h.TeardownAsync(); }
         });
     }
@@ -1852,7 +1852,121 @@ public class ChatTabViewModelTests {
                 await Assert.That(input.Sent).IsEmpty();
                 await Assert.That(h.Chat.ComposerText).IsEqualTo("keep going");
                 await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
-                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Pins a terminal select dialog as a chat question: text is held back, and a choice moves the
+    /// dialog's cursor from where the screen shows it and confirms, in one write.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_dialog_is_answered_by_moving_its_cursor() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var dialog = new TerminalDialogDto("New MCP server found in this project: avalonia-docs",
+                "MCP servers may execute code or access system resources.", [
+                    "Use this MCP server",
+                    "Use this and all future MCP servers in this project",
+                    "Continue without using this MCP server",
+                ], selected: 2, screen: "");
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+                h.Chat.ComposerText = "hello";
+
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.TerminalMenuTitle).IsEqualTo("Waiting for you in Terminal");
+                await Assert.That(h.Chat.TerminalMenuHeading).IsEqualTo(dialog.Heading);
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+
+                await h.Chat.TerminalMenuChoices[0].Choose.Execute().ToTask();
+                await Assert.That(input.Writes).IsEquivalentTo(new[] { "\x1b[A\x1b[A\r" }, CollectionOrdering.Matching);
+
+                var redrawn = new TerminalDialogDto(dialog.Heading, dialog.Body, dialog.Options, selected: 0, screen: "");
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = redrawn });
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                await Assert.That(h.Chat.HasTerminalMenu).IsFalse();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Pins the fallback for a dialog whose choices could not be read: the card carries the
+    /// screen text and sends the user to the terminal, and no keys are offered.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_dialog_without_readable_choices_points_at_the_terminal() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            var shown = false;
+            h.Chat.ShowTerminal = () => shown = true;
+            var dialog = new TerminalDialogDto("", "", [], -1, "3 new MCP servers found in this project\n❯ [ ] docs\n  [ ] search");
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.TerminalMenuChoices).IsEmpty();
+                await Assert.That(h.Chat.TerminalMenuScreen).IsEqualTo(dialog.Screen);
+                await h.Chat.ShowTerminalCommand.Execute().ToTask();
+                await Assert.That(shown).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Pins the hook card's precedence: while a card asks the question, the screen's copy of the
+    /// same dialog is not offered, and the composer stays shut because that dialog is still on
+    /// the terminal. The card comes back once the hook card is gone and the dialog is not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_card_hides_the_terminal_dialog_it_raised() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"), input: new KeyRecordingInput());
+            var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
+            try {
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                h.Chat.ComposerText = "hello";
+                await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsFalse();
+                await Assert.That(h.Chat.TerminalMenuChoices).IsEmpty();
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(h.Chat.TerminalMenuChoices).Count().IsEqualTo(2);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// A usage-limit menu is itself a select dialog, so the screen can report both. The dialog's
+    /// cursor moving under an answered question must not offer the question's choices again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_answered_usage_limit_stays_answered_while_its_dialog_redraws() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit · resets 3:10pm",
+                "What do you want to do?", [new(1, "Stop and wait for limit to reset"), new(2, "Ask your admin for more usage")]);
+            static TerminalDialogDto DialogAt(int selected) =>
+                new("What do you want to do?", "", ["Stop and wait for limit to reset", "Ask your admin for more usage"], selected, "");
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice, TerminalDialog = DialogAt(0) });
+                await Assert.That(h.Chat.TerminalMenuPrompt).IsEqualTo(notice.Prompt);
+
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice, TerminalDialog = DialogAt(1) });
+
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'2' }, CollectionOrdering.Matching);
             } finally { await h.TeardownAsync(); }
         });
     }
@@ -1877,12 +1991,14 @@ public class ChatTabViewModelTests {
 
     sealed class KeyRecordingInput : AcceptingChatInput {
         public List<byte> Keys { get; } = [];
+        public List<string> Writes { get; } = [];
         public bool Accept { get; set; } = true;
         public Task? Gate { get; set; }
-        public override async Task<bool> SendKeyAsync(byte key, CancellationToken ct) {
+        public override async Task<bool> SendKeysAsync(byte[] keys, CancellationToken ct) {
             if (Gate is { } gate) await gate;
             if (!Accept) return false;
-            Keys.Add(key);
+            Keys.AddRange(keys);
+            Writes.Add(System.Text.Encoding.ASCII.GetString(keys));
             return true;
         }
     }

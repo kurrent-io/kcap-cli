@@ -232,40 +232,80 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public string ComposerHint => _composerHint.Value;
 
     UsageLimitNoticeDto? _usageLimit;
-    bool _hasUsageLimitQuestion;
-    string _usageLimitSummary = "";
-    string _usageLimitPrompt = "";
-    string _usageLimitError = "";
-    IReadOnlyList<UsageLimitChoiceViewModel> _usageLimitChoices = [];
-    bool _usageLimitChoiceTaken;
+    TerminalDialogDto? _terminalDialog;
+    bool _terminalDialogShown;
+    bool _hasTerminalMenu;
+    string _terminalMenuTitle = "";
+    string _terminalMenuHeading = "";
+    string _terminalMenuSummary = "";
+    string _terminalMenuScreen = "";
+    string _terminalMenuPrompt = "";
+    string _terminalMenuHint = "";
+    string _terminalMenuError = "";
+    IReadOnlyList<TerminalMenuChoiceViewModel> _terminalMenuChoices = [];
+    bool _terminalMenuChoiceTaken;
 
-    public bool HasUsageLimitQuestion {
-        get => _hasUsageLimitQuestion;
-        private set => this.RaiseAndSetIfChanged(ref _hasUsageLimitQuestion, value);
+    /// A vendor menu is on the terminal: a usage-limit question or a select dialog. Text sent now
+    /// would be typed into it. Stays set while a pending card hides the card itself.
+    public bool HasTerminalMenu {
+        get => _hasTerminalMenu;
+        private set => this.RaiseAndSetIfChanged(ref _hasTerminalMenu, value);
     }
 
-    public string UsageLimitSummary {
-        get => _usageLimitSummary;
-        private set => this.RaiseAndSetIfChanged(ref _usageLimitSummary, value);
+    bool _showsTerminalMenu;
+    /// The menu card. A pending hook card hides the screen's copy of the dialog it raised.
+    public bool ShowsTerminalMenu {
+        get => _showsTerminalMenu;
+        private set => this.RaiseAndSetIfChanged(ref _showsTerminalMenu, value);
     }
 
-    public string UsageLimitPrompt {
-        get => _usageLimitPrompt;
-        private set => this.RaiseAndSetIfChanged(ref _usageLimitPrompt, value);
+    public string TerminalMenuTitle {
+        get => _terminalMenuTitle;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuTitle, value);
     }
 
-    public string UsageLimitError {
-        get => _usageLimitError;
-        private set => this.RaiseAndSetIfChanged(ref _usageLimitError, value);
+    public string TerminalMenuHeading {
+        get => _terminalMenuHeading;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuHeading, value);
     }
 
-    public IReadOnlyList<UsageLimitChoiceViewModel> UsageLimitChoices {
-        get => _usageLimitChoices;
-        private set => this.RaiseAndSetIfChanged(ref _usageLimitChoices, value);
+    /// The dialog as the terminal shows it, for a dialog whose choices could not be read.
+    public string TerminalMenuScreen {
+        get => _terminalMenuScreen;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuScreen, value);
     }
 
-    /// False once a choice has been sent, until this notice changes. A failed send turns it back on.
-    public bool UsageLimitChoicesOpen => !_usageLimitChoiceTaken;
+    /// Set by the workspace hosting this chat; the card's fallback sends the user there.
+    public Action? ShowTerminal { get; set; }
+    public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
+
+    public string TerminalMenuSummary {
+        get => _terminalMenuSummary;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuSummary, value);
+    }
+
+    public string TerminalMenuPrompt {
+        get => _terminalMenuPrompt;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuPrompt, value);
+    }
+
+    public string TerminalMenuHint {
+        get => _terminalMenuHint;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuHint, value);
+    }
+
+    public string TerminalMenuError {
+        get => _terminalMenuError;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuError, value);
+    }
+
+    public IReadOnlyList<TerminalMenuChoiceViewModel> TerminalMenuChoices {
+        get => _terminalMenuChoices;
+        private set => this.RaiseAndSetIfChanged(ref _terminalMenuChoices, value);
+    }
+
+    /// False once a choice has been sent, until the menu changes. A failed send turns it back on.
+    public bool TerminalMenuChoicesOpen => !_terminalMenuChoiceTaken;
 
     readonly ObservableAsPropertyHelper<bool> _showsComposer;
     /// Input + Send stay in the tree only while messaging is still possible. An ended session
@@ -369,7 +409,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 foreach (var change in changes) {
                     if (change.Key != agentId) continue;
                     if (change.Reason == ChangeReason.Remove)
-                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true, UsageLimit = null };
+                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true, UsageLimit = null, TerminalDialog = null };
                     else if (change.Reason is ChangeReason.Add or ChangeReason.Update)
                         info = ChatSessionInfo.FromLocal(change.Current, ended: false);
                 }
@@ -436,8 +476,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .DisposeWith(_disposables);
 
         this.WhenAnyValue(x => x.HasPendingCards)
-            .Subscribe(_ => RefreshActivityNote())
+            .Subscribe(_ => {
+                RefreshActivityNote();
+                ApplyTerminalMenu(_usageLimit, _terminalDialog);
+            })
             .DisposeWith(_disposables);
+
+        ShowTerminalCommand = ReactiveCommand.Create(() => ShowTerminal?.Invoke());
+        _disposables.Add(ShowTerminalCommand);
 
         Cards.Requests
             .Subscribe(changes => {
@@ -478,12 +524,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _input.WhenAnyValue(i => i.Hint),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
                 this.WhenAnyValue(x => x.UploadingFiles),
-                this.WhenAnyValue(x => x.HasUsageLimitQuestion),
+                this.WhenAnyValue(x => x.TerminalMenuHint),
                 _intakeNotice,
-                (hint, readOnly, uploading, limit, notice) =>
+                (hint, readOnly, uploading, menuHint, notice) =>
                     uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
                         : notice ?? (readOnly ? ""
-                            : limit ? "Choose how to handle the usage limit. A message here would be typed into that menu."
+                            : menuHint.Length > 0 ? menuHint
                             : hint))
             .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);
@@ -516,8 +562,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             this.WhenAnyValue(x => x.ComposerText),
             _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-            this.WhenAnyValue(x => x.HasUsageLimitQuestion),
-            (text, can, readOnly, limit) => can && !readOnly && !limit && !string.IsNullOrWhiteSpace(text));
+            this.WhenAnyValue(x => x.HasTerminalMenu),
+            (text, can, readOnly, menu) => can && !readOnly && !menu && !string.IsNullOrWhiteSpace(text));
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
@@ -553,7 +599,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             }
             // The upload can finish after the menu is on screen. The text would be typed into
             // that menu, so the draft and the chips stay where they are.
-            if (HasUsageLimitQuestion) return;
+            if (HasTerminalMenu) return;
             var chipIds = files.Select(f => f.Id).ToList();
             var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
             _lastSent = queued;
@@ -637,8 +683,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         StatusText = info.StatusLabel;
-        StatusDot = SessionStatusDots.For(info.Status, info.WaitsOnUser || UsageLimitNoticeDto.IsQuestion(info.UsageLimit));
-        ApplyUsageLimit(info.UsageLimit);
+        StatusDot = SessionStatusDots.For(info.Status,
+            info.WaitsOnUser || UsageLimitNoticeDto.IsQuestion(info.UsageLimit) || info.TerminalDialog is not null);
+        ApplyTerminalMenu(info.UsageLimit, info.TerminalDialog);
         _status = info.Status;
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
@@ -658,41 +705,72 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         RefreshQueue();
     }
 
-    void ApplyUsageLimit(UsageLimitNoticeDto? notice) {
-        if (Equals(_usageLimit, notice)) return;
-        _usageLimit = notice;
-        foreach (var old in _usageLimitChoices) old.Choose.Dispose();
-        SetUsageLimitChoiceTaken(false);
-        var question = UsageLimitNoticeDto.IsQuestion(notice);
-        HasUsageLimitQuestion = question;
-        UsageLimitSummary = question ? notice!.Summary : "";
-        UsageLimitPrompt = question ? notice!.Prompt : "";
-        UsageLimitError = "";
-        UsageLimitChoices = question
-            ? notice!.Options.Select(option => new UsageLimitChoiceViewModel(
-                option.Index, option.Label,
+    /// A hook-driven card already asks the same question as the dialog it raised, so the screen's
+    /// copy stays out of the way while one is pending.
+    void ApplyTerminalMenu(UsageLimitNoticeDto? limit, TerminalDialogDto? dialog) {
+        var question = UsageLimitNoticeDto.IsQuestion(limit);
+        var shown = !question && dialog is not null && !HasPendingCards;
+        if (Equals(_usageLimit, limit) && Equals(_terminalDialog, dialog) && _terminalDialogShown == shown) return;
+        // An answer redraws the screen before the menu leaves it: arrow keys move the dialog's cursor,
+        // and a usage-limit menu can carry a dialog of its own that moves too. Either way it is still
+        // the menu already answered, and a second click would land on whatever comes next.
+        var sameMenu = question
+            ? Equals(_usageLimit, limit)
+            : shown && _terminalDialogShown && _terminalDialog is { } previous
+                && previous.Heading == dialog!.Heading && previous.Options.SequenceEqual(dialog.Options);
+        _usageLimit = limit;
+        _terminalDialog = dialog;
+        _terminalDialogShown = shown;
+        foreach (var old in _terminalMenuChoices) old.Choose.Dispose();
+        if (!sameMenu) SetTerminalMenuChoiceTaken(false);
+        TerminalMenuError = "";
+        List<(string Label, byte[] Keys)> choices = [];
+        (TerminalMenuTitle, TerminalMenuHeading, TerminalMenuSummary, TerminalMenuPrompt, TerminalMenuScreen, TerminalMenuHint) =
+            ("", "", "", "", "", "");
+        if (question) {
+            TerminalMenuSummary = limit!.Summary;
+            TerminalMenuPrompt = limit.Prompt;
+            TerminalMenuHint = "Choose how to handle the usage limit. A message here would be typed into that menu.";
+            choices = limit.Options.Where(o => o.Index is >= 1 and <= 9)
+                .Select(o => (o.Label, new[] { (byte)('0' + o.Index) })).ToList();
+        } else if (shown) {
+            TerminalMenuTitle = "Waiting for you in Terminal";
+            TerminalMenuHint = "Answer the terminal dialog first. A message here would be typed into it.";
+            if (dialog!.Options.Count > 0) {
+                TerminalMenuHeading = dialog.Heading;
+                TerminalMenuSummary = dialog.Body;
+                choices = dialog.Options
+                    .Select((label, i) => (label, TerminalInputEncoder.ChooseMenuOption(dialog.Selected, i))).ToList();
+            } else {
+                TerminalMenuScreen = dialog.Screen;
+            }
+        }
+        HasTerminalMenu = question || dialog is not null;
+        ShowsTerminalMenu = question || shown;
+        TerminalMenuChoices = choices.Select(choice => new TerminalMenuChoiceViewModel(
+                choice.Label, choice.Keys,
                 ReactiveCommand.CreateFromTask(
-                    () => ChooseUsageLimitAsync(option.Index),
-                    this.WhenAnyValue(x => x.UsageLimitChoicesOpen)))).ToList()
-            : [];
+                    () => ChooseTerminalMenuAsync(choice.Keys),
+                    this.WhenAnyValue(x => x.TerminalMenuChoicesOpen))))
+            .ToList();
     }
 
-    void SetUsageLimitChoiceTaken(bool taken) {
-        if (_usageLimitChoiceTaken == taken) return;
-        _usageLimitChoiceTaken = taken;
-        this.RaisePropertyChanged(nameof(UsageLimitChoicesOpen));
+    void SetTerminalMenuChoiceTaken(bool taken) {
+        if (_terminalMenuChoiceTaken == taken) return;
+        _terminalMenuChoiceTaken = taken;
+        this.RaisePropertyChanged(nameof(TerminalMenuChoicesOpen));
     }
 
-    // The digit is written before the menu leaves the screen, so another click would land on
+    // The keys are written before the menu leaves the screen, so another click would land on
     // the next prompt. A failed send is the only reason to try the same menu again.
-    async Task ChooseUsageLimitAsync(int index) {
-        if (index is < 1 or > 9 || _usageLimitChoiceTaken) return;
-        SetUsageLimitChoiceTaken(true);
-        UsageLimitError = "";
-        var sent = await _input.SendKeyAsync((byte)('0' + index), _lifetimeToken);
+    async Task ChooseTerminalMenuAsync(byte[] keys) {
+        if (_terminalMenuChoiceTaken) return;
+        SetTerminalMenuChoiceTaken(true);
+        TerminalMenuError = "";
+        var sent = await _input.SendKeysAsync(keys, _lifetimeToken);
         if (sent || _lifetimeToken.IsCancellationRequested) return;
-        UsageLimitError = "The terminal is not attached, so that choice was not sent.";
-        SetUsageLimitChoiceTaken(false);
+        TerminalMenuError = "The terminal is not attached, so that choice was not sent.";
+        SetTerminalMenuChoiceTaken(false);
     }
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
@@ -1067,7 +1145,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _subagents.Changed -= RefreshSubagents;
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
         // the cancellation before the channel it is sending through goes away.
-        foreach (var choice in _usageLimitChoices) choice.Choose.Dispose();
+        foreach (var choice in _terminalMenuChoices) choice.Choose.Dispose();
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         Cards.Dispose();

@@ -236,7 +236,7 @@ public class ChatTabViewSmokeTests {
                 await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
                 host.Settle();
 
-                var card = host.View.FindControl<Border>("UsageLimitCard");
+                var card = host.View.FindControl<Border>("TerminalMenuCard");
                 await Assert.That(card!.IsVisible).IsTrue();
                 await Assert.That(host.Composer.IsEnabled).IsFalse();
                 var labels = host.View.GetVisualDescendants().OfType<TextBlock>()
@@ -247,7 +247,7 @@ public class ChatTabViewSmokeTests {
                     .ToArray();
                 await Assert.That(labels).Count().IsEqualTo(3);
 
-                await host.Chat.UsageLimitChoices[2].Choose.Execute().ToTask();
+                await host.Chat.TerminalMenuChoices[2].Choose.Execute().ToTask();
                 host.Settle();
                 await Assert.That(client.SentInput.Any(bytes => bytes is [(byte)'3'])).IsTrue();
             } finally { await host.CloseAsync(); }

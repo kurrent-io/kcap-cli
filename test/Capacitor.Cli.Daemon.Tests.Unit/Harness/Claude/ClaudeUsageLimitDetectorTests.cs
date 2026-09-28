@@ -1,9 +1,9 @@
 using System.Text;
 using Capacitor.Cli.Core.LocalIpc;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Claude;
 using TUnit.Assertions.Enums;
 
-namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
+namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Claude;
 
 /// Pins the live-screen match for Claude's usage-limit menu: a limit line, the title, and two
 /// known choices, cleared when that screen is erased, and quiet when the limit line is absent.
@@ -19,7 +19,7 @@ public class ClaudeUsageLimitDetectorTests {
 
     [Test]
     public async Task Menu_on_the_screen_is_a_blocked_question_with_the_printed_choices() {
-        var notice = new ClaudeUsageLimitDetector().Observe(Utf8(Menu));
+        var notice = new ClaudeScreenWatcher().Observe(Utf8(Menu)).UsageLimit;
 
         await Assert.That(notice).IsNotNull();
         await Assert.That(notice!.Kind).IsEqualTo(UsageLimitKinds.Blocked);
@@ -35,7 +35,7 @@ public class ClaudeUsageLimitDetectorTests {
     [Test]
     public async Task Cursor_and_color_around_the_same_menu_still_match() {
         var framed = "\x1b[31m" + Menu.Replace("1. ", "\x1b[0m❯ 1. ") + "\x1b[0m";
-        var notice = new ClaudeUsageLimitDetector().Observe(Utf8(framed));
+        var notice = new ClaudeScreenWatcher().Observe(Utf8(framed)).UsageLimit;
 
         await Assert.That(notice).IsNotNull();
         await Assert.That(notice!.Options).Count().IsEqualTo(3);
@@ -43,11 +43,11 @@ public class ClaudeUsageLimitDetectorTests {
 
     [Test]
     public async Task A_menu_split_across_chunks_matches_once_the_second_choice_arrives() {
-        var detector = new ClaudeUsageLimitDetector();
+        var detector = new ClaudeScreenWatcher();
         var split = Menu.IndexOf("2. ", StringComparison.Ordinal);
 
-        await Assert.That(detector.Observe(Utf8(Menu[..split]))).IsNull();
-        var notice = detector.Observe(Utf8(Menu[split..]));
+        await Assert.That(detector.Observe(Utf8(Menu[..split])).UsageLimit).IsNull();
+        var notice = detector.Observe(Utf8(Menu[split..])).UsageLimit;
 
         await Assert.That(notice).IsNotNull();
         await Assert.That(notice!.Options).Count().IsEqualTo(3);
@@ -55,10 +55,10 @@ public class ClaudeUsageLimitDetectorTests {
 
     [Test]
     public async Task Clearing_the_screen_drops_the_question() {
-        var detector = new ClaudeUsageLimitDetector();
+        var detector = new ClaudeScreenWatcher();
         detector.Observe(Utf8(Menu));
 
-        var notice = detector.Observe(Utf8("\x1b[2Jready\r\n"));
+        var notice = detector.Observe(Utf8("\x1b[2Jready\r\n")).UsageLimit;
 
         await Assert.That(notice).IsNull();
     }
@@ -67,7 +67,7 @@ public class ClaudeUsageLimitDetectorTests {
     public async Task Prose_that_quotes_one_choice_is_not_a_question() {
         var prose = "The menu says Stop and wait for limit to reset, or ask your admin for more usage.\n";
 
-        await Assert.That(new ClaudeUsageLimitDetector().Observe(Utf8(prose))).IsNull();
+        await Assert.That(new ClaudeScreenWatcher().Observe(Utf8(prose)).UsageLimit).IsNull();
     }
 
     [Test]

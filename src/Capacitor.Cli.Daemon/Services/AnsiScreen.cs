@@ -1,4 +1,5 @@
 using System.Text;
+using Capacitor.Cli.Daemon.Pty;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -6,9 +7,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Stripping those sequences and keeping the bytes leaves a menu on the scrollback after the
 /// screen has overwritten it, so a match has to be read off the cells the cursor last wrote.
 internal sealed class AnsiScreen {
-    readonly int _cols;
-    readonly int _rows;
-    readonly char[] _cells;
+    int _cols;
+    int _rows;
+    char[] _cells;
     readonly Decoder _decoder = Encoding.UTF8.GetDecoder();
     char[] _decoded = new char[4096];
 
@@ -23,11 +24,41 @@ internal sealed class AnsiScreen {
     readonly int[] _params = new int[8];
     int _paramCount;
 
+    /// The grid is one cell per column and row. The product is the array length: an unchecked
+    /// multiply wraps, and a size that does not fit is not a grid this screen can keep.
+    internal const int MaxCells = 1 << 20;
+
+    internal static bool Fits(int cols, int rows) {
+        if (cols <= 0 || rows <= 0) return false;
+        try { return checked(cols * rows) <= MaxCells; }
+        catch (OverflowException) { return false; }
+    }
+
     public AnsiScreen(int cols, int rows) {
+        if (!Fits(cols, rows)) (cols, rows) = (PtyDefaults.Cols, PtyDefaults.Rows);
         _cols  = cols;
         _rows  = rows;
         _cells = new char[cols * rows];
         Array.Fill(_cells, ' ');
+    }
+
+    public int Cols => _cols;
+    public int Rows => _rows;
+
+    /// Follows the PTY to a new size. Cursor moves are relative to the width the TUI drew for, so
+    /// a grid of any other size misplaces every redraw. Keeps the top-left overlap; the TUI
+    /// repaints on the resize anyway.
+    public void Resize(int cols, int rows) {
+        if (cols == _cols && rows == _rows || !Fits(cols, rows)) return;
+        var cells = new char[cols * rows];
+        Array.Fill(cells, ' ');
+        for (var row = 0; row < Math.Min(rows, _rows); row++)
+            Array.Copy(_cells, row * _cols, cells, row * cols, Math.Min(cols, _cols));
+        (_cols, _rows, _cells) = (cols, rows, cells);
+        _row      = Math.Min(_row, rows - 1);
+        _col      = Math.Min(_col, cols - 1);
+        _savedRow = Math.Min(_savedRow, rows - 1);
+        _savedCol = Math.Min(_savedCol, cols - 1);
     }
 
     public void Write(ReadOnlySpan<byte> bytes) {
@@ -125,7 +156,8 @@ internal sealed class AnsiScreen {
     }
 
     void Csi(char c) {
-        if (c == '?' && !_paramStarted && _paramCount == 0) { _private = true; return; }
+        // Any of < = > ? opens a private sequence; Claude Code's version query is CSI > 0 q.
+        if (c is >= '<' and <= '?' && !_paramStarted && _paramCount == 0) { _private = true; return; }
         if (c is >= '0' and <= '9') {
             _paramStarted = true;
             _param = _param * 10 + (c - '0');

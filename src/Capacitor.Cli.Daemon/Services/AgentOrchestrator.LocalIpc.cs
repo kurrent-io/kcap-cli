@@ -82,7 +82,8 @@ internal partial class AgentOrchestrator {
                 // Null until the agent's first subagent report, a number from then on: the clock's
                 // count only while the agent is live, since nothing runs under a terminal one.
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
-                UsageLimit: a.Status == "Running" ? a.UsageLimit : null))];
+                UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
+                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame
