@@ -30,25 +30,31 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     readonly IPlanSource? _source;
     readonly PlanActivity _activity;
     readonly AvaloniaList<PlanTaskRow> _tasks = [];
+    readonly AvaloniaList<PlanTaskRow> _inProgress = [];
     readonly AvaloniaList<PlanDocumentRow> _documents = [];
     readonly List<ReadLease> _outstanding = [];
     readonly ITimer _settle;
+    IReadOnlyList<PlanTaskCount> _counts = [];
     ReadLease? _current;
     bool _tornDown;
 
     public IAvaloniaReadOnlyList<PlanTaskRow> Tasks => _tasks;
+    /// What the collapsed section lists: the rows of Tasks that are in progress, in plan order.
+    public IAvaloniaReadOnlyList<PlanTaskRow> InProgressTasks => _inProgress;
     public IAvaloniaReadOnlyList<PlanDocumentRow> Documents => _documents;
 
-    public bool HasPlan      => HasTasks || HasDocuments;
-    public bool HasTasks     => _tasks.Count > 0;
-    public bool HasDocuments => _documents.Count > 0;
+    public bool HasPlan       => HasTasks || HasDocuments;
+    public bool HasTasks      => _tasks.Count > 0;
+    public bool HasInProgress => _inProgress.Count > 0;
+    public bool HasDocuments  => _documents.Count > 0;
     public int DoneCount => _tasks.Count(task => task.IsSettled);
-    public int OpenCount => _tasks.Count - DoneCount;
-    /// What the expanded header says; folded, the header shows the two counts beside their marks.
+    /// What the expanded header says; collapsed, the header shows Counts.
     public string HeaderText => $"{DoneCount} of {_tasks.Count} done";
-    public string CountsTip => $"{DoneCount} done · {OpenCount} open";
+    /// Pending, in progress, done: one entry per state something is in, so the numbers add up
+    /// to the list. The instance changes only when a number does.
+    public IReadOnlyList<PlanTaskCount> Counts => _counts;
 
-    bool _isExpanded = true;
+    bool _isExpanded;
     public bool IsExpanded { get => _isExpanded; private set => this.RaiseAndSetIfChanged(ref _isExpanded, value); }
     public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
 
@@ -179,13 +185,28 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     }
 
     void RaiseShape() {
+        OrderedSubset.Sync(_inProgress, _tasks.Where(task => task.IsInProgress));
+        var counts = CountStates();
+        if (!counts.SequenceEqual(_counts)) {
+            _counts = counts;
+            this.RaisePropertyChanged(nameof(Counts));
+        }
         this.RaisePropertyChanged(nameof(HasPlan));
         this.RaisePropertyChanged(nameof(HasTasks));
+        this.RaisePropertyChanged(nameof(HasInProgress));
         this.RaisePropertyChanged(nameof(HasDocuments));
         this.RaisePropertyChanged(nameof(DoneCount));
-        this.RaisePropertyChanged(nameof(OpenCount));
         this.RaisePropertyChanged(nameof(HeaderText));
-        this.RaisePropertyChanged(nameof(CountsTip));
+    }
+
+    PlanTaskCount[] CountStates() {
+        var done = DoneCount;
+        PlanTaskCount[] states = [
+            new(PlanTaskState.Pending, _tasks.Count - _inProgress.Count - done),
+            new(PlanTaskState.InProgress, _inProgress.Count),
+            new(PlanTaskState.Completed, done),
+        ];
+        return [.. states.Where(state => state.Count > 0)];
     }
 
     public async Task TeardownAsync() {

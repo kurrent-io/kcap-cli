@@ -10,6 +10,7 @@ namespace Capacitor.App.ViewModels;
 /// persisted.
 public sealed class SessionSubagents(TimeProvider time) {
     readonly AvaloniaList<SubagentRow> _rows = new();
+    readonly AvaloniaList<SubagentRow> _running = new();
     readonly Dictionary<string, SubagentRow> _byCall = new(StringComparer.Ordinal);
     /// The row an agent id currently belongs to; the latest Detached wins.
     readonly Dictionary<string, SubagentRow> _byAgent = new(StringComparer.Ordinal);
@@ -18,6 +19,8 @@ public sealed class SessionSubagents(TimeProvider time) {
     bool _sessionOver;
 
     public IAvaloniaReadOnlyList<SubagentRow> Rows => _rows;
+    /// The rows of Rows that present as running, in arrival order.
+    public IAvaloniaReadOnlyList<SubagentRow> Running => _running;
     public int RunningCount => Count(SubagentState.Running);
 
     public int Count(SubagentState state) => _counts[(int)state];
@@ -116,6 +119,7 @@ public sealed class SessionSubagents(TimeProvider time) {
             row.Present(_sessionOver, now);
             counts[(int)row.State]++;
         }
+        OrderedSubset.Sync(_running, _rows.Where(row => row.IsRunning));
         if (counts.SequenceEqual(_counts)) return;
         counts.CopyTo(_counts);
         Changed?.Invoke();

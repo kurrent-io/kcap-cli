@@ -1596,6 +1596,31 @@ public class WorkContextViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_subagents_list_holds_the_running_rows_and_empties_when_the_session_is_over() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(h.Vm.HasRunningSubagents).IsFalse();
+
+            var now = h.Time.GetUtcNow();
+            h.Subagents.Apply(Spawn("c1", now));
+            h.Subagents.Apply(Spawn("c2", now));
+            h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
+            await Assert.That(h.Vm.HasRunningSubagents).IsTrue();
+            await Assert.That(h.Vm.RunningSubagents.Select(r => r.CallId)).IsEquivalentTo(new[] { "c2" });
+
+            var raised = new List<string?>();
+            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            h.Subagents.SessionOver = true;
+
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasRunningSubagents));
+            await Assert.That(h.Vm.HasRunningSubagents).IsFalse();
+            await Assert.That(h.Vm.RunningSubagents).IsEmpty();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
     /// The collapsed summary lists running, completed, failed, stopped in that order and leaves
     /// out a state nothing is in, so its numbers always add up to the list.
     [Test]
@@ -1672,7 +1697,7 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
             await h.PlanSettledAsync();
             await Assert.That(h.Plans.Requested).IsEquivalentTo(new[] { SessionA });
-            await Assert.That(h.Vm.Plan.OpenCount).IsEqualTo(1);
+            await Assert.That(h.Vm.Plan.Tasks.Count).IsEqualTo(1);
 
             await h.TickAsync();
             await h.PlanSettledAsync();
@@ -1704,7 +1729,7 @@ public class WorkContextViewModelTests {
 
             await Assert.That(h.Plans.Requested).IsEquivalentTo(new[] { SessionA, SessionB }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Plan.DoneCount).IsEqualTo(0);
-            await Assert.That(h.Vm.Plan.OpenCount).IsEqualTo(2);
+            await Assert.That(h.Vm.Plan.Tasks.Count).IsEqualTo(2);
             await h.Vm.TeardownAsync();
         });
     }

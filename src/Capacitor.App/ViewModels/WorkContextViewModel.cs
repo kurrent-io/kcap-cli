@@ -103,6 +103,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     /// under SESSION, so it renders in every pane phase.
     public IAvaloniaReadOnlyList<SubagentRow> Subagents => _subagents.Rows;
     public bool HasSubagents => _subagents.Rows.Count > 0;
+    /// What the collapsed section lists.
+    public IAvaloniaReadOnlyList<SubagentRow> RunningSubagents => _subagents.Running;
+    public bool HasRunningSubagents => _subagents.RunningCount > 0;
     public string SubagentsHeader {
         get {
             var running = _subagents.RunningCount;
@@ -118,7 +121,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     static readonly SubagentState[] SubagentCountOrder =
         [SubagentState.Running, SubagentState.Done, SubagentState.Failed, SubagentState.Stopped];
 
-    /// What the collapsed section shows: one entry per state something is in, so the numbers
+    /// What the collapsed header shows: one entry per state something is in, so the numbers
     /// add up to the list.
     public IReadOnlyList<SubagentCount> SubagentCounts =>
         [.. SubagentCountOrder.Select(state => new SubagentCount(state, _subagents.Count(state))).Where(c => c.Count > 0)];
@@ -129,6 +132,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     void RefreshSubagents() {
         this.RaisePropertyChanged(nameof(HasSubagents));
+        this.RaisePropertyChanged(nameof(HasRunningSubagents));
         this.RaisePropertyChanged(nameof(SubagentsHeader));
         this.RaisePropertyChanged(nameof(SubagentCounts));
     }
