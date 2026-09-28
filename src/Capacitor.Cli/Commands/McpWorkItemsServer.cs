@@ -153,7 +153,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         "work on next, or you are about to propose new work, call get_next_work first and answer from it, " +
         "citing its because-clauses; tracker queries and memory are context for that answer, not a " +
         "substitute for it. When the user turns a presented next-work suggestion down, record it with " +
-        "dismiss_next_work; restore_next_work undoes it.";
+        "dismiss_next_work; restore_next_work undoes it. " + NextWorkEmitter.CompletionInstruction;
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(

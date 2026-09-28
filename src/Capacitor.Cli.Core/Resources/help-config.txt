@@ -17,7 +17,7 @@ Config keys:
   disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)
   disable_memory_index        Skip injecting the team-memory index at SessionStart (true/false)
   disable_workitems_nudge     Skip injecting the work-items nudge at SessionStart (true/false)
-  disable_nextwork_nudge      Skip injecting the next-work list at SessionStart (true/false)
+  disable_nextwork_nudge      Skip the next-work list at SessionStart and the completion nudge (true/false)
   disable_first_run_notice    Skip the one-shot notice in the first session after setup (true/false)
   disable_plans_nudge         Skip injecting the plans nudge at SessionStart (true/false)
   disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)

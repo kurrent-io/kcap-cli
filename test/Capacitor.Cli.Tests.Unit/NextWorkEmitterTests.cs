@@ -42,7 +42,7 @@ public class NextWorkEmitterTests {
     public async Task The_guidance_names_deferral_and_completion() {
         await Assert.That(NextWorkEmitter.Guidance).Contains("Finish a listed item before starting new work.");
         await Assert.That(NextWorkEmitter.Guidance).Contains("declare it at that moment with declare_loose_end (one call per item, never \"none\")");
-        await Assert.That(NextWorkEmitter.Guidance).Contains("then call get_next_work and tell the user what to consider working on next and why.");
+        await Assert.That(NextWorkEmitter.Guidance).EndsWith("When the user's task is complete and you are about to report it: declare any remaining loose ends with declare_loose_end (one call per item, never \"none\"), then call get_next_work and tell the user, in a few lines, what to consider working on next and why.");
     }
 
     [Test]

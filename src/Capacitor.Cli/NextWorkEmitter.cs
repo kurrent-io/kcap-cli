@@ -62,8 +62,12 @@ static partial class NextWorkEmitter {
     internal const string Guidance =
         "Finish a listed item before starting new work. When you decide to defer something in this " +
         "session, declare it at that moment with declare_loose_end (one call per item, never \"none\"). " +
-        "When the user's task is complete and you are about to report it, declare any remaining loose " +
-        "ends, then call get_next_work and tell the user what to consider working on next and why.";
+        CompletionInstruction;
+
+    internal const string CompletionInstruction =
+        "When the user's task is complete and you are about to report it: declare any remaining loose " +
+        "ends with declare_loose_end (one call per item, never \"none\"), then call get_next_work and " +
+        "tell the user, in a few lines, what to consider working on next and why.";
 
     public static string? BuildFragment(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
