@@ -114,7 +114,8 @@ public class McpWorkItemsServerTests {
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
             "merge_work_item", "detach_work_item",
-            "dismiss_next_work", "restore_next_work", "list_dismissed_next_work"
+            "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
+            "list_loose_ends", "close_loose_end", "reopen_loose_end"
         });
     }
 
@@ -175,6 +176,70 @@ public class McpWorkItemsServerTests {
         await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"   "}""")))
             .Throws<ArgumentException>()
             .WithMessageContaining("'text' must not be blank");
+    }
+
+    [Test]
+    public async Task Close_body_carries_the_id_and_the_current_session() {
+        var body = McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"loose_end_id":"le1","session_id":"s1"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"loose_end_id":"le1","session_id":"s1"}""");
+    }
+
+    [Test]
+    public async Task Reopen_body_carries_only_the_id() {
+        var body = McpWorkItemsServer.BuildReopenLooseEndBody(Args("""{"loose_end_id":"le1","session_id":"s1"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"loose_end_id":"le1"}""");
+    }
+
+    [Test]
+    public async Task Close_and_reopen_bodies_require_the_id() {
+        await Assert.That(() => McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"session_id":"s1"}""")))
+            .Throws<ArgumentException>().WithMessageContaining("'loose_end_id' is required");
+        await Assert.That(() => McpWorkItemsServer.BuildReopenLooseEndBody(Args("{}")))
+            .Throws<ArgumentException>().WithMessageContaining("'loose_end_id' is required");
+    }
+
+    [Test]
+    public async Task Close_body_encodes_an_id_that_needs_escaping() {
+        var body = McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"loose_end_id":"a\"b","session_id":"s1"}"""));
+
+        await Assert.That(body["loose_end_id"]!.GetValue<string>()).IsEqualTo("a\"b");
+    }
+
+    [Test]
+    public async Task List_url_carries_status_repo_session_limit_and_cursor() {
+        var url = McpWorkItemsServer.BuildLooseEndsUrl("https://x", Args("""{"status":"closed","session_id":"s1","limit":5,"cursor":"abc"}"""), "r1");
+
+        await Assert.That(url).IsEqualTo("https://x/api/loose-ends?status=closed&repo_hash=r1&session_id=s1&limit=5&cursor=abc");
+    }
+
+    [Test]
+    public async Task List_url_escapes_values_and_omits_what_is_not_known() {
+        await Assert.That(McpWorkItemsServer.BuildLooseEndsUrl("https://x", null, null)).IsEqualTo("https://x/api/loose-ends");
+        await Assert.That(McpWorkItemsServer.BuildLooseEndsUrl("https://x", Args("""{"cursor":"a+b/c="}"""), "r/1"))
+            .IsEqualTo("https://x/api/loose-ends?repo_hash=r%2F1&cursor=a%2Bb%2Fc%3D");
+    }
+
+    [Test]
+    public async Task List_url_rejects_a_non_integer_limit() {
+        await Assert.That(() => McpWorkItemsServer.BuildLooseEndsUrl("https://x", Args("""{"limit":"5"}"""), null))
+            .Throws<ArgumentException>().WithMessageContaining("limit");
+    }
+
+    [Test]
+    public async Task Close_and_reopen_require_the_id_and_list_requires_nothing() {
+        var byName = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
+
+        await Assert.That(byName["list_loose_ends"].InputSchema.Required).IsEmpty();
+        await Assert.That(byName["close_loose_end"].InputSchema.Required).IsEquivalentTo(new[] { "loose_end_id" });
+        await Assert.That(byName["reopen_loose_end"].InputSchema.Required).IsEquivalentTo(new[] { "loose_end_id" });
+    }
+
+    [Test]
+    public async Task Instructions_name_the_close_and_reopen_tools() {
+        await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("close it with close_loose_end");
+        await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("reopen_loose_end undoes a mistaken close");
     }
 
     /// <summary>Pins that the loose end takes its session from McpSessionId like every other
