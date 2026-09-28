@@ -333,6 +333,50 @@ public class SessionSubagentsTests {
     }
 
     [Test]
+    public async Task The_running_list_holds_the_rows_presenting_as_running_in_arrival_order() {
+        var s = new SessionSubagents(Clock());
+        await Assert.That(s.Running).IsEmpty();
+
+        s.Apply(Signals(Started("c1", name: "first"), Started("c2", name: "second"), Started("c3", name: "third")));
+        await Assert.That(s.Running.Select(r => r.Name)).IsEquivalentTo(new[] { "first", "second", "third" }, CollectionOrdering.Matching);
+        await Assert.That(ReferenceEquals(s.Running[1], s.Rows[1])).IsTrue();
+
+        s.Apply(Result("c2"));
+        await Assert.That(s.Running.Select(r => r.Name)).IsEquivalentTo(new[] { "first", "third" }, CollectionOrdering.Matching);
+
+        s.SessionOver = true;
+        await Assert.That(s.Running).IsEmpty();
+
+        s.SessionOver = false;
+        await Assert.That(s.Running.Select(r => r.Name)).IsEquivalentTo(new[] { "first", "third" }, CollectionOrdering.Matching);
+
+        s.Clear();
+        await Assert.That(s.Running).IsEmpty();
+    }
+
+    /// Taking a row out and putting it back would rebuild its container and restart its pulse,
+    /// so a row that keeps running is never touched while others start and finish.
+    [Test]
+    public async Task A_row_that_keeps_running_keeps_its_place_while_others_start_and_finish() {
+        var s = new SessionSubagents(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2"), Started("c3")));
+        var moved = new List<SubagentRow>();
+        var resets = 0;
+        s.Running.CollectionChanged += (_, e) => {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++;
+            moved.AddRange((e.OldItems ?? Array.Empty<object>()).OfType<SubagentRow>());
+            moved.AddRange((e.NewItems ?? Array.Empty<object>()).OfType<SubagentRow>());
+        };
+
+        s.Apply(Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c2")], Started("c4")));
+        s.Tick();
+
+        await Assert.That(s.Running.Select(r => r.CallId)).IsEquivalentTo(new[] { "c1", "c3", "c4" }, CollectionOrdering.Matching);
+        await Assert.That(resets).IsEqualTo(0);
+        await Assert.That(moved.Select(r => r.CallId)).IsEquivalentTo(new[] { "c2", "c4" });
+    }
+
+    [Test]
     public async Task Every_presented_state_has_its_own_count_and_session_over_moves_running_to_stopped() {
         var s = new SessionSubagents(Clock());
         s.Apply(Signals(Started("c1"), Started("c2"), Started("c3"), Started("c4"), Started("c5")));

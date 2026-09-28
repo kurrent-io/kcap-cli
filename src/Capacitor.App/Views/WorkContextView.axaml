@@ -278,6 +278,39 @@
                 </Panel>
             </Panel>
         </DataTemplate>
+        <DataTemplate x:Key="PlanTaskItem" x:DataType="vm:PlanTaskRow">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <!-- The pulse is the row's own: it stops when the session ends, and the
+                     ring stays so the task still reads as started. -->
+                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
+                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}" />
+                </Panel>
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
+                               TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                    <TextBlock Text="{Binding Note}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Note}"
+                               IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="SubagentItem" x:DataType="vm:SubagentRow">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
+                </Panel>
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                    <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
+                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
     </UserControl.Resources>
 
     <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1,0,0,0">
@@ -598,26 +631,30 @@
                                         </MultiBinding>
                                     </TextBlock.IsVisible>
                                 </TextBlock>
-                                <!-- The digits and marks are nudged toward each other as the subagent counts are. -->
-                                <StackPanel x:Name="PlanCounts" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
-                                            Background="Transparent" ToolTip.Tip="{Binding Plan.CountsTip}">
-                                    <StackPanel.IsVisible>
+                                <!-- The digits and marks are nudged toward each other as the subagent counts are,
+                                     and the nudge lifts the marks past the top an ItemsControl clips to. -->
+                                <ItemsControl x:Name="PlanCounts" ItemsSource="{Binding Plan.Counts}" VerticalAlignment="Center" ClipToBounds="False">
+                                    <ItemsControl.IsVisible>
                                         <MultiBinding Converter="{x:Static BoolConverters.And}">
                                             <Binding Path="!Plan.IsExpanded" />
                                             <Binding Path="Plan.HasTasks" />
                                         </MultiBinding>
-                                    </StackPanel.IsVisible>
-                                    <StackPanel Orientation="Horizontal" Spacing="5">
-                                        <ContentControl Content="{x:Static vm:PlanTaskState.Completed}" ContentTemplate="{StaticResource PlanMark}"
-                                                        VerticalAlignment="Center" RenderTransform="translateY(-1px)" />
-                                        <TextBlock x:Name="PlanDoneCount" Text="{Binding Plan.DoneCount}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Spacing="5">
-                                        <ContentControl Content="{x:Static vm:PlanTaskState.Pending}" ContentTemplate="{StaticResource PlanMark}"
-                                                        VerticalAlignment="Center" RenderTransform="translateY(-1px)" />
-                                        <TextBlock x:Name="PlanOpenCount" Text="{Binding Plan.OpenCount}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
-                                    </StackPanel>
-                                </StackPanel>
+                                    </ItemsControl.IsVisible>
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="10" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:PlanTaskCount">
+                                            <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
+                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center"
+                                                                RenderTransform="translateY(-1px)" />
+                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                                 <Panel Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding Plan.IsExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !Plan.IsExpanded}" />
@@ -643,34 +680,31 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <ItemsControl x:Name="PlanTaskList" ItemsSource="{Binding Plan.Tasks}" IsVisible="{Binding Plan.HasTasks}">
+                            <ItemsControl x:Name="PlanTaskList" ItemsSource="{Binding Plan.Tasks}" IsVisible="{Binding Plan.HasTasks}"
+                                          ItemTemplate="{StaticResource PlanTaskItem}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <StackPanel Spacing="10" />
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:PlanTaskRow">
-                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                                            <!-- The pulse is the row's own: it stops when the session ends, and the
-                                                 ring stays so the task still reads as started. -->
-                                            <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
-                                                <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                                                        HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}" />
-                                            </Panel>
-                                            <StackPanel Grid.Column="1" Spacing="2">
-                                                <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
-                                                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
-                                                <TextBlock Text="{Binding Note}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}"
-                                                           TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Note}"
-                                                           IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </StackPanel>
+                    </Border>
+                    <Border x:Name="PlanInProgressBody" Classes="sectionBody">
+                        <Border.IsVisible>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="!Plan.IsExpanded" />
+                                <Binding Path="Plan.HasInProgress" />
+                            </MultiBinding>
+                        </Border.IsVisible>
+                        <ItemsControl x:Name="PlanInProgressList" ItemsSource="{Binding Plan.InProgressTasks}"
+                                      ItemTemplate="{StaticResource PlanTaskItem}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="10" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
                     </Border>
                 </StackPanel>
 
@@ -710,29 +744,27 @@
                         </Grid>
                     </Button>
                     <Border Classes="sectionBody" IsVisible="{Binding SubagentsExpanded}">
-                        <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Subagents}">
+                        <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Subagents}" ItemTemplate="{StaticResource SubagentItem}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Spacing="10" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:SubagentRow">
-                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                                        <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                                            <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
-                                        </Panel>
-                                        <StackPanel Grid.Column="1" Spacing="2">
-                                            <TextBlock Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                                            <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
-                                                       IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
-                                        </StackPanel>
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                    <Border x:Name="RunningSubagentsBody" Classes="sectionBody">
+                        <Border.IsVisible>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="!SubagentsExpanded" />
+                                <Binding Path="HasRunningSubagents" />
+                            </MultiBinding>
+                        </Border.IsVisible>
+                        <ItemsControl x:Name="RunningSubagentList" ItemsSource="{Binding RunningSubagents}" ItemTemplate="{StaticResource SubagentItem}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="10" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
                         </ItemsControl>
                     </Border>
                 </StackPanel>
