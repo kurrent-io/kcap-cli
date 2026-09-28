@@ -264,9 +264,14 @@ reading the endpoint; adopting the daemon list there is a follow-on.
   previous catalog had a key for `SelectedVendor` that contained it, and the next catalog has a
   key for `SelectedVendor` that does not, `SelectedModel` resets to `""`. This covers a machine
   switch to a same-vendor machine with a disjoint list and a live refresh that withdraws the
-  model. A model the previous catalog did not list (a typed custom id, or one picked before any
-  catalog arrived) is never cleared by a catalog change: the daemon is the authority at launch,
-  and clearing a custom id on every emission would make the custom row unusable.
+  model. `SelectedModel` stores only the string, and the listed rows and the typed custom row
+  reach it through the same `Pick`, so provenance is not tracked; the rule is purely about the
+  previous catalog. Consequences, stated as the promise: a model the previous catalog did not
+  list (a typed custom id, or one picked before any catalog arrived) survives that emission,
+  since clearing a custom id on every emission would make the custom row unusable. A custom id
+  that a later catalog comes to list and a still later catalog withdraws is cleared exactly like
+  a listed pick: the catalog is the machine's word on what launches, and its withdrawal of an id
+  it had confirmed is a better signal than how the id was first entered.
 - The agent chip's fourth `MultiBinding` in `LauncherPaneView.axaml` binds
   `EffectiveModelCatalog` instead of `ModelCatalog`; `AgentChipTextConverter` is unchanged, since
   it already resolves the label against that dictionary and falls back to the curated
@@ -348,8 +353,9 @@ App (`test/Capacitor.App.Tests.Unit/`, beside `HomeViewModelTests`):
   a machine-only entry).
 - Selected-model revalidation: Pi model A picked from machine 1's list, switch to machine 2
   whose Pi list lacks A → `SelectedModel` is `""`; a live refresh that drops A → `""`; a typed
-  custom id survives both a machine switch and a refresh; a model picked before any catalog
-  arrived survives the first catalog emission.
+  custom id survives both a machine switch and a refresh while unlisted; a model picked before
+  any catalog arrived survives the first catalog emission; a custom id that a later emission
+  lists and a following emission withdraws is cleared.
 
 Server (kcap-server unit suites beside `DaemonRegistry` and the dialog):
 
