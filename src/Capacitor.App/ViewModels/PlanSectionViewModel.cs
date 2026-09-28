@@ -149,11 +149,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         if (plan is null) { Clear(); return; }
 
         var tasks = plan.Tasks.OrderBy(task => task.Ordinal).ToList();
-        var sameRows = tasks.Count == _tasks.Count && tasks.Zip(_tasks).All(pair => RowKey(pair.First) == pair.Second.TaskId);
-        if (!sameRows) {
-            _tasks.Clear();
-            _tasks.AddRange(tasks.Select(task => new PlanTaskRow(RowKey(task))));
-        }
+        StableRows.Sync(_tasks, RowsFor(tasks));
         for (var i = 0; i < tasks.Count; i++) _tasks[i].Present(tasks[i], _activity.SessionOver);
 
         var documents = plan.Documents
@@ -165,6 +161,13 @@ public sealed class PlanSectionViewModel : ReactiveObject {
             _documents.AddRange(documents);
         }
         RaiseShape();
+    }
+
+    /// A task the plan still names keeps its row, whatever was added, dropped or moved around it.
+    List<PlanTaskRow> RowsFor(List<PlanLedgerTaskDto> tasks) {
+        var known = new Dictionary<string, PlanTaskRow>(StringComparer.Ordinal);
+        foreach (var row in _tasks) known.TryAdd(row.TaskId, row);
+        return [.. tasks.Select(task => known.Remove(RowKey(task), out var row) ? row : new PlanTaskRow(RowKey(task)))];
     }
 
     /// A task the server sent without an id is still one row per position.
@@ -185,7 +188,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     }
 
     void RaiseShape() {
-        OrderedSubset.Sync(_inProgress, _tasks.Where(task => task.IsInProgress));
+        StableRows.Sync(_inProgress, _tasks.Where(task => task.IsInProgress));
         var counts = CountStates();
         if (!counts.SequenceEqual(_counts)) {
             _counts = counts;

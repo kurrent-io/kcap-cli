@@ -278,7 +278,6 @@
                 </Panel>
             </Panel>
         </DataTemplate>
-        <!-- The rows of a section, shared by its full list and the list it shows collapsed. -->
         <DataTemplate x:Key="PlanTaskItem" x:DataType="vm:PlanTaskRow">
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                 <!-- The pulse is the row's own: it stops when the session ends, and the

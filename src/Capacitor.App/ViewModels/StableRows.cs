@@ -4,7 +4,7 @@ namespace Capacitor.App.ViewModels;
 
 /// Brings a bound list to the rows wanted without touching a row that stays: taking it out and
 /// putting it back would rebuild its container and restart its pulse.
-static class OrderedSubset {
+static class StableRows {
     public static void Sync<T>(AvaloniaList<T> shown, IEnumerable<T> wanted) where T : class {
         var rows = wanted.ToList();
         if (rows.SequenceEqual(shown)) return;

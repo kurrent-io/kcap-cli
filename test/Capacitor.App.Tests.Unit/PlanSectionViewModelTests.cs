@@ -364,6 +364,41 @@ public class PlanSectionViewModelTests {
         });
     }
 
+    /// A plan the agent reshapes names most of its tasks again: a task it still names keeps its
+    /// row in both lists, so only what was added, dropped or moved is touched.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_task_the_reshaped_plan_still_names_keeps_its_row() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(
+                Ready(Plan("p1", tasks: [Todo("t1", 1, "in_progress"), Todo("t2", 2, "pending"), Todo("t3", 3, "pending")])),
+                Ready(Plan("p1", tasks: [Todo("t1", 1, "in_progress"), Todo("t4", 2, "pending"), Todo("t3", 3, "in_progress")])));
+            await h.SwitchAsync(SessionA);
+            var first = h.Vm.Tasks[0];
+            var third = h.Vm.Tasks[2];
+            var touched = new List<PlanTaskRow>();
+            var resets = 0;
+            void Record(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) {
+                if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++;
+                touched.AddRange((e.OldItems ?? Array.Empty<object>()).OfType<PlanTaskRow>());
+                touched.AddRange((e.NewItems ?? Array.Empty<object>()).OfType<PlanTaskRow>());
+            }
+            h.Vm.Tasks.CollectionChanged += Record;
+            h.Vm.InProgressTasks.CollectionChanged += Record;
+
+            await h.RefreshAsync();
+
+            await Assert.That(h.Vm.Tasks.Select(t => t.TaskId)).IsEquivalentTo(new[] { "t1", "t4", "t3" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(ReferenceEquals(h.Vm.Tasks[0], first)).IsTrue();
+            await Assert.That(ReferenceEquals(h.Vm.Tasks[2], third)).IsTrue();
+            await Assert.That(h.Vm.InProgressTasks.Select(t => t.TaskId)).IsEquivalentTo(new[] { "t1", "t3" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(resets).IsEqualTo(0);
+            await Assert.That(touched).DoesNotContain(first);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_task_in_progress_stops_reading_as_active_once_the_session_is_over() {

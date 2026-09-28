@@ -119,7 +119,7 @@ public sealed class SessionSubagents(TimeProvider time) {
             row.Present(_sessionOver, now);
             counts[(int)row.State]++;
         }
-        OrderedSubset.Sync(_running, _rows.Where(row => row.IsRunning));
+        StableRows.Sync(_running, _rows.Where(row => row.IsRunning));
         if (counts.SequenceEqual(_counts)) return;
         counts.CopyTo(_counts);
         Changed?.Invoke();
