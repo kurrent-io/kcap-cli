@@ -394,7 +394,7 @@ public class DaemonConfig {
     /// authority. See <c>PiReviewerCapability</c>.</summary>
     public bool PiUnattendedReviewerEnabled { get; set; } = true;
 
-    /// <summary>Ceiling on a Pi reviewer turn. Matches the Antigravity reviewer's turn limit.</summary>
+    /// <summary>How long a Pi reviewer round may go without a frame from Pi before it is reaped.</summary>
     public int PiReviewerTurnTimeoutSeconds { get; set; } = 600;
 
     /// <summary>Path or bare command for Google Gemini CLI's ACP entry point, spawned as
