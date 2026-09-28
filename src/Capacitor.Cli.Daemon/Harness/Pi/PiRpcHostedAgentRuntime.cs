@@ -80,6 +80,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     const int SentPromptMemory = 16;
 
     static readonly TimeSpan DefaultStopGrace = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan PumpDrainFloor   = TimeSpan.FromSeconds(1);
 
     /// <summary>Backs an omitted <c>readyDeadline</c> — see rule (a) on why the deadline is never
     /// allowed to be absent. Generous rather than tight: it bounds a PATHOLOGY (a child that
@@ -166,8 +167,6 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     int _firstRoundSettled;
 
     readonly Task _pumpTask;
-
-    static readonly TimeSpan PumpDrainFloor = TimeSpan.FromSeconds(1);
     readonly Task _handshakeTask;
 
     int _commandSeq;
