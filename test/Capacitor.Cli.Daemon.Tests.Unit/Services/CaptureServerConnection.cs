@@ -315,6 +315,8 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// launch-catch + read-loop cleanup.</summary>
     public List<string> AgentUnregisteredCalls { get; } = [];
 
+    public Dictionary<string, string?> AgentUnregisteredStopReasons { get; } = [];
+
     /// <summary>Every dropped-input report, in call order — the only place a drop reason becomes
     /// observable to anyone but this daemon's own log.</summary>
     public List<(Guid DispatchId, string AgentId, string Reason)> InputRejections { get; } = [];
@@ -325,8 +327,11 @@ sealed class CaptureServerConnection() : ServerConnection(
         return Task.CompletedTask;
     }
 
-    public override Task AgentUnregisteredAsync(string agentId) {
-        lock (AgentUnregisteredCalls) AgentUnregisteredCalls.Add(agentId);
+    public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) {
+        lock (AgentUnregisteredCalls) {
+            AgentUnregisteredCalls.Add(agentId);
+            AgentUnregisteredStopReasons[agentId] = stopReason;
+        }
         OnAgentUnregistered?.Invoke();
 
         return Task.CompletedTask;

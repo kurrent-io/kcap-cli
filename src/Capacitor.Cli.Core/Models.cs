@@ -2246,7 +2246,9 @@ public readonly record struct ReportAgentCommandsArgs(
         IReadOnlyList<HostedAgentCommand> Commands
     );
 
-public readonly record struct AgentUnregistered(string AgentId);
+/// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.
+/// A server that predates it ignores the field.</param>
+public readonly record struct AgentUnregistered(string AgentId, string? StopReason = null);
 
 public readonly record struct LaunchFailed(
         string AgentId,

@@ -1057,7 +1057,7 @@ public class AgentOrchestratorLocalAttachTests {
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
         public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
-        public override Task AgentUnregisteredAsync(string agentId) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
+        public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }
         public override Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) { Calls.Add(nameof(SendTerminalOutputAsync)); return Task.CompletedTask; }
         public override Task AppendAgentRunEventAsync(string agentId, object evt) { Calls.Add(nameof(AppendAgentRunEventAsync)); RunEvents.Add(evt); return Task.CompletedTask; }
