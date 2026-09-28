@@ -26,6 +26,9 @@ Options for start:
 Options for stop:
   --all                   Stop every agent, including --private ones. Review and
                           review-flow agents are skipped unless --force is given.
+                          Only the displayed snapshot is stopped; agents started
+                          after the list was fetched remain running.
+                          Listed agents that finish before dispatch count as stopped.
   --force                 Stop a single review or review-flow agent that would
                           otherwise be refused, or include them under --all.
                           Stopping a flow participant mid-round leaves the flow

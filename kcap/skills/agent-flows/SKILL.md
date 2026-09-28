@@ -18,7 +18,7 @@ description: >-
 
 # Agent Flows
 
-Use the `kcap mcp flows` MCP tools (`start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result (kind `findings` with the participant's result text, or `clean`); you address a `findings` result and keep iterating until the clean signal. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
+Use the `kcap mcp flows` MCP tools (`list_flow_definitions`, `start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result (kind `findings` with the participant's result text, or `clean`); you address a `findings` result and keep iterating until the clean signal. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
 
 ## Long rounds are normal
 
@@ -46,7 +46,7 @@ Once the user has explicitly opted into a flow (see above), pick the `definition
 
 - Spec or design document → `definition_id: "spec-review"` (built-in; same as `review-flows`' `spec-review` kind)
 - Code changes or a pull request → `definition_id: "code-review"` (built-in; same as `review-flows`' `code-review` kind)
-- Anything else → the definition id the user named, or one you look up in the server's flow-definition catalog at `/admin/flows`. If you're unsure which definition applies, ask the user rather than guessing.
+- Anything else → the definition id the user named, or one from `list_flow_definitions` (read-only), which lists every definition this server can start — operator-published ones included — with its version, description, participant roles and their authored vendor and model, and whether it is single- or multi-participant. Call it whenever the user has not named a definition, or named one you have not seen listed: a definition it does not list is disabled, deleted or unknown, and `start_flow` will refuse it. If several fit, ask the user rather than guessing. A server that answers that it cannot list definitions only predates the tool — the two built-ins and any id the user names still work.
 
 For the reserved `spec-review` and `code-review` aliases, reviewer-vendor language is role-bound:
 pass the one vendor explicitly named as the reviewer, ignore driver-harness mentions, honor
@@ -89,7 +89,7 @@ server rejects the override outright.
 
 ## Composing a dynamic flow
 
-If nothing in the catalog fits — no `definition_id` covers the roles or workflow you need — compose one inline instead: pass `definition_yaml` to `start_flow` in place of `definition_id`. Provide exactly one of the two, never both. (`start_review_flow` / `submit_review_round` stay catalog-only — this only applies to the generic `start_flow`.)
+If nothing `list_flow_definitions` shows fits — no `definition_id` covers the roles or workflow you need — compose one inline instead: pass `definition_yaml` to `start_flow` in place of `definition_id`. Provide exactly one of the two, never both. (`start_review_flow` / `submit_review_round` stay catalog-only — this only applies to the generic `start_flow`.)
 
 YAML shape:
 
@@ -216,6 +216,7 @@ report completion to user
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
+| `list_flow_definitions` | — | — | Before `start_flow`, whenever the user has not named a definition or named one you have not seen listed. Read-only: returns each runnable definition's id, version, description, whether it is single- or multi-participant, and its participants' role, authored vendor and model. A `server_catching_up` error is retryable — do not read it as an empty catalog. |
 | `start_flow` | Exactly one of `definition_id` (catalog id, e.g. `spec-review`, `code-review`, or a custom catalog id) or `definition_yaml` (inline dynamic definition — see "Composing a dynamic flow"); plus `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (reserved aliases only — explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (reserved aliases only — explicit reviewer model override; REQUIRES `vendor`, rejected on dynamic/multi-participant starts), `instructions`, `mode` (`context-only` — optional; by default the participant's worktree is mirrored from THIS SESSION's project directory, not from the directory you are working in. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
 | `send_to_participant` | `flow_run_id`, `participant` (role name declared in the flow definition's `participants` map; single-participant definitions use `reviewer` — an unknown role is rejected, naming the valid ones), `message` | `instructions`, `async` (defaults to `true`) | After addressing a non-clean result for that role, or to launch a role for the first time. Pass the same `flow_run_id`, the role's name, and the updated message. |
 | `get_flow_status` | — | `flow_run_id` (omit to read the newest open flow this session started, or on a harness without a session identity the newest one started from this workspace; several open flows are listed instead), `session_id` (look up another session's flows; defaults to this session), `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow run (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself, and omit `flow_run_id` to recover a flow whose id you never received or lost. |

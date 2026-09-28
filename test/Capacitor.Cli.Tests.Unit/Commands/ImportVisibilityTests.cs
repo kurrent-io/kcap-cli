@@ -806,7 +806,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("kiro");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
@@ -821,7 +821,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("kiro").ContainsKey("default_visibility")).IsFalse();
     }
@@ -835,7 +835,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("kiro")["default_visibility"]?.GetValue<string>())
             .IsEqualTo("private");
@@ -1183,7 +1183,7 @@ public class ImportVisibilityTests : IDisposable {
         new(HarnessId.Gemini, () => new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir, TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase KiroCase() =>
-        new(HarnessId.Kiro, () => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
+        new(HarnessId.Kiro, () => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase PiCase() =>
         new(HarnessId.Pi, () => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });

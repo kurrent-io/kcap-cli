@@ -119,7 +119,7 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 /// <see cref="PiRpcHostedAgentRuntime"/>'s tests. Every literal here is a Pi JSONL-RPC frame in the
 /// pinned upstream shape — kept in ONE place so a protocol correction lands once.</summary>
 internal static class PiRpcRuntimeFakes {
-    public const string SessionId      = "pi-session-abc123";
+    public const string PiSessionId    = "pi-session-abc123";
     public const string StateModelId   = "anthropic/claude-sonnet-4";
     public const string RequestedModel = "requested-model";
 
@@ -128,7 +128,7 @@ internal static class PiRpcRuntimeFakes {
     /// fallback to the requested model.</summary>
     public static string GetStateResponse(
             string  id          = "init-state",
-            string? sessionId   = SessionId,
+            string? sessionId   = PiSessionId,
             string? modelId     = StateModelId,
             bool    isStreaming = false,
             bool    success     = true) {

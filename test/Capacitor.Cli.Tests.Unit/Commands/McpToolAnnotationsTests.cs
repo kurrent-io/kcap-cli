@@ -47,6 +47,7 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-plans", "get_plan").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-memory", "search_memories").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-flows", "list_reviewer_vendors").Annotations.ReadOnlyHint).IsTrue();
+        await Assert.That(Tool("kcap-flows", "list_flow_definitions").Annotations.ReadOnlyHint).IsTrue();
 
         var declare = Tool("kcap-plans", "declare_plan_document").Annotations;
         await Assert.That(declare.ReadOnlyHint).IsFalse();

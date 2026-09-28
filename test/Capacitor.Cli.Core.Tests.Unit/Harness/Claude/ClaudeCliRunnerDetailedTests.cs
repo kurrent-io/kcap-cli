@@ -102,24 +102,21 @@ public class ClaudeCliRunnerDetailedTests {
         await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.OutputUnparseable);
     }
 
-    /// <summary>Puts a `claude` on PATH running the given shell script. Mirrors
-    /// <c>ImportSkipTitleTests.FakeClaudeOnPath</c>.</summary>
-    sealed class FakeClaudeOnPath : IDisposable {
-        readonly TempDir  _bin;
-        readonly EnvScope _path;
+    [Test]
+    public async Task RunDetailedAsync_returns_spend_budget_with_the_subtype_for_a_spend_cap_envelope() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
 
-        public FakeClaudeOnPath(string script) {
-            _bin = new TempDir();
+        using var fake = new FakeClaudeOnPath("""
+            #!/bin/sh
+            echo '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"result":""}'
+            exit 1
+            """);
 
-            _bin.CreateExecutable("claude", script);
+        var outcome = await ClaudeCliRunner.RunDetailedAsync(
+            "irrelevant", TimeSpan.FromSeconds(10), TimeProvider.System, _ => { }, null,
+            TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()));
 
-            _path = EnvScope.Exclusive(
-                "PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
-        }
-
-        public void Dispose() {
-            _path.Dispose();
-            _bin.Dispose();
-        }
+        await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.SpendBudget);
+        await Assert.That(outcome.Subtype).IsEqualTo("error_max_budget_usd");
     }
 }

@@ -40,6 +40,20 @@ public class PullRequestContextViewModelRegistryTests {
         await h.Dispose();
     });
 
+    /// The daemon keeps reporting the branch the worktree was cut on; a PR opened after a switch is
+    /// on the branch HEAD names, and a discovery by the reported one would never find it.
+    [Test]
+    public Task Discovery_searches_the_branch_the_checkout_is_on_now() => RunOnUiAsync(async () => {
+        using var tmp = new TempDir();
+        var worktree = tmp.CreateDir("wt");
+        tmp.CreateFile("wt/.git/HEAD", "ref: refs/heads/switched\n");
+        var h = new Harness("github.com", new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        h.Provider.Discovered = [Link("github.com", 9)];
+        h.Push(worktree); await h.Show();
+        await Assert.That(h.Provider.Discoveries[0].Branch).IsEqualTo("switched");
+        await h.Dispose();
+    });
+
     [Test]
     public Task A_subject_no_provider_serves_shows_the_no_reader_notice_without_the_capacitor_sign_in() => RunOnUiAsync(async () => {
         var h = new Harness("github.com");
@@ -180,7 +194,8 @@ public class PullRequestContextViewModelRegistryTests {
             Registry = new(Links, [Provider], TimeProvider.System);
             Vm = new(Presence, Registry, Time, Opener, () => { }, primaryRepo: () => primary);
         }
-        internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
+        internal void Push(string? worktree = null) =>
+            Presence.OnNext(Agent("agent", "claude", hasTerminal: false, worktreePath: worktree, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }
         internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); }
     }
