@@ -151,7 +151,6 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         await Assert.That(body["subagent_session_ids"]!.AsArray().Select(n => n!.GetValue<string>())).IsEquivalentTo([Child]);
     }
 
-    /// <summary>A chat Crew moved to a new session names the session it replaced, so the two are chained.</summary>
     [Test]
     public async Task A_crew_chat_that_moved_on_names_its_previous_session() {
         const string earlier = "8bd763b1-280e-47c3-bd4d-79438fc4a37b";
