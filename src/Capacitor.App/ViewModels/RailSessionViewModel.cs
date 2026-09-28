@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -20,6 +21,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Vendor { get; }
     public bool HasVendor { get; }
     public string? Model { get; }
+    /// Curated display name when the slug is known; the slug otherwise.
+    public string? ModelLabel { get; }
     public bool HasModel { get; }
     public string Meta { get; }
     public string Tooltip => Status.Tip;
@@ -47,7 +50,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public RailSessionViewModel(
             AgentRow row, IObservable<string?> selectedAgentId,
             IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
-            Action<string> openLocal, Action<string> openRemote, TimeProvider time) {
+            Action<string> openLocal, Action<string> openRemote, TimeProvider time,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
         var kindExtra = row.Kind == "agent" ? null : row.Kind;
@@ -61,6 +65,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         HasVendor = !string.IsNullOrEmpty(row.Vendor);
         Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
         HasModel = Model is not null;
+        ModelLabel = Model is { } model ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, model) : null;
         IsStarting = row.Origin == AgentOrigin.Pending;
         var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
         Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age, subagents);
@@ -71,8 +76,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.IsSelected, initialValue: false)
             .DisposeWith(_disposables);
 
-        _status = agentsWithPending
-            .Select(set => SessionStatusDots.ForRow(row, set.Contains(row.Id)))
+        var answering = agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
+        _status = agentsWithPending.CombineLatest(answering,
+                (pending, asked) => SessionStatusDots.ForRow(row, pending.Contains(row.Id), asked.Contains(row.Id)))
             .ToProperty(this, x => x.Status, initialValue: SessionStatusDots.ForRow(row, pending: false))
             .DisposeWith(_disposables);
 

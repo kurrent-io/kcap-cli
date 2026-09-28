@@ -15,17 +15,20 @@
         <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
                 Padding="20,16,16,16" Background="Transparent" PointerPressed="OnHeaderPointerPressed">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                <StackPanel Spacing="2" VerticalAlignment="Center" Margin="0,0,8,0">
+                <StackPanel Spacing="6" VerticalAlignment="Center" Margin="0,0,8,0">
                     <TextBlock x:Name="WorkspaceTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
                                Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding Title}" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <views:AgentStatusMark x:Name="WorkspaceStatus" DataContext="{Binding Chat.AgentStatus}"
-                                               VerticalAlignment="Center" />
-                        <TextBlock x:Name="WorkspaceSubtitle" Text="{Binding RepoLabelText}" FontSize="13"
+                    <!-- Auto so the mark keeps the width of its word. A star beside it would
+                         measure the mark with the leftover and clip "Working". -->
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                        <views:AgentStatusMark x:Name="WorkspaceStatus" Classes="header"
+                                               DataContext="{Binding Chat.AgentStatus}"
+                                               HorizontalAlignment="Left" VerticalAlignment="Center" />
+                        <TextBlock x:Name="WorkspaceSubtitle" Grid.Column="1" Text="{Binding RepoLabelText}" FontSize="13"
                                    Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" />
-                    </StackPanel>
+                    </Grid>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <Border x:Name="SurfaceSwitch" Classes="kcapSegment" IsVisible="{Binding ShowsSurfaceSwitch}">

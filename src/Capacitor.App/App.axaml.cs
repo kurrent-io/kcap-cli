@@ -649,6 +649,7 @@ public partial class App : Application {
                 lifecycleStatus, _navigation, _workspaceTeardown.Track, BuildWorkspace,
                 // The tenant slug the rail footer shows — profiles are named after it at sign-in.
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
+                agentsAwaitingAnswer: permissions.AgentsAwaitingAnswer,
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention, pullRequestTones: pullRequestTones.Tones,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
@@ -1177,7 +1178,8 @@ public partial class App : Application {
             IObservable<string?>? lifecycleStatus = null,
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, string? tenantName = null,
-            IObservable<IReadOnlySet<string>>? agentsWithPending = null, Action? requestSignIn = null,
+            IObservable<IReadOnlySet<string>>? agentsWithPending = null,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null, Action? requestSignIn = null,
             IObservable<string?>? lifecycleAttention = null,
             IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
@@ -1228,7 +1230,7 @@ public partial class App : Application {
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
             openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), time: time, agentsWithPending: agentsWithPending,
-            pullRequestTones: pullRequestTones);
+            pullRequestTones: pullRequestTones, agentsAwaitingAnswer: agentsAwaitingAnswer);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,

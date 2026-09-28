@@ -558,23 +558,54 @@ public class WorkspaceViewSmokeTests {
                 daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = false });
                 Dispatcher.UIThread.RunJobs();
                 window.UpdateLayout();
-                await AssertStatus(window, "Working", "Working.", window.FindResource("KcapPurpleBrush")!);
-                var workingTip = ToolTip.GetTip(StatusMark(window)) as string;
-                await Assert.That(workingTip).Contains("Working for");
+                var working = StatusMark(window);
+                await Assert.That(working.IsEffectivelyVisible).IsTrue();
+                var workingWord = working.FindControl<TextBlock>("StatusWord")!;
+                await Assert.That(workingWord.Text).IsEqualTo("Working");
+                await Assert.That(workingWord.Foreground).IsSameReferenceAs(window.FindResource("KcapPurpleBrush"));
+                await Assert.That(workingWord.Bounds.Width).IsGreaterThan(workingWord.Bounds.Height);
+                var path = Find<TextBlock>(window, "WorkspaceSubtitle")!;
+                double LeftOf(Control control) => control.TranslatePoint(default, window)!.Value.X;
+                double RightOf(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), window)!.Value.X;
+                await Assert.That(RightOf(workingWord)).IsLessThanOrEqualTo(RightOf(working) + 1);
+                await Assert.That(LeftOf(path)).IsGreaterThanOrEqualTo(RightOf(working) - 1);
+                var workingLines = TipLines(working);
+                await Assert.That(workingLines[0]).StartsWith("Working for ");
+                await Assert.That(workingLines[1]).IsEqualTo("Status");
+                await Assert.That(AutomationProperties.GetName(working)).IsEqualTo(workingLines[0]);
                 await Assert.That(Visible(window, "ChatActivityNote")).IsFalse();
 
                 daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = true });
                 Dispatcher.UIThread.RunJobs();
                 window.UpdateLayout();
-                await AssertStatus(window, "Idle", "Idle. Waiting for input.", window.FindResource("KcapWarningBrush")!);
+                await AssertStatus(window, "Idle", "Idle", window.FindResource("KcapWarningBrush")!);
+                var idleMark = StatusMark(window);
+                var idleWord = idleMark.FindControl<TextBlock>("StatusWord")!;
+                var subtitle = Find<TextBlock>(window, "WorkspaceSubtitle")!;
+                await Assert.That(idleWord.FontSize).IsEqualTo(subtitle.FontSize);
+                await Assert.That(idleWord.FontWeight).IsEqualTo(subtitle.FontWeight);
+                await Assert.That(double.IsNaN(idleWord.LineHeight)).IsTrue();
+                await Assert.That(double.IsNaN(subtitle.LineHeight)).IsTrue();
+                double Mid(Control control) => control.TranslatePoint(new Point(0, control.Bounds.Height / 2), window)!.Value.Y;
+                double Baseline(TextBlock text) => text.TranslatePoint(new Point(0, text.TextLayout.Baseline), window)!.Value.Y;
+                var glyph = idleMark.FindControl<Panel>("Glyph")!;
+                var title = Find<TextBlock>(window, "WorkspaceTitle")!;
+                double Bottom(Control control) => control.TranslatePoint(new Point(0, control.Bounds.Height), window)!.Value.Y;
+                double Top(Control control) => control.TranslatePoint(default, window)!.Value.Y;
+                await Assert.That(Top(subtitle) - Bottom(title)).IsGreaterThan(4);
+                await Assert.That(Math.Abs(Mid(idleWord) - Mid(subtitle))).IsLessThan(2);
+                await Assert.That(Math.Abs(Baseline(idleWord) - Baseline(subtitle))).IsLessThan(1);
+                await Assert.That(Math.Abs(Mid(glyph) - Mid(idleWord))).IsLessThan(1);
 
                 var limit = new UsageLimitNoticeDto(
                     UsageLimitKinds.Blocked, "Weekly limit reached", "Pick one", [new UsageLimitOptionDto(1, "Stop")]);
                 daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = false, UsageLimit = limit });
                 Dispatcher.UIThread.RunJobs();
                 window.UpdateLayout();
-                await AssertStatus(window, "Needs you", "Needs you.", window.FindResource("KcapWarningBrush")!);
-                await Assert.That(ToolTip.GetTip(StatusMark(window)) as string).Contains("Weekly limit reached");
+                await AssertStatus(window, "Needs you", "Needs you", window.FindResource("KcapWarningBrush")!);
+                var needsYou = string.Join('\n', TipLines(StatusMark(window)));
+                await Assert.That(needsYou).Contains("Weekly limit reached");
+                await Assert.That(needsYou).Contains("Usage limit");
             } finally {
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -593,6 +624,19 @@ public class WorkspaceViewSmokeTests {
         await Assert.That(text.Text).IsEqualTo(word);
         await Assert.That(text.Foreground).IsSameReferenceAs(brush);
         await Assert.That(AutomationProperties.GetName(mark)).IsEqualTo(accessibleName);
-        await Assert.That((ToolTip.GetTip(mark) as string)!.Split('\n')[0]).IsEqualTo(accessibleName);
+        await Assert.That(TipLines(mark)[0]).IsEqualTo(accessibleName);
+    }
+
+    static string[] TipLines(Control control) {
+        ToolTip.SetIsOpen(control, true);
+        Dispatcher.UIThread.RunJobs();
+        var tip = (Control)ToolTip.GetTip(control)!;
+        tip.UpdateLayout();
+        var lines = tip.GetVisualDescendants().OfType<TextBlock>()
+            .Where(t => t.IsVisible)
+            .Select(t => t.Text ?? "")
+            .ToArray();
+        ToolTip.SetIsOpen(control, false);
+        return lines;
     }
 }

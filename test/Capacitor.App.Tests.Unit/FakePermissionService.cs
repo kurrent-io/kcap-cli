@@ -68,6 +68,9 @@ sealed class FakePermissionService : IPermissionService {
     public IObservable<IReadOnlySet<string>> AgentsWithPending =>
         Cache.Connect().QueryWhenChanged(q => (IReadOnlySet<string>)q.Items.Select(p => p.AgentId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal))
             .StartWith((IReadOnlySet<string>)new HashSet<string>());
+    public IObservable<IReadOnlySet<string>> AgentsAwaitingAnswer =>
+        Cache.Connect().QueryWhenChanged(q => (IReadOnlySet<string>)q.Items.Where(p => p.IsQuestion).Select(p => p.AgentId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal))
+            .StartWith((IReadOnlySet<string>)new HashSet<string>());
     public IObservable<PendingSummary> Summary => _summaryOverride ??
         Cache.Connect()
             .QueryWhenChanged(q => PendingSummary.From(q.Items))

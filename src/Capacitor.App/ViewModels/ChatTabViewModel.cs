@@ -350,9 +350,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var question = UsageLimitNoticeDto.IsQuestion(_usageLimit);
         var elapsed = ActivityNote.StartsWith("Working for ", StringComparison.Ordinal) ? ActivityNote : null;
         var stage = ActivityNote.StartsWith("Starting ", StringComparison.Ordinal) ? ActivityNote : null;
+        var answerExpected = Cards.PendingCards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
         AgentStatus = SessionStatusDots.Present(
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
-            question ? _usageLimit!.Summary : null, stage, elapsed, sessionId: null);
+            question ? _usageLimit!.Summary : null, stage, elapsed, sessionId: null,
+            answerExpected: answerExpected);
         StatusText = AgentStatus.Label;
     }
 

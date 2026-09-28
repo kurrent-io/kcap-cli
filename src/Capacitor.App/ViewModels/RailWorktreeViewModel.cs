@@ -77,7 +77,8 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
             IObservableCache<AgentRow, string> sessionsCache, RailCollapseState collapse,
             IObservable<string?> selectedAgentId, IObservable<IReadOnlySet<string>> agentsWithPending,
             IObservable<bool> remoteStale, Action<string> openLocal, Action<string> openRemote, TimeProvider time,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
         Path = path;
         // Every row in one worktree group shares CheckoutLabel by construction — any member
         // names a remote pseudo-checkout (labeled by the daemon it runs on, never "main"); an
@@ -128,9 +129,10 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
         _needsYou = needsYou
             .ToProperty(this, x => x.NeedsYou, initialValue: false)
             .DisposeWith(_disposables);
+        var answering = agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
         var header = sessionsCache.Connect().QueryWhenChanged()
-            .CombineLatest(agentsWithPending, sessionsVisible, (q, set, visible) =>
-                visible ? null : SessionStatusDots.Rollup(q.Items, set))
+            .CombineLatest(agentsWithPending, answering, sessionsVisible, (q, set, asked, visible) =>
+                visible ? null : SessionStatusDots.Rollup(q.Items, set, asked))
             .Replay(1).RefCount();
         _headerStatus = header
             .ToProperty(this, x => x.HeaderStatus, initialValue: null)
@@ -159,7 +161,7 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
 
         Sessions = new ReadOnlyObservableCollection<RailSessionViewModel>(_sessionsSource);
         sessionsCache.Connect()
-            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale, openLocal, openRemote, time))
+            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale, openLocal, openRemote, time, answering))
             .DisposeMany()
             .SortAndBind(_sessionsSource, SessionComparer)
             .Subscribe()

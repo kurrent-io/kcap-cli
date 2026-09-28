@@ -1,16 +1,15 @@
 using System.Globalization;
 using Avalonia.Data.Converters;
-using Avalonia.Media;
-using Avalonia.Media.Immutable;
 using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
-public sealed class VendorChipBackgroundConverter : IValueConverter {
-    public static readonly VendorChipBackgroundConverter Instance = new();
+/// Vendor token to its display name ("claude" → "Claude"). An unknown token stays as given.
+public sealed class VendorLabelConverter : IValueConverter {
+    public static readonly VendorLabelConverter Instance = new();
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        new ImmutableSolidColorBrush(Color.Parse(VendorChipPalette.For(value as string).Background));
+        value is string vendor ? HostedHarnessCatalog.LabelFor(vendor) : "";
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

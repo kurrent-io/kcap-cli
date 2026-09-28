@@ -46,7 +46,8 @@ public class SessionStatusDotsTests {
 
         var pending = SessionStatusDots.ForRow(Local("a", awaiting: false, subagents: 2), pending: true);
         await Assert.That(pending.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
-        await Assert.That(pending.AccessibleName).IsEqualTo("Needs you.");
+        await Assert.That(pending.AccessibleName).IsEqualTo("Needs you");
+        await Assert.That(pending.Tip).Contains("Needs you\nStatus");
         await Assert.That(pending.Tip).Contains("Pending response");
         await Assert.That(pending.Tip).Contains("2 subagents running");
         await Assert.That(pending.Pulses).IsFalse();
@@ -58,7 +59,8 @@ public class SessionStatusDotsTests {
 
         var idle = SessionStatusDots.ForRow(Local("a", awaiting: true), pending: false);
         await Assert.That(idle.Kind).IsEqualTo(AgentStatusKind.Idle);
-        await Assert.That(idle.AccessibleName).IsEqualTo("Idle. Waiting for input.");
+        await Assert.That(idle.AccessibleName).IsEqualTo("Idle");
+        await Assert.That(idle.Tip).StartsWith("Idle\nStatus");
         await Assert.That(idle.Pulses).IsFalse();
 
         var done = SessionStatusDots.ForRow(Local("a", status: "Completed"), pending: false);
@@ -85,5 +87,35 @@ public class SessionStatusDotsTests {
         await Assert.That(mixed.Tip).Contains("Waiting —");
 
         await Assert.That(SessionStatusDots.Rollup([Local("a")], new HashSet<string>())).IsNull();
+    }
+
+    [Test]
+    public async Task A_tip_labels_the_session_the_requester_and_the_borrowed_checkout() {
+        var row = AgentRow.FromLocal(
+            new("a", "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null,
+                "ada@example.com", AwaitingInput: false, SessionId: "abc123", BorrowedFrom: "/repo/wt"),
+            Repo);
+        var status = SessionStatusDots.ForRow(row, pending: false);
+
+        await Assert.That(status.Tip.Split('\n')[0]).IsEqualTo("Working");
+        await Assert.That(status.Tip).Contains("Working\nStatus");
+
+        var timed = SessionStatusDots.Present(
+            "Running", false, false, null, false, null, null, "Working for 2m 39s", sessionId: null);
+        await Assert.That(timed.Label).IsEqualTo("Working");
+        await Assert.That(timed.Tip).IsEqualTo("Working for 2m 39s\nStatus");
+
+        var asked = SessionStatusDots.Present(
+            "Running", true, true, null, pending: true, null, null, null, sessionId: null, answerExpected: true);
+        await Assert.That(asked.Kind).IsEqualTo(AgentStatusKind.Answer);
+        await Assert.That(asked.Label).IsEqualTo("Answer");
+        await Assert.That(asked.Tip).IsEqualTo("An answer is expected\nStatus");
+        await Assert.That(asked.Tip).DoesNotContain("Idle");
+        await Assert.That(status.Tip).Contains("\n\nabc123\nSession");
+
+        var named = SessionStatusDots.ForRow(row with { Model = "claude-opus-5" }, pending: false);
+        await Assert.That(named.Tip).Contains("Claude Opus 5\nModel");
+        await Assert.That(status.Tip).Contains("\n\nada@example.com\nRequester");
+        await Assert.That(status.Tip).Contains("\n\n/repo/wt\nBorrowed from");
     }
 }

@@ -33,22 +33,25 @@ public static class SessionStatusDots {
 
     public static string Label(AgentRow row) => ForRow(row, pending: false).Label;
 
-    public static AgentStatusPresentation ForRow(AgentRow row, bool pending) =>
+    public static AgentStatusPresentation ForRow(AgentRow row, bool pending, bool answerExpected = false) =>
         Present(
             row.Status, row.AwaitingInput, WaitsOnUser(row), row.LiveSubagents, pending,
             UsageLimitSummary(row.UsageLimit),
             row.Origin == AgentOrigin.Pending ? LaunchStages.Label(row.LaunchStage) : null,
             elapsed: null, sessionId: row.SessionId ?? row.Id,
-            row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
+            requester: row.RequesterDisplay, borrowedFrom: row.BorrowedFrom, answerExpected: answerExpected,
+            model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null);
 
     /// First match wins, so two surfaces cannot draw different marks for the same facts.
     /// <paramref name="usageLimitSummary"/> is set only for a question the user must answer.
     public static AgentStatusPresentation Present(
             string status, bool? awaitingInput, bool waitsOnUser, int? liveSubagents, bool pending,
             string? usageLimitSummary, string? launchStage, string? elapsed, string? sessionId,
-            params string?[] more) {
+            string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
+            string? model = null) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
+            : answerExpected ? AgentStatusKind.Answer
             : pending || usageLimitSummary is not null ? AgentStatusKind.NeedsYou
             : status == "Starting" ? AgentStatusKind.Starting
             : IsWorking(status, awaitingInput, liveSubagents) ? AgentStatusKind.Working
@@ -57,6 +60,7 @@ public static class SessionStatusDots {
             : AgentStatusKind.Other;
         var label = kind switch {
             AgentStatusKind.Failed   => "Failed",
+            AgentStatusKind.Answer   => "Answer",
             AgentStatusKind.NeedsYou => "Needs you",
             AgentStatusKind.Starting => "Starting",
             AgentStatusKind.Working  => "Working",
@@ -66,35 +70,50 @@ public static class SessionStatusDots {
         };
         if (string.IsNullOrEmpty(label)) return AgentStatusPresentation.None;
 
-        var sentence = kind switch {
-            AgentStatusKind.Idle     => "Idle. Waiting for input.",
-            AgentStatusKind.NeedsYou => "Needs you.",
-            AgentStatusKind.Working  => "Working.",
-            AgentStatusKind.Starting => "Starting.",
-            AgentStatusKind.Failed   => "Failed.",
-            AgentStatusKind.Done     => "Done.",
-            _                        => $"{label}.",
-        };
-        var lines = new List<string> { sentence };
-        if (!string.IsNullOrEmpty(usageLimitSummary)) lines.Add(usageLimitSummary);
-        if (pending) lines.Add("Pending response");
-        if (waitsOnUser && kind != AgentStatusKind.Idle) lines.Add("Waiting for input.");
+        // Elapsed and a "Starting …" stage already name the status, so they are the value
+        // rather than a second line under the short word.
+        var sentence =
+            kind == AgentStatusKind.Working && !string.IsNullOrEmpty(elapsed) ? elapsed
+            : kind == AgentStatusKind.Starting && launchStage is { } stage && stage.StartsWith("Starting", StringComparison.Ordinal) ? stage
+            : kind == AgentStatusKind.Answer ? "An answer is expected"
+            : label;
+        var facts = new List<AgentStatusFact> { new(sentence, "Status") };
+        Add(facts, model, "Model");
+        Add(facts, usageLimitSummary, "Usage limit");
+        if (pending && kind != AgentStatusKind.Answer) Add(facts, "Pending response");
+        if (waitsOnUser && kind is not AgentStatusKind.Idle and not AgentStatusKind.Answer)
+            Add(facts, "Waiting for input.");
         if (liveSubagents is int live and > 0)
-            lines.Add($"{live} subagent{(live == 1 ? "" : "s")} running");
-        if (kind == AgentStatusKind.Starting && !string.IsNullOrEmpty(launchStage)) lines.Add(launchStage);
-        if (kind == AgentStatusKind.Working && !string.IsNullOrEmpty(elapsed)) lines.Add(elapsed);
-        if (!string.IsNullOrEmpty(sessionId)) lines.Add(sessionId);
-        foreach (var line in more)
-            if (!string.IsNullOrEmpty(line)) lines.Add(line);
-        return new AgentStatusPresentation(kind, label, string.Join('\n', lines),
-            kind is AgentStatusKind.Working or AgentStatusKind.Starting);
+            Add(facts, $"{live} subagent{(live == 1 ? "" : "s")} running");
+        if (kind == AgentStatusKind.Starting && sentence == "Starting") Add(facts, launchStage, "Launch");
+        Add(facts, sessionId, "Session");
+        Add(facts, requester, "Requester");
+        Add(facts, borrowedFrom, "Borrowed from");
+        return new AgentStatusPresentation(kind, label, FormatTip(facts),
+            kind is AgentStatusKind.Working or AgentStatusKind.Starting, facts);
+    }
+
+    static void Add(List<AgentStatusFact> facts, string? text, string? caption = null) {
+        if (!string.IsNullOrEmpty(text)) facts.Add(new(text, caption));
+    }
+
+    /// Blank line between facts, caption under the value. The first line stays the sentence.
+    static string FormatTip(IReadOnlyList<AgentStatusFact> facts) {
+        var lines = new List<string>();
+        foreach (var fact in facts) {
+            if (lines.Count > 0) lines.Add("");
+            lines.Add(fact.Text);
+            if (fact.HasCaption) lines.Add(fact.Caption!);
+        }
+        return string.Join('\n', lines);
     }
 
     /// Dominant surfaced status for a collapsed worktree. Null when every child is settled or
     /// only carrying the daemon's own word. The accessible name counts the dominant kind.
-    public static AgentStatusPresentation? Rollup(IEnumerable<AgentRow> rows, IReadOnlySet<string> pending) {
+    public static AgentStatusPresentation? Rollup(
+            IEnumerable<AgentRow> rows, IReadOnlySet<string> pending, IReadOnlySet<string>? answering = null) {
         var presented = rows
-            .Select(row => (Row: row, Status: ForRow(row, pending.Contains(row.Id))))
+            .Select(row => (Row: row, Status: ForRow(row, pending.Contains(row.Id), answering?.Contains(row.Id) ?? false)))
             .Where(item => item.Status.HasLabel)
             .OrderBy(item => (int)item.Status.Kind)
             .ThenBy(item => item.Row.Id, StringComparer.Ordinal)
@@ -104,18 +123,24 @@ public static class SessionStatusDots {
         var dominant = surfaced[0].Status.Kind;
         var count = surfaced.Count(item => item.Status.Kind == dominant);
         var name = RollupName(dominant, count);
-        var lines = new List<string> { name };
+        var facts = new List<AgentStatusFact> { new(name, "Status") };
         foreach (var item in presented) {
             var who = string.IsNullOrEmpty(item.Row.Title) ? item.Row.Id : item.Row.Title;
-            lines.Add($"{who} — {item.Status.Tip.Replace('\n', ' ')}");
+            var sentence = item.Status.Facts.Count > 0 ? item.Status.Facts[0].Text : item.Status.Label;
+            string? detail = null;
+            if (item.Status.Facts.Count > 1)
+                detail = string.Join('\n', item.Status.Facts.Skip(1).Select(fact =>
+                    fact.HasCaption ? $"{fact.Caption}\n{fact.Text}" : fact.Text));
+            facts.Add(new($"{who} — {sentence}", detail));
         }
-        return surfaced[0].Status with { Tip = string.Join('\n', lines) };
+        return surfaced[0].Status with { Tip = FormatTip(facts), Facts = facts };
     }
 
     static string RollupName(AgentStatusKind kind, int count) {
         var sessions = count == 1 ? "session" : "sessions";
         var state = kind switch {
             AgentStatusKind.Failed   => "failed",
+            AgentStatusKind.Answer   => count == 1 ? "needs an answer" : "need an answer",
             AgentStatusKind.NeedsYou => count == 1 ? "needs you" : "need you",
             AgentStatusKind.Starting => "starting",
             AgentStatusKind.Working  => "working",

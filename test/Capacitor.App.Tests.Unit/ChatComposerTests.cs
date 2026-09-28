@@ -141,7 +141,7 @@ public class ChatComposerTests {
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { AwaitingInput = true });
             await Assert.That(chat.StatusText).IsEqualTo("Idle");
-            await Assert.That(chat.AgentStatus.AccessibleName).IsEqualTo("Idle. Waiting for input.");
+            await Assert.That(chat.AgentStatus.AccessibleName).IsEqualTo("Idle");
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { Status = "Failed" });
             await Assert.That(chat.StatusText).IsEqualTo("Failed");

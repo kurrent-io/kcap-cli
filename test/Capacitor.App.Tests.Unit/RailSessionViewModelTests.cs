@@ -127,8 +127,8 @@ public class RailSessionViewModelTests {
             using var older   = new RailSessionViewModel(Row(awaitingInput: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             await Assert.That(waiting.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
             await Assert.That(waiting.Status.Label).IsEqualTo("Idle");
-            await Assert.That(waiting.Status.AccessibleName).IsEqualTo("Idle. Waiting for input.");
-            await Assert.That(waiting.Tooltip).Contains("Waiting for input");
+            await Assert.That(waiting.Status.AccessibleName).IsEqualTo("Idle");
+            await Assert.That(waiting.Tooltip).DoesNotContain("Waiting for input");
             await Assert.That(working.Status.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(working.Status.Label).IsEqualTo("Working");
             await Assert.That(working.Tooltip).DoesNotContain("Waiting for input");
@@ -217,6 +217,15 @@ public class RailSessionViewModelTests {
             await Assert.That(idle.Status.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
             pending.OnNext(new HashSet<string>());
             await Assert.That(idle.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
+
+            var asked = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string> { "a1" });
+            using var question = new RailSessionViewModel(
+                Row(awaitingInput: true), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { },
+                TimeProvider.System, asked);
+            await Assert.That(question.Status.Kind).IsEqualTo(AgentStatusKind.Answer);
+            await Assert.That(question.Status.Label).IsEqualTo("Answer");
+            await Assert.That(question.Status.AccessibleName).IsEqualTo("An answer is expected");
+            await Assert.That(question.Tooltip).DoesNotContain("Pending response");
         });
     }
 

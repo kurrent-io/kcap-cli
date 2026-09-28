@@ -497,13 +497,14 @@ public class MainWindowSmokeTests {
 
     /// A shown MainWindow whose rail holds two rows, "Fix the flaky test"
     /// and "Leave this one alone", under one worktree named feature-x.
-    static (MainWindowViewModel Vm, MainWindow Window) RailWindow(bool awaitingInput = false, int? liveSubagents = null) {
+    static (MainWindowViewModel Vm, MainWindow Window) RailWindow(
+            bool awaitingInput = false, int? liveSubagents = null, string? model = null) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-            null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test",
+            null, null, null, DateTime.UtcNow, model, null, Title: "Fix the flaky test",
             AwaitingInput: awaitingInput ? true : null, LiveSubagents: liveSubagents));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
@@ -649,40 +650,105 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// WrapPanel Center matches the chip and meta boxes, not the glyph baselines — a padded
-    /// 11px vendor chip then sits the vendor word high of a larger running-time. One line box
-    /// and Bottom keep them on the same baseline.
+    /// Collapsed, the session count follows the worktree title. Expanded, it stays on the right,
+    /// clear of the title, because the sessions themselves are listed underneath.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Vendor_chip_and_running_time_share_a_baseline() {
+    public async Task A_collapsed_worktree_puts_its_count_against_the_title() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var seen = await AvaloniaSession.DispatchAsync(() => {
                 var (_, window) = RailWindow();
-                var row = RailRow(window, "Fix the flaky test");
-                var chip = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("railChip"));
-                var label = chip.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railChipLabel"));
-                var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                window.UpdateLayout();
+                var header = RailRow(window, "feature-x");
+                var label = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "feature-x");
+                double Left(Control control) => control.TranslatePoint(default, header)!.Value.X;
+                double Right(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), header)!.Value.X;
+                var expandedCount = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "2");
+                var expandedGap = Left(expandedCount) - Right(label);
+                header.Command!.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var collapsedCount = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "(2)");
                 var result = (
-                    ChipAlign: chip.VerticalAlignment,
-                    MetaAlign: meta.VerticalAlignment,
-                    LabelSize: label.FontSize,
-                    MetaSize: meta.FontSize,
-                    LabelLine: label.LineHeight,
-                    MetaLine: meta.LineHeight,
-                    ChipPadTop: chip.Padding.Top,
-                    ChipPadBottom: chip.Padding.Bottom,
-                    MetaPadTop: meta.Padding.Top,
-                    MetaPadBottom: meta.Padding.Bottom);
+                    ExpandedGap: expandedGap,
+                    CollapsedGap: Left(collapsedCount) - Right(label),
+                    ExpandedCountHidden: !expandedCount.IsVisible,
+                    CollapsedCountVisible: collapsedCount.IsVisible);
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
-            await Assert.That(seen.ChipAlign).IsEqualTo(VerticalAlignment.Bottom);
-            await Assert.That(seen.MetaAlign).IsEqualTo(VerticalAlignment.Bottom);
-            await Assert.That(seen.LabelSize).IsEqualTo(seen.MetaSize);
-            await Assert.That(seen.LabelLine).IsEqualTo(seen.MetaLine);
-            await Assert.That(seen.ChipPadTop).IsEqualTo(seen.MetaPadTop);
-            await Assert.That(seen.ChipPadBottom).IsEqualTo(seen.MetaPadBottom);
+            await Assert.That(seen.ExpandedGap).IsGreaterThan(24);
+            await Assert.That(seen.CollapsedGap).IsLessThan(12);
+            await Assert.That(seen.ExpandedCountHidden).IsTrue();
+            await Assert.That(seen.CollapsedCountVisible).IsTrue();
+        });
+    }
+
+    /// The vendor mark, the status word, and the age share one baseline. The age has no extra
+    /// padding, or it sits below that line.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Vendor_mark_model_chip_and_running_time_share_the_status_line() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(model: "opus");
+                window.UpdateLayout();
+                var row = RailRow(window, "Fix the flaky test");
+                var mark = row.GetVisualDescendants().OfType<AgentStatusMark>().First();
+                var word = mark.FindControl<TextBlock>("StatusWord")!;
+                var vendor = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("vendorMark"));
+                var chip = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("railChip"));
+                var label = chip.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railChipLabel"));
+                var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                ToolTip.SetIsOpen(vendor, true);
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var tip = (StackPanel)ToolTip.GetTip(vendor)!;
+                var tipLines = tip.Children.OfType<TextBlock>().Select(t => t.Text).ToArray();
+                double Center(Control control) =>
+                    control.TranslatePoint(new Point(0, control.Bounds.Height / 2), row)!.Value.Y;
+                double Baseline(TextBlock text) =>
+                    text.TranslatePoint(new Point(0, text.TextLayout.Baseline), row)!.Value.Y;
+                double Left(Control control) => control.TranslatePoint(default, row)!.Value.X;
+                double Right(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), row)!.Value.X;
+                var glyph = mark.FindControl<Panel>("Glyph")!;
+                var result = (
+                    Word: Center(word),
+                    WordBaseline: Baseline(word),
+                    MetaBaseline: Baseline(meta),
+                    Vendor: Center(vendor),
+                    Glyph: Center(glyph),
+                    Model: Center(label),
+                    Meta: Center(meta),
+                    VendorName: AutomationProperties.GetName(vendor),
+                    VendorLeft: Left(vendor),
+                    MarkLeft: Left(mark),
+                    MetaGap: row.Bounds.Width - Right(meta),
+                    ChipToMeta: Left(meta) - Right(chip),
+                    TipVendor: tipLines[0],
+                    TipModel: tipLines[1],
+                    HasMark: vendor.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Any(),
+                    ChipAlign: chip.VerticalAlignment,
+                    MetaAlign: meta.VerticalAlignment);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.VendorName).IsEqualTo("Claude Code");
+            await Assert.That(seen.TipVendor).IsEqualTo("Claude Code");
+            await Assert.That(seen.TipModel).IsEqualTo("opus");
+            await Assert.That(seen.VendorLeft).IsLessThan(seen.MarkLeft);
+            await Assert.That(seen.MetaGap).IsLessThan(16);
+            await Assert.That(seen.ChipToMeta).IsGreaterThan(24);
+            await Assert.That(seen.HasMark).IsTrue();
+            await Assert.That(Math.Abs(seen.WordBaseline - seen.MetaBaseline)).IsLessThan(1);
+            await Assert.That(Math.Abs(seen.Word - seen.Vendor)).IsLessThan(2);
+            await Assert.That(Math.Abs(seen.Word - seen.Glyph)).IsLessThan(2);
+            await Assert.That(Math.Abs(seen.Word - seen.Model)).IsLessThan(2);
+            await Assert.That(Math.Abs(seen.Word - seen.Meta)).IsLessThan(2);
+            await Assert.That(seen.ChipAlign).IsEqualTo(VerticalAlignment.Center);
+            await Assert.That(seen.MetaAlign).IsEqualTo(VerticalAlignment.Center);
         });
     }
 
