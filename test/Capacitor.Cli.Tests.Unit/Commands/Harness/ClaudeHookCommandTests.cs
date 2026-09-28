@@ -618,7 +618,8 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
         fx.RegisterClaudeMcpServer("kcap-workitems");
 
-        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
+            clock: new HookClock(new FakeTimeProvider()));
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]?.GetValue<string>()).IsEqualTo("v1");

@@ -1,14 +1,19 @@
 using System.Text.Json;
 using Capacitor.Cli.Capture;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Capture;
 
+// The record budget is wall-clock. A frozen clock keeps a loaded runner from reporting
+// RecordBudget in place of the reason under test.
 public class TranscriptCaptureTests {
+    static readonly FakeTimeProvider Clock = new();
+
     [Test]
     [Arguments("not json")]
     [Arguments("{\"token\":\"ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"")]
     public async Task Small_malformed_records_become_explicit_loss_markers(string raw) {
-        var result = TranscriptCapture.Encode(raw);
+        var result = TranscriptCapture.Encode(raw, Clock);
         await Assert.That(result.Loss).IsEqualTo(RedactionLossReason.MalformedInput);
         using var marker = JsonDocument.Parse(result.Line);
         await Assert.That(marker.RootElement.GetProperty("reason").GetString()).IsEqualTo("malformed_input");
@@ -18,7 +23,7 @@ public class TranscriptCaptureTests {
     [Test]
     public async Task LargeMalformedInputBecomesSafeVersionedMarker() {
         var raw = new string('x', 70_000) + " ghp_0123456789abcdef";
-        var result = TranscriptCapture.Encode(raw);
+        var result = TranscriptCapture.Encode(raw, Clock);
         using var marker = JsonDocument.Parse(result.Line);
         await Assert.That(result.Loss).IsEqualTo(RedactionLossReason.MalformedInput);
         await Assert.That(result.Line.Contains("ghp_", StringComparison.Ordinal)).IsFalse();
