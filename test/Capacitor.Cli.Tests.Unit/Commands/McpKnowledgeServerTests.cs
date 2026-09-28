@@ -110,9 +110,20 @@ public class McpKnowledgeServerTests {
         await Assert.That(body["applies_to_session_kinds"]).IsNull();
         await Assert.That(body["target_scope_id"]!.GetValue<string>()).IsEqualTo("");
         await Assert.That(body["preserve_decision"]!.GetValue<bool>()).IsTrue();
-        await Assert.That(body["preserve_audience"]!.GetValue<bool>()).IsFalse();
+        await Assert.That(body.ContainsKey("preserve_audience")).IsFalse();
         await Assert.That(() => McpKnowledgeServer.BuildCurateBody(Args("""{"operation_id":"op","audience_kind":"everyone"}""")))
             .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Audience_only_curation_omits_unsupplied_decision_fields() {
+        var body = McpKnowledgeServer.BuildCurateBody(Args("""
+            {"curation_key":{"source_repo_hash":"r","category":"c","cluster_id":"k"},
+             "operation_id":"o","audience_kind":"everyone"}
+            """));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo(
+            """{"curation_key":{"source_repo_hash":"r","category":"c","cluster_id":"k"},"operation_id":"o","audience_kind":"everyone","audience_id":""}""");
     }
 
     [Test]

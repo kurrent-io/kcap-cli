@@ -44,7 +44,10 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await http.ForSessionAsync();
+                if (client is null) {
+                    client = await http.ForSessionAsync();
+                    McpArtefactsServer.LiftClientTimeout(client);
+                }
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, await repository.GetHashAsync());
             } catch (Exception ex) {
                 // The detail goes to stderr, not the client: an IO error's message can carry local paths.
@@ -166,8 +169,6 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         }
     }
 
-    // ── reads ──────────────────────────────────────────────────────────────────────────────────
-
     internal static string BuildListSkillsUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
         var qs = ScopeQuery(args, cwdRepoHash);
         AddString(qs, args, "state");
@@ -227,8 +228,6 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         if (Flag(args, key) is { } value) qs.Add($"{key}={(value ? "true" : "false")}");
     }
 
-    // ── writes ─────────────────────────────────────────────────────────────────────────────────
-
     static string SkillUrl(string baseUrl, JsonObject? args, string action) =>
         $"{baseUrl}/api/knowledge/skills/{DocId(args)}/{action}";
 
@@ -262,28 +261,30 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static JsonObject BuildCurateBody(JsonObject? args) {
         if (args?["curation_key"] is not JsonObject key)
             throw new ArgumentException("'curation_key' is required: pass the curation_key object a fact read or get_skill member returned.");
-        return new JsonObject {
+        var body = new JsonObject {
             ["curation_key"] = new JsonObject {
                 ["source_repo_hash"] = McpToolArguments.RequireString(key, "source_repo_hash"),
                 ["category"]         = McpToolArguments.RequireString(key, "category"),
                 ["cluster_id"]       = McpToolArguments.RequireString(key, "cluster_id"),
             },
-            ["operation_id"]             = McpToolArguments.RequireString(args, "operation_id"),
-            ["audience_kind"]            = McpToolArguments.RequireString(args, "audience_kind"),
-            ["audience_id"]              = Text(args, "audience_id") ?? "",
-            ["curated_text"]             = Text(args, "curated_text"),
-            ["target_kinds"]             = StringArray(args, "target_kinds", allowBlank: true),
-            ["applies_to_vendors"]       = StringArray(args, "applies_to_vendors"),
-            ["applies_to_session_kinds"] = StringArray(args, "applies_to_session_kinds"),
-            ["applies_to_flow_roles"]    = StringArray(args, "applies_to_flow_roles"),
-            ["applies_to_platforms"]     = StringArray(args, "applies_to_platforms"),
-            ["status"]                   = Text(args, "status"),
-            ["reason"]                   = Text(args, "reason"),
-            ["target_scope_kind"]        = McpToolArguments.OptionalString(args, "target_scope_kind"),
-            ["target_scope_id"]          = Text(args, "target_scope_id"),
-            ["preserve_audience"]        = Flag(args, "preserve_audience") ?? false,
-            ["preserve_decision"]        = Flag(args, "preserve_decision") ?? false,
+            ["operation_id"]  = McpToolArguments.RequireString(args, "operation_id"),
+            ["audience_kind"] = McpToolArguments.RequireString(args, "audience_kind"),
+            ["audience_id"]   = Text(args, "audience_id") ?? "",
         };
+
+        if (Text(args, "curated_text") is { } curatedText) body["curated_text"] = curatedText;
+        if (StringArray(args, "target_kinds", allowBlank: true) is { } targetKinds) body["target_kinds"] = targetKinds;
+        if (StringArray(args, "applies_to_vendors") is { } vendors) body["applies_to_vendors"] = vendors;
+        if (StringArray(args, "applies_to_session_kinds") is { } sessionKinds) body["applies_to_session_kinds"] = sessionKinds;
+        if (StringArray(args, "applies_to_flow_roles") is { } flowRoles) body["applies_to_flow_roles"] = flowRoles;
+        if (StringArray(args, "applies_to_platforms") is { } platforms) body["applies_to_platforms"] = platforms;
+        if (Text(args, "status") is { } status) body["status"] = status;
+        if (Text(args, "reason") is { } reason) body["reason"] = reason;
+        if (McpToolArguments.OptionalString(args, "target_scope_kind") is { } scopeKind) body["target_scope_kind"] = scopeKind;
+        if (Text(args, "target_scope_id") is { } scopeId) body["target_scope_id"] = scopeId;
+        if (Flag(args, "preserve_audience") is { } preserveAudience) body["preserve_audience"] = preserveAudience;
+        if (Flag(args, "preserve_decision") is { } preserveDecision) body["preserve_decision"] = preserveDecision;
+        return body;
     }
 
     static string DocId(JsonObject? args) =>
@@ -337,8 +338,6 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
 
     static StringContent Json(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
-    // ── protocol ───────────────────────────────────────────────────────────────────────────────
-
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
         ToResponse<McpToolCallResult>(id, new([new("text", text)], isError ? true : null), McpJsonContext.Default.McpToolCallResult);
 
@@ -359,8 +358,6 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         };
         return envelope.ToJsonString();
     }
-
-    // ── tool list ──────────────────────────────────────────────────────────────────────────────
 
     static McpSchemaProperty Strings(string description) => new("array", description, new("string", "One value."));
 
