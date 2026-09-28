@@ -15,6 +15,7 @@ public class McpToolAnnotationsTests {
         ("kcap-workitems",      McpWorkItemsServer.BuildToolsList()),
         ("kcap-plans",          McpPlansServer.BuildToolsList()),
         ("kcap-artefacts",      McpArtefactsServer.BuildToolsList()),
+        ("kcap-knowledge",      McpKnowledgeServer.BuildToolsList()),
         ("kcap-flows",          McpFlowsServer.BuildToolsList()),
         ("kcap-flow-result",    McpFlowResultServer.BuildToolsList()),
         ("kcap-judge",          McpJudgeServer.BuildToolsList()),
@@ -70,6 +71,17 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-flows", "get_review_flow_status").Annotations.ReadOnlyHint).IsFalse();
         // A hosted agent acts on its own once launched.
         await Assert.That(Tool("kcap-flows", "start_review_flow").Annotations.OpenWorldHint).IsTrue();
+    }
+
+    [Test]
+    public async Task Knowledge_reads_are_read_only_and_its_writes_overwrite() {
+        foreach (var read in new[] { "list_skills", "get_skill", "list_facts", "search_facts" })
+            await Assert.That(Tool("kcap-knowledge", read).Annotations).IsEqualTo(McpToolAnnotations.Read).Because(read);
+
+        // Each write replaces standing state (a draft, a lifecycle status, a pin, a curation), and an
+        // operation_id retry replays rather than repeats.
+        foreach (var write in new[] { "edit_skill_body", "transition_skill", "adjust_skill_members", "curate_fact_cluster" })
+            await Assert.That(Tool("kcap-knowledge", write).Annotations).IsEqualTo(McpToolAnnotations.Destructive).Because(write);
     }
 
     [Test]

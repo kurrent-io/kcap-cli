@@ -446,7 +446,7 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts|knowledge …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
@@ -457,6 +457,7 @@ switch (command) {
             Console.Error.WriteLine("  kcap mcp plans");
             Console.Error.WriteLine("  kcap mcp analytics");
             Console.Error.WriteLine("  kcap mcp artefacts");
+            Console.Error.WriteLine("  kcap mcp knowledge");
 
             return 1;
         }
@@ -503,6 +504,8 @@ switch (command) {
                 return await Run<McpAnalyticsServer>().RunAsync();
             case "artefacts":
                 return await Run<McpArtefactsServer>().RunAsync();
+            case "knowledge":
+                return await Run<McpKnowledgeServer>().RunAsync();
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 

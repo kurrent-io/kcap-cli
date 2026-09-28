@@ -127,6 +127,7 @@ public static class CommandServices {
         services.AddTransient<McpPlansServer>();
         services.AddTransient<McpAnalyticsServer>();
         services.AddTransient<McpArtefactsServer>();
+        services.AddTransient<McpKnowledgeServer>();
         services.AddTransient<McpReviewServer>();
         services.AddTransient<McpJudgeServer>();
         services.AddTransient<UninstallCommand>();
