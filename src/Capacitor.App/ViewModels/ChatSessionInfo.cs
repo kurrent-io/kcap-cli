@@ -12,7 +12,9 @@ public sealed record ChatSessionInfo(
         // The daemon's count of running subagents; null on the remote lane and from an older daemon.
         int? LiveSubagents = null,
         // The local daemon's usage-limit notice. Null on the remote lane and from an older daemon.
-        UsageLimitNoticeDto? UsageLimit = null) {
+        UsageLimitNoticeDto? UsageLimit = null,
+        // The select dialog on the local agent's terminal. Null on the remote lane and from an older daemon.
+        TerminalDialogDto? TerminalDialog = null) {
     /// True when this session is waiting on the user. Independent of the status word.
     public bool WaitsOnUser { get; init; }
 
@@ -26,7 +28,7 @@ public sealed record ChatSessionInfo(
         // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
         ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath,
-        dto.LiveSubagents, dto.UsageLimit) { WaitsOnUser = SessionStatusDots.WaitsOnUser(dto) };
+        dto.LiveSubagents, dto.UsageLimit, dto.TerminalDialog) { WaitsOnUser = SessionStatusDots.WaitsOnUser(dto) };
 
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended) => new(
         row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,

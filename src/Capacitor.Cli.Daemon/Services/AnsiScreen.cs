@@ -125,7 +125,8 @@ internal sealed class AnsiScreen {
     }
 
     void Csi(char c) {
-        if (c == '?' && !_paramStarted && _paramCount == 0) { _private = true; return; }
+        // Any of < = > ? opens a private sequence; Claude Code's version query is CSI > 0 q.
+        if (c is >= '<' and <= '?' && !_paramStarted && _paramCount == 0) { _private = true; return; }
         if (c is >= '0' and <= '9') {
             _paramStarted = true;
             _param = _param * 10 + (c - '0');
