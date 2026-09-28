@@ -7,7 +7,6 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Collections;
-using Avalonia.Media;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
@@ -294,6 +293,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     string _statusText = "";
     public string StatusText { get => _statusText; private set => this.RaiseAndSetIfChanged(ref _statusText, value); }
 
+    AgentStatusPresentation _agentStatus = AgentStatusPresentation.None;
+    public AgentStatusPresentation AgentStatus {
+        get => _agentStatus;
+        private set => this.RaiseAndSetIfChanged(ref _agentStatus, value);
+    }
+
+    bool _showsActivityNote;
+    /// Failure text beside the composer. Working and starting ride the header status instead.
+    public bool ShowsActivityNote {
+        get => _showsActivityNote;
+        private set => this.RaiseAndSetIfChanged(ref _showsActivityNote, value);
+    }
+
     string _activityNote = "";
     /// Live elapsed time throughout a busy turn, including while output is streaming.
     public string ActivityNote {
@@ -307,6 +319,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     string _status = "";
     bool? _awaitingInput;
+    bool _waitsOnUser;
     int? _liveSubagents;
     long? _workingSince;
     TimeSpan _worked;
@@ -329,6 +342,20 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 ? VendorLabel.Length > 0 ? $"Starting {VendorLabel}…" : "Starting…"
                 : working && _workingSince is { } since
                     ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
+        ShowsActivityNote = _failureNote is not null && Phase != ChatTabPhase.Failed && ActivityNote.Length > 0;
+        RefreshAgentStatus();
+    }
+
+    void RefreshAgentStatus() {
+        var question = UsageLimitNoticeDto.IsQuestion(_usageLimit);
+        var elapsed = ActivityNote.StartsWith("Working for ", StringComparison.Ordinal) ? ActivityNote : null;
+        var stage = ActivityNote.StartsWith("Starting ", StringComparison.Ordinal) ? ActivityNote : null;
+        var answerExpected = Cards.PendingCards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
+        AgentStatus = SessionStatusDots.Present(
+            _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
+            question ? _usageLimit!.Summary : null, stage, elapsed, sessionId: null,
+            answerExpected: answerExpected);
+        StatusText = AgentStatus.Label;
     }
 
     static string WorkingNote(TimeSpan elapsed) {
@@ -369,7 +396,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 foreach (var change in changes) {
                     if (change.Key != agentId) continue;
                     if (change.Reason == ChangeReason.Remove)
-                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true, UsageLimit = null };
+                        info = (info ?? ChatSessionInfo.Gone) with {
+                            Status = "Completed", StatusLabel = "Done", Ended = true, UsageLimit = null, WaitsOnUser = false,
+                        };
                     else if (change.Reason is ChangeReason.Add or ChangeReason.Update)
                         info = ChatSessionInfo.FromLocal(change.Current, ended: false);
                 }
@@ -386,9 +415,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         return path => new LocalTranscriptFeed(path, projection, agentId, time,
             reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); });
     }
-
-    IBrush _statusDot = SessionStatusDots.For("");
-    public IBrush StatusDot { get => _statusDot; private set => this.RaiseAndSetIfChanged(ref _statusDot, value); }
 
     /// Test-only seam: the read in flight, or the last one started. A switch that loses the
     /// in-flight CAS starts no read of its own, so this still points at the previous file's read —
@@ -453,6 +479,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
                 Reconcile();
                 SyncPendingCardItems();
+                // HasPendingCards stays true when a question is replaced by a permission, so the
+                // header status has to be recomputed from the cards themselves.
+                RefreshAgentStatus();
             })
             .DisposeWith(_disposables);
 
@@ -636,10 +665,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _rootSubject.OnNext(info.Root);
         VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
-        StatusText = info.StatusLabel;
-        StatusDot = SessionStatusDots.For(info.Status, info.WaitsOnUser || UsageLimitNoticeDto.IsQuestion(info.UsageLimit));
         ApplyUsageLimit(info.UsageLimit);
         _status = info.Status;
+        _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;

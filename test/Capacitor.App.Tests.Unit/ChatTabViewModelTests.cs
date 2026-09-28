@@ -763,6 +763,27 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// The header status reads the card type. Replacing a question with a permission leaves the
+    /// collection nonempty, so the word has to move without waiting for the poll.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Resolving_a_question_beside_a_permission_updates_the_header_status() {
+        await RunOnUiAsync(async () => {
+            var h = Claude(p => p.Add(PermissionEntries.Entry("r1", "a1")));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the permission");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 2, what: "the question");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Answer);
+
+            h.Permissions.Remove("q1");
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the question resolved");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_request_with_an_id_marks_its_row_in_either_order_and_clears_on_resolve() {
@@ -1721,12 +1742,11 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A cache removal is the other way a session ends: the footer has to say so — the daemon's
-    /// vocabulary has no word for an agent it has already dropped — and a send that can never be
-    /// echoed must stop claiming it is still queued.
+    /// A cache removal ends the session. The visible word is Done — the daemon has already
+    /// dropped the agent — and a send that can never be echoed stops claiming it is queued.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_removed_agent_reads_as_Completed_and_unconfirms_the_queue() {
+    public async Task A_removed_agent_reads_as_done_and_unconfirms_the_queue() {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();
             var h = new Harness(TranscriptChat.Journal, input: input);
@@ -1740,7 +1760,7 @@ public class ChatTabViewModelTests {
                 await Assert.That(h.Chat.QueuedMessages.Single().IsUnconfirmed).IsFalse();
 
                 h.Daemon.Agents.Remove("a1");
-                await Assert.That(h.Chat.StatusText).IsEqualTo("Completed");
+                await Assert.That(h.Chat.StatusText).IsEqualTo("Done");
                 await Assert.That(h.Chat.QueuedMessages.Single().IsUnconfirmed).IsTrue();
             } finally { await h.TeardownAsync(); }
         });

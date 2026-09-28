@@ -28,7 +28,7 @@
         <Border Height="40" VerticalAlignment="Top" Background="Transparent"
                 PointerPressed="OnChromePointerPressed" />
 
-        <Grid x:Name="SessionsSurface" ColumnDefinitions="310,*">
+        <Grid x:Name="SessionsSurface" ColumnDefinitions="330,*">
             <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
             <Panel Grid.Column="1">
                 <!-- The launcher pane: daemon status top-left, Activity top-right, the composer

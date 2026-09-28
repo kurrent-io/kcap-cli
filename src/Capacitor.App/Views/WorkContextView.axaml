@@ -192,6 +192,11 @@
         <Style Selector="Button.toggle:pointerover Border.card">
             <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <!-- Centred on the line box, the chevron sits 1.5px under the eyebrow and meta glyphs. The
+             lift goes on the box: a Shape's own RenderTransform is a local value. -->
+        <Style Selector="Panel.chevronBox">
+            <Setter Property="RenderTransform" Value="translateY(-1.5px)" />
+        </Style>
         <Style Selector="Path.chevron">
             <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" />
             <Setter Property="StrokeThickness" Value="1.8" />
@@ -406,7 +411,7 @@
                                         <TextBlock Text="PARTS" Classes="eyebrow" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding PartsHeader}" Classes="sectionMeta" />
-                                            <Panel Width="12" Height="12">
+                                            <Panel Classes="chevronBox" Width="12" Height="12">
                                                 <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PartsExpanded}" />
                                                 <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PartsExpanded}" />
                                             </Panel>
@@ -473,7 +478,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="WhoCountText" Text="{Binding WhoCountText}" Classes="sectionMeta"
                                            IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Panel Width="12" Height="12" IsVisible="{Binding PeopleOverflows}">
+                                <Panel Classes="chevronBox" Width="12" Height="12" IsVisible="{Binding PeopleOverflows}">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
                                 </Panel>
@@ -573,7 +578,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="IssueKey" Text="{Binding IssueSectionMeta}" Classes="sectionMeta"
                                            IsVisible="{Binding IssueSectionMeta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Panel Width="12" Height="12" IsVisible="{Binding IssuesOverflows}">
+                                <Panel Classes="chevronBox" Width="12" Height="12" IsVisible="{Binding IssuesOverflows}">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IssuesExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IssuesExpanded}" />
                                 </Panel>
@@ -655,7 +660,7 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <Panel Width="12" Height="12">
+                                <Panel Classes="chevronBox" Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding Plan.IsExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !Plan.IsExpanded}" />
                                 </Panel>
@@ -736,7 +741,7 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <Panel Width="12" Height="12">
+                                <Panel Classes="chevronBox" Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SubagentsExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SubagentsExpanded}" />
                                 </Panel>
@@ -774,7 +779,7 @@
                     <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SESSION" Classes="eyebrow" />
-                            <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
+                            <Panel Classes="chevronBox" Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
                                 <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SessionExpanded}" />
                                 <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SessionExpanded}" />
                             </Panel>

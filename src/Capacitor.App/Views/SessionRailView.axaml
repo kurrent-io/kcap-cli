@@ -5,9 +5,6 @@
              xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
              x:Class="Capacitor.App.Views.SessionRailView"
              x:DataType="vm:MainWindowViewModel">
-    <UserControl.Resources>
-        <StreamGeometry x:Key="IdleClockIcon">M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zM12.75 7h-1.5v5.25h4.2v-1.5H12.75z</StreamGeometry>
-    </UserControl.Resources>
     <!-- DataContext is INHERITED from the window (never assigned here), so Rail is null on any
          window built without one — every Rail.* binding below carries a fallback for that. -->
     <UserControl.Styles>
@@ -20,8 +17,6 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="7" />
-            <!-- 32 is the attention badge (20) plus the header's vertical padding; without a
-                 floor the collapsed header grows onto the badge and the rail jumps. -->
             <Setter Property="MinHeight" Value="32" />
         </Style>
         <Style Selector="Button.holdsSelected">
@@ -35,33 +30,6 @@
         </Style>
         <Style Selector="Button.selected TextBlock.rowTitle">
             <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-        <Style Selector="Border.attentionBadge">
-            <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
-            <Setter Property="CornerRadius" Value="999" />
-            <Setter Property="Padding" Value="4" />
-            <Setter Property="Width" Value="20" />
-            <Setter Property="Height" Value="20" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Border.attentionBadge > Panel">
-            <Setter Property="Width" Value="12" />
-            <Setter Property="Height" Value="12" />
-        </Style>
-        <Style Selector="Border.attentionBadge > Panel > TextBlock">
-            <Setter Property="FontSize" Value="10.5" />
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Border.attentionBadge PathIcon.idleMark">
-            <Setter Property="Width" Value="12" />
-            <Setter Property="Height" Value="12" />
-            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style Selector="TextBlock.footerValue">
             <Setter Property="FontSize" Value="12" />
@@ -88,11 +56,20 @@
         <Style Selector="WrapPanel#RailDaemonRow > TextBlock">
             <Setter Property="Margin" Value="0,0,5,0" />
         </Style>
-        <!-- WrapPanel Center matches layout boxes, not glyph baselines, so a padded 11px
-             chip sits the vendor word high of 12.5px meta. One line box and Bottom
-             put the chip labels and the running-time on the same baseline. -->
+        <!-- Centred on the 11px line, the glyph lands a pixel under the word. The same
+             translateY(-1px) lifts an icon that sits beside a label. -->
+        <Style Selector="Panel.glyph, Border.vendorMark">
+            <Setter Property="RenderTransform" Value="translateY(-1px)" />
+        </Style>
+        <!-- The worktree row's marks sit on 13.5px and 12px text, whose glyphs centre 1.5px above
+             the line box. The lift goes on a box: a Shape's own RenderTransform is a local value. -->
+        <Style Selector="Panel.branchMark, Panel.chevronBox">
+            <Setter Property="RenderTransform" Value="translateY(-1.5px)" />
+        </Style>
+        <!-- Status word and the age share one 11px line. The logo and glyph sit in that line;
+             chip padding stays on the chip, not on the age, or the age drops below the line. -->
         <Style Selector="Border.railChip">
-            <Setter Property="VerticalAlignment" Value="Bottom" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style Selector="TextBlock.railChipLabel">
             <Setter Property="FontSize" Value="11" />
@@ -101,9 +78,7 @@
         <Style Selector="TextBlock.railMeta">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="LineHeight" Value="16" />
-            <Setter Property="Padding" Value="0,2,0,2" />
-            <Setter Property="VerticalAlignment" Value="Bottom" />
-            <Setter Property="Margin" Value="0,0,0,3" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style Selector="Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
@@ -293,22 +268,29 @@
                                                             Padding="8,6" Margin="0,2,0,0"
                                                             ToolTip.Tip="{Binding Tooltip}"
                                                             Classes="railRow" Classes.holdsSelected="{Binding HoldsSelected}">
-                                                        <DockPanel>
-                                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6"
-                                                                        VerticalAlignment="Center">
-                                                                <TextBlock Text="{Binding CountText}" FontSize="12"
+                                                        <!-- Fixed status and count columns, so every row's title gets the same width and
+                                                             the statuses line up down the rail. 76 fits "Needs you", the longest word. -->
+                                                        <Grid ColumnDefinitions="Auto,*,76,Auto" ColumnSpacing="8">
+                                                            <!-- Branch glyph: two commits and a fork, stroked to read at 12px. Its
+                                                                 colour is the worktree's pull request state; plain when it has none. -->
+                                                            <Panel Classes="branchMark" VerticalAlignment="Center">
+                                                                <Path Stroke="{Binding PullRequestTone, Converter={x:Static views:PullRequestToneBrushConverter.Instance}}"
+                                                                      StrokeThickness="1.5" views:PulseClock.IsActive="{Binding ChecksRunning}"
+                                                                      Width="12" Height="12" Stretch="Uniform"
+                                                                      Data="M3.3,3 A1.3,1.3 0 1 0 3.3,5.6 A1.3,1.3 0 1 0 3.3,3 M3.3,9 A1.3,1.3 0 1 0 3.3,11.6 A1.3,1.3 0 1 0 3.3,9 M9,4 A1.3,1.3 0 1 0 9,6.6 A1.3,1.3 0 1 0 9,4 M3.3,5.6 L3.3,9 M9,6.6 C9,8.6 3.3,7.6 3.3,9" />
+                                                            </Panel>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="13.5"
+                                                                       Foreground="{StaticResource KcapMutedBrush}"
+                                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                            <Border Grid.Column="2" IsVisible="{Binding ShowsHeaderBadge}" VerticalAlignment="Center">
+                                                                <views:AgentStatusMark DataContext="{Binding HeaderStatus}" />
+                                                            </Border>
+                                                            <!-- The count's box has a floor so a two-digit count does not push the status column. -->
+                                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding CountText}" FontSize="12" MinWidth="14" TextAlignment="Right"
                                                                            Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
-                                                                <Border Classes="attentionBadge" IsVisible="{Binding ShowsHeaderBadge}">
-                                                                    <Panel>
-                                                                        <TextBlock Text="!" IsVisible="{Binding !ShowsIdleBadge}" />
-                                                                        <PathIcon Classes="idleMark" Data="{StaticResource IdleClockIcon}"
-                                                                                  IsVisible="{Binding ShowsIdleBadge}" />
-                                                                    </Panel>
-                                                                </Border>
-                                                            </StackPanel>
-                                                            <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
                                                                 <!-- Stroked chevron, not a text glyph — the 9px ▸ rendered as a dot. -->
-                                                                <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                                                <Panel Classes="chevronBox" Width="12" Height="12" VerticalAlignment="Center">
                                                                     <Path Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
                                                                           StrokeLineCap="Round" StrokeJoin="Round"
                                                                           Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IsExpanded}" />
@@ -316,17 +298,8 @@
                                                                           StrokeLineCap="Round" StrokeJoin="Round"
                                                                           Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
                                                                 </Panel>
-                                                                <!-- Branch glyph: two commits and a fork, stroked to read at 12px. Its
-                                                                     colour is the worktree's pull request state; plain when it has none. -->
-                                                                <Path Stroke="{Binding PullRequestTone, Converter={x:Static views:PullRequestToneBrushConverter.Instance}}"
-                                                                      StrokeThickness="1.5" views:PulseClock.IsActive="{Binding ChecksRunning}"
-                                                                      Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center"
-                                                                      Data="M3.3,3 A1.3,1.3 0 1 0 3.3,5.6 A1.3,1.3 0 1 0 3.3,3 M3.3,9 A1.3,1.3 0 1 0 3.3,11.6 A1.3,1.3 0 1 0 3.3,9 M9,4 A1.3,1.3 0 1 0 9,6.6 A1.3,1.3 0 1 0 9,4 M3.3,5.6 L3.3,9 M9,6.6 C9,8.6 3.3,7.6 3.3,9" />
-                                                                <TextBlock Text="{Binding Label}" FontSize="13.5"
-                                                                           Foreground="{StaticResource KcapMutedBrush}"
-                                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                                             </StackPanel>
-                                                        </DockPanel>
+                                                        </Grid>
                                                     </Button>
                                                     <!-- The indent's guide-line: sessions hang off their worktree visually,
                                                          not just by margin. -->
@@ -339,65 +312,65 @@
                                                                     <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
                                                                             HorizontalContentAlignment="Stretch"
                                                                             Padding="8,6" Margin="0,2,0,0"
-                                                                            ToolTip.Tip="{Binding Tooltip}"
                                                                             Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}"
                                                                             Classes="railRow" Classes.selected="{Binding IsSelected}">
-                                                                        <DockPanel>
-                                                                            <Border DockPanel.Dock="Right" Classes="attentionBadge" Margin="8,0,0,0"
-                                                                                    IsVisible="{Binding NeedsYou}">
-                                                                                <Panel>
-                                                                                    <TextBlock Text="!" IsVisible="{Binding !ShowsIdleBadge}" />
-                                                                                    <PathIcon Classes="idleMark" Data="{StaticResource IdleClockIcon}"
-                                                                                              IsVisible="{Binding ShowsIdleBadge}" />
-                                                                                </Panel>
-                                                                            </Border>
-                                                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                                                                <Ellipse Grid.Column="0" Width="7" Height="7" Fill="{Binding StatusDot}"
-                                                                                         Classes.pulsing="{Binding DotPulses}"
-                                                                                         IsVisible="{Binding ShowsStatusDot}"
-                                                                                         VerticalAlignment="Top" Margin="0,4,0,0" />
-                                                                                <StackPanel Grid.Column="1" Spacing="3">
-                                                                                    <!-- Title stands alone on its line; a plain TextBlock in this vertical
-                                                                                         StackPanel is width-bounded, so CharacterEllipsis engages. When the
-                                                                                         row has no title the chips line below is the row's identity. -->
-                                                                                    <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
-                                                                                               Classes="rowTitle" IsVisible="{Binding HasTitle}"
-                                                                                               Foreground="{StaticResource KcapTextBrush}"
+                                                                        <ToolTip.Tip>
+                                                                            <views:AgentStatusTip DataContext="{Binding Status}" />
+                                                                        </ToolTip.Tip>
+                                                                        <StackPanel Spacing="3">
+                                                                            <!-- Title stands alone on its line; a plain TextBlock in this vertical
+                                                                                 StackPanel is width-bounded, so CharacterEllipsis engages. When the
+                                                                                 row has no title the chips line below is the row's identity. -->
+                                                                            <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
+                                                                                       Classes="rowTitle" IsVisible="{Binding HasTitle}"
+                                                                                       Foreground="{StaticResource KcapTextBrush}"
+                                                                                       TextTrimming="CharacterEllipsis"
+                                                                                       ToolTip.Tip="{Binding Primary}" />
+                                                                            <!-- The age sits on the right. Vendor, status and chips stay on the left
+                                                                                 and wrap rather than overflow the 330px rail. A WrapPanel measures
+                                                                                 each child unconstrained, and the age column is measured first, so
+                                                                                 each has a cap. The tips keep the full text. -->
+                                                                            <Grid ColumnDefinitions="*,Auto">
+                                                                            <WrapPanel VerticalAlignment="Center">
+                                                                                <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
+                                                                                        VerticalAlignment="Center" Background="Transparent"
+                                                                                        IsVisible="{Binding HasVendor}"
+                                                                                        AutomationProperties.Name="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}">
+                                                                                    <ToolTip.Tip>
+                                                                                        <StackPanel Spacing="1">
+                                                                                            <TextBlock Text="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}" />
+                                                                                            <TextBlock Text="{Binding ModelLabel}"
+                                                                                                       Foreground="{StaticResource KcapTextBrush}"
+                                                                                                       IsVisible="{Binding HasModel}" />
+                                                                                        </StackPanel>
+                                                                                    </ToolTip.Tip>
+                                                                                    <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                                    Content="{Binding Vendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=14}" />
+                                                                                </Border>
+                                                                                <views:AgentStatusMark DataContext="{Binding Status}" MaxWidth="160"
+                                                                                                       Margin="0,0,6,0" VerticalAlignment="Center" />
+                                                                                <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
+                                                                                        Padding="6,2" Margin="0,0,6,0"
+                                                                                        Background="{StaticResource KcapInfoDimBrush}">
+                                                                                    <TextBlock Text="{Binding ModelLabel}" Classes="railChipLabel"
+                                                                                               Foreground="{StaticResource KcapInfoBrush}"
+                                                                                               TextTrimming="CharacterEllipsis" />
+                                                                                </Border>
+                                                                                <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                                                        Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
+                                                                                        CornerRadius="3" Padding="4,2" Margin="0,0,6,0">
+                                                                                    <TextBlock Text="{Binding MachineBadge}" Classes="railChipLabel"
                                                                                                TextTrimming="CharacterEllipsis"
-                                                                                               ToolTip.Tip="{Binding Primary}" />
-                                                                                    <!-- WrapPanel, not a fixed row: chips + meta wrap to a second line rather
-                                                                                         than overflow the 310px rail when a vendor token, model id, or daemon
-                                                                                         name is unusually long. Each label is also individually width-capped and
-                                                                                         trims, so no single chip can push a line past the rail either. -->
-                                                                                    <WrapPanel>
-                                                                                        <Border Classes="railChip" IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
-                                                                                                Padding="6,2" Margin="0,0,6,3"
-                                                                                                Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
-                                                                                            <TextBlock Text="{Binding Vendor}" Classes="railChipLabel"
-                                                                                                       FontWeight="SemiBold"
-                                                                                                       TextTrimming="CharacterEllipsis"
-                                                                                                       Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
-                                                                                        </Border>
-                                                                                        <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
-                                                                                                Padding="6,2" Margin="0,0,6,3"
-                                                                                                Background="{StaticResource KcapInfoDimBrush}">
-                                                                                            <TextBlock Text="{Binding Model}" Classes="railChipLabel"
-                                                                                                       Foreground="{StaticResource KcapInfoBrush}"
-                                                                                                       TextTrimming="CharacterEllipsis" />
-                                                                                        </Border>
-                                                                                        <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                                                                                Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
-                                                                                                CornerRadius="3" Padding="4,2" Margin="0,0,6,3">
-                                                                                            <TextBlock Text="{Binding MachineBadge}" Classes="railChipLabel"
-                                                                                                       TextTrimming="CharacterEllipsis"
-                                                                                                       Foreground="{StaticResource KcapFaintBrush}" />
-                                                                                        </Border>
-                                                                                        <TextBlock Text="{Binding Meta}" Classes="railMeta"
-                                                                                                   Foreground="{StaticResource KcapFaintBrush}" />
-                                                                                    </WrapPanel>
-                                                                                </StackPanel>
+                                                                                               Foreground="{StaticResource KcapFaintBrush}" />
+                                                                                </Border>
+                                                                            </WrapPanel>
+                                                                                <TextBlock Grid.Column="1" Text="{Binding Meta}" Classes="railMeta"
+                                                                                           MaxWidth="180" TextTrimming="CharacterEllipsis"
+                                                                                           ToolTip.Tip="{Binding Meta}"
+                                                                                           Margin="8,0,0,0" HorizontalAlignment="Right"
+                                                                                           Foreground="{StaticResource KcapFaintBrush}" />
                                                                             </Grid>
-                                                                        </DockPanel>
+                                                                        </StackPanel>
                                                                     </Button>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
