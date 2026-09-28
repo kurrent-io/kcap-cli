@@ -37,6 +37,7 @@
     <!-- Must stay on the Microsoft.Testing.Platform version TUnit.Engine resolves (2.4.0):
          an MTP extension only loads against its own platform version. -->
     <PackageVersion Include="Microsoft.Testing.Extensions.GitHubActionsReport" Version="2.4.0" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.HangDump" Version="2.4.0" />
     <PackageVersion Include="TUnit" Version="1.68.4" />
     <PackageVersion Include="TUnit.Core" Version="1.68.4" />
     <PackageVersion Include="Velopack" Version="1.2.0" />
