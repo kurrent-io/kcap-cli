@@ -201,7 +201,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "list_dismissed_next_work" => await client.GetAsync($"{baseUrl}/api/next-work/dismissals"),
 
                 "list_loose_ends"  => await client.GetAsync(BuildLooseEndsUrl(baseUrl, arguments, McpToolArguments.OptionalString(arguments, "repo_hash") ?? await cwdRepoHash())),
-                "close_loose_end"  => await client.PostAsync($"{baseUrl}/api/loose-ends/close", ToJsonContent(BuildCloseLooseEndBody(arguments))),
+                "close_loose_end"  => await CloseLooseEndAsync(client, baseUrl, arguments),
                 "reopen_loose_end" => await client.PostAsync($"{baseUrl}/api/loose-ends/reopen", ToJsonContent(BuildReopenLooseEndBody(arguments))),
 
                 // The declared breakdown/relation surface. Every id is a
@@ -239,6 +239,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             // rather than reaching the agent verbatim.
             if (IsNextWorkTargetTool(toolName)) return RenderNextWorkTargetResult(id, toolName, httpResponse.StatusCode, body);
             if (toolName == "list_loose_ends") return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
+            if (toolName is "close_loose_end" or "reopen_loose_end" && IsLedgerUnavailable(httpResponse.StatusCode, body))
+                return BuildToolResult(id, NextWorkUnavailableMessage);
 
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
@@ -447,7 +449,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static string RenderLooseEndListResult(JsonNode id, HttpStatusCode status, string body) {
         var code = NextWorkTargetErrorCode(body);
 
-        if (status == HttpStatusCode.NotFound && code == "next_work_unavailable")
+        if (IsLedgerUnavailable(status, body))
             return BuildToolResult(id, NextWorkUnavailableMessage);
 
         if ((int)status is < 200 or > 299)
@@ -521,6 +523,20 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         return RenderNextWorkTargetBody(toolName, body) is { } text
             ? BuildToolResult(id, text)
             : BuildToolResult(id, "Error: the server returned an unreadable response.", isError: true);
+    }
+
+    /// <summary>A 404 coded <c>next_work_unavailable</c>, or one with no JSON body at all: a server
+    /// older than the loose-end routes answers them with an empty 404.</summary>
+    internal static bool IsLedgerUnavailable(HttpStatusCode status, string body) {
+        if (status != HttpStatusCode.NotFound) return false;
+        if (string.IsNullOrWhiteSpace(body)) return true;
+
+        try {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.Str("code") == "next_work_unavailable";
+        } catch (JsonException) {
+            return true;
+        }
     }
 
     static string? NextWorkTargetErrorCode(string body) {
@@ -723,13 +739,30 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     /// <summary>The session is optional context for the server, so a close outside any harness session
     /// still goes through.</summary>
-    internal static JsonObject BuildCloseLooseEndBody(JsonObject? args) {
+    internal static JsonObject BuildCloseLooseEndBody(JsonObject? args, string? ambientSessionId) {
         var body      = BuildReopenLooseEndBody(args);
-        var sessionId = McpSessionId.TryResolveWithin(args, HarnessRequesterContext.Resolve(Environment.GetEnvironmentVariable, Directory.Exists).SessionId);
+        var sessionId = McpSessionId.TryResolveWithin(args, ambientSessionId);
 
         if (sessionId is not null) body["session_id"] = AotJsonString(sessionId);
 
         return body;
+    }
+
+    /// <summary>A session the server cannot attribute to the caller is refused <c>session_not_found</c>.
+    /// When that session was only the harness default rather than the agent's own argument, the close
+    /// is retried once without it, since the session is context the close does not need.</summary>
+    static async Task<HttpResponseMessage> CloseLooseEndAsync(HttpClient client, string baseUrl, JsonObject? args) {
+        var url       = $"{baseUrl}/api/loose-ends/close";
+        var ambient   = HarnessRequesterContext.Resolve(Environment.GetEnvironmentVariable, Directory.Exists).SessionId;
+        var body      = BuildCloseLooseEndBody(args, ambient);
+        var defaulted = body.ContainsKey("session_id") && McpSessionId.TryResolveWithin(args, null) is null;
+
+        var response = await client.PostAsync(url, ToJsonContent(body));
+        if (!defaulted || response.StatusCode != HttpStatusCode.NotFound) return response;
+        if (NextWorkTargetErrorCode(await response.Content.ReadAsStringAsync()) != "session_not_found") return response;
+
+        response.Dispose();
+        return await client.PostAsync(url, ToJsonContent(BuildReopenLooseEndBody(args)));
     }
 
     internal static JsonObject BuildReopenLooseEndBody(JsonObject? args) =>
