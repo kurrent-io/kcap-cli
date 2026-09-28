@@ -1,4 +1,5 @@
 using System.Text;
+using Capacitor.Cli.Daemon.Pty;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -23,7 +24,18 @@ internal sealed class AnsiScreen {
     readonly int[] _params = new int[8];
     int _paramCount;
 
+    /// The grid is one cell per column and row. The product is the array length: an unchecked
+    /// multiply wraps, and a size that does not fit is not a grid this screen can keep.
+    internal const int MaxCells = 1 << 20;
+
+    internal static bool Fits(int cols, int rows) {
+        if (cols <= 0 || rows <= 0) return false;
+        try { return checked(cols * rows) <= MaxCells; }
+        catch (OverflowException) { return false; }
+    }
+
     public AnsiScreen(int cols, int rows) {
+        if (!Fits(cols, rows)) (cols, rows) = (PtyDefaults.Cols, PtyDefaults.Rows);
         _cols  = cols;
         _rows  = rows;
         _cells = new char[cols * rows];
@@ -37,7 +49,7 @@ internal sealed class AnsiScreen {
     /// a grid of any other size misplaces every redraw. Keeps the top-left overlap; the TUI
     /// repaints on the resize anyway.
     public void Resize(int cols, int rows) {
-        if (cols == _cols && rows == _rows) return;
+        if (cols == _cols && rows == _rows || !Fits(cols, rows)) return;
         var cells = new char[cols * rows];
         Array.Fill(cells, ' ');
         for (var row = 0; row < Math.Min(rows, _rows); row++)

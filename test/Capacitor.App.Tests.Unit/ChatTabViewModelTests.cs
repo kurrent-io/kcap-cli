@@ -1991,24 +1991,30 @@ public class ChatTabViewModelTests {
     }
 
     /// Pins the hook card's precedence: while a card asks the question, the screen's copy of the
-    /// same dialog is not offered, and it comes back once the card is gone and the dialog is not.
+    /// same dialog is not offered, and the composer stays shut because that dialog is still on
+    /// the terminal. The card comes back once the hook card is gone and the dialog is not.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_pending_card_hides_the_terminal_dialog_it_raised() {
         await RunOnUiAsync(async () => {
-            var h = new Harness(TranscriptChat.For("claude"));
+            var h = new Harness(TranscriptChat.For("claude"), input: new KeyRecordingInput());
             var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
             try {
                 h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                h.Chat.ComposerText = "hello";
                 await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
 
-                await Assert.That(h.Chat.HasTerminalMenu).IsFalse();
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsFalse();
                 await Assert.That(h.Chat.TerminalMenuChoices).IsEmpty();
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
 
                 h.Permissions.Remove("r1");
                 await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsTrue();
                 await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
                 await Assert.That(h.Chat.TerminalMenuChoices).Count().IsEqualTo(2);
             } finally { await h.TeardownAsync(); }
         });
