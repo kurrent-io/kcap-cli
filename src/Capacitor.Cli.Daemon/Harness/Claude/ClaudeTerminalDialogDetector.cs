@@ -14,31 +14,35 @@ internal static class ClaudeTerminalDialogDetector {
     const char   Cursor = '❯';
 
     /// <param name="cols">The width the screen was drawn at, which decides where a label wrapped.</param>
-    internal static TerminalDialogDto? Parse(string screen, int cols) {
+    internal static TerminalDialogDto? Parse(string screen, int cols) => Read(screen, cols).Dialog;
+
+    /// IncompleteRedraw is set when the cursor is not on exactly one row: the chunk ended between
+    /// drawing the new cursor and erasing the old one.
+    internal static (TerminalDialogDto? Dialog, bool IncompleteRedraw) Read(string screen, int cols) {
         var lines  = screen.Split('\n');
         var footer = Array.FindLastIndex(lines, l => l.Trim().Length > 0);
-        if (footer < 0 || !lines[footer].Trim().StartsWith(Footer, StringComparison.Ordinal)) return null;
+        if (footer < 0 || !lines[footer].Trim().StartsWith(Footer, StringComparison.Ordinal)) return (null, false);
 
         var border = Array.FindLastIndex(lines, footer, IsRule);
-        if (border < 0) return null;
+        if (border < 0) return (null, false);
         var region = lines[(border + 1)..footer];
 
-        var (options, selected, firstRow) = ReadOptions(region, cols);
+        var (options, selected, firstRow, incomplete) = ReadOptions(region, cols);
         var paragraphs = Paragraphs(region[..firstRow].Select(l => l.Trim()));
         var heading = paragraphs.FirstOrDefault() ?? "";
         var body = string.Join('\n', paragraphs.Skip(1));
         var shown = string.Join('\n', region.Select(l => l.TrimEnd())).Trim('\n');
 
-        return new TerminalDialogDto(heading, body, options, selected, shown);
+        return (new TerminalDialogDto(heading, body, options, selected, shown), incomplete);
     }
 
     /// Options share the text column of the cursor row. A row continues the option above it when it
     /// is indented deeper, or when its first word could not have fit on that option's row: Claude
     /// wraps a long label at the label's own column. A checkbox list is multi-select, which arrows
     /// and Enter cannot answer.
-    static (List<string> Options, int Selected, int FirstRow) ReadOptions(string[] region, int cols) {
+    static (List<string> Options, int Selected, int FirstRow, bool Incomplete) ReadOptions(string[] region, int cols) {
         var cursorRows = Enumerable.Range(0, region.Length).Where(i => region[i].TrimStart().StartsWith(Cursor)).ToList();
-        if (cursorRows.Count != 1) return ([], -1, region.Length);
+        if (cursorRows.Count != 1) return ([], -1, region.Length, true);
 
         var cursor = cursorRows[0];
         var mark   = region[cursor].IndexOf(Cursor);
@@ -61,8 +65,8 @@ internal static class ClaudeTerminalDialogDetector {
             options.Add(StripNumber(line.Trim()));
         }
 
-        if (options.Count < 2 || options.Any(IsCheckbox)) return ([], -1, first);
-        return (options, selected, first);
+        if (options.Count < 2 || options.Any(IsCheckbox)) return ([], -1, first, false);
+        return (options, selected, first, false);
     }
 
     static bool Wrapped(string above, string line, int cols) {
