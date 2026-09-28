@@ -1,9 +1,9 @@
 using System.Text;
 using Capacitor.Cli.Core.LocalIpc;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Claude;
 using TUnit.Assertions.Enums;
 
-namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
+namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Claude;
 
 /// Pins the live-screen match for Claude's usage-limit menu: a limit line, the title, and two
 /// known choices, cleared when that screen is erased, and quiet when the limit line is absent.
