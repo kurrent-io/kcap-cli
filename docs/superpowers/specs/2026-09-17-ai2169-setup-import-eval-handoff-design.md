@@ -645,9 +645,10 @@ to its own cohort.
 - **Exact**: the file's `session_ids` — the run candidate set, so sessions the background child lands
   before the skill's first snapshot are counted, and sessions imported concurrently by anything else
   are not. Completed eval rows already present at the first snapshot count.
-- **Partial-exact**: identical mechanics over the listed 500 — every foreground session, then the
+- **Partial-exact**: identical mechanics over the listed 500 — foreground sessions first, then the
   most recent candidates to fill; a chain is taken whole, so a foreground member can sit past the
-  cap in run order, and the watch cannot wait on a session it never queries. The skill opens by
+  cap in run order, and the watch cannot wait on a session it never queries. A foreground set
+  larger than the cap is itself cut at 500, so the per-poll query budget holds. The skill opens by
   saying which sessions it watches and that older ones may land and evaluate unobserved.
   Omitted candidates are invisible to the bounded queries and are never labelled unrelated.
 - **Unknown**, or no file: no query, links and the closing block only.
@@ -732,8 +733,9 @@ non-null in a later poll completed during this watch. Every summarized session c
 two labels.
 
 **Stop rules**, evaluated in order after each successful poll, its state committed first. K is
-`foreground_succeeded_ids.length`: the sessions that imported while the user watched, and the ones
-the watch waits on.
+the number of `foreground_succeeded_ids` entries present in `session_ids`: the sessions that
+imported while the user watched, and the ones the watch waits on. An entry the cap left out is
+never queried; the skill says how many.
 
 1. K > 0 and every foreground session has a completed eval → summarize all of them, ordered by
    `evaluated_at`, ties by `session_id`. A pre-existing eval counts.

@@ -62,6 +62,18 @@ public class ImportHandoffFileTests {
         await Assert.That(file.SessionIds.Distinct().Count()).IsEqualTo(500);
     }
 
+    /// <summary>The watch's query budget assumes at most 500 ids, so a foreground chain longer
+    /// than that is cut at the cap rather than carried whole.</summary>
+    [Test]
+    public async Task A_foreground_set_larger_than_the_cap_is_cut_at_the_cap() {
+        var foreground = Enumerable.Range(0, 501).Select(i => $"c{i:000}").ToArray();
+        var file = Compose(Outcome(candidates: 600, foreground));
+
+        await Assert.That(file.SessionIds.Count).IsEqualTo(500);
+        await Assert.That(file.SessionIds[499]).IsEqualTo("c499");
+        await Assert.That(file.ForegroundSucceededIds.Count).IsEqualTo(501);
+    }
+
     [Test]
     public async Task Unknown_candidates_write_an_unknown_cohort_with_no_ids() {
         var o = new ForegroundImportOutcome(ForegroundCertainty.Incomplete, 0, 0, 0, 0, true, null, []);

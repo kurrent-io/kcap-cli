@@ -104,11 +104,14 @@ if kcap uses a custom config directory — then prompt again.
 ## 5. Watch the cohort
 
 Cohort = `session_ids` (`cohort: unknown` or empty → CLOSE with links, no query). Foreground =
-`foreground_succeeded_ids`, the sessions that imported while the user watched setup; they are the
-sessions this watch waits on. Open with: "Watching N sessions from this import; waiting for the K
-that imported first to be evaluated" — K is `foreground_succeeded_ids.length`; for `partial_exact`
-add "the sessions that imported first and the most recent others, 500 in all; older ones may land
-and evaluate unobserved"; if `unattributed_on_disk` > 0 add the sentence from section 7.
+the entries of `foreground_succeeded_ids` that are also in `session_ids`: the sessions that
+imported while the user watched setup, and the ones this watch waits on. K is the foreground
+count. A foreground entry missing from `session_ids` is never queried; when any are missing, say
+"M of the sessions that imported first are outside the 500 this watch can query". Open with:
+"Watching N sessions from this import; waiting for the K that imported first to be evaluated";
+for `partial_exact` add "the sessions that imported first and the most recent others, 500 at
+most; older ones may land and evaluate unobserved"; if `unattributed_on_disk` > 0 add the
+sentence from section 7.
 
 Every query uses `query_analytics` with `scope: 'global'` (the MCP defaults to the caller's cwd
 repo and will not widen on its own), **ONE call at a time — never two in flight** — and names only

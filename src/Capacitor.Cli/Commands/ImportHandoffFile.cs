@@ -31,16 +31,18 @@ internal sealed record ImportHandoffFile(
             outcome.SucceededIds, unattributedOnDisk, background.Status, background.LogPath);
     }
 
-    /// <summary>The first <see cref="CohortCap"/> candidates in run order, except that every
-    /// foreground session is kept: a chain is selected whole, so a member can sit past the cap, and
-    /// the watch cannot wait on a session it never queries.</summary>
+    /// <summary>At most <see cref="CohortCap"/> candidates in run order, foreground sessions
+    /// first: a chain is selected whole, so a member can sit past the cap, and the watch cannot wait
+    /// on a session it never queries. A foreground set larger than the cap is itself cut at the cap,
+    /// which keeps the watch's per-poll query budget valid.</summary>
     static List<string> CappedCohort(IReadOnlyList<string> candidates, IReadOnlyList<string> foreground) {
         if (candidates.Count <= CohortCap) return [.. candidates];
 
         var reserved = foreground.ToHashSet(StringComparer.Ordinal);
-        var room     = CohortCap - candidates.Count(reserved.Contains);
+        var room     = Math.Max(0, CohortCap - candidates.Count(reserved.Contains));
         var cohort   = new List<string>(CohortCap);
         foreach (var id in candidates) {
+            if (cohort.Count == CohortCap) break;
             if (reserved.Contains(id)) cohort.Add(id);
             else if (room > 0) { cohort.Add(id); room--; }
         }
