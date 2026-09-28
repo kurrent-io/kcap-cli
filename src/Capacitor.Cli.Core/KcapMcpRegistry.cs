@@ -29,6 +29,7 @@ public static class KcapMcpRegistry {
         ["kcap-plans"]     = new("kcap-plans",     ["mcp", "plans"],     false),
         ["kcap-analytics"] = new("kcap-analytics", ["mcp", "analytics"], false),
         ["kcap-artefacts"] = new("kcap-artefacts", ["mcp", "artefacts"], false),
+        ["kcap-knowledge"] = new("kcap-knowledge", ["mcp", "knowledge"], false),
     };
 
     /// <summary>Every registered id. Exposed so a conformance test can compare this list against the

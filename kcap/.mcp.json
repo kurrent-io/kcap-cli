@@ -46,6 +46,12 @@
       "args": ["mcp", "analytics"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "description": "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with governed read-only SQL. For 'what did we spend', 'which tools/models do we use', 'how many sessions' questions: call get_analytics_schema once, then query_analytics. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide."
+    },
+    "kcap-knowledge": {
+      "command": "kcap",
+      "args": ["mcp", "knowledge"],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "description": "Read retained facts and curated skills (list_facts, search_facts, list_skills, get_skill) and fine-tune skills through edit, transition, membership and fact curation tools. Repo-aware: reads default to the current repo."
     }
   }
 }
