@@ -107,8 +107,8 @@ Cohort = `session_ids` (`cohort: unknown` or empty → CLOSE with links, no quer
 `foreground_succeeded_ids`, the sessions that imported while the user watched setup; they are the
 sessions this watch waits on. Open with: "Watching N sessions from this import; waiting for the K
 that imported first to be evaluated" — K is `foreground_succeeded_ids.length`; for `partial_exact`
-add "the 500 most recent; older ones may land and evaluate unobserved"; if `unattributed_on_disk`
-> 0 add the sentence from section 7.
+add "the sessions that imported first and the most recent others, 500 in all; older ones may land
+and evaluate unobserved"; if `unattributed_on_disk` > 0 add the sentence from section 7.
 
 Every query uses `query_analytics` with `scope: 'global'` (the MCP defaults to the caller's cwd
 repo and will not widen on its own), **ONE call at a time — never two in flight** — and names only

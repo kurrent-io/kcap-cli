@@ -422,9 +422,9 @@ unfollowed; no temp file is left behind on any path.
 ```
 
 - `cohort: "exact"` — `session_ids` is the complete run candidate set in candidate order (§1).
-- `cohort: "partial_exact"` — the candidate set exceeded **500**; `session_ids` holds the first 500 in
-  candidate order, so the cut is deterministic across chains, routed sessions and probe errors alike.
-  The skill watches exactly those and says so.
+- `cohort: "partial_exact"` — the candidate set exceeded **500**; `session_ids` holds every foreground
+  session plus the first candidates in candidate order to fill 500, so the cut is deterministic
+  across chains, routed sessions and probe errors alike. The skill watches exactly those and says so.
 - `cohort: "unknown"` — `Certainty == Incomplete` with `RunCandidateIds == null`; `session_ids` is
   empty and meaningless; the skill queries nothing and closes with links.
 - `foreground_succeeded_ids` is the completed pass's `ImportRunPartition.SucceededIds`, verbatim —
@@ -645,8 +645,10 @@ to its own cohort.
 - **Exact**: the file's `session_ids` — the run candidate set, so sessions the background child lands
   before the skill's first snapshot are counted, and sessions imported concurrently by anything else
   are not. Completed eval rows already present at the first snapshot count.
-- **Partial-exact**: identical mechanics over the listed 500; the skill opens by saying it watches the
-  500 most recent sessions of this import and that older ones may land and evaluate unobserved.
+- **Partial-exact**: identical mechanics over the listed 500 — every foreground session, then the
+  most recent candidates to fill; a chain is taken whole, so a foreground member can sit past the
+  cap in run order, and the watch cannot wait on a session it never queries. The skill opens by
+  saying which sessions it watches and that older ones may land and evaluate unobserved.
   Omitted candidates are invisible to the bounded queries and are never labelled unrelated.
 - **Unknown**, or no file: no query, links and the closing block only.
 
@@ -898,7 +900,7 @@ its child) lists that parent; `handoff_suppressed` takes each value of the §4 t
 built for that row, `null` whenever `handoff_offered` is true, and the precedence cases — failed
 import **and** cached denial → `import_failed`; empty cohort **and** cached denial →
 `no_new_sessions`; all-skipped pass with nothing left → `nothing_landed` — resolve as the table says;
->500 candidates → first 500 in candidate order, `partial_exact`; two concurrent runs → two files;
+>500 candidates → foreground sessions plus the first candidates to fill 500, `partial_exact`; two concurrent runs → two files;
 >7-day files pruned on write; write failure warns and continues.
 
 **Handoff gating and picker**: each row of the §4 table has a fixture and the first matching row wins;

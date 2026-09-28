@@ -47,6 +47,21 @@ public class ImportHandoffFileTests {
         await Assert.That(file.SessionIds[0]).IsEqualTo("c000");
     }
 
+    /// <summary>A foreground chain is taken whole, so a member can sit past the cap in candidate
+    /// order; the watch waits on every foreground session, so each must be in the cohort it queries.</summary>
+    [Test]
+    public async Task Foreground_sessions_past_the_cap_are_kept_in_the_cohort() {
+        var file = Compose(Outcome(candidates: 600, "c000", "c001", "c599"));
+
+        await Assert.That(file.SessionIds.Count).IsEqualTo(500);
+        await Assert.That(file.SessionIds).Contains("c599");
+        await Assert.That(file.SessionIds[0]).IsEqualTo("c000");
+        await Assert.That(file.SessionIds[1]).IsEqualTo("c001");
+        await Assert.That(file.SessionIds[2]).IsEqualTo("c002");
+        await Assert.That(file.SessionIds).DoesNotContain("c499");
+        await Assert.That(file.SessionIds.Distinct().Count()).IsEqualTo(500);
+    }
+
     [Test]
     public async Task Unknown_candidates_write_an_unknown_cohort_with_no_ids() {
         var o = new ForegroundImportOutcome(ForegroundCertainty.Incomplete, 0, 0, 0, 0, true, null, []);
