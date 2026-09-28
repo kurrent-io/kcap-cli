@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Commands;
 
@@ -57,6 +58,31 @@ public class AppMenuBarTests {
         await Assert.That(minimize).IsEqualTo(new KeyGesture(Key.M, KeyModifiers.Meta));
         await Assert.That(fullScreen).IsEqualTo(new KeyGesture(Key.F, KeyModifiers.Control | KeyModifiers.Meta));
         await Assert.That(main).IsEqualTo(new KeyGesture(Key.D0, KeyModifiers.Meta));
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Window_menu_on_the_main_window_offers_Refresh_beside_the_other_shortcuts() {
+        var (layout, gesture, enabled) = await AvaloniaSession.DispatchAsync(() => {
+            var vm = new MainWindowViewModel(
+                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var menu = Submenu(NewBar(showMainWindow: () => { }).Build(new MainWindow { DataContext = vm }), "Window");
+            var refresh = Item(menu, "Refresh");
+            return (Layout(menu), refresh.Gesture, refresh.IsEnabled);
+        });
+
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|-|Kurrent Capacitor|-|Bring All to Front");
+        await Assert.That(gesture).IsEqualTo(RefreshShortcut.Primary);
+        await Assert.That(enabled).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Window_menu_on_any_other_window_has_no_Refresh() {
+        var layout = await AvaloniaSession.DispatchAsync(() =>
+            Layout(Submenu(NewBar().Build(new SettingsWindow()), "Window")));
+
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Bring All to Front");
     }
 
     [Test]

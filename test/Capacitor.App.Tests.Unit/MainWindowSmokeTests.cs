@@ -14,6 +14,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
@@ -722,6 +723,93 @@ public class MainWindowSmokeTests {
             await Assert.That(hasMeta).IsTrue();
             await Assert.That(hasCtrl).IsTrue();
             await Assert.That(afterInvoke).IsNull();
+        });
+    }
+
+    /// Command+R runs the header refresh. Linux and Windows also bind Control+R, the command key
+    /// there; macOS does not, so the terminal keeps reverse-i-search. The shortcut stays disabled
+    /// on the launcher, before a session id, and while a refresh the user asked for is running.
+    /// A poll does not count as that.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Refresh_shortcut_runs_the_open_works_refresh_and_follows_the_button() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            const string id = "0123456789abcdef0123456789abcdef";
+            var service = new FakeDaemonClientService();
+            var (actions, _) = NewActions(service);
+            var source = new FakeWorkContextSource();
+            var time = new FakeTimeProvider();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                workspaceFactory: agentId => new WorkspaceViewModel(
+                    agentId, service, actions, new FakeTerminalAttachClientFactory().Factory,
+                    () => new FakeTerminalSurface(), time, new RecordingOpener(), new FakePermissionService(),
+                    source, new ScriptedLocalControlOps(), new NoAttachmentUploader()));
+            var window = new MainWindow { DataContext = vm };
+            var windowMenu = new AppMenuBar(new RecordingOpener(), () => [], () => null).Build(window)
+                .Items.OfType<NativeMenuItem>().Single(i => i.Header == "Window").Menu!;
+            var refreshItem = windowMenu.Items.OfType<NativeMenuItem>().Single(i => i.Header == "Refresh");
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            try {
+                var bindings = window.KeyBindings.Where(k => k.Gesture is { Key: Key.R }).ToArray();
+                bool Bound(KeyModifiers mod) => bindings.Any(k => k.Gesture!.KeyModifiers == mod);
+                bool Can() => bindings[0].Command!.CanExecute(null);
+
+                await Assert.That(Bound(KeyModifiers.Meta)).IsTrue();
+                await Assert.That(Bound(KeyModifiers.Control)).IsEqualTo(RefreshShortcut.UsesControl);
+                await Assert.That(bindings.All(k => ReferenceEquals(k.Command, vm.RefreshWorkCommand))).IsTrue();
+                await Assert.That(refreshItem.Command).IsSameReferenceAs(vm.RefreshWorkCommand);
+                await Assert.That(refreshItem.Gesture).IsEqualTo(RefreshShortcut.Primary);
+                await Assert.That(Can()).IsFalse();
+                await Assert.That(refreshItem.IsEnabled).IsFalse();
+
+                vm.OpenSession(id);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(Can()).IsFalse();
+
+                service.Agents.AddOrUpdate(WorkspaceFixtures.Agent(id, "claude", true, "/repo/myproj", sessionId: id));
+                var work = ((WorkspaceViewModel)vm.CurrentWorkspace!).WorkContext;
+                await work.PendingReadForTesting!;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(work.HasSession).IsTrue();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(refreshItem.IsEnabled).IsTrue();
+
+                var tip = VisibleTipLines(window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "RefreshButton"));
+                await Assert.That(tip).Contains(WorkContextViewModel.RefreshShortcutCaption);
+
+                var gate = source.Gate();
+                var beforePoll = source.Requested.Count;
+                time.Advance(WorkContextViewModel.PollInterval);
+                await Assert.That(work.IsReading).IsTrue();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(source.Requested.Count).IsEqualTo(beforePoll + 1);
+
+                bindings[0].Command!.Execute(null);
+                await Assert.That(work.IsRefreshing).IsTrue();
+                await Assert.That(source.Requested.Count).IsEqualTo(beforePoll + 1);
+                await Assert.That(Can()).IsFalse();
+                await Assert.That(refreshItem.IsEnabled).IsFalse();
+
+                var parked = work.PendingReadForTesting!;
+                gate.SetResult(WorkContextRead.Of(WorkContextReadKind.SessionUnknown));
+                await parked;
+                if (work.PendingReadForTesting is { } follow && !ReferenceEquals(follow, parked)) await follow;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(refreshItem.IsEnabled).IsTrue();
+
+                vm.CloseWorkspace();
+                await Assert.That(Can()).IsFalse();
+                await Assert.That(refreshItem.IsEnabled).IsFalse();
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
         });
     }
 

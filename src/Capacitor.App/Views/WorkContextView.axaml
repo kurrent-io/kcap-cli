@@ -304,7 +304,7 @@
                             <ToolTip.Tip>
                                 <StackPanel Spacing="2" MaxWidth="260">
                                     <TextBlock Text="{Binding RefreshTip}" TextWrapping="Wrap" />
-                                    <TextBlock Text="Refresh this work" Classes="kcapTipCaption" />
+                                    <TextBlock Text="{x:Static vm:WorkContextViewModel.RefreshShortcutCaption}" Classes="kcapTipCaption" />
                                 </StackPanel>
                             </ToolTip.Tip>
                             <!-- The arrow glyph is off-centre in its box and would orbit if turned; the ring spins in place. -->

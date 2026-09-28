@@ -155,6 +155,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
+    /// The header refresh on the open local workspace. Disabled with no workspace, no session
+    /// id, or a refresh the user already asked for still running — the same intervals the button is.
+    public ReactiveCommand<Unit, Unit> RefreshWorkCommand { get; }
+
     /// Opens the product documentation. Enabled whatever the server says — a user who cannot reach
     /// a tenant is exactly the one who needs the docs.
     public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }
@@ -276,6 +280,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
+        var canRefreshWork = this.WhenAnyValue(x => x.CurrentWorkspace)
+            .Select(CanRefreshOpenWork)
+            .Switch()
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        RefreshWorkCommand = ReactiveCommand.Create(RefreshOpenWork, canRefreshWork);
         CanOpenFeedback     = openFeedback is not null;
         OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
         OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
@@ -486,6 +495,18 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// The coordinator's close paths. Bumps unconditionally — a close-to-hide with no workspace
     /// open must still retire an in-flight launch's captured generation.
     public void CloseWorkspace() => SwapTo(null);
+
+    static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
+        workspace is WorkspaceViewModel { WorkContext: var work }
+            ? work.WhenAnyValue(w => w.HasSession, w => w.IsRefreshing, (hasSession, refreshing) => hasSession && !refreshing)
+            : Observable.Never<bool>().StartWith(false);
+
+    // The menu gesture and the key binding can both deliver one press. IsRefreshing flips
+    // inside the work command, before this returns, so the second delivery no-ops.
+    void RefreshOpenWork() {
+        if (CurrentWorkspace is not WorkspaceViewModel { WorkContext: { HasSession: true, IsRefreshing: false } work }) return;
+        work.RefreshCommand.Execute().Subscribe();
+    }
 
     /// First shutdown pass: unhook the live workspace and register its teardown before the drain
     /// seals the tracker, then latch so no later window opens another. A workspace that never
