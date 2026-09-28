@@ -58,8 +58,13 @@
         </Style>
         <!-- Centred on the 11px line, the glyph lands a pixel under the word. The same
              translateY(-1px) lifts an icon that sits beside a label. -->
-        <Style Selector="Panel.glyph">
+        <Style Selector="Panel.glyph, Border.vendorMark">
             <Setter Property="RenderTransform" Value="translateY(-1px)" />
+        </Style>
+        <!-- The worktree row's marks sit on 13.5px and 12px text, whose glyphs centre 1.5px above
+             the line box. The lift goes on a box: a Shape's own RenderTransform is a local value. -->
+        <Style Selector="Panel.branchMark, Panel.chevronBox">
+            <Setter Property="RenderTransform" Value="translateY(-1.5px)" />
         </Style>
         <!-- Status word and the age share one 11px line. The logo and glyph sit in that line;
              chip padding stays on the chip, not on the age, or the age drops below the line. -->
@@ -263,22 +268,29 @@
                                                             Padding="8,6" Margin="0,2,0,0"
                                                             ToolTip.Tip="{Binding Tooltip}"
                                                             Classes="railRow" Classes.holdsSelected="{Binding HoldsSelected}">
-                                                        <DockPanel>
-                                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6"
-                                                                        VerticalAlignment="Center">
-                                                                <!-- Expanded, the count stays on the right: the sessions are listed under
-                                                                     the title. Collapsed, it follows the title so it is not read as part
-                                                                     of the status mark. -->
-                                                                <TextBlock Text="{Binding CountText}" FontSize="12"
-                                                                           Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
-                                                                           IsVisible="{Binding IsExpanded}" />
-                                                                <Border IsVisible="{Binding ShowsHeaderBadge}">
-                                                                    <views:AgentStatusMark DataContext="{Binding HeaderStatus}" />
-                                                                </Border>
-                                                            </StackPanel>
-                                                            <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                                        <!-- Fixed status and count columns, so every row's title gets the same width and
+                                                             the statuses line up down the rail. 76 fits "Needs you", the longest word. -->
+                                                        <Grid ColumnDefinitions="Auto,*,76,Auto" ColumnSpacing="8">
+                                                            <!-- Branch glyph: two commits and a fork, stroked to read at 12px. Its
+                                                                 colour is the worktree's pull request state; plain when it has none. -->
+                                                            <Panel Classes="branchMark" VerticalAlignment="Center">
+                                                                <Path Stroke="{Binding PullRequestTone, Converter={x:Static views:PullRequestToneBrushConverter.Instance}}"
+                                                                      StrokeThickness="1.5" views:PulseClock.IsActive="{Binding ChecksRunning}"
+                                                                      Width="12" Height="12" Stretch="Uniform"
+                                                                      Data="M3.3,3 A1.3,1.3 0 1 0 3.3,5.6 A1.3,1.3 0 1 0 3.3,3 M3.3,9 A1.3,1.3 0 1 0 3.3,11.6 A1.3,1.3 0 1 0 3.3,9 M9,4 A1.3,1.3 0 1 0 9,6.6 A1.3,1.3 0 1 0 9,4 M3.3,5.6 L3.3,9 M9,6.6 C9,8.6 3.3,7.6 3.3,9" />
+                                                            </Panel>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="13.5"
+                                                                       Foreground="{StaticResource KcapMutedBrush}"
+                                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                            <Border Grid.Column="2" IsVisible="{Binding ShowsHeaderBadge}" VerticalAlignment="Center">
+                                                                <views:AgentStatusMark DataContext="{Binding HeaderStatus}" />
+                                                            </Border>
+                                                            <!-- The count's box has a floor so a two-digit count does not push the status column. -->
+                                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding CountText}" FontSize="12" MinWidth="14" TextAlignment="Right"
+                                                                           Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
                                                                 <!-- Stroked chevron, not a text glyph — the 9px ▸ rendered as a dot. -->
-                                                                <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                                                <Panel Classes="chevronBox" Width="12" Height="12" VerticalAlignment="Center">
                                                                     <Path Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
                                                                           StrokeLineCap="Round" StrokeJoin="Round"
                                                                           Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IsExpanded}" />
@@ -286,21 +298,8 @@
                                                                           StrokeLineCap="Round" StrokeJoin="Round"
                                                                           Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
                                                                 </Panel>
-                                                                <!-- Branch glyph: two commits and a fork, stroked to read at 12px. Its
-                                                                     colour is the worktree's pull request state; plain when it has none. -->
-                                                                <Path Stroke="{Binding PullRequestTone, Converter={x:Static views:PullRequestToneBrushConverter.Instance}}"
-                                                                      StrokeThickness="1.5" views:PulseClock.IsActive="{Binding ChecksRunning}"
-                                                                      Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center"
-                                                                      Data="M3.3,3 A1.3,1.3 0 1 0 3.3,5.6 A1.3,1.3 0 1 0 3.3,3 M3.3,9 A1.3,1.3 0 1 0 3.3,11.6 A1.3,1.3 0 1 0 3.3,9 M9,4 A1.3,1.3 0 1 0 9,6.6 A1.3,1.3 0 1 0 9,4 M3.3,5.6 L3.3,9 M9,6.6 C9,8.6 3.3,7.6 3.3,9" />
-                                                                <TextBlock Text="{Binding Label}" FontSize="13.5"
-                                                                           Foreground="{StaticResource KcapMutedBrush}"
-                                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                                                <TextBlock Text="{Binding CountText, StringFormat='({0})'}" FontSize="12"
-                                                                           Foreground="{StaticResource KcapFaintBrush}"
-                                                                           VerticalAlignment="Center"
-                                                                           IsVisible="{Binding !IsExpanded}" />
                                                             </StackPanel>
-                                                        </DockPanel>
+                                                        </Grid>
                                                     </Button>
                                                     <!-- The indent's guide-line: sessions hang off their worktree visually,
                                                          not just by margin. -->
@@ -328,7 +327,7 @@
                                                                                        TextTrimming="CharacterEllipsis"
                                                                                        ToolTip.Tip="{Binding Primary}" />
                                                                             <!-- The age sits on the right. Vendor, status and chips stay on the left
-                                                                                 and wrap rather than overflow the 310px rail. -->
+                                                                                 and wrap rather than overflow the 330px rail. -->
                                                                             <Grid ColumnDefinitions="*,Auto">
                                                                             <WrapPanel VerticalAlignment="Center">
                                                                                 <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"

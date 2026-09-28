@@ -496,9 +496,10 @@ public class MainWindowSmokeTests {
     }
 
     /// A shown MainWindow whose rail holds two rows, "Fix the flaky test"
-    /// and "Leave this one alone", under one worktree named feature-x.
+    /// and "Leave this one alone", under one worktree named feature-x. A sibling worktree
+    /// adds one more row under that name.
     static (MainWindowViewModel Vm, MainWindow Window) RailWindow(
-            bool awaitingInput = false, int? liveSubagents = null, string? model = null) {
+            bool awaitingInput = false, int? liveSubagents = null, string? model = null, string? siblingWorktree = null) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
@@ -509,6 +510,11 @@ public class MainWindowSmokeTests {
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
             null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
+        if (siblingWorktree is not null)
+            service.Agents.AddOrUpdate(new AgentStatusDto(
+                "a3", "agent", "claude", $"/dev/alpha/wt/{siblingWorktree}", "Running",
+                null, null, null, DateTime.UtcNow, null, null, Title: "Sibling work",
+                AwaitingInput: awaitingInput ? true : null));
 
         var (actions, _) = NewActions(service);
         MainWindowViewModel? vm = null;
@@ -650,38 +656,51 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// Collapsed, the session count follows the worktree title. Expanded, it stays on the right,
-    /// clear of the title, because the sessions themselves are listed underneath.
+    /// The count sits tight against the chevron on the right edge, expanded or collapsed.
+    /// Collapsed, the status mark sits in a fixed column, so worktrees whose names differ in
+    /// length show their statuses at one x.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_collapsed_worktree_puts_its_count_against_the_title() {
+    public async Task Worktree_statuses_line_up_beside_a_tight_count() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var seen = await AvaloniaSession.DispatchAsync(() => {
-                var (_, window) = RailWindow();
+                var (_, window) = RailWindow(awaitingInput: true, siblingWorktree: "x");
                 window.UpdateLayout();
                 var header = RailRow(window, "feature-x");
+                var sibling = RailRow(window, "x");
+                double Left(Control control) => control.TranslatePoint(default, window)!.Value.X;
+                double Right(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), window)!.Value.X;
+                Avalonia.Controls.Shapes.Path Chevron(Button row) => row.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First(p => p.IsVisible && p.StrokeThickness == 1.8);
+                TextBlock Count(Button row, string text) => row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == text);
+                AgentStatusMark Mark(Button row) => row.GetVisualDescendants().OfType<AgentStatusMark>().First(m => m.IsVisible);
                 var label = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "feature-x");
-                double Left(Control control) => control.TranslatePoint(default, header)!.Value.X;
-                double Right(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), header)!.Value.X;
-                var expandedCount = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "2");
-                var expandedGap = Left(expandedCount) - Right(label);
+                var branch = header.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First(p => p.StrokeThickness == 1.5);
+                var expandedGap = Left(Chevron(header)) - Right(Count(header, "2"));
                 header.Command!.Execute(null);
+                sibling.Command!.Execute(null);
                 Dispatcher.UIThread.RunJobs();
                 window.UpdateLayout();
-                var collapsedCount = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "(2)");
                 var result = (
                     ExpandedGap: expandedGap,
-                    CollapsedGap: Left(collapsedCount) - Right(label),
-                    ExpandedCountHidden: !expandedCount.IsVisible,
-                    CollapsedCountVisible: collapsedCount.IsVisible);
+                    CollapsedGap: Left(Chevron(header)) - Right(Count(header, "2")),
+                    MarkOffset: Math.Abs(Left(Mark(header)) - Left(Mark(sibling))),
+                    MarkClearsCount: Left(Count(header, "2")) - Right(Mark(header)),
+                    ChevronOffset: Math.Abs(Left(Chevron(header)) - Left(Chevron(sibling))),
+                    BranchBeforeTitle: Right(branch) <= Left(label),
+                    Parenthetical: header.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "(2)"));
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
-            await Assert.That(seen.ExpandedGap).IsGreaterThan(24);
-            await Assert.That(seen.CollapsedGap).IsLessThan(12);
-            await Assert.That(seen.ExpandedCountHidden).IsTrue();
-            await Assert.That(seen.CollapsedCountVisible).IsTrue();
+            await Assert.That(seen.ExpandedGap).IsGreaterThan(0);
+            await Assert.That(seen.ExpandedGap).IsLessThan(8);
+            await Assert.That(seen.CollapsedGap).IsGreaterThan(0);
+            await Assert.That(seen.CollapsedGap).IsLessThan(8);
+            await Assert.That(seen.MarkOffset).IsLessThan(0.5);
+            await Assert.That(seen.MarkClearsCount).IsGreaterThan(0);
+            await Assert.That(seen.ChevronOffset).IsLessThan(0.5);
+            await Assert.That(seen.BranchBeforeTitle).IsTrue();
+            await Assert.That(seen.Parenthetical).IsFalse();
         });
     }
 
@@ -1179,7 +1198,7 @@ public class MainWindowSmokeTests {
         await Assert.That(visibleWhileIn).IsFalse();
     }
 
-    /// 310 of rail plus 400 of pane must never squeeze the center column to nothing.
+    /// 330 of rail plus 400 of pane must never squeeze the center column to nothing.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task MainWindow_keeps_a_layout_floor_and_a_wider_default() {
