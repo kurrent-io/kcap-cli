@@ -101,6 +101,48 @@ public class ClaudeTerminalDialogDetectorTests {
         await Assert.That(dialog.Screen).Contains("[ ] search");
     }
 
+    /// A checkbox list is a finished menu, not a cursor redraw. Same heading or not, it must not
+    /// keep the select choices the previous screen had, or Chat would send those keys to it.
+    [Test]
+    public async Task A_checkbox_dialog_does_not_keep_the_previous_select_choices() {
+        var screen = new ClaudeScreenWatcher();
+        var select = string.Join('\n',
+            new string('─', 40),
+            "  Pick a server",
+            "",
+            "    Use this one",
+            "  ❯ Use the other",
+            "",
+            "  Enter to confirm · Esc to cancel");
+        screen.Observe(Utf8(select));
+        await Assert.That(screen.Observe(Utf8("")).Dialog!.Options).Count().IsEqualTo(2);
+
+        var checkbox = "\x1b[2J" + string.Join('\n',
+            new string('─', 40),
+            "  Pick a server",
+            "",
+            "  ❯ [ ] docs",
+            "    [ ] search",
+            "",
+            "  Enter to confirm · Esc to cancel");
+        var dialog = screen.Observe(Utf8(checkbox)).Dialog;
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Options).IsEmpty();
+        await Assert.That(dialog.Screen).Contains("[ ] search");
+    }
+
+    /// The cell count is the allocation. A winsize at the top of ushort wraps that product.
+    [Test]
+    public async Task A_resize_whose_cell_count_does_not_fit_keeps_the_dialog() {
+        var screen = new ClaudeScreenWatcher(ushort.MaxValue, ushort.MaxValue);
+        screen.Observe(Utf8(Dialog));
+        await Assert.That(screen.Observe(Utf8("")).Dialog!.Options).Count().IsEqualTo(3);
+
+        screen.Resize(ushort.MaxValue, ushort.MaxValue);
+        await Assert.That(screen.Observe(Utf8("")).Dialog!.Options).Count().IsEqualTo(3);
+    }
+
     [Test]
     public async Task Labels_wrapped_at_the_terminal_width_are_one_choice_each() {
         var screen = new ClaudeScreenWatcher(40, 40);

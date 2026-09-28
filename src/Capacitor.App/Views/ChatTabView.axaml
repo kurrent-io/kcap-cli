@@ -285,7 +285,7 @@
                 Background="{StaticResource KcapSurfaceBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">
-                <Border x:Name="TerminalMenuCard" IsVisible="{Binding HasTerminalMenu}"
+                <Border x:Name="TerminalMenuCard" IsVisible="{Binding ShowsTerminalMenu}"
                         Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
                         BorderThickness="1" CornerRadius="8" Padding="12,10">
                     <StackPanel Spacing="8">

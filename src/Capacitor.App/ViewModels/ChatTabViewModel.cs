@@ -246,10 +246,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool _terminalMenuChoiceTaken;
 
     /// A vendor menu is on the terminal: a usage-limit question or a select dialog. Text sent now
-    /// would be typed into it, so the composer waits on the menu's own choices.
+    /// would be typed into it. Stays set while a pending card hides the card itself.
     public bool HasTerminalMenu {
         get => _hasTerminalMenu;
         private set => this.RaiseAndSetIfChanged(ref _hasTerminalMenu, value);
+    }
+
+    bool _showsTerminalMenu;
+    /// The menu card. A pending hook card hides the screen's copy of the dialog it raised.
+    public bool ShowsTerminalMenu {
+        get => _showsTerminalMenu;
+        private set => this.RaiseAndSetIfChanged(ref _showsTerminalMenu, value);
     }
 
     public string TerminalMenuTitle {
@@ -738,7 +745,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 TerminalMenuScreen = dialog.Screen;
             }
         }
-        HasTerminalMenu = question || shown;
+        HasTerminalMenu = question || dialog is not null;
+        ShowsTerminalMenu = question || shown;
         TerminalMenuChoices = choices.Select(choice => new TerminalMenuChoiceViewModel(
                 choice.Label, choice.Keys,
                 ReactiveCommand.CreateFromTask(
