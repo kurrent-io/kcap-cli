@@ -58,4 +58,14 @@ public class CursorChatTitleTests {
 
         await Assert.That(new CursorChatTitle(Tmp.Path, SessionId).Read()!.Title).IsEqualTo("Live");
     }
+
+    [Test]
+    public async Task ForTranscript_derives_the_session_id_from_the_transcript_file_name() {
+        Tmp.CreateFile(["ws", SessionId, "meta.json"], """{"title":"From transcript"}""");
+        var transcriptPath = Path.Combine("agent-transcripts", SessionId, $"{SessionId}.jsonl");
+
+        var title = CursorChatTitle.ForTranscript(Tmp.Path, transcriptPath).Read();
+
+        await Assert.That(title!.Title).IsEqualTo("From transcript");
+    }
 }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
@@ -156,6 +157,14 @@ class WatchState {
     public bool               FullFileScanDone   { get; set; }
     public string?            FirstAssistantText { get; set; }
     public int                EventCount         { get; set; }
+
+    // Non-null only when this vendor has its own title store the watcher polls (Codex, Copilot,
+    // Kiro, Cursor, Antigravity) for a top-level session watcher. HarnessTitleSeen also latches
+    // from a transcript line for vendors whose title arrives inline instead (TranscriptTitleLines)
+    // — either source stops LLM titling for good, since a harness-native title always wins.
+    public HarnessTitleTracker? TitleTracker         { get; set; }
+    public DateTimeOffset       LastHarnessTitleRead { get; set; }
+    public bool                 HarnessTitleSeen     { get; set; }
 
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)

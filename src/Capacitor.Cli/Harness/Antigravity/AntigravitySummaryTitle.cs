@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Data.Sqlite;
@@ -15,6 +16,14 @@ namespace Capacitor.Cli.Harness.Antigravity;
 /// every step best-effort: a missing db / table / row is skipped, never thrown.</para></summary>
 public sealed class AntigravitySummaryTitle(string dbPath, string dashedConversationId) : IHarnessTitleStore {
     static AntigravitySummaryTitle() => SqliteNativeResolver.Register();
+
+    /// <summary>The conversation id is the db's own file name — <see cref="AntigravityPaths.ConversationDb"/>
+    /// names it that way, so no separate parse of the transcript path is needed.</summary>
+    public static AntigravitySummaryTitle? ForTranscript(string transcriptPath) {
+        var dbPath = AntigravityPaths.ConversationDbFromTranscript(transcriptPath);
+
+        return dbPath is null ? null : new AntigravitySummaryTitle(dbPath, Path.GetFileNameWithoutExtension(dbPath));
+    }
 
     public bool RecordsChangeTime => false;
 

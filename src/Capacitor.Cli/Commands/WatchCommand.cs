@@ -16,11 +16,14 @@ using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
+using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.Kiro;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.PrDetection;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -369,6 +372,19 @@ partial class WatchCommand(
         // task can read state.LastActivityAt as its no-progress clock.
         var state = new WatchState();
         state.LastActivityAt = time.GetUtcNow();
+
+        // Non-null only for a top-level session watcher (agentId is null) of a vendor that keeps
+        // its own title store the watcher can poll — the other vendors carry their title inline
+        // in the transcript instead (see the TranscriptTitleLines call in DrainNewLines).
+        IHarnessTitleStore? titleStore = agentId is not null ? null : vendor switch {
+            "codex"       => new CodexSessionIndexTitle(harnesses.Of<CodexHarness>().Paths.Home, sessionId),
+            "copilot"     => new CopilotWorkspaceTitle(Path.Combine(Path.GetDirectoryName(transcriptPath)!, "workspace.yaml")),
+            "kiro"        => new KiroSessionTitle(Path.ChangeExtension(transcriptPath, ".json")),
+            "cursor"      => CursorChatTitle.ForTranscript(harnesses.Of<CursorHarness>().Paths.ChatsDir, transcriptPath),
+            "antigravity" => AntigravitySummaryTitle.ForTranscript(transcriptPath),
+            _             => null,
+        };
+        if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
         // lifetime (its checkpoint/pending-range state is meant to persist poll-to-poll). Null
@@ -815,6 +831,14 @@ partial class WatchCommand(
                 // gated so this can never interleave with a
                 // concurrently-running reconnect rewind (see cursorRewindGate's declaration above).
                 var drained = await DrainNewLinesGatedAsync(isFinalDrainLocal: false, cts.Token);
+
+                // Polled every drain that produced content, and otherwise on its own 30s cadence —
+                // a store some vendors write outside the transcript (Cursor's meta.json, Antigravity's
+                // sqlite row) would otherwise never be re-read on an idle transcript.
+                if (titleStore is not null && (drained.Count > 0 || time.GetUtcNow() - state.LastHarnessTitleRead >= TimeSpan.FromSeconds(30))) {
+                    state.LastHarnessTitleRead = time.GetUtcNow();
+                    await PostHarnessTitleAsync(titleStore, sessionId, state, cts.Token);
+                }
 
                 // Live subagent discovery: only the parent (agentId == null) watcher scans;
                 // child subagent watchers (agentId != null) just stream their file. Gemini
@@ -2200,6 +2224,12 @@ partial class WatchCommand(
                             Log(time, $"First assistant text captured ({state.FirstAssistantText.Length} chars)");
                         }
                     }
+
+                    // A vendor whose title lives inline in the transcript (rather than a separate
+                    // store this watcher polls) — latches for good, same as a polled title.
+                    if (agentId is null && !state.HarnessTitleSeen && TranscriptTitleLines.CarriesHarnessTitle(vendor, line)) {
+                        state.HarnessTitleSeen = true;
+                    }
                 }
             }
 
@@ -2207,6 +2237,7 @@ partial class WatchCommand(
             // (deferred until threshold is reached for session watchers)
             if (state is { TitleGenerated: false, TitleInFlight: false, TitleAttempts: < 5, ThresholdReached: true }
              && agentId is null
+             && !state.HarnessTitleSeen
              && state.FirstUserText is not null
              && state.EventCount >= 5) {
                 Log(time, $"Triggering LLM title generation (attempt {state.TitleAttempts + 1}/5, events: {state.EventCount})");
@@ -3461,6 +3492,24 @@ partial class WatchCommand(
     // The watcher is killed 5s after it is told to stop. The final-line wait, the final drain and
     // the PR probe share this much of it, leaving the rest for the drain-complete signal.
     static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
+
+    async Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct) {
+        if (state.TitleTracker!.Observe(store.Read(), time.GetUtcNow()) is not { } post) return;
+
+        state.HarnessTitleSeen = true;
+
+        try {
+            using var client  = await http.ForBackgroundAsync(ct);
+            var       outcome = await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, post, ct);
+
+            if (outcome == HarnessTitleOutcome.Posted) state.TitleTracker.Posted(post);
+            else Log(time, $"Harness title not recorded yet: {outcome}");
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            Log(time, $"Harness title post failed: {ex.Message}");
+        }
+    }
 
     async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
         try {

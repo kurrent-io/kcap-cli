@@ -56,4 +56,33 @@ public class AntigravitySummaryTitleTests {
     public async Task Does_not_record_change_time() {
         await Assert.That(new AntigravitySummaryTitle(Tmp.PathTo("absent.db"), ConversationId).RecordsChangeTime).IsFalse();
     }
+
+    [Test]
+    public async Task ForTranscript_derives_the_sibling_db_and_conversation_id() {
+        var dbPath = Tmp.PathTo("conversations", $"{ConversationId}.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+        using (var conn = new SqliteConnection($"Data Source={dbPath}")) {
+            conn.Open();
+            using var create = conn.CreateCommand();
+            create.CommandText = "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '')";
+            create.ExecuteNonQuery();
+            using var insert = conn.CreateCommand();
+            insert.CommandText = "INSERT INTO conversation_summaries(conversation_id, title) VALUES ($id, $title)";
+            insert.Parameters.AddWithValue("$id", ConversationId);
+            insert.Parameters.AddWithValue("$title", "From transcript path");
+            insert.ExecuteNonQuery();
+        }
+
+        var transcriptPath = Tmp.PathTo("brain", ConversationId, ".system_generated", "logs", "transcript_full.jsonl");
+
+        var title = AntigravitySummaryTitle.ForTranscript(transcriptPath)!.Read();
+
+        await Assert.That(title!.Title).IsEqualTo("From transcript path");
+    }
+
+    [Test]
+    public async Task ForTranscript_returns_null_for_an_unrecognized_shape() {
+        await Assert.That(AntigravitySummaryTitle.ForTranscript(Tmp.PathTo("not-a-transcript.jsonl"))).IsNull();
+    }
 }

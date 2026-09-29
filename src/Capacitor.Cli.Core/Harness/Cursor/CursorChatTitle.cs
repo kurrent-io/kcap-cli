@@ -12,6 +12,11 @@ namespace Capacitor.Cli.Core.Harness.Cursor;
 /// (it moves with the transcript's own last-write time), so it is not a reliable rename timestamp —
 /// this reader never reports a change time.</summary>
 public sealed class CursorChatTitle(string chatsDir, string dashedSessionId) : IHarnessTitleStore {
+    /// <summary>The session id is the transcript file's own name (without extension) — the same id
+    /// that names its directory under <c>agent-transcripts</c>.</summary>
+    public static CursorChatTitle ForTranscript(string chatsDir, string transcriptPath) =>
+        new(chatsDir, Path.GetFileNameWithoutExtension(transcriptPath));
+
     public bool RecordsChangeTime => false;
 
     public StoreTitle? Read() {
