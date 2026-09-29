@@ -44,8 +44,6 @@ public class LocalPermissionBridgeInteractiveTests {
             return File.Exists(path) ? File.ReadAllLines(path) : [];
         }
 
-        /// Fails as soon as the hook is answered without a request ever pending, naming how it was
-        /// answered, instead of waiting out the deadline on a request that can no longer appear.
         public async Task<PermissionPendingDto> WaitPendingAsync(Task<HttpResponseMessage> response) {
             var deadline = DateTime.UtcNow.AddSeconds(30);
             while (Broker.PendingSnapshot().Count == 0) {
