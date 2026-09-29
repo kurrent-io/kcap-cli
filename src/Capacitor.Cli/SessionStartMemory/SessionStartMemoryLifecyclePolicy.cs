@@ -8,6 +8,8 @@ internal static class SessionStartMemoryLifecyclePolicy {
             return SessionMemoryLifecycleDecision.RetryLaterNoCommit;
         if (!lifecycle.IsTopLevel || lifecycle.Reason == SessionLifecycleReason.Compact)
             return SessionMemoryLifecycleDecision.IneligibleNoCommit;
+        if (!lifecycle.HostKeepsContext)
+            return SessionMemoryLifecycleDecision.EligibleEveryStart;
         return lifecycle.CallbackMayRepeat
             ? SessionMemoryLifecycleDecision.EligibleWithLease
             : SessionMemoryLifecycleDecision.EligibleOneShot;
