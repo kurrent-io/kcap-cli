@@ -5341,7 +5341,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             a.IsPrivate ? null : a.SessionId ?? (a.Runtime as IAcpTranscriptSource)?.AcpSessionId,
             a.TranscriptPath, a.CreatedAt))];
 
-    static HarnessTitlePost? NativeTitleFor(TitleAgentView agent) =>
+    internal static HarnessTitlePost? NativeTitleFor(TitleAgentView agent) =>
         agent is { Vendor: "claude", TranscriptPath: { } path } && ClaudeNativeTitle.TryExtractWithKind(path) is { } title
             ? new HarnessTitlePost(title.Title, title.IsRename ? HarnessTitleKind.Rename : HarnessTitleKind.Auto, title.IsRename ? title.ChangedAt : null)
             : null;

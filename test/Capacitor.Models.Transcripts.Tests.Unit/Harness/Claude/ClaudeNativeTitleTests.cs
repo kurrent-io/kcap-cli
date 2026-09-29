@@ -84,7 +84,7 @@ public class ClaudeNativeTitleTests {
     }
 
     [Test]
-    public async Task Custom_title_beats_ai_title_and_is_timed_by_its_first_occurrence() {
+    public async Task Custom_title_beats_ai_title_and_is_timed_by_the_start_of_its_run() {
         var path = Transcript(
             """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
             """{"type":"ai-title","aiTitle":"Auto","sessionId":"s"}""",
@@ -131,5 +131,28 @@ public class ClaudeNativeTitleTests {
 
         await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
             .IsEqualTo(new ClaudeTitle("A", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:10:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    [Test]
+    public async Task TryExtractWithKind_returns_a_long_title_whole() {
+        var longTitle = new string('r', 150);
+        var path = Transcript($$"""{"type":"custom-title","customTitle":"{{longTitle}}","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path)!.Title).IsEqualTo(longTitle);
+        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo(new string('r', 120));
+    }
+
+    /// <summary>A line whose only timestamp is nested (inside <c>message</c>) does not time a rename; the stamp
+    /// resolved at the previous run start does, which is earlier.</summary>
+    [Test]
+    public async Task A_nested_timestamp_in_the_preceding_line_is_not_used() {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""",
+            """{"type":"assistant","message":{"timestamp":"2026-09-29T10:30:00Z"}}""",
+            """{"type":"custom-title","customTitle":"B","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("B", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
     }
 }

@@ -174,7 +174,7 @@ internal sealed class TitleResolveLoop {
 
         // On a failed read the last successfully-read authority stands in, so an outage tick
         // cannot demote the applied title down the ladder.
-        var best = (serverReadOk ? serverReal : state.ServerTitle) ?? native?.Title ?? state.Generated;
+        var best = (serverReadOk ? serverReal : state.ServerTitle) ?? Normalize(native?.Title) ?? state.Generated;
 
         if (best is not null && best != state.Applied) {
             _apply(agent.Id, best);
@@ -184,7 +184,8 @@ internal sealed class TitleResolveLoop {
         // The harness's own title is pushed whenever it changes, independent of the server's
         // current title — it is authoritative for what the harness itself calls the session.
         if (native is not null && !native.Equals(state.PushedNative) && agent.SessionId is { } sid) {
-            state.PushAttempts.Add(native.Title);
+            // A server read comes back display-capped, so the capped form is what an echo of this push looks like.
+            state.PushAttempts.Add(Normalize(native.Title)!);
 
             var outcome = HarnessTitleOutcome.Failed;
             try {
@@ -251,7 +252,7 @@ internal sealed class TitleResolveLoop {
     /// title line. No stat to compare against (no transcript path, or the file is missing) just
     /// calls the lane every time.</summary>
     HarnessTitlePost? ExtractNative(TitleAgentView agent, AgentTitleState state) {
-        if (agent.TranscriptPath is not { } path) return NormalizePost(_nativeLane(agent));
+        if (agent.TranscriptPath is not { } path) return TrimPost(_nativeLane(agent));
 
         FileInfo? info;
         try {
@@ -262,7 +263,7 @@ internal sealed class TitleResolveLoop {
 
         if (info is not { Exists: true }) {
             state.NativeStatPath = null;
-            return NormalizePost(_nativeLane(agent));
+            return TrimPost(_nativeLane(agent));
         }
 
         if (state.NativeStatPath == path && state.NativeStatLength == info.Length
@@ -270,7 +271,7 @@ internal sealed class TitleResolveLoop {
             return state.NativeStatResult;
         }
 
-        var result = NormalizePost(_nativeLane(agent));
+        var result = TrimPost(_nativeLane(agent));
         state.NativeStatPath         = path;
         state.NativeStatLength       = info.Length;
         state.NativeStatLastWriteUtc = info.LastWriteTimeUtc;
@@ -285,8 +286,10 @@ internal sealed class TitleResolveLoop {
         return trimmed.Length > 120 ? trimmed[..120] : trimmed;
     }
 
-    static HarnessTitlePost? NormalizePost(HarnessTitlePost? post) =>
-        post is null ? null : Normalize(post.Title) is { } title ? post with { Title = title } : null;
+    /// <summary>Trimmed but not capped: the pushed value must match what every other sender of the same rename
+    /// sends, and the server applies its own clamp. The display cap belongs to <see cref="Normalize"/> alone.</summary>
+    static HarnessTitlePost? TrimPost(HarnessTitlePost? post) =>
+        post is null || string.IsNullOrWhiteSpace(post.Title) ? null : post with { Title = post.Title.Trim() };
 
     /// <summary>
     /// The watcher's initial title and the daemon's seed take exactly two forms: the launch

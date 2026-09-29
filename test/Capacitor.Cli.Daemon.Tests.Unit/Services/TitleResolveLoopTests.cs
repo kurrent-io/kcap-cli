@@ -571,4 +571,38 @@ public class TitleResolveLoopTests {
 
         await Assert.That(h.NativeCalls).IsEqualTo(2);
     }
+
+    /// <summary>The push carries the title uncapped, as the watcher sends the same rename, while only the local
+    /// display is capped; the server echoing the whole title back is still recognised as this loop's own.</summary>
+    [Test]
+    public async Task A_long_native_title_is_pushed_whole_and_applied_capped() {
+        var h         = new Harness();
+        var longTitle = new string('n', 150);
+        h.Agents.Add(Agent());
+        h.Native = _ => longTitle;
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Server.Pushed.Select(p => p.Post.Title)).IsEquivalentTo([longTitle]);
+        await Assert.That(h.Applied).IsEquivalentTo([("a1", new string('n', 120))]);
+    }
+
+    /// <summary>An auth lapse reaches the loop as <see cref="HarnessTitleOutcome.Failed"/>, which stays retryable.</summary>
+    [Test]
+    public async Task A_failed_native_push_is_retried_on_the_next_tick() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "A";
+        h.Server.PushResult = HarnessTitleOutcome.Failed;
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        h.Server.PushResult = HarnessTitleOutcome.Posted;
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Server.Pushed.Count).IsEqualTo(2);
+    }
 }
