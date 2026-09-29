@@ -1,13 +1,108 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Harness.Pi;
 
 /// Asks an installed `pi` for the models it can launch here, over its RPC mode, and maps them to
 /// `provider/id` values. The answer is Pi's own auth-filtered list; the daemon never reads Pi's
 /// auth or models files.
-internal static class PiModelCatalogProbe {
+internal static partial class PiModelCatalogProbe {
     internal const string Command = "get_available_models";
+
+    internal static readonly TimeSpan Deadline  = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(2);
+
+    const int StderrLogCap = 512;
+
+    internal static string DirectoryFor(string stateDir) => Path.Combine(stateDir, "pi-probe");
+
+    /// Emptied before every run: Pi reads a `.pi/` in its cwd as project config and renames its
+    /// commands directory at startup.
+    internal static void PrepareDirectory(string dir) {
+        if (Directory.Exists(dir))
+            foreach (var entry in Directory.EnumerateFileSystemEntries(dir)) {
+                if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true);
+                else File.Delete(entry);
+            }
+        Directory.CreateDirectory(dir);
+    }
+
+    // --offline stops Pi's startup network work (a configured package install runs even with
+    // --no-extensions); --no-extensions keeps third-party extensions from starting.
+    internal static ProcessStartInfo BuildStartInfo(string piPath, string workingDirectory) {
+        var psi = new ProcessStartInfo(piPath, ["--mode", "rpc", "--offline", "--no-extensions", "--no-session"]) {
+            WorkingDirectory       = workingDirectory,
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+        };
+        PiLaunchEnvironment.Apply(psi.Environment);
+        return psi;
+    }
+
+    internal static async Task<IReadOnlyList<VendorModelOption>?> RunAsync(
+            string piPath, string workingDirectory,
+            Func<ProcessStartInfo, CancellationToken, Task<IPiRpcProcess>> processSource,
+            TimeProvider time, ILogger logger, CancellationToken ct) {
+        IPiRpcProcess process;
+        try {
+            PrepareDirectory(workingDirectory);
+            process = await processSource(BuildStartInfo(piPath, workingDirectory), ct).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            LogCouldNotStart(logger, ex);
+            return null;
+        }
+
+        using var deadline = new CancellationTokenSource(Deadline, time);
+        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+        try {
+            // Stdin stays open until the response: Pi treats EOF as shutdown without awaiting an
+            // in-flight command, so closing early races the answer.
+            await process.WriteLineAsync($$"""{"type":"{{Command}}"}""", linked.Token).ConfigureAwait(false);
+            await foreach (var line in process.ReadLinesAsync(linked.Token).ConfigureAwait(false)) {
+                var parsed = Parse(line);
+                if (!parsed.IsResponse) continue;
+
+                await process.CloseInputAsync(ExitGrace).ConfigureAwait(false);
+                await process.WaitForExitAsync(ExitGrace).ConfigureAwait(false);
+                if (!process.HasExited) await process.TerminateAsync(ExitGrace).ConfigureAwait(false);
+                if (parsed.Models is null) LogInvalidEnvelope(logger, Stderr(process));
+                return parsed.Models;
+            }
+            LogExitedBeforeAnswering(logger, process.ExitCode, Stderr(process));
+            return null;
+        } catch (OperationCanceledException) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested) {
+            LogNoResponse(logger, Deadline, Stderr(process));
+            await process.TerminateAsync(ExitGrace).ConfigureAwait(false);
+            return null;
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            LogFailed(logger, ex, Stderr(process));
+            return null;
+        } finally {
+            await process.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    static string Stderr(IPiRpcProcess process) =>
+        process.Diagnostics is { } d ? d.Length > StderrLogCap ? d[..StderrLogCap] : d : "";
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "pi model catalog probe could not start")]
+    static partial void LogCouldNotStart(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "pi model catalog probe: invalid response envelope; stderr: {Stderr}")]
+    static partial void LogInvalidEnvelope(ILogger logger, string stderr);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "pi model catalog probe: pi exited before answering (exit {ExitCode}); stderr: {Stderr}")]
+    static partial void LogExitedBeforeAnswering(ILogger logger, int? exitCode, string stderr);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "pi model catalog probe: no response within {Deadline}; stderr: {Stderr}")]
+    static partial void LogNoResponse(ILogger logger, TimeSpan deadline, string stderr);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "pi model catalog probe failed; stderr: {Stderr}")]
+    static partial void LogFailed(ILogger logger, Exception ex, string stderr);
 
     internal static PiModelCatalogParse Parse(string line) {
         if (string.IsNullOrWhiteSpace(line)) return PiModelCatalogParse.NotResponse;

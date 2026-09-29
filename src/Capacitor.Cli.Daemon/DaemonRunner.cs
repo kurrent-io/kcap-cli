@@ -539,7 +539,8 @@ public static partial class DaemonRunner {
             new PiRpcHostedAgentRuntimeFactory(
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<TimeProvider>()
+                sp.GetRequiredService<TimeProvider>(),
+                paths: harnesses.Of<Core.Harness.Pi.PiHarness>().Paths
             )
         );
 
