@@ -1,9 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Core.Harness.Titles;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Core.Telemetry;
 
@@ -156,6 +159,23 @@ class WatchState {
     public bool               FullFileScanDone   { get; set; }
     public string?            FirstAssistantText { get; set; }
     public int                EventCount         { get; set; }
+
+    // Non-null only for a top-level session watcher whose vendor keeps a title store the watcher polls.
+    public HarnessTitleTracker? TitleTracker                { get; set; }
+    public DateTimeOffset       LastHarnessTitleRead        { get; set; }
+    public HarnessTitlePost?    LastHarnessTitleAttempted   { get; set; }
+    public DateTimeOffset       LastHarnessTitlePostAttempt { get; set; }
+    // A store read that outlasted its poll's budget; the next poll waits on it rather than start another.
+    public HarnessTitleRead?    HarnessTitleReadInFlight    { get; set; }
+
+    // LLM titling stops for good once a harness title is known to be recorded, since it always wins on the server:
+    // one the server took through /hooks/harness-title, or a transcript line every server records. A line only a
+    // server with harness titles records (InlineHarnessTitleSeen) stops it once that server is known to have them;
+    // an older server records neither it nor a store title sent through set-title, so it must still get a generated one.
+    public bool                 HarnessTitleSeen            { get; set; }
+    public bool                 InlineHarnessTitleSeen      { get; set; }
+    public bool?                ServerRecordsHarnessTitles  { get; set; }
+    public DateTimeOffset       LastHarnessTitleProbe       { get; set; }
 
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
@@ -1079,6 +1099,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(GitCacheEntry))]
 [JsonSerializable(typeof(TranscriptBatch))]
 [JsonSerializable(typeof(SessionTitlePayload))]
+[JsonSerializable(typeof(HarnessTitleHook))]
 [JsonSerializable(typeof(WhatsDonePayload))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareRequest))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareResponse))]

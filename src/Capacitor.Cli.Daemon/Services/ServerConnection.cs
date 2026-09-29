@@ -847,6 +847,21 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     internal virtual Task SendRepoPathsAsync(string[] repoPaths)
         => _hub.InvokeAsync("DaemonUpdateRepoPaths", repoPaths, cancellationToken: _ct);
 
+    /// <summary>Pushes a locally generated title through the same <c>UpdateTitle</c> hub method
+    /// the watcher uses for its own LLM-refined titles — the arity is frozen, so the four token
+    /// counts and the model are always sent as null/zero from here.</summary>
+    internal virtual async Task<bool> UpdateTitleAsync(string sessionId, string title, CancellationToken ct) {
+        try {
+            await _hub.InvokeAsync("UpdateTitle", sessionId, title, null, 0L, 0L, 0L, 0L, cancellationToken: ct);
+            return true;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "UpdateTitle send failed for session {SessionId}", sessionId);
+            return false;
+        }
+    }
+
     // Outgoing messages to server
     public virtual Task AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
