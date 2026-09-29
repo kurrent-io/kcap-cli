@@ -6,6 +6,8 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Copilot;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Copilot;
@@ -124,6 +126,7 @@ internal sealed class CopilotImportSource : IImportSource {
                             ["TranscriptPath"] = jsonl,
                             ["Cwd"]            = meta?.Cwd,
                             ["Name"]           = meta?.Name,
+                            ["UserNamed"]      = meta?.UserNamed ?? false,
                         }));
                 } catch {
                     // A hostile/inaccessible session subtree must not abort the whole scan.
@@ -290,12 +293,17 @@ internal sealed class CopilotImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
-        // Copilot auto-names every session (workspace.yaml `name`) — forward
-        // it as the title. Best-effort: a title miss must not fail the import.
+        // Copilot auto-names every session (workspace.yaml `name`) — forward it as the title,
+        // waiting out the server's projection lag. Best-effort: a title miss must not fail the import.
         if (classification.SourceMeta!.TryGetValue("Name", out var nameObj)
          && nameObj is string name
          && !string.IsNullOrWhiteSpace(name)) {
-            await PostSetTitleAsync(ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId, name, ct);
+            var userNamed = classification.SourceMeta!.TryGetValue("UserNamed", out var un) && un is true;
+
+            await ImportHarnessTitle.PostAsync(
+                ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId,
+                new HarnessTitlePost(name, userNamed ? HarnessTitleKind.Rename : HarnessTitleKind.Auto, null),
+                ctx.Progress, ct);
         }
 
         var endOk = await PostSyntheticHookAsync(
@@ -345,22 +353,6 @@ internal sealed class CopilotImportSource : IImportSource {
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
-        }
-    }
-
-    static async Task PostSetTitleAsync(HttpClient client, TimeProvider time, string baseUrl, string sessionId, string title, CancellationToken ct) {
-        if (title.Length > 120) title = title[..120];
-
-        var payload = new JsonObject {
-            ["session_id"] = sessionId,
-            ["title"]      = title,
-        };
-
-        try {
-            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, ct: ct);
-        } catch {
-            // Best effort.
         }
     }
 

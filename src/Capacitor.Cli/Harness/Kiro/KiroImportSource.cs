@@ -7,6 +7,8 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Kiro;
@@ -311,12 +313,15 @@ internal sealed class KiroImportSource : IImportSource {
             catch { /* best effort */ }
         }
 
-        // Forward Kiro's own session title (best-effort — a title miss must not
-        // fail the import).
+        // Forward Kiro's own session title, waiting out the server's projection lag
+        // (best-effort — a title miss must not fail the import).
         if (classification.SourceMeta!.TryGetValue("Title", out var titleObj)
          && titleObj is string title
          && !string.IsNullOrWhiteSpace(title)) {
-            await PostSetTitleAsync(ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId, title, ct);
+            await ImportHarnessTitle.PostAsync(
+                ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId,
+                new HarnessTitlePost(title, HarnessTitleKind.Auto, null),
+                ctx.Progress, ct);
         }
 
         var endOk = await PostSyntheticHookAsync(
@@ -366,22 +371,6 @@ internal sealed class KiroImportSource : IImportSource {
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
-        }
-    }
-
-    static async Task PostSetTitleAsync(HttpClient client, TimeProvider time, string baseUrl, string sessionId, string title, CancellationToken ct) {
-        if (title.Length > 120) title = title[..120];
-
-        var payload = new JsonObject {
-            ["session_id"] = sessionId,
-            ["title"]      = title,
-        };
-
-        try {
-            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, ct: ct);
-        } catch {
-            // Best effort.
         }
     }
 
