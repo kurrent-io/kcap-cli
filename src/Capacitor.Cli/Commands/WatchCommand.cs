@@ -3497,11 +3497,13 @@ partial class WatchCommand(
     internal static readonly TimeSpan HarnessTitleRetryGap = TimeSpan.FromSeconds(30);
 
     /// <summary>A harness-native title the server is known to record suppresses LLM titling for good. A transcript
-    /// title only a server with harness titles records defers it while that is unknown.</summary>
+    /// title only a server with harness titles records suppresses it only once the server is known to have them: an
+    /// unanswered probe must not cost an older server its only title, and on a newer one the harness title outranks
+    /// a generated title anyway.</summary>
     internal static bool ShouldGenerateLlmTitle(WatchState state, string? agentId) =>
         state is { TitleGenerated: false, TitleInFlight: false, TitleAttempts: < 5, ThresholdReached: true, HarnessTitleSeen: false, FirstUserText: not null, EventCount: >= 5 }
      && agentId is null
-     && !(state.InlineHarnessTitleSeen && state.ServerRecordsHarnessTitles != false);
+     && !(state.InlineHarnessTitleSeen && state.ServerRecordsHarnessTitles == true);
 
     internal static void ObserveTitleLine(WatchState state, string vendor, string line) {
         switch (TranscriptTitleLines.Classify(vendor, line)) {
@@ -3529,6 +3531,8 @@ partial class WatchCommand(
         ) {
         if (budget <= TimeSpan.Zero) return;
 
+        // The read can be a synchronous SQLite query, so it spends the same budget as the post.
+        var started = time.GetTimestamp();
         StoreTitle? read;
         try {
             read = store.Read();
@@ -3542,13 +3546,16 @@ partial class WatchCommand(
 
         if (ReferenceEquals(owed, state.LastHarnessTitleAttempted) && now - state.LastHarnessTitlePostAttempt < HarnessTitleRetryGap) return;
 
+        var remaining = budget - time.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero) return;
+
         state.LastHarnessTitleAttempted   = owed;
         state.LastHarnessTitlePostAttempt = now;
         beat();
 
         HarnessTitleOutcome outcome;
         try {
-            outcome = await post(owed, budget, ct);
+            outcome = await post(owed, remaining, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             state.TitleTracker.OutcomeUnknown();
             throw;

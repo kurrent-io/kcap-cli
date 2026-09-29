@@ -200,10 +200,18 @@ public class WatchHarnessTitleTests {
         await Assert.That(WatchCommand.ShouldGenerateLlmTitle(AfterLine(vendor, line, serverRecordsHarnessTitles: true), agentId: null)).IsFalse();
     }
 
-    /// <summary>Until the probe answers, generation waits rather than spend a call the harness title may outrank.</summary>
+    /// <summary>An older server whose first probe is inconclusive still gets a generated title: the watcher may never
+    /// probe again before a short session ends, and that server records nothing from the line.</summary>
     [Test]
-    public async Task A_title_line_defers_llm_titling_while_the_server_is_unknown() =>
-        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(AfterLine("claude", CustomTitle, serverRecordsHarnessTitles: null), agentId: null)).IsFalse();
+    public async Task A_title_line_does_not_suppress_llm_titling_while_the_probe_is_inconclusive() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(503));
+        using var client = new HttpClient();
+        var probed = await HarnessTitleClient.ServerRecordsHarnessTitlesAsync(client, TimeProvider.System, server.Url!, TimeSpan.FromSeconds(5), default);
+
+        await Assert.That(probed).IsNull();
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(AfterLine("claude", CustomTitle, probed), agentId: null)).IsTrue();
+    }
 
     [Test]
     [Arguments(false)]
@@ -225,5 +233,36 @@ public class WatchHarnessTitleTests {
 
         await Assert.That(reads).IsEqualTo(0);
         await Assert.That(Posts(server)).IsEqualTo(0);
+    }
+
+    /// <summary>A slow store read (a synchronous SQLite query) spends the budget too, so a read that uses it all sends
+    /// nothing rather than start the post with a fresh budget past the shutdown deadline.</summary>
+    [Test]
+    public async Task A_read_that_spends_the_budget_sends_nothing() {
+        var time  = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = new FixedStore(() => { time.Advance(TimeSpan.FromSeconds(4)); return Named; });
+        var state = StateFor(store);
+        var posts = 0;
+
+        await WatchCommand.PostHarnessTitleAsync(store, state,
+            (_, _, _) => { posts++; return Task.FromResult(HarnessTitleOutcome.Posted); },
+            TimeSpan.FromSeconds(3), time, () => { }, _ => { }, default);
+
+        await Assert.That(posts).IsEqualTo(0);
+    }
+
+    /// <summary>The post gets only what the read left of the budget.</summary>
+    [Test]
+    public async Task The_post_gets_what_the_read_left_of_the_budget() {
+        var time    = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store   = new FixedStore(() => { time.Advance(TimeSpan.FromSeconds(1)); return Named; });
+        var state   = StateFor(store);
+        var granted = TimeSpan.Zero;
+
+        await WatchCommand.PostHarnessTitleAsync(store, state,
+            (_, b, _) => { granted = b; return Task.FromResult(HarnessTitleOutcome.Posted); },
+            TimeSpan.FromSeconds(3), time, () => { }, _ => { }, default);
+
+        await Assert.That(granted).IsEqualTo(TimeSpan.FromSeconds(2));
     }
 }
