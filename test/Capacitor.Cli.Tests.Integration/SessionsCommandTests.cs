@@ -79,4 +79,68 @@ public class SessionsCommandTests : IDisposable {
         await Assert.That(result.StdErr).Contains("Not in a git repository with a remote origin.");
         await Assert.That(_server.LogEntries.Any(e => e.RequestMessage.Path.Contains("/sessions"))).IsFalse();
     }
+
+    const string PeriodPage =
+        """{"items":[{"session_id":"s-9","slug":null,"title":"Ship the window","owner":{"user_id":"github:1","username":"alice","display_name":"Alice","avatar_url":null},"vendor":"claude","status":"ended","access_level":"full","stale":false,"started_at":"2026-09-20T09:00:00+00:00","ended_at":"2026-09-20T11:00:00+00:00","last_activity_at":"2026-09-20T11:00:00+00:00","primary_repo_hash":"x","is_primary":true,"branch":"main","cwd":"/w","last_prompt":null,"write_attempt_paths":[],"write_attempt_count":0,"repo":{"hash":"x","owner":"acme","name":"widgets"}}],"total":2,"limit":20,"offset":0,"since":"2026-09-14T00:00:00+00:00","until":null,"next_cursor":"eyJ2IjoxfQ"}""";
+
+    const string LastPage =
+        """{"items":[{"session_id":"s-8","slug":null,"title":"Earlier work","owner":null,"vendor":"claude","status":"ended","access_level":"full","stale":false,"started_at":"2026-09-15T09:00:00+00:00","ended_at":"2026-09-15T11:00:00+00:00","last_activity_at":"2026-09-15T11:00:00+00:00","primary_repo_hash":null,"is_primary":false,"branch":null,"cwd":null,"last_prompt":null,"write_attempt_paths":[],"write_attempt_count":0,"repo":null}],"total":2,"limit":20,"offset":0,"since":"2026-09-14T00:00:00+00:00","until":null,"next_cursor":null}""";
+
+    /// <summary>The working directory is no checkout at all, so reaching the server proves that
+    /// listing every repository never looked for an origin remote.</summary>
+    [Test]
+    public async Task A_period_across_repositories_pages_outside_any_checkout() {
+        _server.Given(Request.Create().WithPath("/api/sessions/listing").UsingGet()
+                .WithParam("since", "2026-09-14T00:00:00Z").WithParam("state", "all"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(PeriodPage));
+        _server.Given(Request.Create().WithPath("/api/sessions/listing").UsingGet().WithParam("cursor", "eyJ2IjoxfQ"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(LastPage));
+
+        var first = await RunAsync(Tmp.Path, "sessions", "--repo", "all", "--since", "2026-09-14T00:00:00Z");
+
+        await Assert.That(first.ExitCode).IsEqualTo(0);
+        await Assert.That(first.StdOut).Contains("REPO");
+        await Assert.That(first.StdOut).Contains("STARTED");
+        await Assert.That(first.StdOut).Contains("acme/widgets");
+        await Assert.That(first.StdOut).Contains("Ship the window");
+        await Assert.That(first.StdOut).Contains("More: kcap sessions --repo all --cursor eyJ2IjoxfQ --limit 20");
+
+        var second = await RunAsync(Tmp.Path, "sessions", "--repo", "all", "--cursor", "eyJ2IjoxfQ", "--limit", "20");
+
+        await Assert.That(second.ExitCode).IsEqualTo(0);
+        await Assert.That(second.StdOut).Contains("Earlier work");
+        await Assert.That(second.StdOut).DoesNotContain("More:");
+    }
+
+    [Test]
+    public async Task A_server_that_ignores_the_period_is_reported_and_lists_nothing() {
+        using var repo = GitRepo.Create();
+        repo.AddRemote("https://github.com/acme/widgets.git");
+        var hash = RepoHashHelper.ComputeRepoHash("acme", "widgets");
+
+        _server.Given(Request.Create().WithPath($"/api/repositories/{hash}/sessions").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(Page));
+
+        var table = await RunAsync(repo.Path, "sessions", "--since", "14d");
+
+        await Assert.That(table.ExitCode).IsEqualTo(1);
+        await Assert.That(table.StdErr).Contains("The time filter needs a newer server; ask your admin to update.");
+        await Assert.That(table.StdOut).DoesNotContain("s-1");
+
+        var json = await RunAsync(repo.Path, "sessions", "--since", "14d", "--json");
+
+        await Assert.That(json.ExitCode).IsEqualTo(1);
+        await Assert.That(json.StdOut).DoesNotContain("s-1");
+    }
+
+    [Test]
+    public async Task Every_repository_on_an_older_server_is_one_line_and_exit_1() {
+        _server.Given(Request.Create().WithPath("/api/sessions/listing").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        var result = await RunAsync(Tmp.Path, "sessions", "--repo", "all");
+
+        await Assert.That(result.ExitCode).IsEqualTo(1);
+        await Assert.That(result.StdErr).Contains("Session listing needs a newer server; ask your admin to update.");
+    }
 }
