@@ -43,8 +43,9 @@ public class AgentOrchestratorCapabilityRefreshTests {
 
     // No unattended vendors, so the capability half reads unchanged and only the catalog decides.
     static (AgentOrchestrator Orchestrator, CaptureServerConnection Server, DaemonConfig Config) BuildWithCatalog(
-            StubCatalogFactory factory, Dictionary<string, VendorModelOption[]>? initial) {
-        var server = new CaptureServerConnection();
+            StubCatalogFactory factory, Dictionary<string, VendorModelOption[]>? initial,
+            bool supported = true, Exception? registerThrow = null) {
+        var server = new CaptureServerConnection { RegisterDaemonThrow = registerThrow };
         DaemonConfig? captured = null;
         var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
@@ -53,6 +54,7 @@ public class AgentOrchestratorCapabilityRefreshTests {
                 config.UnattendedVendors            = [];
                 config.UnattendedVendorCapabilities = [];
                 config.VendorModels                 = initial;
+                config.SupportedVendors             = supported ? [factory.Vendor] : [];
                 captured = config;
             });
         return (orch, server, captured!);
@@ -181,6 +183,48 @@ public class AgentOrchestratorCapabilityRefreshTests {
         await Assert.That(stub.ProbeCalls).IsEqualTo(1);
         await Assert.That(config.VendorModels!["pi"].Single().Value).IsEqualTo("p/a");
         await Assert.That(server.RegisterDaemonCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_republish_only_request_spawns_no_catalog_probe() {
+        var stub = new StubCatalogFactory("pi", [new("p/b", "B · p")]);
+        var (orch, server, config) = BuildWithCatalog(stub, Catalog(new VendorModelOption("p/a", "A · p")));
+        await using var _ = orch;
+
+        orch.RepublishRegistration("capacity changed");
+        await orch.CapabilityRefreshForTest;
+
+        await Assert.That(stub.ProbeCalls).IsEqualTo(0);
+        await Assert.That(config.VendorModels!["pi"].Single().Value).IsEqualTo("p/a");
+        await Assert.That(server.RegisterDaemonCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_vendor_the_daemon_does_not_advertise_is_never_probed() {
+        var stub = new StubCatalogFactory("pi", [new("p/a", "A · p")], paths: ["/nonexistent/auth.json"]);
+        var (orch, server, config) = BuildWithCatalog(stub, initial: null, supported: false);
+        await using var _ = orch;
+
+        orch.RefreshAdvertisedCapabilities("test");
+        await orch.CapabilityRefreshForTest;
+
+        await Assert.That(stub.ProbeCalls).IsEqualTo(0);
+        await Assert.That(config.VendorModels).IsNull();
+        await Assert.That(server.RegisterDaemonCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_failed_re_register_still_pulses_local_status_for_a_changed_catalog() {
+        var (orch, _, config) = BuildWithCatalog(new StubCatalogFactory("pi", [new("p/a", "A · p")]), Catalog(),
+            registerThrow: new InvalidOperationException("hub down"));
+        await using var _ = orch;
+        var v0 = orch.StatusNotifierForTest.Version;
+
+        orch.RefreshAdvertisedCapabilities("test");
+        try { await orch.CapabilityRefreshForTest; } catch (InvalidOperationException) { }
+
+        await Assert.That(config.VendorModels!["pi"].Single().Value).IsEqualTo("p/a");
+        await Assert.That(orch.StatusNotifierForTest.Version).IsGreaterThan(v0);
     }
 
     [Test]
