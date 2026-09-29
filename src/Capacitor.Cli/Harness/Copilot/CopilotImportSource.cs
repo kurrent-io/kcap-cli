@@ -466,17 +466,18 @@ internal sealed class CopilotImportSource : IImportSource {
 /// YAML dependency would be overkill for the four fields we need, and a parse
 /// failure must never break discovery (returns null / partial data instead).
 /// </summary>
-internal sealed record CopilotWorkspaceYaml(string? Cwd, string? Name, DateTimeOffset? CreatedAt, DateTimeOffset? UpdatedAt) {
+internal sealed record CopilotWorkspaceYaml(string? Cwd, string? Name, bool UserNamed, DateTimeOffset? CreatedAt, DateTimeOffset? UpdatedAt) {
     public static CopilotWorkspaceYaml? TryRead(string path) {
         try {
             if (!File.Exists(path)) return null;
 
             string? cwd       = null;
             string? name      = null;
+            bool userNamed    = false;
             DateTimeOffset? createdAt = null;
             DateTimeOffset? updatedAt = null;
 
-            foreach (var line in File.ReadLines(path)) {
+            foreach (var line in File.ReadLinesShared(path)) {
                 var idx = line.IndexOf(": ", StringComparison.Ordinal);
                 if (idx <= 0) continue;
 
@@ -488,12 +489,13 @@ internal sealed record CopilotWorkspaceYaml(string? Cwd, string? Name, DateTimeO
                 switch (key) {
                     case "cwd":        cwd  = value; break;
                     case "name":       name = value; break;
+                    case "user_named": userNamed = value == "true"; break;
                     case "created_at": createdAt = ParseTimestamp(value); break;
                     case "updated_at": updatedAt = ParseTimestamp(value); break;
                 }
             }
 
-            return new CopilotWorkspaceYaml(cwd, name, createdAt, updatedAt);
+            return new CopilotWorkspaceYaml(cwd, name, userNamed, createdAt, updatedAt);
         } catch {
             return null;
         }

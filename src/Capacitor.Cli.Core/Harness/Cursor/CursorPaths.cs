@@ -59,6 +59,11 @@ public sealed class CursorPaths {
     /// </summary>
     public string ProjectsDir => Path.Combine(CursorDir, "projects");
 
+    /// <summary>Per-chat store root at <c>~/.cursor/chats/</c>. Each chat lives at
+    /// <c>&lt;chatsDir&gt;/&lt;workspace-hash&gt;/&lt;session-id&gt;/meta.json</c>, keyed by the same
+    /// (dashed) session id as <see cref="ProjectsDir"/>'s agent-transcripts.</summary>
+    public string ChatsDir => Path.Combine(CursorDir, "chats");
+
     /// <summary>Whether Cursor has run here — the editor creates a root on first run, and that is
     /// the only signal it gives. A root this host could not name is no signal at all.</summary>
     public bool HasUserData() =>

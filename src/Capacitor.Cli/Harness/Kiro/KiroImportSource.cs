@@ -474,7 +474,7 @@ internal sealed record KiroSessionMeta(string? Cwd, string? Title, string? Model
     public static KiroSessionMeta? TryRead(string jsonPath) {
         try {
             if (!File.Exists(jsonPath)) return null;
-            if (JsonNode.Parse(File.ReadAllText(jsonPath)) is not JsonObject root) return null;
+            if (JsonNode.Parse(File.ReadAllTextShared(jsonPath)) is not JsonObject root) return null;
 
             return new KiroSessionMeta(
                 Cwd:       root["cwd"]?.GetValue<string>(),
