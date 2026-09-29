@@ -40,6 +40,11 @@ public sealed class CursorPaths {
 
     public string WorkspaceStorageDir => Path.Combine(UserDir, "workspaceStorage");
 
+    /// <summary>The IDE's global key-value store, <c>globalStorage/state.vscdb</c>, whose <c>cursorDiskKV</c> table
+    /// holds a <c>composerData:&lt;session-id&gt;</c> record per agent chat. Null when this host could not name
+    /// the Electron dir.</summary>
+    public string? GlobalStateDb => _userDirIsNameable ? Path.Combine(UserDir, "globalStorage", "state.vscdb") : null;
+
     /// <summary>The universal <c>~/.cursor</c> root, on every OS.</summary>
     public string CursorDir => Path.Combine(_home, ".cursor");
 
