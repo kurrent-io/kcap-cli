@@ -88,7 +88,19 @@ public static class OpenCodeExtensionInstaller {
           // indefinitely. Found by review tracing the `!started.has(sid)` guard.
           const MEMORY_COLD_START_ATTEMPTS = 3
           const coldStarts = new Map<string, number>()
+          const TITLE_MAX_SESSIONS = 64
           const lastTitle = new Map<string, string>()   // dedupes session.updated noise per session
+
+          // Bounded like the memory cache: most sessions end without a session.deleted. Re-inserting keeps the most
+          // recently titled sessions; an evicted one only writes its title line again.
+          function rememberTitle(id: string, title: string) {
+            lastTitle.delete(id)
+            if (lastTitle.size >= TITLE_MAX_SESSIONS) {
+              const oldest = lastTitle.keys().next()
+              if (!oldest.done) lastTitle.delete(oldest.value)
+            }
+            lastTitle.set(id, title)
+          }
 
           function rememberMemory(sid: string, fragment: string) {
             if (!fragment) return
@@ -461,7 +473,7 @@ public static class OpenCodeExtensionInstaller {
                   if (typeof info?.time?.updated === "number") line.time = info.time.updated
                   appendFileSync(file(id), JSON.stringify(line) + "\n")
                   // Only after the append succeeds, so a failed write is retried by the next update.
-                  lastTitle.set(id, title)
+                  rememberTitle(id, title)
                   return
                 }
                 if (type === "session.deleted") {

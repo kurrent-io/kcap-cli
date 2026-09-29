@@ -362,7 +362,18 @@ public class OpenCodeSessionStartMemoryTests {
         var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
         branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
 
-        await Assert.That(branch.IndexOf("lastTitle.set(id, title)", StringComparison.Ordinal))
+        await Assert.That(branch.IndexOf("rememberTitle(id, title)", StringComparison.Ordinal))
             .IsGreaterThan(branch.IndexOf("appendFileSync", StringComparison.Ordinal));
+    }
+
+    /// <summary>The title dedupe map is bounded: most sessions end without a <c>session.deleted</c>, so a long-lived
+    /// plugin process would otherwise keep every session it ever titled.</summary>
+    [Test]
+    public async Task Plugin_bounds_the_title_dedupe_map() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content).Contains("const TITLE_MAX_SESSIONS = 64");
+        await Assert.That(content).Contains("lastTitle.size >= TITLE_MAX_SESSIONS");
+        await Assert.That(content.Split("lastTitle.set(").Length - 1).IsEqualTo(1); // only inside rememberTitle
     }
 }
