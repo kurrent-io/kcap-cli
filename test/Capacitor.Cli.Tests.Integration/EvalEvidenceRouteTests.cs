@@ -247,6 +247,37 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(failure.TryGetProperty("http_status", out _)).IsFalse();
     }
 
+    /// <summary>A run whose every question failed posts the failure-only record under the evidence route's coverage policy
+    /// and scope version, posts no fact, and ends in OnFailed, never OnFinished.</summary>
+    [Test]
+    public async Task An_all_failed_run_persists_the_failure_only_record_and_reports_it_failed() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 124_999);
+        using var claude = Claude(Dir("c-all-failed"), Verdict("q1"), special: """{"type":"result","subtype":"error_max_budget_usd","is_error":true,"num_turns":9}""");
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q-special"], observer);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.IsFailureOnly).IsTrue();
+        await Assert.That(observer.Finished).IsNull();
+        await Assert.That(observer.Failures).IsEquivalentTo(["Not evaluated: all 1 questions failed (spend_budget ×1)"]);
+        await Assert.That(_stub.Requests("judge-facts")).IsEmpty();
+        var payload = Payload();
+        await Assert.That(payload.GetProperty("categories").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(payload.GetProperty("overall_score").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(payload.GetProperty("retrospective").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(payload.GetProperty("retrospective_prompt_version").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(payload.GetProperty("facts_used").GetArrayLength()).IsEqualTo(0);
+        foreach (var count in new[] { "assessed_questions", "unassessed_questions", "judged_questions" })
+            await Assert.That(payload.GetProperty(count).GetInt32()).IsEqualTo(0);
+        await Assert.That(payload.GetProperty("total_questions").GetInt32()).IsEqualTo(1);
+        await Assert.That(payload.GetProperty("failed_questions").EnumerateArray().Single().GetProperty("code").GetString()).IsEqualTo("spend_budget");
+        await Assert.That(payload.GetProperty("summary").GetString()).IsEqualTo("Not evaluated: all 1 questions failed (spend_budget ×1)");
+        await Assert.That(payload.GetProperty("coverage_policy_version").GetString()).IsEqualTo("coverage-v2");
+        await Assert.That(payload.GetProperty("evidence_scope_version").GetString()).IsEqualTo("v1");
+    }
+
     [Test]
     public async Task A_retrieval_harness_that_outlives_its_budget_is_judge_timeout() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");

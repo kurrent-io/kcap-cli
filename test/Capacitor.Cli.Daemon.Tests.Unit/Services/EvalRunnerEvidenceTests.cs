@@ -316,7 +316,7 @@ public class EvalRunnerEvidenceTests : IDisposable {
     }
 
     [Test]
-    public async Task One_assessed_and_one_iteration_cap_persist_together_and_all_failed_posts_nothing() {
+    public async Task One_assessed_and_one_iteration_cap_persist_together_and_all_failed_persists_a_failed_run() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
         Serve(1);
         using var claude = Claude(Verdict());
@@ -335,7 +335,28 @@ public class EvalRunnerEvidenceTests : IDisposable {
         await connection.PrepareEvalHandler!(Prepare());
         var none = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [], [cap with { QuestionId = "q1" }], "sonnet"));
         await Assert.That(none.Success).IsFalse();
-        await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(1);
+        await Assert.That(none.Error).IsEqualTo("the failed run was persisted: Not evaluated: all 1 questions failed (iteration_cap ×1)");
+        await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(2);
+        using var failed = JsonDocument.Parse(_stub.Requests("evals/v4")[1].RequestMessage.Body!);
+        await Assert.That(failed.RootElement.GetProperty("categories").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(failed.RootElement.GetProperty("coverage_policy_version").GetString()).IsEqualTo("coverage-v2");
+    }
+
+    [Test]
+    public async Task A_legacy_finalize_whose_every_question_failed_persists_the_failed_run_and_answers_failure() {
+        Serve(1, advertised: false);
+        _stub.Route("GET", "eval-context", 200, LegacyContext);
+        var (_, connection, _) = Daemon();
+        await connection.PrepareEvalHandler!(Prepare());
+
+        var result = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [],
+            [new EvalQuestionFailure { Category = "safety", QuestionId = "q1", Code = EvalFailureCodes.JudgeTimeout }], "sonnet"));
+
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(result.Error).IsEqualTo("the failed run was persisted: Not evaluated: all 1 questions failed (judge_timeout ×1)");
+        using var payload = JsonDocument.Parse(_stub.Requests("evals/v4").Single().RequestMessage.Body!);
+        await Assert.That(payload.RootElement.GetProperty("categories").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(payload.RootElement.GetProperty("coverage_policy_version").GetString()).IsEqualTo("coverage-v1");
     }
 
     [Test]

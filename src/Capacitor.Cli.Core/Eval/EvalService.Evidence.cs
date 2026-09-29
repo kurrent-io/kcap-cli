@@ -299,15 +299,16 @@ public static partial class EvalService {
     public static async Task<SessionEvalCompletedPayloadV4?> FinalizeEvidenceAsync(
             EvidenceRunSetup setup, HttpClient httpClient, string baseUrl, IReadOnlyList<EvalQuestionAssessment> assessments,
             IReadOnlyList<EvalQuestionFailure> failures, string model, IEvalObserver observer, TimeProvider time, CancellationToken ct) {
-        if (assessments.Count == 0) {
-            setup.Context.DiscardRetainedFacts();
-            observer.OnFailed("all judge invocations failed");
-            return null;
-        }
-
         var aggregate = Aggregate(assessments, failures, setup.EvalRunId, model, setup.Questions) with {
             FactsUsed = [], CoveragePolicyVersion = EvidenceCoveragePolicyVersion, EvidenceScopeVersion = setup.Scope.State!.ScopeVersion
         };
+
+        if (assessments.Count == 0) {
+            setup.Context.DiscardRetainedFacts();
+            if (failures.Count > 0) return await PersistFailureOnlyAsync(httpClient, baseUrl, setup.EncodedSessionId, aggregate, observer, time, ct);
+            observer.OnFailed("all judge invocations failed");
+            return null;
+        }
 
         EvalRetrospectiveV2? retrospective = null;
         var clean = true;
