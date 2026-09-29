@@ -483,22 +483,26 @@ jobs:
             echo "::error::packaged daemon digest mismatch"; exit 1
           fi
 
+      # Binaries under bin/: the plugin directory is also named kcap, and cannot sit beside the
+      # kcap binary. SetupCommand.ResolvePluginPath finds it at <bin>/../kcap.
       - name: Create release archive
         shell: bash
         run: |
-          mkdir -p archive
-          cp publish/cli/${{ matrix.cli-binary }} archive/
-          cp publish/daemon/${{ matrix.daemon-binary }} archive/
+          mkdir -p archive/bin
+          cp publish/cli/${{ matrix.cli-binary }} archive/bin/
+          cp publish/daemon/${{ matrix.daemon-binary }} archive/bin/
           for ext in so dylib; do
             if [ -f "publish/daemon/libpty_shim.$ext" ]; then
-              cp "publish/daemon/libpty_shim.$ext" archive/
+              cp "publish/daemon/libpty_shim.$ext" archive/bin/
             fi
           done
           if [[ "${{ matrix.rid }}" == osx-* ]]; then
             source scripts/lib/hash.sh
-            echo "${{ steps.daemon-digest.outputs.DIGEST }}" > archive/daemon.sha256
-            sha256_of publish/cli/${{ matrix.cli-binary }} > archive/kcap.sha256
+            echo "${{ steps.daemon-digest.outputs.DIGEST }}" > archive/bin/daemon.sha256
+            sha256_of publish/cli/${{ matrix.cli-binary }} > archive/bin/kcap.sha256
           fi
+          cp -r kcap archive/kcap
+          cp LICENSE.md archive/
           cd archive
           if [ "${{ matrix.rid }}" = "win-x64" ]; then
             7z a ../kcap-${{ matrix.rid }}.zip *
@@ -669,6 +673,105 @@ jobs:
           files: release-artifacts/*
           generate_release_notes: true
 
+  # The script installer's manifests, served by kcap-web from the bucket's cli/ prefix. The
+  # archives stay on the GitHub Release: the checksum and the bytes it covers come from two hosts.
+  cli-publish:
+    name: Publish the CLI install manifest
+    needs: github-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Channel promotion is read-compare-write.
+    concurrency:
+      group: cli-publish
+      cancel-in-progress: false
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+      DEST: s3://${{ secrets.R2_BUCKET }}/cli
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all release archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-artifacts/
+          merge-multiple: true
+
+      - name: Build the manifest
+        shell: bash
+        run: >
+          bash scripts/build-cli-manifest.sh "${{ steps.version.outputs.VERSION }}" "${{ github.sha }}"
+          release-artifacts "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          > kcap-manifest.json
+
+      # Fetches an object to a file; exit 44 when it does not exist, 1 on any other failure, so a
+      # transient R2 error is never read as "no channel yet".
+      - name: Write the fetch helper
+        shell: bash
+        run: |
+          cat > fetch.sh <<'EOF'
+          #!/usr/bin/env bash
+          ERR="$(aws s3 cp $R2 "$DEST/$1" "$2" 2>&1 >/dev/null)"
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            exit 0
+          elif echo "$ERR" | grep -qiE '404|Not Found'; then
+            exit 44
+          else
+            echo "$ERR" >&2
+            exit 1
+          fi
+          EOF
+          chmod +x fetch.sh
+
+      # A version's manifest is written once. A re-run finds identical bytes and carries on; a
+      # re-cut tag finds different ones and stops before any channel moves.
+      - name: Upload the version manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY="${{ steps.version.outputs.VERSION }}/manifest.json"
+          set +e; ./fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  cmp -s published.json kcap-manifest.json || {
+                  echo "::error::cli/$KEY is already published with different contents"; exit 1; } ;;
+            44) aws s3 cp $R2 kcap-manifest.json "$DEST/$KEY" \
+                  --content-type application/json --cache-control "public, max-age=31536000, immutable" ;;
+            *)  exit 1 ;;
+          esac
+
+      - name: Promote channels
+        shell: bash
+        run: |
+          set -euo pipefail
+          current() { # <channel> — the channel's version, empty when it does not exist yet
+            local rc; set +e; ./fetch.sh "channels/$1.json" "current-$1.json"; rc=$?; set -e
+            case "$rc" in
+              0)  jq -er .version "current-$1.json" ;;
+              44) echo "" ;;
+              *)  return 1 ;;
+            esac
+          }
+          latest="$(current latest)"; beta="$(current beta)"
+          for channel in $(bash scripts/promote-cli-channels.sh "${{ steps.version.outputs.VERSION }}" "$latest" "$beta"); do
+            aws s3 cp $R2 kcap-manifest.json "$DEST/channels/$channel.json" \
+              --content-type application/json --cache-control "no-cache"
+            echo "cli/channels/$channel.json -> ${{ steps.version.outputs.VERSION }}"
+          done
+
+      - name: Attach the manifest to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" kcap-manifest.json --clobber
+
   app-macos:
     name: Build and sign the desktop app
     needs: build
@@ -700,7 +803,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p trio/bin && tar xzf trio/kcap-osx-arm64.tar.gz -C trio/bin
+          tar xzf trio/kcap-osx-arm64.tar.gz -C trio
           chmod +x trio/bin/kcap trio/bin/kcap-daemon
           test -f trio/bin/daemon.sha256 && test -f trio/bin/kcap.sha256
 
