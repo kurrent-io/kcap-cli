@@ -89,15 +89,16 @@ public class SessionsCommandRenderTests {
         await Assert.That(text).Contains("Showing 1 of 5 in this period.");
         await Assert.That(text).DoesNotContain("raise --limit");
         await Assert.That(text).Contains("More: kcap sessions --repo acme/widgets --cursor eyJ2IjoxfQ --limit 1");
+        await Assert.That(text.TrimEnd()).EndsWith("More: kcap sessions --repo acme/widgets --cursor eyJ2IjoxfQ --limit 1");
     }
 
     [Test]
-    public async Task The_next_page_of_the_current_repo_names_no_repo() {
+    public async Task The_next_page_of_the_checkout_repo_names_it() {
         var page = new RepoSessionsResponse([Row("s-1", "ended", "full", "main")], 5, 1, 0, Since, null, "eyJ2IjoxfQ");
 
         var text = SessionsCommand.Render(page, "acme/widgets", Options("all", since: Since));
 
-        await Assert.That(text).Contains("More: kcap sessions --cursor eyJ2IjoxfQ --limit 20");
+        await Assert.That(text).Contains("More: kcap sessions --repo acme/widgets --cursor eyJ2IjoxfQ --limit 20");
     }
 
     [Test]
@@ -126,7 +127,7 @@ public class SessionsCommandRenderTests {
 
         var text = SessionsCommand.Render(page, "any repository", Options("all", "all", allRepos: true, cursor: "cHJldg"));
 
-        await Assert.That(text).Contains("No further sessions.");
+        await Assert.That(text).Contains("No sessions on this page.");
         await Assert.That(text).Contains("More: kcap sessions --repo all --cursor bmV4dA --limit 20");
         await Assert.That(text).DoesNotContain("SESSION");
         await Assert.That(text).DoesNotContain("kcap recap --full");

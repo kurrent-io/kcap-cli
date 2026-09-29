@@ -72,6 +72,21 @@ public class SessionsCommandTests : IDisposable {
     }
 
     [Test]
+    public async Task A_success_body_that_is_not_a_listing_is_reported_and_not_echoed() {
+        using var repo = GitRepo.Create();
+        repo.AddRemote("https://github.com/acme/widgets.git");
+
+        _server.Given(Request.Create().WithPath("/api/repositories/*/sessions").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("<html>Sign in</html>"));
+
+        var json = await RunAsync(repo.Path, "sessions", "--json");
+
+        await Assert.That(json.ExitCode).IsEqualTo(1);
+        await Assert.That(json.StdErr).Contains("Unexpected response from the server.");
+        await Assert.That(json.StdOut).DoesNotContain("<html>");
+    }
+
+    [Test]
     public async Task No_origin_and_no_repo_flag_fails_closed() {
         var result = await RunAsync(Tmp.Path, "sessions");
 

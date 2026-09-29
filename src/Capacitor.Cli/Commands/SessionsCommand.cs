@@ -76,9 +76,15 @@ class SessionsCommand(
             return 1;
         }
 
-        var page = JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.RepoSessionsResponse);
+        RepoSessionsResponse? page;
 
-        if (page is null) {
+        try {
+            page = JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.RepoSessionsResponse);
+        } catch (JsonException) {
+            page = null;
+        }
+
+        if (page?.Items is null) {
             await Console.Error.WriteLineAsync("Unexpected response from the server.");
 
             return 1;
@@ -149,18 +155,18 @@ class SessionsCommand(
                         : $"Showing {page.Items.Count} of {page.Total}; raise --limit or narrow with --mine / --touching.");
         }
 
-        if (page.NextCursor is { } next) sb.AppendLine($"More: {NextPage(options, next)}");
-
         if (page.Items.Count > 0) {
             sb.AppendLine();
             sb.AppendLine("Details (full access): kcap recap --full <session-id>");
         }
 
+        if (page.NextCursor is { } next) sb.AppendLine($"More: {NextPage(options, repoLabel, next)}");
+
         return sb.ToString();
     }
 
     static string Empty(string repoLabel, SessionsOptions options) {
-        if (options.Cursor is not null) return "No further sessions.";
+        if (options.Cursor is not null) return "No sessions on this page.";
 
         var what = options.State == "all" ? "sessions" : $"{options.State} sessions";
         var when = options.Windowed ? " in that period" : "";
@@ -168,11 +174,9 @@ class SessionsCommand(
         return $"No {what} visible to you on {repoLabel}{when}.";
     }
 
-    static string NextPage(SessionsOptions options, string cursor) {
-        var repo = options.Repo is null ? "" : $" --repo {options.Repo}";
-
-        return $"kcap sessions{repo} --cursor {cursor} --limit {options.Limit}";
-    }
+    // The line is meant to be pasted anywhere, so it names the repository even when this run took it from the checkout.
+    static string NextPage(SessionsOptions options, string repoLabel, string cursor) =>
+        $"kcap sessions --repo {options.Repo ?? repoLabel} --cursor {cursor} --limit {options.Limit}";
 
     static string Repository(RepoSessionRepositoryDto? repo) =>
         repo switch {
