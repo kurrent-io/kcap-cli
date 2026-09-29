@@ -1455,7 +1455,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>
     /// Re-probes the vendors advertised at startup and re-registers when the advertisement changed
     /// — the one path through which a running daemon updates what the server knows about its CLI
-    /// versions. Returns at once; the work is single-flighted off the caller's stack so a burst of
+    /// versions and vendor model catalogs. Returns at once; the work is single-flighted off the caller's stack so a burst of
     /// requests coalesces and the last publication is always the newest probe.
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
@@ -1472,12 +1472,26 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
                     DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
 
-                if (!republish && current is not null && current.SequenceEqual(fresh)) return;
+                var previousCatalog = _config.VendorModels;
+                var catalogVendors  = _runtimeFactories.Values
+                    .Where(f => f.CatalogFingerprintPaths.Count > 0 || (previousCatalog?.ContainsKey(f.Vendor) ?? false))
+                    .Select(f => f.Vendor)
+                    .ToArray();
+                var mergedCatalog = catalogVendors.Length == 0
+                    ? previousCatalog
+                    : VendorModelCatalogs.Merge(previousCatalog,
+                        await VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, CancellationToken.None));
+                var catalogChanged = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog);
+
+                if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
 
                 _config.UnattendedVendorCapabilities = fresh;
+                // One reference swap: status serializers on other threads may be enumerating the old one.
+                if (catalogChanged) _config.VendorModels = mergedCatalog;
                 LogReAdvertising(_logger, reason,
                     string.Join(", ", fresh.Select(c => $"{c.Vendor} {c.CliVersion ?? DaemonRunner.UnknownCliVersion}")));
                 await _server.ReRegisterAsync();
+                if (catalogChanged) _statusNotifier.Pulse();
             },
             ex => _logger.LogDebug(ex,
                 "Capability refresh ({Reason}) failed; the next registration or launch re-evaluates it.", reason));
