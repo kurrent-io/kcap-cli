@@ -13,7 +13,7 @@ internal static class ImportHarnessTitle {
         TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15),
     ];
 
-    public static async Task PostAsync(
+    public static Task PostAsync(
             HttpClient                 client,
             TimeProvider                time,
             string                      baseUrl,
@@ -21,9 +21,24 @@ internal static class ImportHarnessTitle {
             HarnessTitlePost            post,
             IProgress<ImportProgress>?  progress,
             CancellationToken           ct
+        ) => PostAsync(client, time, time, baseUrl, sessionId, post, progress, ct);
+
+    /// <summary>Splits the backoff-delay clock from the one <see cref="HarnessTitleClient"/> hands its
+    /// per-attempt HTTP timeout, so a test can drive the backoff clock without also racing that timeout —
+    /// production passes the same provider for both, and the public overload above is what every caller
+    /// outside this file uses.</summary>
+    internal static async Task PostAsync(
+            HttpClient                 client,
+            TimeProvider                backoffTime,
+            TimeProvider                httpTime,
+            string                      baseUrl,
+            string                      sessionId,
+            HarnessTitlePost            post,
+            IProgress<ImportProgress>?  progress,
+            CancellationToken           ct
         ) {
         for (var attempt = 0; ; attempt++) {
-            var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, time, baseUrl, sessionId, post, ct);
+            var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, httpTime, baseUrl, sessionId, post, ct);
 
             if (outcome != HarnessTitleOutcome.SessionNotFound) {
                 if (outcome is HarnessTitleOutcome.Refused or HarnessTitleOutcome.Failed)
@@ -38,7 +53,7 @@ internal static class ImportHarnessTitle {
                 return;
             }
 
-            await Task.Delay(Backoff[attempt], time, ct);
+            await Task.Delay(Backoff[attempt], backoffTime, ct);
         }
     }
 

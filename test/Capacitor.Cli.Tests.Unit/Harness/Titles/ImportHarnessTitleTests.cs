@@ -27,9 +27,8 @@ public class ImportHarnessTitleTests {
 
     /// <summary>Blocks on REAL wall-clock time (never the <see cref="FakeTimeProvider"/> under test) until
     /// WireMock has logged <paramref name="expectedCount"/> requests to <paramref name="path"/>, or throws.
-    /// Polling real time rather than advancing the fake clock speculatively is what makes the first wait
-    /// (for the request an attempt already in flight will produce with no clock help at all) deterministic:
-    /// nothing here can cut off a real in-flight request that is merely slow.</summary>
+    /// Used for the first request, which an attempt already in flight produces with no clock help at
+    /// all.</summary>
     static async Task WaitForRequestCountAsync(WireMockServer server, string path, int expectedCount, TimeSpan realTimeout) {
         var deadline = DateTime.UtcNow + realTimeout;
 
@@ -41,17 +40,21 @@ public class ImportHarnessTitleTests {
         }
     }
 
-    /// <summary>Advances the fake clock in small nudges, real-sleeping between them, until the next
+    /// <summary>Advances the fake BACKOFF clock in small nudges, real-sleeping between them, until the next
     /// attempt's request lands — rather than jumping the FULL backoff in one <c>Advance</c> call.
     ///
-    /// <para>A single big jump raced <c>ImportHarnessTitle.PostAsync</c>'s own continuation: the request
-    /// landing at the server (observed here) and that code actually reaching its
-    /// <c>Task.Delay(delay, time, ct)</c> call are on different threads, so a big <c>Advance</c> issued the
-    /// instant the request is observed can land BEFORE that delay's timer is constructed. The timer's due
-    /// time is then <c>(already-advanced now) + delay</c> — a full backoff further out than intended — and
-    /// nothing ever advances the clock that far again, hanging for the rest of this method's real-time
-    /// budget. Repeated small nudges close that window: whichever nudge lands after the timer exists is
-    /// enough to cross its due time, however many nudges that takes.</para></summary>
+    /// <para>A single big jump can land BEFORE <c>ImportHarnessTitle.PostAsync</c>'s continuation actually
+    /// reaches its <c>Task.Delay(delay, backoffTime, ct)</c> call: the request landing at the server
+    /// (observed here) and that continuation resuming are on different threads. When that race is lost, the
+    /// eventual timer's due time becomes <c>(already-advanced now) + delay</c> — a full backoff further out
+    /// than intended — and nothing ever advances the clock that far again, hanging for the rest of this
+    /// method's real-time budget. Repeated small nudges close that window: whichever nudge lands after the
+    /// timer exists is enough to cross its due time, however many nudges that takes.</para>
+    ///
+    /// <para>This clock only ever drives <c>PostAsync</c>'s backoff <c>Task.Delay</c> — the tests pass a
+    /// SEPARATE, real <see cref="TimeProvider"/> for the per-attempt HTTP timeout in
+    /// <c>HarnessTitleClient</c>/<c>SendWithRetryAsync</c>, so nudging this one can never cut off an
+    /// in-flight request the way a single shared clock could.</para></summary>
     static async Task AdvanceUntilRequestAsync(WireMockServer server, string path, FakeTimeProvider time, int expectedCount) {
         var deadline = DateTime.UtcNow + RequestWait;
 
@@ -89,7 +92,7 @@ public class ImportHarnessTitleTests {
         using var client = new HttpClient();
         await WarmUpAsync(server, client);
 
-        var task = ImportHarnessTitle.PostAsync(client, time, server.Url!, "s", new("T", HarnessTitleKind.Auto, null), progress: null, default);
+        var task = ImportHarnessTitle.PostAsync(client, time, TimeProvider.System, server.Url!, "s", new("T", HarnessTitleKind.Auto, null), progress: null, default);
         await DriveRetriesAsync(server, "/hooks/harness-title", time, totalAttempts: 2);
         await task;
 
@@ -106,7 +109,7 @@ public class ImportHarnessTitleTests {
         await WarmUpAsync(server, client);
         var progress = new CollectingProgress();
 
-        var task = ImportHarnessTitle.PostAsync(client, time, server.Url!, "s", new("T", HarnessTitleKind.Auto, null), progress, default);
+        var task = ImportHarnessTitle.PostAsync(client, time, TimeProvider.System, server.Url!, "s", new("T", HarnessTitleKind.Auto, null), progress, default);
         await DriveRetriesAsync(server, "/hooks/harness-title", time, totalAttempts: 8);
         await task;
 
