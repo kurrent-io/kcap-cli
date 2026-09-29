@@ -91,6 +91,22 @@ public class PiModelCatalogProbeTests {
     }
 
     [Test]
+    public async Task A_spawn_failing_after_the_deadline_is_observed() {
+        var time    = new FakeTimeProvider();
+        var release = new TaskCompletionSource<IPiRpcProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var logger  = new Capacitor.Tests.Helpers.CapturingLogger();
+        var run     = PiModelCatalogProbe.RunAsync("/opt/pi", PiModelCatalogProbe.DirectoryFor(Tmp.Path),
+            (_, _) => release.Task, time, logger, CancellationToken.None);
+
+        time.Advance(PiModelCatalogProbe.Deadline + TimeSpan.FromSeconds(1));
+        await Assert.That(await run).IsNull();
+
+        release.SetException(new InvalidOperationException("late start failure"));
+        for (var waited = 0; !logger.Warnings.Any(w => w.Contains("could not start")) && waited < 30_000; waited += 10) await Task.Delay(10);
+        await Assert.That(logger.Warnings.Any(w => w.Contains("could not start"))).IsTrue();
+    }
+
+    [Test]
     public async Task Invalid_envelope_returns_null_and_empty_catalog_returns_empty() {
         var bad = new FakePiRpcProcess { AutoStateResponse = null };
         bad.OnWrite = _ => bad.Push("""{"type":"response","command":"get_available_models","success":true}""");

@@ -70,10 +70,10 @@ internal static partial class PiModelCatalogProbe {
             process = await spawn.WaitAsync(linked.Token).ConfigureAwait(false);
         } catch (OperationCanceledException) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested) {
             LogNoResponse(logger, Deadline, "");
-            DisposeWhenStarted(spawn);
+            DisposeWhenStarted(spawn, logger);
             return null;
         } catch (OperationCanceledException) {
-            DisposeWhenStarted(spawn);
+            DisposeWhenStarted(spawn, logger);
             throw;
         } catch (Exception ex) {
             LogCouldNotStart(logger, ex);
@@ -108,9 +108,13 @@ internal static partial class PiModelCatalogProbe {
         }
     }
 
-    static void DisposeWhenStarted(Task<IPiRpcProcess>? spawn) =>
-        spawn?.ContinueWith(t => t.Result.DisposeAsync().AsTask(), CancellationToken.None,
-            TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+    // Observes every outcome of a spawn the probe stopped waiting for: a late process is disposed,
+    // a late failure is logged rather than left unobserved.
+    static void DisposeWhenStarted(Task<IPiRpcProcess>? spawn, ILogger logger) =>
+        spawn?.ContinueWith(async t => {
+            if (t.IsCompletedSuccessfully) await t.Result.DisposeAsync().ConfigureAwait(false);
+            else if (t.Exception is { } ex) LogCouldNotStart(logger, ex.GetBaseException());
+        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
 
     static string Stderr(IPiRpcProcess process) =>
         process.Diagnostics is { } d ? d.Length > StderrLogCap ? d[..StderrLogCap] : d : "";
