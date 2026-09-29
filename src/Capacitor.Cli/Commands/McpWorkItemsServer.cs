@@ -477,7 +477,6 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             : BuildToolResult(id, "Error: the server returned an unreadable response.", isError: true);
     }
 
-    /// <summary>Null when the body carries no loose_end_id.</summary>
     internal static string? RenderLooseEndChange(string toolName, string body) {
         try {
             using var doc  = JsonDocument.Parse(body);
