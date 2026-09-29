@@ -106,6 +106,39 @@ public class ClaudeChatRulesTests {
         await Assert.That(onlyWrappers).IsEmpty();
     }
 
+    /// The record shape Claude Code writes for a paste: the queue must see the same text the
+    /// bubble shows, or an attached prompt never leaves it.
+    [Test]
+    public async Task A_paste_shows_its_text_and_trailer_without_the_wrapper() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"role":"user","content":"\n\n<pasted_content id=\"97c1\">\nchecks are slow\n\n\n[Attached files: .attached/b1/Screenshot 1.png]\n</pasted_content id=\"97c1\">\n"}}""", 1, Received, chat.CreateContext("a1", null));
+        const string expected = "checks are slow\n\n\n[Attached files: .attached/b1/Screenshot 1.png]";
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo(expected);
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { expected });
+
+        var quoted = P("""{"type":"user","message":{"content":"why does <pasted_content id=\"a\"> never close with </pasted_content id=\"b\">?"}}""");
+        await Assert.That(quoted.Single().Text).IsEqualTo("why does <pasted_content id=\"a\"> never close with </pasted_content id=\"b\">?");
+
+        var matching = P("""{"type":"user","message":{"content":"why does <pasted_content id=\"a\">x</pasted_content id=\"a\">?"}}""");
+        await Assert.That(matching.Single().Text).IsEqualTo("why does <pasted_content id=\"a\">x</pasted_content id=\"a\">?");
+    }
+
+    [Test]
+    public async Task An_embedded_paste_keeps_the_spaces_at_its_edges() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"before\n\n<pasted_content id=\"p\">\n  keep  \n</pasted_content id=\"p\">\nafter"}}""", 1, Received, chat.CreateContext("a1", null));
+        const string expected = "before\n\n  keep  \nafter";
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo(expected);
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { expected });
+    }
+
+    [Test]
+    public async Task Unmatched_paste_openings_stay_in_the_message() {
+        var opens = string.Concat(Enumerable.Repeat("<pasted_content id=\"a\">", 64));
+        var shown = P("{\"type\":\"user\",\"message\":{\"content\":" + System.Text.Json.JsonSerializer.Serialize(opens + " tail") + "}}");
+        await Assert.That(shown.Single().Text).IsEqualTo(opens + " tail");
+    }
+
     [Test]
     public async Task Tool_results_carry_string_or_block_content_capped_and_flag_errors() {
         var str = P("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"done","is_error":true}]}}""");

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core.LocalIpc;
@@ -132,8 +133,49 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     }
 
     /// Removes the blocks Claude Code injects around a user turn: reminders and slash-command
-    /// echoes.
-    internal static string StripWrappers(string text) => Wrappers().Replace(text, "").Trim();
+    /// echoes are dropped, a paste keeps its text.
+    internal static string StripWrappers(string text) => Wrappers().Replace(UnwrapPastes(text), "").Trim();
+
+    const string PasteOpen = "<pasted_content id=\"";
+
+    /// A paste is a block whose close repeats the id, with a newline right after the open tag and
+    /// right before the close. Only those newlines come off: a one-line pair is prose, and spaces
+    /// inside the block stay so the queue still matches.
+    static string UnwrapPastes(string text) {
+        var cursor = 0;
+        var scan = 0;
+        StringBuilder? built = null;
+        while (scan < text.Length) {
+            var open = text.IndexOf(PasteOpen, scan, StringComparison.Ordinal);
+            if (open < 0) break;
+            var idStart = open + PasteOpen.Length;
+            var idEnd = text.IndexOf('"', idStart);
+            if (idEnd < 0 || idEnd + 1 >= text.Length || text[idEnd + 1] != '>') {
+                scan = open + PasteOpen.Length;
+                continue;
+            }
+            var afterOpen = idEnd + 2;
+            if (afterOpen >= text.Length || text[afterOpen] != '\n') {
+                scan = afterOpen;
+                continue;
+            }
+            var contentStart = afterOpen + 1;
+            var close = string.Concat("\n</pasted_content id=\"", text.AsSpan(idStart, idEnd - idStart), "\">");
+            var closeAt = text.IndexOf(close, contentStart, StringComparison.Ordinal);
+            if (closeAt < 0) {
+                scan = afterOpen;
+                continue;
+            }
+            built ??= new StringBuilder(text.Length);
+            built.Append(text, cursor, open - cursor);
+            built.Append(text, contentStart, closeAt - contentStart);
+            cursor = closeAt + close.Length;
+            scan = cursor;
+        }
+        if (built is null) return text;
+        built.Append(text, cursor, text.Length - cursor);
+        return built.ToString();
+    }
 
     /// The command when the whole message is a bash-input tag; null when the tag is quoted
     /// inside other text or the command is blank.
