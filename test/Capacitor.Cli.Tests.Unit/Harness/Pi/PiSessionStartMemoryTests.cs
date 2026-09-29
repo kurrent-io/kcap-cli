@@ -49,10 +49,8 @@ public class PiSessionStartMemoryTests {
         await Assert.That(Render(fragment)).IsEqualTo(fragment + "\n");
     }
 
-    // Pi's stable identity is the SESSION FILE PATH (SessionStartMemoryIdentity hashes it via
-    // PiSessionPathCanonicalizer) — the uuid is deliberately NOT the lease key, because the file is
-    // the one thing every lifecycle callback observably shares, resume reuses it, and fork mints a
-    // new one (new file ⇒ new identity ⇒ fresh eligibility, exactly the design's fork semantics).
+    // Pi's identity is the SESSION FILE PATH (hashed via PiSessionPathCanonicalizer), the one thing
+    // every lifecycle callback shares; an unrooted path has no identity at all (below).
     [Test]
     public async Task Lifecycle_keys_on_the_rooted_session_file_path() {
         using var tmp = new TempDir();
@@ -63,12 +61,13 @@ public class PiSessionStartMemoryTests {
         await Assert.That(lifecycle.SessionId).IsEqualTo(file);
         await Assert.That(lifecycle.IsTopLevel).IsTrue();
         await Assert.That(lifecycle.ClassificationAuthoritative).IsTrue();
-        // Durable-lease dedupe, not one-shot: Pi restarts and resumes re-fire session_start for the
-        // same file, and only the lease makes the repeat a no-op.
         await Assert.That(lifecycle.CallbackMayRepeat).IsTrue();
+        // kcap.ts drops the fragment at every session_shutdown and Pi persists none of it, so each
+        // start of the same file (restart, resume, switch) must be served again, not deduped.
+        await Assert.That(lifecycle.HostKeepsContext).IsFalse();
 
         await Assert.That(SessionStartMemoryLifecyclePolicy.Decide(lifecycle))
-            .IsEqualTo(SessionMemoryLifecycleDecision.EligibleWithLease);
+            .IsEqualTo(SessionMemoryLifecycleDecision.EligibleEveryStart);
     }
 
     // A relative/garbage path cannot canonicalize ⇒ identity null ⇒ policy answers RetryLaterNoCommit

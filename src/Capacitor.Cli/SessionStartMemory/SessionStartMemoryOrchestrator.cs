@@ -38,6 +38,14 @@ internal sealed class SessionStartMemoryOrchestrator(
             var decision = SessionStartMemoryLifecyclePolicy.Decide(lifecycle);
             if (decision is SessionMemoryLifecycleDecision.IneligibleNoCommit or SessionMemoryLifecycleDecision.RetryLaterNoCommit)
                 return null;
+            // No lease: the host keeps nothing it was handed, so each start is its own delivery and a
+            // failed fetch simply leaves the next start to try again.
+            if (decision == SessionMemoryLifecycleDecision.EligibleEveryStart) {
+                var fresh = await provider.GetAsync(request with { Budget = Remaining() });
+                if (fresh.Disposition != SessionStartMemoryDisposition.Ready) return null;
+                if (commitGate is not null && !await commitGate(request.CancellationToken)) return null;
+                return fresh.Fragment;
+            }
             var key = SessionStartMemoryIdentity.Create(lifecycle.Harness, lifecycle.SessionId,
                 lifecycle.LifecycleInstanceId);
             var lease = await store.TryBeginAsync(key, Remaining(), request.CancellationToken);
