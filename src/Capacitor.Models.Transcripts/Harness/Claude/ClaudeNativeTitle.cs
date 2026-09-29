@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Json;
 
 namespace Capacitor.Models.Transcripts.Harness.Claude;
@@ -10,12 +12,45 @@ namespace Capacitor.Models.Transcripts.Harness.Claude;
 /// chars — the <c>/hooks/set-title</c> and <c>/hooks/harness-title</c> limit.
 /// </summary>
 public static class ClaudeNativeTitle {
+    /// <summary>Per-path result cache keyed by the file's own length and last-write time — the
+    /// daemon re-extracts every agent's transcript on a short poll, and a session between polls
+    /// almost never gains a new line, let alone a new title line.</summary>
+    static readonly ConcurrentDictionary<string, (long Length, DateTime LastWriteUtc, ClaudeTitle? Result)> Cache = new();
+
     public static string? TryExtract(string transcriptPath) => TryExtractWithKind(transcriptPath)?.Title;
 
     public static ClaudeTitle? TryExtractWithKind(string transcriptPath) {
+        FileInfo info;
+        try {
+            info = new FileInfo(transcriptPath);
+            if (!info.Exists) {
+                Cache.TryRemove(transcriptPath, out _);
+                return null;
+            }
+        } catch {
+            return null;
+        }
+
+        var length      = info.Length;
+        var lastWriteUtc = info.LastWriteTimeUtc;
+
+        if (Cache.TryGetValue(transcriptPath, out var cached) && cached.Length == length && cached.LastWriteUtc == lastWriteUtc) {
+            return cached.Result;
+        }
+
+        var result = Extract(transcriptPath);
+        Cache[transcriptPath] = (length, lastWriteUtc, result);
+
+        return result;
+    }
+
+    static ClaudeTitle? Extract(string transcriptPath) {
         DateTimeOffset? lastTimestamp = null;
-        var firstSeenAt = new Dictionary<string, DateTimeOffset?>(StringComparer.Ordinal);
-        string? lastRename = null;
+        // The value of the custom-title run currently in progress, and when that run began —
+        // an identical re-append does not restart it, but a switch to a different value does,
+        // even back to one seen earlier (a rename undone by the user is still a rename).
+        string? currentRenameValue = null;
+        DateTimeOffset? currentRenameChangedAt = null;
         string? lastAutoTitle = null;
         string? lastSummary = null;
 
@@ -34,10 +69,12 @@ public static class ClaudeNativeTitle {
 
                     switch (root.Str("type")) {
                         case "custom-title":
-                            if (root.Str("customTitle") is { Length: > 0 } custom && !string.IsNullOrWhiteSpace(custom)) {
+                            if (root.Str("customTitle") is { } custom && !string.IsNullOrWhiteSpace(custom)) {
                                 var trimmed = custom.Trim();
-                                if (!firstSeenAt.ContainsKey(trimmed)) firstSeenAt[trimmed] = lastTimestamp;
-                                lastRename = trimmed;
+                                if (!string.Equals(trimmed, currentRenameValue, StringComparison.Ordinal)) {
+                                    currentRenameChangedAt = lastTimestamp;
+                                    currentRenameValue     = trimmed;
+                                }
                             }
                             break;
                         case "ai-title":
@@ -49,8 +86,8 @@ public static class ClaudeNativeTitle {
                     }
 
                     if (root.TryGetProperty("timestamp", out var tsElement) && tsElement.ValueKind == JsonValueKind.String
-                     && DateTimeOffset.TryParse(tsElement.GetString(), out var ts)) {
-                        lastTimestamp = ts;
+                     && DateTimeOffset.TryParse(tsElement.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)) {
+                        lastTimestamp = ts.ToUniversalTime();
                     }
                 } catch (JsonException) { }
             }
@@ -58,10 +95,7 @@ public static class ClaudeNativeTitle {
             return null;
         }
 
-        if (lastRename is not null) {
-            var changedAt = firstSeenAt.GetValueOrDefault(lastRename);
-            return new ClaudeTitle(Cap(lastRename), IsRename: true, changedAt);
-        }
+        if (currentRenameValue is not null) return new ClaudeTitle(Cap(currentRenameValue), IsRename: true, currentRenameChangedAt);
 
         var auto = lastAutoTitle ?? lastSummary;
         return auto is null ? null : new ClaudeTitle(Cap(auto), IsRename: false, null);

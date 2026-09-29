@@ -11,7 +11,7 @@ internal sealed record TitleAgentView(
 /// harness-native one (with its kind and change time) via the harness-title path.</summary>
 internal interface ITitleServerPort {
     Task<string?> GetTitleAsync(string sessionId, CancellationToken ct);
-    Task<bool> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct);
+    Task<HarnessTitleOutcome> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct);
 }
 
 /// <summary>
@@ -178,14 +178,17 @@ internal sealed class TitleResolveLoop {
         if (native is not null && !native.Equals(state.PushedNative) && agent.SessionId is { } sid) {
             state.PushAttempts.Add(native.Title);
 
-            var pushed = false;
+            var outcome = HarnessTitleOutcome.Failed;
             try {
-                pushed = await _server.PushTitleAsync(sid, native, ct);
+                outcome = await _server.PushTitleAsync(sid, native, ct);
             } catch (Exception ex) {
                 _logger.LogDebug(ex, "Native title push failed for session {SessionId}", sid);
             }
 
-            if (pushed) state.PushedNative = native;
+            // A refusal (blank title, unsafe id, not the owner) is a verdict on this exact
+            // value, not a transient hiccup — retrying it every tick forever would spend a
+            // request for nothing. Failed/SessionNotFound stay retryable.
+            if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.Refused) state.PushedNative = native;
         }
 
         // A locally generated title only converges to the server while it verifiably has no

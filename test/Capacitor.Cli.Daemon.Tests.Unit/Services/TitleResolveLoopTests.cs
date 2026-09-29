@@ -22,14 +22,14 @@ public class TitleResolveLoopTests {
         public Func<string, string?>? Get { get; set; }
         public string? Committed { get; private set; }
         public List<(string SessionId, HarnessTitlePost Post)> Pushed { get; } = [];
-        public bool PushResult { get; set; } = true;
+        public HarnessTitleOutcome PushResult { get; set; } = HarnessTitleOutcome.Posted;
 
         public Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) =>
             Task.FromResult(Get is not null ? Get(sessionId) : Committed);
 
-        public Task<bool> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) {
+        public Task<HarnessTitleOutcome> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) {
             Pushed.Add((sessionId, post));
-            if (PushResult) Committed = post.Title;
+            if (PushResult == HarnessTitleOutcome.Posted) Committed = post.Title;
             return Task.FromResult(PushResult);
         }
     }
@@ -313,12 +313,12 @@ public class TitleResolveLoopTests {
         h.Agents.Add(Agent());
         var native = "First cut";
         h.Native = _ => native;
-        h.Server.PushResult = false; // the push may have committed server-side; only its ack is lost
+        h.Server.PushResult = HarnessTitleOutcome.Failed; // the push may have committed server-side; only its ack is lost
         var loop = h.Build();
 
         await loop.TickAsync(CancellationToken.None);
         h.Server.Get = _ => "First cut"; // the committed-but-unacknowledged push coming back
-        h.Server.PushResult = true;
+        h.Server.PushResult = HarnessTitleOutcome.Posted;
         native = "Second cut";
         await loop.TickAsync(CancellationToken.None);
 
@@ -351,7 +351,7 @@ public class TitleResolveLoopTests {
         h.Agents.Add(Agent());
         var native = "First cut";
         h.Native = _ => native;
-        h.Server.PushResult = false; // acks lost; either attempt may have committed
+        h.Server.PushResult = HarnessTitleOutcome.Failed; // acks lost; either attempt may have committed
         h.Server.Get = _ => null;
         var loop = h.Build();
 
@@ -371,7 +371,7 @@ public class TitleResolveLoopTests {
         h.Agents.Add(Agent());
         var native = "Cut 01";
         h.Native = _ => native;
-        h.Server.PushResult = false;
+        h.Server.PushResult = HarnessTitleOutcome.Failed;
         h.Server.Get = _ => null;
         var loop = h.Build();
 
@@ -435,15 +435,63 @@ public class TitleResolveLoopTests {
         var h = new Harness();
         h.Agents.Add(Agent());
         h.Native = _ => "Native title";
-        h.Server.PushResult = false;
+        h.Server.PushResult = HarnessTitleOutcome.Failed;
         var loop = h.Build();
 
         await loop.TickAsync(CancellationToken.None);
-        h.Server.PushResult = true;
+        h.Server.PushResult = HarnessTitleOutcome.Posted;
         await loop.TickAsync(CancellationToken.None);
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Server.Pushed.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task A_refused_push_is_not_retried_for_the_same_value() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native title";
+        h.Server.PushResult = HarnessTitleOutcome.Refused; // e.g. blank title, unsafe id, not the owner
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        // A verdict on this value, not a transient hiccup — retrying forever would spend a
+        // request for nothing.
+        await Assert.That(h.Server.Pushed.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_session_not_found_push_is_retried_on_the_next_tick() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native title";
+        h.Server.PushResult = HarnessTitleOutcome.SessionNotFound; // not yet projected server-side
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Server.Pushed.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task A_failed_generated_push_is_retried_on_the_next_tick() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Generate = (_, _) => Task.FromResult<string?>("Generated title");
+        h.Time.Advance(TimeSpan.FromMinutes(6));
+        h.PostGeneratedResult = false;
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        h.PostGeneratedResult = true;
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.GeneratedPosts.Count).IsEqualTo(2);
     }
 
     [Test]

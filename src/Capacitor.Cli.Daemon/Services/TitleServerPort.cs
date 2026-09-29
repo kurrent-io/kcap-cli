@@ -41,19 +41,18 @@ internal sealed class TitleServerPort(ICapacitorHttpClient http, string baseUrl)
         }
     }
 
-    public async Task<bool> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) {
+    public async Task<HarnessTitleOutcome> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) {
         // The server files sessions under the canonical key (a GUID as its 32-hex form, an opaque
         // vendor id unchanged) — the raw id must not ride the payload or it would update a
         // different key than the one the summary read used.
-        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } canonical) return true; // nothing to converge with
+        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } canonical) return HarnessTitleOutcome.Posted; // nothing to converge with
 
         var (client, status) = await http.ForHookAsync(ct);
 
         using (client) {
-            if (status is AuthStatus.Expired or AuthStatus.NotAuthenticated or AuthStatus.WrongServer) return false;
+            if (status is AuthStatus.Expired or AuthStatus.NotAuthenticated or AuthStatus.WrongServer) return HarnessTitleOutcome.Failed;
 
-            return await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, _baseUrl, canonical, post, ct)
-                == HarnessTitleOutcome.Posted;
+            return await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, _baseUrl, canonical, post, ct);
         }
     }
 }

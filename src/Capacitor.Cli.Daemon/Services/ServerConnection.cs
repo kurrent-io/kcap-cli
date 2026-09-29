@@ -856,7 +856,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             return true;
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
-        } catch (Exception) {
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "UpdateTitle send failed for session {SessionId}", sessionId);
             return false;
         }
     }

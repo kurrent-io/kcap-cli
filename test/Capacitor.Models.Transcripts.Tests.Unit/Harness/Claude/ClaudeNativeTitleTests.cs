@@ -115,4 +115,40 @@ public class ClaudeNativeTitleTests {
         await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
             .IsEqualTo(new ClaudeTitle("Mine", IsRename: true, null));
     }
+
+    /// A rename back to an earlier value is a genuine switch, not a re-append: timing it by the
+    /// value's first-ever occurrence would post the final "A" with a changed_at earlier than
+    /// "B"'s, and the server would keep "B" — losing the operator's rename back to "A".
+    [Test]
+    public async Task A_rename_back_to_an_earlier_value_is_timed_by_its_own_return_not_its_first_occurrence() {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:05:00Z"}""",
+            """{"type":"custom-title","customTitle":"B","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:10:00Z"}""",
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("A", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:10:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    [Test]
+    public async Task Unchanged_file_length_and_write_time_skip_the_re_read() {
+        var path = Transcript("""{"type":"ai-title","aiTitle":"Alpha title","sessionId":"s1"}""");
+        var writeTime = File.GetLastWriteTimeUtc(path);
+
+        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Alpha title");
+
+        // Same length as the original line, rewritten content — proves a cache hit only if the
+        // stale value comes back despite the on-disk content having changed.
+        await File.WriteAllTextAsync(path, """{"type":"ai-title","aiTitle":"Bravo title","sessionId":"s1"}""" + "\n");
+        File.SetLastWriteTimeUtc(path, writeTime);
+
+        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Alpha title");
+
+        File.SetLastWriteTimeUtc(path, writeTime + TimeSpan.FromSeconds(1));
+
+        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Bravo title");
+    }
 }
