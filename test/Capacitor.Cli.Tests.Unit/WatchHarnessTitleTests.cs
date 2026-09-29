@@ -192,6 +192,7 @@ public class WatchHarnessTitleTests {
     /// <summary>An older server records none of these lines, so generation must still run there.</summary>
     [Test]
     [Arguments("claude", CustomTitle)]
+    [Arguments("claude", """{"type":"summary","summary":"Legacy","leafUuid":"u"}""")]
     [Arguments("pi", """{"type":"session_info","name":"x"}""")]
     [Arguments("gemini", """{"$set":{"summary":"x"}}""")]
     [Arguments("opencode", """{"type":"session_title","title":"x"}""")]
@@ -375,4 +376,15 @@ public class WatchHarnessTitleTests {
         await Assert.That(sent.Last().ChangedAt).IsEqualTo(t1);
         await Assert.That(sent.Last().ChangedAt!.Value).IsLessThan(regenerateAt);
     }
+
+    [Test]
+    public async Task A_legacy_claude_summary_does_not_suppress_llm_titling_while_the_probe_is_inconclusive() =>
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(
+            AfterLine("claude", """{"type":"summary","summary":"Legacy","leafUuid":"u"}""", serverRecordsHarnessTitles: null), agentId: null)).IsTrue();
+
+    /// <summary>A summary copied in from another session names that session, so no server records it for this one.</summary>
+    [Test]
+    public async Task A_foreign_legacy_claude_summary_never_suppresses_llm_titling() =>
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(
+            AfterLine("claude", """{"type":"summary","summary":"Legacy","sessionId":"other"}""", serverRecordsHarnessTitles: true), agentId: null)).IsTrue();
 }

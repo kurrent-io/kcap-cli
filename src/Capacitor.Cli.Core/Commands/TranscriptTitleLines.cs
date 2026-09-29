@@ -12,8 +12,8 @@ internal static class TranscriptTitleLines {
     /// <param name="sessionId">The watched session: a Claude title line copied in from another session (a resume carries
     /// its history) is not recorded for this one.</param>
     public static TranscriptTitleLineKind Classify(string vendor, string sessionId, string line) => vendor switch {
-        "claude" => ClaudeTitleLine.CarriesTitle(line, sessionId, out var isRename)
-            ? isRename ? TranscriptTitleLineKind.RecordedWithHarnessTitles : TranscriptTitleLineKind.RecordedByEveryServer
+        "claude" => ClaudeTitleLine.CarriesTitle(line, sessionId, out var everyServer)
+            ? everyServer ? TranscriptTitleLineKind.RecordedByEveryServer : TranscriptTitleLineKind.RecordedWithHarnessTitles
             : TranscriptTitleLineKind.None,
         "pi"       => Newer(PiTitleLine.CarriesTitle(line)),
         "gemini"   => Newer(GeminiTitleLine.CarriesTitle(line)),

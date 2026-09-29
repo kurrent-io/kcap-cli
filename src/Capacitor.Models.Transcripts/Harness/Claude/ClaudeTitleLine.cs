@@ -3,31 +3,35 @@ using System.Text.Json;
 namespace Capacitor.Models.Transcripts.Harness.Claude;
 
 /// <summary>Whether a transcript line is one of Claude Code's own title records the server records: a non-blank
-/// <c>ai-title</c> or <c>custom-title</c>. The legacy <c>summary</c> shape is not one — the server does not record it,
-/// so it must not stand in for a title the server will have.</summary>
+/// <c>ai-title</c> or <c>custom-title</c>, or the legacy <c>{"type":"summary","summary":…}</c> earlier versions wrote.</summary>
 public static class ClaudeTitleLine {
-    /// <param name="sessionId">The session the line is recorded for. The server records a title line only when its own
-    /// <c>sessionId</c> names that session, so one copied in from another session does not count.</param>
-    /// <param name="isRename">A <c>custom-title</c>; otherwise an <c>ai-title</c>, which every server records.</param>
-    public static bool CarriesTitle(string line, string sessionId, out bool isRename) {
-        isRename = false;
-        if (!line.Contains("\"ai-title\"") && !line.Contains("\"custom-title\"")) return false;
+    /// <param name="sessionId">The session the line is recorded for. A title line copied in from another session names
+    /// that session and does not count; a legacy summary names none and counts unless it names another.</param>
+    /// <param name="recordedByEveryServer">An <c>ai-title</c>. A <c>custom-title</c> or a legacy summary is recorded
+    /// only by a server with harness titles.</param>
+    public static bool CarriesTitle(string line, string sessionId, out bool recordedByEveryServer) {
+        recordedByEveryServer = false;
+        if (!line.Contains("\"ai-title\"") && !line.Contains("\"custom-title\"") && !line.Contains("\"type\":\"summary\"")) return false;
 
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
 
-            if (root.Str("sessionId") is not { } own || Canonical(own) != Canonical(sessionId)) return false;
+            var (field, legacy) = root.Str("type") switch {
+                "ai-title"     => ("aiTitle", false),
+                "custom-title" => ("customTitle", false),
+                "summary"      => ("summary", true),
+                _              => (null, false),
+            };
+            if (field is null) return false;
 
-            switch (root.Str("type")) {
-                case "ai-title":
-                    return !string.IsNullOrWhiteSpace(root.Str("aiTitle"));
-                case "custom-title":
-                    isRename = true;
-                    return !string.IsNullOrWhiteSpace(root.Str("customTitle"));
-                default:
-                    return false;
-            }
+            var hasSid = root.Prop("sessionId") is not null;
+            if (hasSid && (root.Str("sessionId") is not { } own || Canonical(own) != Canonical(sessionId))) return false;
+            if (!hasSid && !legacy) return false;
+
+            recordedByEveryServer = field == "aiTitle";
+
+            return !string.IsNullOrWhiteSpace(root.Str(field));
         } catch (JsonException) {
             return false;
         }
