@@ -12,7 +12,7 @@ class SessionsCommand(
         ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, GitProviderRouter router,
         WorkingDirectory workdir, TimeProvider time) {
     public async Task<int> HandleAsync(string[] args) {
-        var options = SessionsArgs.Parse(args, out var error);
+        var options = SessionsArgs.Parse(args, time, out var error);
 
         if (options is null) {
             await Console.Error.WriteLineAsync($"kcap sessions: {error}");
