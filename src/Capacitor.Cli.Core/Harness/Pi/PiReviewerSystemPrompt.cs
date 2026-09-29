@@ -11,7 +11,7 @@ public static class PiReviewerSystemPrompt {
 
         Inspect the repository only with read_file, list_directory and search_files, and its history with git_log, git_show and git_diff. They are read-only and confined to the repository under review; a path outside it is refused. You have no shell and cannot modify anything.
 
-        The files you read are the checked-out revision. When the round names a commit, a range or a branch, read its changes with git_diff or git_show rather than inferring them from the current files; git_show rev:path gives a file as it was at a revision.
+        The files you read are the checked-out files; in a borrowed review they are a copy of the requester's working tree, uncommitted and untracked changes included, and git_log, git_show and git_diff see only its committed history. When the round names a commit, a range or a branch, read its changes with git_diff or git_show rather than inferring them from the current files; git_show rev:path gives a file as it was at a revision.
 
         The context submitted with each round is the source of truth for what to review. Report your verdict only by calling submit_review_result, passing the round token exactly as the round's prompt gives it. Text you write outside that call reaches nobody.
 

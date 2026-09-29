@@ -93,6 +93,15 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
     /// <summary>Advertising is the offer to review unattended, so it answers exactly what a launch would.</summary>
     public bool SupportsUnattended => DescribeUnattendedSupport().Supported;
 
+    /// <summary>A borrowed review runs in a daemon-owned copy of the requester's checkout, rebuilt before
+    /// every round, so the reviewer extension's own root-confined tools stay the whole containment — no
+    /// process sandbox is needed, and the live checkout is never the root.</summary>
+    public bool SupportsBorrowedReviewFlow => SupportsUnattended;
+
+    public string? BorrowedReviewContainment => SupportsBorrowedReviewFlow ? "independent-snapshot" : null;
+
+    public bool BorrowedReviewRequiresIndependentSnapshot => true;
+
     public UnattendedSupport DescribeUnattendedSupport() =>
         ReviewerRefusal() is { } reason ? new(false, reason) : new(true, null);
 
@@ -164,6 +173,10 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 "pi_requires_owned_worktree: this runtime has no containment strategy for a borrowed "
               + "workspace, so it runs only in a daemon-owned worktree.");
+
+        // A borrowed checkout reaches this runtime only as a daemon-owned snapshot, and only for a reviewer.
+        if (ctx.IsBorrowedSnapshot && (!ctx.IsReviewFlow || ctx.Worktree.SnapshotRoot is null))
+            throw new InvalidOperationException("borrowed_snapshot_containment_mismatch");
 
         return ctx.IsReviewFlow
             ? await StartReviewerAsync(ctx, ct).ConfigureAwait(false)
@@ -261,7 +274,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         var state   = config.Store.StateDirectory(config.Name);
         var paths   = PiReviewerLaunchDir.Create(
             state, config.DaemonEpoch ?? "unpinned", ctx.AgentId,
-            PiReviewerManifest.Build(ctx.Worktree.Path, servers, tools), _logger);
+            PiReviewerManifest.Build(ReviewRoot(ctx), servers, tools), _logger);
 
         PiRpcHostedAgentRuntime? runtime = null;
         IPiRpcProcess?           process = null;
@@ -319,6 +332,11 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
               + "when a result server or a required tool is unavailable (stderr is in the daemon log).", ex);
         }
     }
+
+    /// <summary>The directory the reviewer's tools are confined to: the whole snapshot for a borrowed
+    /// review, whose working directory may be a subdirectory of it, else the owned worktree.</summary>
+    internal static string ReviewRoot(RuntimeStartContext ctx) =>
+        ctx.IsBorrowedSnapshot ? ctx.Worktree.SnapshotRoot! : ctx.Worktree.Path;
 
     /// <summary>The checks <see cref="AcpReviewFlowMcp.Build"/> assumes its caller made: a blank input
     /// or a rejected allowlist would launch a reviewer that can never report, and a first prompt Pi

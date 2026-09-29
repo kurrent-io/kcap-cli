@@ -1386,8 +1386,9 @@ verdict through the injected result channel; it has no shell and cannot
 write anywhere, in or out of the worktree — a path outside the worktree is refused by the tool
 itself, not merely left untrusted. It runs offline, so a repository cannot trigger a package install
 either. The git tools run only git's own diff machinery, never an external diff or textconv
-program, and ignore system and global git config. A Pi reviewer still cannot borrow your checkout,
-so uncommitted work reaches it only through the context you submit.
+program, and ignore system and global git config. A review of your working tree borrows it as a
+daemon-owned copy — tracked, modified and untracked files, rebuilt before every round — so the
+reviewer sees your uncommitted work but never reads or runs in the live checkout itself.
 
 It authenticates as **you**: whatever Pi provider credentials and default model your account already
 has, or `KCAP_PI_MODEL` to pick a specific one — the same override a hosted Pi agent uses.
