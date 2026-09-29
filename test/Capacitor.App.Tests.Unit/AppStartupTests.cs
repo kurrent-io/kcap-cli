@@ -301,8 +301,7 @@ public class AppStartupTests {
 
     /// Minimal stand-in for LocalControlClient.RunAsync: yields Connecting once, then sits
     /// forever until its ct is cancelled (RestartLoopAsync/DisposeAsync's normal teardown path)
-    /// — enough to prove a DaemonClientService actually has a LIVE loop to dispose. Start and end
-    /// are signals rather than polled counts, so a slow runner waits instead of timing out.
+    /// — enough to prove a DaemonClientService actually has a LIVE loop to dispose.
     sealed class ForeverRunClient {
         readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         readonly TaskCompletionSource _ended   = new(TaskCreationOptions.RunContinuationsAsynchronously);
