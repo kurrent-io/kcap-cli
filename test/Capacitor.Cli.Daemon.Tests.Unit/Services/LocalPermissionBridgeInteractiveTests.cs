@@ -44,13 +44,20 @@ public class LocalPermissionBridgeInteractiveTests {
             return File.Exists(path) ? File.ReadAllLines(path) : [];
         }
 
-        public async Task<PermissionPendingDto> WaitPendingAsync() {
+        public async Task<PermissionPendingDto> WaitPendingAsync(Task<HttpResponseMessage> response) {
             var deadline = DateTime.UtcNow.AddSeconds(30);
             while (Broker.PendingSnapshot().Count == 0) {
+                if (response.IsCompleted) throw new InvalidOperationException($"The hook was answered before any request was pending: {await DescribeAsync(response)}");
                 if (DateTime.UtcNow > deadline) throw new TimeoutException("Timed out waiting for a pending request");
                 await Task.Delay(10);
             }
             return Broker.PendingSnapshot().Single();
+        }
+
+        static async Task<string> DescribeAsync(Task<HttpResponseMessage> response) {
+            if (!response.IsCompletedSuccessfully) return response.Exception?.GetBaseException().ToString() ?? "cancelled";
+            using var answered = response.Result;
+            return $"{(int)answered.StatusCode} {await answered.Content.ReadAsStringAsync()}";
         }
 
         public async ValueTask DisposeAsync() { await Bridge.DisposeAsync(); Client.Dispose(); Tmp.Dispose(); }
@@ -68,7 +75,7 @@ public class LocalPermissionBridgeInteractiveTests {
         await h.StartAsync();
         var response = h.Client.PostAsync($"{h.Bridge.BaseUrl}/{vendor}/permission-request",
             JsonContent.Create(new { session_id = Session, tool_name = "Bash", agent_id = "agent-1", cwd = "/repo" }));
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
         using var answered = await response;
 
@@ -85,7 +92,7 @@ public class LocalPermissionBridgeInteractiveTests {
         await h.StartAsync();
 
         var response = h.PostAsync();
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         await Assert.That(pending.SessionId).IsEqualTo(Session);
         await Assert.That(pending.AgentId).IsEqualTo("agent-1");
 
@@ -112,7 +119,7 @@ public class LocalPermissionBridgeInteractiveTests {
 
         var response = h.Client.PostAsync($"{h.Bridge.BaseUrl}/claude/permission-request",
             JsonContent.Create(new { session_id = Session, tool_name = "Bash", tool_input = new { command = "ls" }, tool_use_id = "toolu_01X", agent_id = "agent-1", cwd = "/repo" }));
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         await Assert.That(pending.ToolUseId).IsEqualTo("toolu_01X");
 
         await Assert.That(h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app")).IsTrue();
@@ -129,7 +136,7 @@ public class LocalPermissionBridgeInteractiveTests {
 
         var response = h.Client.PostAsync($"{h.Bridge.BaseUrl}/claude/permission-request",
             JsonContent.Create(new { session_id = Session, tool_name = "Bash", tool_input = new { command = "ls" }, subagent_id = "sub-1", agent_id = "agent-1", cwd = "/repo" }));
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
 
         await Assert.That(h.Broker.WithdrawTurn("agent-1", Session, subagentId: null)).IsEqualTo(0);
         await Assert.That(h.Broker.PendingSnapshot().Single().RequestId).IsEqualTo(pending.RequestId);
@@ -147,7 +154,7 @@ public class LocalPermissionBridgeInteractiveTests {
         var (_, reader) = h.Broker.Subscribe();
 
         var response = h.PostAsync();
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token); // Pending
         var correlated = ((PermissionStreamItem.Pending)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
         await Assert.That(correlated.ServerRequestId).IsEqualTo("srv-1");
@@ -169,7 +176,7 @@ public class LocalPermissionBridgeInteractiveTests {
         h.Server.RespondScript = () => new ServerConnection.RespondOutcome(ServerConnection.RespondOutcomeKind.NotPending, "Permission request is no longer pending.");
         await h.StartAsync();
         var response = h.PostAsync();
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         // A settle that lands before Begin abandons the server leg, and then no server request
         // exists to respond to. The respond under test needs one, so the leg has to hold it first.
         await awaiting.Task.WaitAsync(TimeSpan.FromSeconds(30));
@@ -197,7 +204,7 @@ public class LocalPermissionBridgeInteractiveTests {
         h.Server.BeginScript = (_, _) => throw new Microsoft.AspNetCore.SignalR.HubException("boom");
         await h.StartAsync();
         var response = h.PostAsync();
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         await Task.Delay(100);
         await Assert.That(response.IsCompleted).IsFalse();
         h.Broker.Unsubscribe(id);
@@ -225,7 +232,7 @@ public class LocalPermissionBridgeInteractiveTests {
         };
         await h.StartAsync();
         var response = h.PostAsync();
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         await WaitUntil(() => seen is not null, "Begin entered");
 
         h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
@@ -243,7 +250,7 @@ public class LocalPermissionBridgeInteractiveTests {
         h.Server.BeginScript = async (ct, abandoned) => { await release.Task.WaitAsync(ct); if (abandoned()) throw new PermissionRequestAbandonedException(); return "srv-1"; };
         await h.StartAsync();
         var response = h.PostAsync();
-        _ = await h.WaitPendingAsync();
+        _ = await h.WaitPendingAsync(response);
         h.Broker.WithdrawForAgent("agent-1");
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("deny");
         await Assert.That(h.LogLines()[0]).Contains("\"source\":\"agent_gone\"");
@@ -268,7 +275,7 @@ public class LocalPermissionBridgeInteractiveTests {
         var big = new string('x', PermissionWire.MaxElementBytes);
         var response = h.Client.PostAsync($"{h.Bridge.BaseUrl}/claude/permission-request",
             JsonContent.Create(new { session_id = Session, tool_name = "Bash", tool_input = new { command = big }, agent_id = "agent-1" }));
-        var pending = await h.WaitPendingAsync();
+        var pending = await h.WaitPendingAsync(response);
         await Assert.That(pending.ToolInput).IsNull();
         await Assert.That(pending.ToolInputOmitted).IsTrue();
         h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
