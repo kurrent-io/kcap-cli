@@ -123,9 +123,6 @@ public class SessionStartMemoryFoundationTests {
             .IsEqualTo(SessionMemoryLifecycleDecision.RetryLaterNoCommit);
     }
 
-    /// <summary>The same session started twice gets the fragment both times when its host keeps
-    /// nothing, and nothing is written to the lease store. A host that does keep context is the
-    /// control: the same two starts yield the fragment once.</summary>
     [Test]
     [Arguments(false, 2)]
     [Arguments(true, 1)]
