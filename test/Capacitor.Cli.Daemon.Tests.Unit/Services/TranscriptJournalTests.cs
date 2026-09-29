@@ -291,7 +291,7 @@ public class TranscriptJournalTests {
         await Assert.That(second.IsOpen).IsFalse();
 
         sink.Release.Release(10);
-        await WaitUntil(() => Volatile.Read(ref sink.Appends) >= 1); // the abandoned append returned and freed the path lock
+        await WaitUntil(() => locks.LiveEntries == 0); // the abandoned append returned and freed the path lock
         var third = new TranscriptJournal(first.Path, NullLogger.Instance, Time, locks: locks, lockBound: TimeSpan.FromMilliseconds(100));
         await Assert.That(third.Open(null, null)).IsTrue();
         await third.CompleteAsync();
