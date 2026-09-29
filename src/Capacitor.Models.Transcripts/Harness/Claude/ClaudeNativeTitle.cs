@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 
@@ -10,41 +9,15 @@ namespace Capacitor.Models.Transcripts.Harness.Claude;
 /// <c>{"type":"summary","summary":...}</c> shape still written by earlier Claude Code versions.
 /// Returns null when the file is unreadable or carries no title; never throws. Capped at 120
 /// chars — the <c>/hooks/set-title</c> and <c>/hooks/harness-title</c> limit.
+///
+/// <para>Stateless by design — a caller re-extracting the same path on every poll (the daemon's
+/// title loop) owns any skip-when-unchanged caching itself, scoped to its own per-agent
+/// lifetime rather than this type's, which has none.</para>
 /// </summary>
 public static class ClaudeNativeTitle {
-    /// <summary>Per-path result cache keyed by the file's own length and last-write time — the
-    /// daemon re-extracts every agent's transcript on a short poll, and a session between polls
-    /// almost never gains a new line, let alone a new title line.</summary>
-    static readonly ConcurrentDictionary<string, (long Length, DateTime LastWriteUtc, ClaudeTitle? Result)> Cache = new();
-
     public static string? TryExtract(string transcriptPath) => TryExtractWithKind(transcriptPath)?.Title;
 
     public static ClaudeTitle? TryExtractWithKind(string transcriptPath) {
-        FileInfo info;
-        try {
-            info = new FileInfo(transcriptPath);
-            if (!info.Exists) {
-                Cache.TryRemove(transcriptPath, out _);
-                return null;
-            }
-        } catch {
-            return null;
-        }
-
-        var length      = info.Length;
-        var lastWriteUtc = info.LastWriteTimeUtc;
-
-        if (Cache.TryGetValue(transcriptPath, out var cached) && cached.Length == length && cached.LastWriteUtc == lastWriteUtc) {
-            return cached.Result;
-        }
-
-        var result = Extract(transcriptPath);
-        Cache[transcriptPath] = (length, lastWriteUtc, result);
-
-        return result;
-    }
-
-    static ClaudeTitle? Extract(string transcriptPath) {
         DateTimeOffset? lastTimestamp = null;
         // The value of the custom-title run currently in progress, and when that run began —
         // an identical re-append does not restart it, but a switch to a different value does,

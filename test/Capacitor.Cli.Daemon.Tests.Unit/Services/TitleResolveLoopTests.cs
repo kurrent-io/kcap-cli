@@ -14,6 +14,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// initial truncated-prompt title) counts as "no real title yet".
 /// </summary>
 public class TitleResolveLoopTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static readonly DateTime T0 = new(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
 
     /// By default behaves like the real server: a successfully pushed native title is what the
@@ -41,6 +43,7 @@ public class TitleResolveLoopTests {
         public Func<TitleAgentView, string?> Native { get; set; } = _ => null;
         public HarnessTitleKind NativeKind { get; set; } = HarnessTitleKind.Rename;
         public DateTimeOffset? NativeChangedAt { get; set; }
+        public int NativeCalls;
         public Func<TitleAgentView, CancellationToken, Task<string?>> Generate { get; set; } =
             (_, _) => Task.FromResult<string?>(null);
         public int GenerateCalls;
@@ -52,7 +55,10 @@ public class TitleResolveLoopTests {
             () => Agents,
             (id, title) => Applied.Add((id, title)),
             Server,
-            a => Native(a) is { } title ? new HarnessTitlePost(title, NativeKind, NativeChangedAt) : null,
+            a => {
+                Interlocked.Increment(ref NativeCalls);
+                return Native(a) is { } title ? new HarnessTitlePost(title, NativeKind, NativeChangedAt) : null;
+            },
             (a, ct) => { Interlocked.Increment(ref GenerateCalls); return Generate(a, ct); },
             (sessionId, title, ct) => {
                 GeneratedPosts.Add((sessionId, title));
@@ -523,5 +529,46 @@ public class TitleResolveLoopTests {
 
         // Fresh state after re-appearance: the title is applied (and pushed) again.
         await Assert.That(h.Applied.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Native_extraction_is_skipped_when_the_transcript_file_is_unchanged() {
+        var path = Tmp.CreateFile("t.jsonl", "irrelevant — the native lane is faked below");
+        var writeTime = File.GetLastWriteTimeUtc(path);
+
+        var h = new Harness();
+        h.Agents.Add(Agent(transcript: path));
+        h.Native = _ => "Native title";
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.NativeCalls).IsEqualTo(1);
+
+        File.SetLastWriteTimeUtc(path, writeTime + TimeSpan.FromSeconds(1));
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.NativeCalls).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task A_departed_agents_native_extraction_cache_is_dropped_with_its_state() {
+        var path = Tmp.CreateFile("t.jsonl", "irrelevant — the native lane is faked below");
+
+        var h = new Harness();
+        var agent = Agent(transcript: path);
+        h.Agents.Add(agent);
+        h.Native = _ => "Native title";
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        h.Agents.Clear();
+        await loop.TickAsync(CancellationToken.None); // agent gone: no extraction, cache untouched
+        h.Agents.Add(agent);
+        await loop.TickAsync(CancellationToken.None); // fresh state: re-extracts despite the unchanged file
+
+        await Assert.That(h.NativeCalls).IsEqualTo(2);
     }
 }

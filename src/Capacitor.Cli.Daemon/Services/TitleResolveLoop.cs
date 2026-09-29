@@ -63,6 +63,14 @@ internal sealed class TitleResolveLoop {
         /// only by a successful read proving the server silent.
         public string? ServerTitle;
         public bool GenerationAttempted;
+        /// The transcript path, length and last-write time the native lane was last invoked
+        /// against — a match skips re-invoking it (a JSON parse of the whole file) this tick.
+        /// Scoped to this agent's state so it is dropped with the agent rather than growing
+        /// unbounded across a long-lived daemon's lifetime-total sessions.
+        public string? NativeStatPath;
+        public long NativeStatLength;
+        public DateTime NativeStatLastWriteUtc;
+        public HarnessTitlePost? NativeStatResult;
     }
 
     /// <summary>
@@ -138,7 +146,7 @@ internal sealed class TitleResolveLoop {
 
     async Task ResolveOneAsync(TitleAgentView agent, AgentTitleState state, CancellationToken ct) {
         try {
-            if (NormalizePost(_nativeLane(agent)) is { } extracted) state.Native = extracted;
+            if (ExtractNative(agent, state) is { } extracted) state.Native = extracted;
         } catch (Exception ex) {
             _logger.LogDebug(ex, "Native title extraction failed for agent {AgentId}", agent.Id);
         }
@@ -235,6 +243,40 @@ internal sealed class TitleResolveLoop {
 
             return (false, null);
         }
+    }
+
+    /// <summary>Invokes the native lane, skipping it when the agent's transcript file's length
+    /// and last-write time still match the last invocation — the daemon polls every agent on a
+    /// short tick, and a session between ticks almost never gains a new line, let alone a new
+    /// title line. No stat to compare against (no transcript path, or the file is missing) just
+    /// calls the lane every time.</summary>
+    HarnessTitlePost? ExtractNative(TitleAgentView agent, AgentTitleState state) {
+        if (agent.TranscriptPath is not { } path) return NormalizePost(_nativeLane(agent));
+
+        FileInfo? info;
+        try {
+            info = new FileInfo(path);
+        } catch {
+            info = null;
+        }
+
+        if (info is not { Exists: true }) {
+            state.NativeStatPath = null;
+            return NormalizePost(_nativeLane(agent));
+        }
+
+        if (state.NativeStatPath == path && state.NativeStatLength == info.Length
+         && state.NativeStatLastWriteUtc == info.LastWriteTimeUtc) {
+            return state.NativeStatResult;
+        }
+
+        var result = NormalizePost(_nativeLane(agent));
+        state.NativeStatPath         = path;
+        state.NativeStatLength       = info.Length;
+        state.NativeStatLastWriteUtc = info.LastWriteTimeUtc;
+        state.NativeStatResult       = result;
+
+        return result;
     }
 
     static string? Normalize(string? title) {

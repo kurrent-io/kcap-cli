@@ -132,23 +132,4 @@ public class ClaudeNativeTitleTests {
         await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
             .IsEqualTo(new ClaudeTitle("A", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:10:00Z", System.Globalization.CultureInfo.InvariantCulture)));
     }
-
-    [Test]
-    public async Task Unchanged_file_length_and_write_time_skip_the_re_read() {
-        var path = Transcript("""{"type":"ai-title","aiTitle":"Alpha title","sessionId":"s1"}""");
-        var writeTime = File.GetLastWriteTimeUtc(path);
-
-        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Alpha title");
-
-        // Same length as the original line, rewritten content — proves a cache hit only if the
-        // stale value comes back despite the on-disk content having changed.
-        await File.WriteAllTextAsync(path, """{"type":"ai-title","aiTitle":"Bravo title","sessionId":"s1"}""" + "\n");
-        File.SetLastWriteTimeUtc(path, writeTime);
-
-        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Alpha title");
-
-        File.SetLastWriteTimeUtc(path, writeTime + TimeSpan.FromSeconds(1));
-
-        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Bravo title");
-    }
 }
