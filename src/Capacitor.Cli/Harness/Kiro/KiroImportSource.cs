@@ -288,7 +288,7 @@ internal sealed class KiroImportSource : IImportSource {
 
         if (anchors.Count > 0) {
             enrichedTemp = Path.Combine(Path.GetTempPath(), $"kcap-kiro-usage-{classification.SessionId}-{Guid.NewGuid():N}.jsonl");
-            var enriched = (await File.ReadAllLinesAsync(transcriptPath, ct))
+            var enriched = File.ReadLinesShared(transcriptPath)
                 .Select(l => string.IsNullOrWhiteSpace(l) ? l : KiroUsage.EnrichLine(l, anchors));
             await File.WriteAllLinesAsync(enrichedTemp, enriched, ct);
             sendPath = enrichedTemp;
@@ -378,8 +378,8 @@ internal sealed class KiroImportSource : IImportSource {
         try { return File.GetLastWriteTimeUtc(path); } catch { return null; }
     }
 
-    static string SafeReadText(string path) {
-        try { return File.Exists(path) ? File.ReadAllText(path) : ""; }
+    internal static string SafeReadText(string path) {
+        try { return File.Exists(path) ? File.ReadAllTextShared(path) : ""; }
         catch { return ""; }
     }
 

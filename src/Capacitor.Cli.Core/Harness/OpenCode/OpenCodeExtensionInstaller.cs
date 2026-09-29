@@ -452,6 +452,7 @@ public static class OpenCodeExtensionInstaller {
                   const info = event?.properties?.info
                   const id = info?.id
                   const title = info?.title
+                  if (id && info?.parentID) { children.add(id); return }
                   if (!id || children.has(id) || typeof title !== "string" || /^New session - \d{4}-/.test(title)) return
                   if (lastTitle.get(id) === title) return
                   lastTitle.set(id, title)

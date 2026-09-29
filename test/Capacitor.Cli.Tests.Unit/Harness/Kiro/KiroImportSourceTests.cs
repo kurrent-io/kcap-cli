@@ -63,4 +63,15 @@ public class KiroImportSourceTests {
     public async Task is_import_relevant_line(string line, bool expected) {
         await Assert.That(KiroImportSource.IsImportRelevantLine(line)).IsEqualTo(expected);
     }
+
+    /// <summary>The usage sidecar is Kiro's own file; the read must not deny it write access (mandatory on Windows).</summary>
+    [Test]
+    public async Task Usage_sidecar_reads_while_a_writer_holds_it() {
+        using var tmp = new TempDir();
+        var path = tmp.CreateFile($"{Dashed}.json", """{"title":"live"}""");
+
+        using var writer = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+
+        await Assert.That(KiroImportSource.SafeReadText(path)).IsEqualTo("""{"title":"live"}""");
+    }
 }

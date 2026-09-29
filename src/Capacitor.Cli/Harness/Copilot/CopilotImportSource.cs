@@ -455,7 +455,7 @@ internal sealed class CopilotImportSource : IImportSource {
 /// <summary>
 /// Minimal reader for Copilot's per-session <c>workspace.yaml</c>. The file is
 /// flat <c>key: value</c> lines (no nesting, no quoting in practice) — a full
-/// YAML dependency would be overkill for the four fields we need, and a parse
+/// YAML dependency would be overkill for the fields we need, and a parse
 /// failure must never break discovery (returns null / partial data instead).
 /// </summary>
 internal sealed record CopilotWorkspaceYaml(string? Cwd, string? Name, bool UserNamed, DateTimeOffset? CreatedAt, DateTimeOffset? UpdatedAt) {

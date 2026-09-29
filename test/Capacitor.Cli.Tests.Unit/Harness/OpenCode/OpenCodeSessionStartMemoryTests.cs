@@ -297,9 +297,8 @@ public class OpenCodeSessionStartMemoryTests {
     }
 
     /// <summary>
-    /// The plugin's own rename must not re-trigger itself: OpenCode's placeholder title
-    /// (<c>New session - &lt;ISO date&gt;</c>) is filtered so the server's title extractor never
-    /// sees it, matching the server-side placeholder regex byte for byte.
+    /// <c>session.updated</c> appends a <c>session_title</c> line to the watched transcript, and OpenCode's
+    /// placeholder title (<c>New session - &lt;ISO date&gt;</c>) is filtered by the same pattern the server uses.
     /// </summary>
     [Test]
     public async Task Plugin_writes_a_session_title_line_on_session_updated() {
@@ -308,6 +307,21 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("type === \"session.updated\"");
         await Assert.That(content).Contains("type: \"session_title\"");
         await Assert.That(content).Contains("/^New session - \\d{4}-/");
+    }
+
+    /// <summary>
+    /// A subagent session carries <c>info.parentID</c>; one not yet classified must be classified here rather than
+    /// get a title line appended to a top-level <c>&lt;dir&gt;/&lt;childId&gt;.jsonl</c> of its own.
+    /// </summary>
+    [Test]
+    public async Task Plugin_skips_title_lines_for_child_sessions() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch).Contains("if (id && info?.parentID) { children.add(id); return }");
+        await Assert.That(branch.IndexOf("info?.parentID", StringComparison.Ordinal))
+            .IsLessThan(branch.IndexOf("appendFileSync", StringComparison.Ordinal));
     }
 
     /// <summary>
