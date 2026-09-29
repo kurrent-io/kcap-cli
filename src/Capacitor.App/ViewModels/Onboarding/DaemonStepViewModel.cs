@@ -8,7 +8,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// One classified row of the spec §3 step-7 matrix — the step's whole decision, named.
+/// One classified row of the daemon step's matrix — the step's whole decision, named.
 public enum DaemonRow {
     CliMissing, RequiresSignIn, NoServerConfigured, BinaryUnresolved, StatusUnknown, TransactionActive,
     AlreadyEnabled, OwnedIdentityMismatch, ManualIdentityMatch, ManualIdentityMismatch,
@@ -20,7 +20,6 @@ public enum DaemonAffordance { None, Install, Start, Takeover, Repair }
 
 /// Daemon enablement over the lifecycle state matrix; mutations update this step's status only — dialogs/recovery are presented by the channel's single consumer.
 public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
-    internal const string ConsentV3Capability = "consent/3";
 
     internal const string CliMissingMessage    = "kcap isn't available on this machine. Install it, then check again.";
     internal const string RequiresSignInMessage = "Go Back to sign in, or continue and enable the daemon later in Settings.";
@@ -142,12 +141,9 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         get => _busy;
         private set {
             this.RaiseAndSetIfChanged(ref _busy, value);
-            this.RaisePropertyChanged(nameof(Idle));
             this.RaisePropertyChanged(nameof(RefreshVisible));
         }
     }
-
-    public bool Idle => !Busy;
 
     /// Re-check only when the row can change without a mutation — never when the user already
     /// has an action, is already done, or has to leave the step to make progress.
@@ -173,7 +169,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
     public Task OnEnterAsync(CancellationToken ct) => RefreshAsync(ct);
 
-    /// Never vetoes: a running mutation belongs to the LANE (§6a), so cancelling detaches this
+    /// Never vetoes: a running mutation belongs to the LANE, so cancelling detaches this
     /// waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
         _classifyCts?.Cancel();
@@ -240,7 +236,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
-    /// spec §6a: a held transaction is waited out, never mutated into. Bounded — an orphaned
+    /// A held transaction is waited out, never mutated into. Bounded — an orphaned
     /// grandchild that outlives a force-quit must not wedge the step forever.
     async Task<ServiceSnapshot?> ReadStatusAsync(CancellationToken ct) {
         for (var poll = 0; ; poll++) {
@@ -253,7 +249,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     }
 
     // Precedence: unreadable evidence, live transaction, the pid-keyed ownership rows, then the
-    // repair rows — a stale marker precedes every install/start row, never a blind reinstall (§6a).
+    // repair rows — a stale marker precedes every install/start row, never a blind reinstall.
     async Task ClassifySnapshotAsync(ServiceSnapshot? snapshot, CancellationToken ct) {
         if (snapshot is null) {
             Set(DaemonRow.StatusUnknown, StatusUnknownMessage, DaemonAffordance.None);
@@ -348,7 +344,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             ? $"a daemon for {server}"
             : "a daemon kcap could not identify";
 
-    /// Fail closed (§6 probe): a positive match needs a reachable daemon whose two probe dials
+    /// Fail closed: a positive match needs a reachable daemon whose two probe dials
     /// provably landed on the SAME process and whose name and canonical server both agree.
     static bool IdentityMatches(ObservedEvidence? evidence, MutationRequest request) =>
         evidence is { Reachable: true, IdentityConsistent: true }
@@ -395,8 +391,8 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
-    // The ONLY dialog this step opens: consent BEFORE a unit rewrite (spec decision 3's
-    // disclosure). Outcome presentation belongs to the channel consumer, never to this waiter.
+    // The ONLY dialog this step opens: consent BEFORE a unit rewrite, with the takeover
+    // disclosure. Outcome presentation belongs to the channel consumer, never to this waiter.
     async Task RunConsentedReplaceAsync(string kind, CancellationToken ct) {
         var pathDegraded = await _terminalPathAsync(ct).ConfigureAwait(false) is null;
         var prompt = new LifecyclePrompt(
@@ -405,7 +401,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
             Status = TakeoverDeclinedMessage;
             // Decline leaves the step visibly incomplete — but the flip protects the owner
-            // regardless of which process hosts an identity-MATCHED daemon (§3 step 7).
+            // regardless of which process hosts an identity-MATCHED daemon.
             if (Row == DaemonRow.ManualIdentityMatch) await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(false);
             return;
         }
@@ -442,7 +438,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             c => c.Profile == request.Profile && c.CanonicalServer == request.CanonicalServer);
         if (claim is null) return;
 
-        if (evidence?.Capabilities?.Contains(ConsentV3Capability) != true) {
+        if (evidence?.Capabilities?.Contains(ConsentFlipCoordinator.ConsentV3Capability) != true) {
             Status = Append(Status, ClaimMissingCapabilityMessage);
             return;
         }
@@ -450,7 +446,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         ConsentAckDto ack;
         try {
             var policy = await _ops.GetConsentPolicyAsync(CancellationToken.None).ConfigureAwait(false);
-            // §6 seeding respects an operator's deny: it is stricter than prompt, so the flip is inert here.
+            // Seeding respects an operator's deny: it is stricter than prompt, so the flip is inert here.
             if (policy.Default == "deny") {
                 Status = Append(Status, ClaimAlreadyStricterMessage);
                 return;
@@ -471,11 +467,8 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         await Task.Run(() => _claims.TryConsume(claim, ResolveCanonical, request.DaemonName)).ConfigureAwait(false);
     }
 
-    // Both this step's own match and TryConsume's re-resolve must observe identical canonicalization — the store never re-canonicalizes.
-    (string Profile, string Server, string DaemonName) ResolveCanonical() {
-        var (profile, server, daemonName) = _resolveIdentityUnderConfigLock();
-        return (profile, ServerIdentity.Canonicalize(server) ?? server, daemonName);
-    }
+    (string Profile, string Server, string DaemonName) ResolveCanonical() =>
+        ConsentFlipClaims.Canonical(_resolveIdentityUnderConfigLock());
 
     static string Append(string? status, string sentence) =>
         string.IsNullOrEmpty(status) ? sentence : $"{status} {sentence}";

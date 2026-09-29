@@ -4,6 +4,7 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
+using Capacitor.App.Services.Notifications;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using ReactiveUI.Reactive;
@@ -22,6 +23,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     readonly Task _startupSettled;
     readonly bool _nameOverridden;
     readonly Func<MutationRequest, CancellationToken, Task<bool>> _canRetire;
+    readonly NotificationSettingsService? _notificationSettings;
+    readonly IDesktopNotificationAccess? _notificationAccess;
     readonly CancellationTokenSource _lifetime;
     readonly CompositeDisposable _subscriptions = new();
     AttachStatus _status = new(AttachState.Connecting, null, null);
@@ -31,7 +34,14 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     decimal? _capacity;
     bool _isBusy;
     bool _needsAppRestart;
+    bool _notifyOnPermissions = true;
+    bool _notifyOnQuestions = true;
+    bool _notifyOnIdle = true;
     string? _message;
+    string? _notificationMessage;
+    DesktopNotificationAccess _access;
+    int _accessReads;
+    int _accessShown;
 
     public SettingsViewModel(
             SettingsProfileStore settings, IDaemonClientService service, ILocalControlOps ops,
@@ -40,7 +50,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Func<LifecyclePrompt, CancellationToken, Task<bool>> confirm,
             Func<CancellationToken, Task<bool>> relaunch, bool canRenameOnPlatform,
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
-            bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default) {
+            bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
+            NotificationSettingsService? notificationSettings = null,
+            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null) {
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -51,6 +63,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         _canRenameOnPlatform = canRenameOnPlatform;
         _startupSettled = startupSettled;
         _canRetire = canRetire;
+        _notificationSettings = notificationSettings;
+        _notificationAccess = notificationAccess;
+        Profiles = profiles;
         _nameOverridden = nameOverridden;
         _needsAppRestart = needsAppRestart;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
@@ -64,6 +79,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
         SaveCommand = ReactiveCommand.CreateFromTask(SaveAsync, this.WhenAnyValue(x => x.CanSave)).DisposeWith(_subscriptions);
         RenameCommand = ReactiveCommand.CreateFromTask(RenameAsync, this.WhenAnyValue(x => x.CanRename)).DisposeWith(_subscriptions);
+        NotificationAccessCommand = ReactiveCommand.CreateFromTask(ResolveNotificationAccessAsync).DisposeWith(_subscriptions);
         service.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
             _status = status;
             if (status.State != AttachState.Connected) _snapshot = null;
@@ -73,6 +89,12 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             _snapshot = snapshot;
             Refresh();
         }).DisposeWith(_subscriptions);
+        if (notificationSettings is not null) {
+            ApplyNotificationPreferences(notificationSettings.Current);
+            notificationSettings.Changes.Skip(1).ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(ApplyNotificationPreferences).DisposeWith(_subscriptions);
+        }
+        RefreshNotificationAccess();
     }
 
     public string Name {
@@ -93,6 +115,56 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
+    }
+
+    public string? NotificationMessage {
+        get => _notificationMessage;
+        private set => this.RaiseAndSetIfChanged(ref _notificationMessage, value);
+    }
+
+    public bool CanManageNotifications => _notificationSettings is not null;
+
+    public ProfilesSettingsViewModel? Profiles { get; }
+
+    public string? NotificationAccessText => _access switch {
+        DesktopNotificationAccess.Denied =>
+            "Notifications from Kurrent Capacitor are turned off in System Settings, so none of these will appear.",
+        DesktopNotificationAccess.NotDetermined =>
+            "Kurrent Capacitor has not been allowed to send notifications yet.",
+        _ => null,
+    };
+
+    public string? NotificationAccessAction => _access switch {
+        DesktopNotificationAccess.Denied => "Open System Settings",
+        DesktopNotificationAccess.NotDetermined => "Allow notifications",
+        _ => null,
+    };
+
+    public bool NotifyOnPermissions {
+        get => _notifyOnPermissions;
+        set {
+            if (!CanManageNotifications || value == _notifyOnPermissions) return;
+            this.RaiseAndSetIfChanged(ref _notifyOnPermissions, value);
+            PersistNotificationPreferences();
+        }
+    }
+
+    public bool NotifyOnQuestions {
+        get => _notifyOnQuestions;
+        set {
+            if (!CanManageNotifications || value == _notifyOnQuestions) return;
+            this.RaiseAndSetIfChanged(ref _notifyOnQuestions, value);
+            PersistNotificationPreferences();
+        }
+    }
+
+    public bool NotifyOnIdle {
+        get => _notifyOnIdle;
+        set {
+            if (!CanManageNotifications || value == _notifyOnIdle) return;
+            this.RaiseAndSetIfChanged(ref _notifyOnIdle, value);
+            PersistNotificationPreferences();
+        }
     }
 
     public bool CanEdit => !IsBusy && !_needsAppRestart;
@@ -137,6 +209,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> SaveCommand { get; }
     public ReactiveCommand<Unit, Unit> RenameCommand { get; }
+    public ReactiveCommand<Unit, Unit> NotificationAccessCommand { get; }
 
     async Task SaveAsync() {
         if (!CanSave) return;
@@ -215,6 +288,65 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         } catch (Exception ex) {
             Message = $"Could not finish renaming: {ex.Message} Restart the app to reload the saved settings.";
         } finally { IsBusy = false; }
+    }
+
+    /// Access changes in System Settings, outside the app, so the window re-reads it on activation.
+    public void RefreshNotificationAccess() => _ = ReadNotificationAccessAsync();
+
+    async Task ResolveNotificationAccessAsync() {
+        if (_notificationAccess is null) return;
+        if (_access == DesktopNotificationAccess.Denied) {
+            _notificationAccess.OpenSystemSettings();
+            return;
+        }
+        if (_access != DesktopNotificationAccess.NotDetermined) return;
+        try {
+            await _notificationAccess.RequestAsync();
+        } catch {
+        }
+        await ReadNotificationAccessAsync();
+    }
+
+    // Reads overlap (opening, every activation, after a request) and answer in any order, so only
+    // an answer to a later read than the one on screen is applied. A request is followed by a read
+    // of its own rather than applied directly: its prompt can stay open across many activations.
+    async Task ReadNotificationAccessAsync() {
+        if (_notificationAccess is null) return;
+        var read = ++_accessReads;
+        DesktopNotificationAccess access;
+        try {
+            access = await _notificationAccess.GetAsync();
+        } catch {
+            return;
+        }
+        if (_lifetime.IsCancellationRequested || read < _accessShown) return;
+        _accessShown = read;
+        if (access == _access) return;
+        _access = access;
+        this.RaisePropertyChanged(nameof(NotificationAccessText));
+        this.RaisePropertyChanged(nameof(NotificationAccessAction));
+    }
+
+    void ApplyNotificationPreferences(NotificationPreferences preferences) {
+        this.RaiseAndSetIfChanged(ref _notifyOnPermissions, preferences.Permissions, nameof(NotifyOnPermissions));
+        this.RaiseAndSetIfChanged(ref _notifyOnQuestions, preferences.Questions, nameof(NotifyOnQuestions));
+        this.RaiseAndSetIfChanged(ref _notifyOnIdle, preferences.Idle, nameof(NotifyOnIdle));
+    }
+
+    void PersistNotificationPreferences() {
+        var preferences = new NotificationPreferences(_notifyOnPermissions, _notifyOnQuestions, _notifyOnIdle);
+        _ = PersistNotificationPreferencesAsync(preferences);
+    }
+
+    async Task PersistNotificationPreferencesAsync(NotificationPreferences preferences) {
+        if (_notificationSettings is null) return;
+        var saved = false;
+        try {
+            saved = await _notificationSettings.SaveAsync(preferences);
+        } catch {
+        }
+        if (_lifetime.IsCancellationRequested) return;
+        NotificationMessage = saved ? null : "Could not save notification settings. The change still applies for this run.";
     }
 
     void Refresh() {

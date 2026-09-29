@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.App.Services;
 
-/// spec §5: the once-ever shim offer + the "Install command-line tool…" tray item it shares a
+/// The once-ever shim offer + the "Install command-line tool…" tray item it shares a
 /// code path with. Waits for the SAME startup-phase signal the lifecycle controller exposes
 /// (`PhaseClosed`, any path — an immediate `Connected` releases this exactly like a completed
 /// `daemon_unreachable` branch) before probing anything, so the offer dialog can never race the
@@ -11,7 +11,7 @@ namespace Capacitor.App.Services;
 /// dialogs use — its own `SemaphoreSlim(1,1)` already guarantees this offer never stacks over one
 /// of those, so no second serialization lives here.
 ///
-/// spec §3.3: macOS-only, no-op elsewhere — off-macOS the target is forced null at construction,
+/// macOS-only, no-op elsewhere — off-macOS the target is forced null at construction,
 /// so this degrades exactly like "nothing to link" everywhere below.
 public sealed class ShimOfferCoordinator {
     internal const string ShimDisclosure =
@@ -51,7 +51,7 @@ public sealed class ShimOfferCoordinator {
             bool autoOfferSuppressed = false)
         : this(phaseClosed, probe, installer, store, surface, target, lifetime, destination, OperatingSystem.IsMacOS, autoOfferSuppressed) { }
 
-    // spec §3.3: macOS-only, no-op elsewhere. `isMacOs` is a test seam (off-macOS can't otherwise
+    // `isMacOs` is a test seam (off-macOS can't otherwise
     // be exercised from macOS CI); production always resolves to the real OS check. Nulling
     // `_target` off-macOS reuses every existing "nothing to link" no-op path below (RunAsync,
     // RunInstallAsync) instead of adding a second guard.
@@ -79,7 +79,7 @@ public sealed class ShimOfferCoordinator {
     /// subscribe-before-run shape. Fire-and-forget: every path through RunAsync is exception-safe.
     public void Start() => _ = RunAsync();
 
-    /// The tray menu item's click handler (spec §5): runs the SAME install path as an accepted
+    /// The tray menu item's click handler: runs the SAME install path as an accepted
     /// offer, regardless of whether this run already offered or the user already declined — a
     /// manual retry is always allowed.
     public Task RunManualInstallAsync() => RunInstallAsync();
@@ -106,7 +106,7 @@ public sealed class ShimOfferCoordinator {
                 return;
             }
 
-            // §3.5 claim-before-show: persisted BEFORE ConfirmAsync so a crash while the dialog is
+            // Claim-before-show: persisted BEFORE ConfirmAsync so a crash while the dialog is
             // open still suppresses a re-offer next run. A persist failure still proceeds — this
             // run never re-checks AppState again, so there is nothing left here to re-offer.
             await ClaimOfferedAsync().ConfigureAwait(false);

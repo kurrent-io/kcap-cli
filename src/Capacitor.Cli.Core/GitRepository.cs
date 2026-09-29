@@ -66,6 +66,48 @@ public static class GitRepository {
         return StripAgentWorktreeTail(path);
     }
 
+    /// <summary>The git directory belonging to THIS working tree: <c>.git</c> in a main checkout,
+    /// and the <c>gitdir:</c> target in a linked worktree, which is where per-worktree state
+    /// belongs and where Git itself removes it with the worktree.</summary>
+    public static string? ResolveGitDir(string startDir) {
+        var root = FindRoot(startDir);
+        if (root is null) return null;
+
+        var dotGit = Path.Combine(root, ".git");
+
+        try {
+            // Resolving walks the path a component at a time, so it reads the filesystem and can
+            // fail the same ways the pointer read below does — an unresolvable git directory is
+            // this method's null, never an exception at the call site.
+            if (Directory.Exists(dotGit)) return CanonicalPath.Resolve(dotGit);
+
+            var line = File.ReadAllText(dotGit).Trim();
+            const string marker = "gitdir:";
+            if (!line.StartsWith(marker, StringComparison.Ordinal)) return null;
+
+            var target = line[marker.Length..].Trim();
+            if (!Path.IsPathRooted(target)) target = Path.Combine(root, target);
+            return CanonicalPath.Resolve(target);
+        } catch {
+            return null;
+        }
+    }
+
+    /// <summary>The branch checked out in <paramref name="startDir"/>'s working tree, read from its
+    /// <c>HEAD</c> with no git process; null when detached or unreadable. A checkout can switch
+    /// branch after launch, so a branch recorded at creation is not this.</summary>
+    public static string? CurrentBranch(string? startDir) {
+        if (string.IsNullOrEmpty(startDir) || ResolveGitDir(startDir) is not { } gitDir) return null;
+
+        try {
+            const string prefix = "ref: refs/heads/";
+            var head = File.ReadAllTextShared(Path.Combine(gitDir, "HEAD")).Trim();
+            return head.StartsWith(prefix, StringComparison.Ordinal) && head.Length > prefix.Length ? head[prefix.Length..] : null;
+        } catch {
+            return null;
+        }
+    }
+
     static string StripAgentWorktreeTail(string path) {
         var normalized = path.Replace('\\', '/');
         foreach (var infra in (string[])["/.claude/worktrees/", "/.capacitor/worktrees/"]) {

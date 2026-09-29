@@ -19,8 +19,8 @@ public static class HostedHarnessCatalog {
     // Transport family for each vendor: how the daemon hosts it (pty, acp, or rpc).
     // Vendors absent from this map default to "rpc" — which reads as "chat" in the picker, true or
     // not, so HostedHarnessCatalogTests pins every harness Core knows to an entry here. The fallback
-    // stays for a vendor only the DAEMON knows about; it is not a licence to skip a tenth entry when
-    // one is added to Core.
+    // stays for a vendor only the DAEMON knows about; it is not a licence to skip an entry when one
+    // is added to Core.
     static readonly Dictionary<string, string> TransportFamilies = new(StringComparer.OrdinalIgnoreCase) {
         { "claude",      "pty" },
         { "codex",       "pty" },
@@ -44,7 +44,6 @@ public static class HostedHarnessCatalog {
             : new HashSet<string>(supportedVendors, StringComparer.OrdinalIgnoreCase);
 
         var options = HarnessRegistry.Identities
-            .Select(h => (h.VendorId, h.Label))
             .Select(h => new HarnessOption(
                 h.VendorId,
                 h.Label,
@@ -154,6 +153,11 @@ public static class HostedHarnessCatalog {
     /// of). Shared by the harness chip and the repository menu's remembered-harness pill.
     public static string LabelFor(IReadOnlyList<HarnessOption> options, string vendor) =>
         options.FirstOrDefault(o => string.Equals(o.Vendor, vendor, StringComparison.OrdinalIgnoreCase))?.Label ?? vendor;
+
+    /// Display name for a vendor token with no option list in hand. An unknown token stays as given.
+    public static string LabelFor(string vendor) =>
+        HarnessRegistry.Identities.FirstOrDefault(i =>
+            string.Equals(i.VendorId, vendor, StringComparison.OrdinalIgnoreCase))?.Label ?? vendor;
 
     public static string DescriptionFor(HarnessOption option) => option.TransportFamily switch {
         "pty" => "PTY · terminal + chat",

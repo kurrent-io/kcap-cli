@@ -1,5 +1,4 @@
 using Capacitor.App.Services.Onboarding;
-using Capacitor.Cli.Core.Auth;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
@@ -7,15 +6,15 @@ namespace Capacitor.App.ViewModels.Onboarding;
 public enum ConnectChoice { Discover, Paste, Create }
 
 /// <summary>
-/// Intent only (spec §3 step 2): nothing here reaches the network or writes anything. The Sign-in
-/// step runs whatever this stages. A pasted server is normalized by the SAME rule the operation
-/// uses, then validated by the gate's shared server-URL validator, so "Next accepted it" and "the
-/// gate can be satisfied by it" can never disagree.
+/// Intent only: nothing here reaches the network or writes anything. The Sign-in step runs
+/// whatever this stages. A pasted server is normalized by the SAME rule the operation uses, then
+/// validated by the gate's shared server-URL validator, so "Next accepted it" and "the gate can be
+/// satisfied by it" can never disagree. Discovery is single sign-on only; a server on another
+/// provider is reached by name or URL, where its own auth config picks the flow.
 /// </summary>
 public sealed class ConnectStepViewModel : ReactiveObject, IWizardStep {
     ConnectChoice _choice = ConnectChoice.Discover;
     string        _serverInputText = "";
-    string        _discoveryProvider = AuthProvider.GitHubApp;
     string?       _inputError;
 
     public WizardStepId Id         => WizardStepId.Connect;
@@ -35,15 +34,6 @@ public sealed class ConnectStepViewModel : ReactiveObject, IWizardStep {
         set {
             this.RaiseAndSetIfChanged(ref _serverInputText, value);
             InputError = null; // editing clears the stale complaint
-            Restate();
-        }
-    }
-
-    /// <see cref="AuthProvider.GitHubApp"/> or <see cref="AuthProvider.WorkOS"/>.
-    public string DiscoveryProvider {
-        get => _discoveryProvider;
-        set {
-            this.RaiseAndSetIfChanged(ref _discoveryProvider, value);
             Restate();
         }
     }
@@ -69,19 +59,9 @@ public sealed class ConnectStepViewModel : ReactiveObject, IWizardStep {
         set { if (value) Choice = ConnectChoice.Create; }
     }
 
-    public bool GitHubProvider {
-        get => DiscoveryProvider == AuthProvider.GitHubApp;
-        set { if (value) DiscoveryProvider = AuthProvider.GitHubApp; }
-    }
-
-    public bool WorkOSProvider {
-        get => DiscoveryProvider == AuthProvider.WorkOS;
-        set { if (value) DiscoveryProvider = AuthProvider.WorkOS; }
-    }
-
     /// What the Sign-in step will run; null while the paste input is unusable.
     public ConnectIntent? Intent => Choice switch {
-        ConnectChoice.Discover                                 => new ConnectIntent.Discover(DiscoveryProvider),
+        ConnectChoice.Discover                                 => new ConnectIntent.Discover(),
         ConnectChoice.Create                                   => new ConnectIntent.Create(),
         ConnectChoice.Paste when UsableServer() is { } server   => new ConnectIntent.Paste(server),
         _                                                      => null
@@ -119,7 +99,5 @@ public sealed class ConnectStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(DiscoverSelected));
         this.RaisePropertyChanged(nameof(PasteSelected));
         this.RaisePropertyChanged(nameof(CreateSelected));
-        this.RaisePropertyChanged(nameof(GitHubProvider));
-        this.RaisePropertyChanged(nameof(WorkOSProvider));
     }
 }

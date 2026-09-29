@@ -33,9 +33,7 @@ public class PiMcpExtensionInstallerTests {
 
         // Async factory (pi awaits it before session_start → tools ready turn 1).
         await Assert.That(content).Contains("export default async function");
-        // Bridges every kcap server Pi ships, including analytics (the guided tour's menu
-        // query needs query_analytics) and workitems (registered on every harness).
-        await Assert.That(content).Contains("[\"review\", \"sessions\", \"flows\", \"memory\", \"analytics\", \"workitems\", \"plans\"]");
+        await Assert.That(content).Contains("[\"review\", \"sessions\", \"flows\", \"memory\", \"analytics\", \"workitems\", \"plans\", \"artefacts\", \"knowledge\"]");
         // MCP handshake incl. the mandatory notifications/initialized.
         await Assert.That(content).Contains("initialize");
         await Assert.That(content).Contains("notifications/initialized");
@@ -61,7 +59,7 @@ public class PiMcpExtensionInstallerTests {
         await Assert.That(content).Contains("throw new Error");
         // Dependency-free spawn of the stdio servers.
         await Assert.That(content).Contains("node:child_process");
-        await Assert.That(content).Contains("\"mcp\", this.server");
+        await Assert.That(content).Contains("new McpStdioClient(server, \"kcap\", [\"mcp\", server], {})");
     }
 
     [Test]

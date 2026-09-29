@@ -9,12 +9,11 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// <summary>
 /// <see cref="ServerConnection.DisposeAsync"/> must be idempotent and non-throwing: the DI
 /// container tracks the singleton AND <c>DaemonRunner</c> disposes it explicitly, so it runs twice
-/// by construction on every shutdown. Before the run-once guard, the second pass called
-/// <c>CancelAsync</c> on the already-disposed terminal-sender CTS — an
-/// <see cref="ObjectDisposedException"/> that escaped into DI teardown and, under NativeAOT,
-/// aborted the process (SIGABRT) instead of exiting cleanly. Mirrors
-/// <see cref="ConnectWithRetryTests"/>' harness: no live SignalR transport; the internal seams are
-/// overridden so <c>ConnectAsync</c> reaches the CTS-creating line without a server.
+/// by construction on every shutdown. These tests pin that disposing twice must not re-enter the
+/// dispose body: re-disposing its resources throws, and a fault escaping DI teardown aborts a
+/// NativeAOT process (SIGABRT) instead of exiting cleanly. Mirrors <see cref="ConnectWithRetryTests"/>'
+/// harness: no live SignalR transport; the internal seams are overridden so <c>ConnectAsync</c>
+/// reaches the DisposeAsync-relevant state without a server.
 /// </summary>
 public class ServerConnectionDisposeTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
@@ -25,9 +24,7 @@ public class ServerConnectionDisposeTests {
         NullLoggerFactory.Instance,
         logger ?? NullLogger<ServerConnection>.Instance
     , TimeProvider.System) {
-        // Always "ready": ConnectAsync's retry loop returns immediately without ever touching the
-        // (never-started) real hub — but only AFTER the terminal-sender CTS has been created,
-        // which is exactly the state production disposes from.
+        // IsReady is overridden so ConnectAsync returns without a server.
         internal override bool IsReady => true;
     }
 
@@ -55,8 +52,8 @@ public class ServerConnectionDisposeTests {
     public async Task Dispose_twice_after_connect_does_not_throw() {
         var conn = new DisposeTestConnection();
 
-        // Creates the linked terminal-sender CTS — the object the unguarded second pass
-        // re-cancelled after disposal (the production crash).
+        // Starts the event-processor task DisposeAsync must await, so this exercises the dispose
+        // body against live connection state rather than the all-null state above.
         await conn.ConnectAsync(CancellationToken.None).WaitAsync(HangGuard);
 
         await conn.DisposeAsync().AsTask().WaitAsync(HangGuard);
@@ -64,21 +61,16 @@ public class ServerConnectionDisposeTests {
     }
 
     [Test, NotInParallel(nameof(ServerConnectionDisposeTests))]
-    public async Task Second_dispose_does_not_reenter_the_body_and_the_cts_ends_cancelled_and_disposed() {
+    public async Task Second_dispose_does_not_reenter_the_body_and_the_hub_ends_disposed() {
         var conn = new DisposeTestConnection();
 
         await conn.ConnectAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        var cts = conn.TerminalSenderCtsForTests;
-        await Assert.That(cts).IsNotNull();
-
         await conn.DisposeAsync().AsTask().WaitAsync(HangGuard);
 
         await Assert.That(conn.DisposeBodyRuns).IsEqualTo(1);
-        // Cancelled (IsCancellationRequested is safe to read post-dispose) AND disposed
-        // (the Token property throws once the source is disposed).
-        await Assert.That(cts!.IsCancellationRequested).IsTrue();
-        await Assert.That(() => _ = cts.Token).Throws<ObjectDisposedException>();
+        await Assert.That(async () => await conn.SendTerminalOutputAsync("agent", "AA=="))
+            .Throws<ObjectDisposedException>();
 
         await conn.DisposeAsync().AsTask().WaitAsync(HangGuard);
 
@@ -93,9 +85,6 @@ public class ServerConnectionDisposeTests {
 
         await conn.ConnectAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        var cts = conn.TerminalSenderCtsForTests;
-        await Assert.That(cts).IsNotNull();
-
         // Inject a faulted pipeline task: the await must be contained + logged, never skipping
         // the sibling awaits or the mandatory resource release.
         conn.EventProcessorTaskForTests = Task.FromException(new InvalidOperationException("boom"));
@@ -106,9 +95,9 @@ public class ServerConnectionDisposeTests {
         await Assert.That(log.Messages.Any(m =>
             m.Contains("dispose step 'event-processor' failed", StringComparison.Ordinal))).IsTrue();
 
-        // (b) …and later cleanup still ran: the CTS was cancelled AND disposed.
-        await Assert.That(cts!.IsCancellationRequested).IsTrue();
-        await Assert.That(() => _ = cts.Token).Throws<ObjectDisposedException>();
+        // (b) …and later cleanup still ran: the hub was disposed.
+        await Assert.That(async () => await conn.SendTerminalOutputAsync("agent", "AA=="))
+            .Throws<ObjectDisposedException>();
     }
 
     [Test, NotInParallel(nameof(ServerConnectionDisposeTests))]

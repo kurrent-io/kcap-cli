@@ -11,12 +11,12 @@ namespace Capacitor.App.Services;
 
 /// Rx/DynamicData adapter over LocalControlClient.RunAsync: owns the single live attach
 /// enumeration, publishes the atomic AttachStatus + Snapshots streams, and delegates
-/// `daemon start -d` to the injected mutation-lane runner on request. See app-shell design spec §5.
+/// `daemon start -d` to the injected mutation-lane runner on request.
 public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable {
     readonly Func<CancellationToken, IAsyncEnumerable<LocalControlEvent>> _runClient;
     // The lane's RunAsync, pre-bound to a DetachedStart request for THIS daemon (or an honest
-    // Refused("no_server_configured") when no canonical server can be bound) — this service no
-    // longer spawns `daemon start -d` itself and carries no bare-"kcap" fallback of its own.
+    // Refused("no_server_configured") when no canonical server can be bound). This service never
+    // spawns `daemon start -d` itself.
     readonly Func<CancellationToken, Task<MutationOutcome>> _startDaemon;
 
     readonly BehaviorSubject<AttachStatus> _status = new(new(AttachState.Connecting, null, null));
@@ -54,8 +54,7 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
     public void Start() => _ = RestartLoopAsync();
 
     // Maps one LocalControlEvent to the service's published state. On Connected, the carried
-    // snapshot is applied to Snapshots/Agents BEFORE AttachStatus flips to Connected (no-stale
-    // pin, spec §5) — a consumer that gates rendering on Connected can never observe it
+    // snapshot is applied to Snapshots/Agents BEFORE AttachStatus flips to Connected — a consumer that gates rendering on Connected can never observe it
     // alongside a previous incarnation's data.
     void Apply(LocalControlEvent e) {
         switch (e) {
@@ -118,9 +117,8 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
         }
     }
 
-    // Defense-in-depth alongside PumpAsync's catch-all: even if a future edit reintroduces a
-    // path where `_loop` faults, a bricked loop must never block RestartLoopAsync or
-    // DisposeAsync from progressing.
+    // Defense-in-depth alongside PumpAsync's catch-all: a faulted `_loop` must never block
+    // RestartLoopAsync or DisposeAsync from progressing.
     static async Task AwaitLoopQuietly(Task loop) {
         try { await loop.ConfigureAwait(false); }
         catch { /* contained — see PumpAsync */ }
@@ -155,7 +153,7 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
 
     /// <summary>
     /// Resolves the daemon name ONCE via the same chain DaemonCommands.ResolveName uses, so the
-    /// watched daemon and the started daemon can never diverge (spec §5). `runMutation` is the
+    /// watched daemon and the started daemon can never diverge. `runMutation` is the
     /// app-lifetime DaemonMutationLane's RunAsync, injected by the composition root so this
     /// factory never spawns a process of its own. Built over the profile the caller ALREADY
     /// resolved: the app resolves once per graph build (evaluating the onboarding gate) and builds
@@ -176,8 +174,7 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
 
     /// The main-window Start/Retry delegate: builds a DetachedStart MutationRequest at the profile
     /// this service was resolved for — the one the gate was evaluated on — and hands it to
-    /// `runMutation`; a caller that cannot bind a canonical server never reaches it (binding
-    /// ruling 1). A profile written after startup reaches it through a graph rebuild, which is the
+    /// `runMutation`; a caller that cannot bind a canonical server never reaches it. A profile written after startup reaches it through a graph rebuild, which is the
     /// only thing that re-evaluates the gate too.
     internal static Func<CancellationToken, Task<MutationOutcome>> BuildStartDaemon(
             string daemonName, ResolvedProfile? profile,

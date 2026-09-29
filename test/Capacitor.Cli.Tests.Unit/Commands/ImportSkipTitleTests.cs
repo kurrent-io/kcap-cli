@@ -110,12 +110,7 @@ public class ImportSkipTitleTests : IDisposable {
         public FakeClaudeOnPath() {
             _bin = new TempDir();
 
-            var script = _bin.CreateFile("claude", "#!/bin/sh\necho 'Retry the import loop'\n");
-
-            // Only the Unix-only positive control executes this; the guard is for the compiler.
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(script,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            _bin.CreateExecutable("claude", "#!/bin/sh\necho 'Retry the import loop'\n");
 
             _path = EnvScope.Exclusive(
                 "PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));

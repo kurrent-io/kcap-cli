@@ -36,8 +36,14 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _needsYou;
     public bool NeedsYou => _needsYou.Value;
 
-    readonly ObservableAsPropertyHelper<string> _statusBadge;
-    public string StatusBadge => _statusBadge.Value;
+    readonly ObservableAsPropertyHelper<bool> _showsHeaderBadge;
+    /// Collapsed-header status only; expanded, each session row carries its own mark.
+    public bool ShowsHeaderBadge => _showsHeaderBadge.Value;
+
+    readonly ObservableAsPropertyHelper<AgentStatusPresentation?> _headerStatus;
+    /// Dominant child status while the group is collapsed. Null when expanded, or when every
+    /// child is settled or only carrying the daemon's own word.
+    public AgentStatusPresentation? HeaderStatus => _headerStatus.Value;
 
     readonly ObservableAsPropertyHelper<bool> _holdsSelected;
     public bool HoldsSelected => _holdsSelected.Value;
@@ -71,7 +77,8 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
             IObservableCache<AgentRow, string> sessionsCache, RailCollapseState collapse,
             IObservable<string?> selectedAgentId, IObservable<IReadOnlySet<string>> agentsWithPending,
             IObservable<bool> remoteStale, Action<string> openLocal, Action<string> openRemote, TimeProvider time,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
         Path = path;
         // Every row in one worktree group shares CheckoutLabel by construction — any member
         // names a remote pseudo-checkout (labeled by the daemon it runs on, never "main"); an
@@ -101,7 +108,8 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
         _isExpanded = expanded
             .ToProperty(this, x => x.IsExpanded)
             .DisposeWith(_disposables);
-        _sessionsVisible = expanded.Select(isExpanded => isExpanded || !showHeader)
+        var sessionsVisible = expanded.Select(isExpanded => isExpanded || !showHeader);
+        _sessionsVisible = sessionsVisible
             .ToProperty(this, x => x.SessionsVisible)
             .DisposeWith(_disposables);
         ToggleCommand = ReactiveCommand.Create(() => collapse.Set(path, IsExpanded));
@@ -115,17 +123,23 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
         // Both projections compare against AgentRow.Id (the logical agent id), never the cache's
         // own key — that key is source-scoped ("local:"/"remote:" prefixed) so it never matches
         // selectedAgentId or an agentsWithPending member verbatim.
-        _needsYou = sessionsCache.Connect().QueryWhenChanged()
+        var needsYou = sessionsCache.Connect().QueryWhenChanged()
             .CombineLatest(agentsWithPending, (q, set) =>
-                q.Items.Any(r => SessionStatusDots.NeedsAttention(r) || set.Contains(r.Id)))
+                q.Items.Any(r => SessionStatusDots.NeedsAttention(r) || set.Contains(r.Id)));
+        _needsYou = needsYou
             .ToProperty(this, x => x.NeedsYou, initialValue: false)
             .DisposeWith(_disposables);
-
-        _statusBadge = sessionsCache.Connect().QueryWhenChanged()
-            .CombineLatest(agentsWithPending, (q, set) =>
-                q.Items.Any(r => r.Status == "Failed" || set.Contains(r.Id)) ? "!"
-                : q.Items.Any(SessionStatusDots.WaitsOnUser) ? "zzz" : "")
-            .ToProperty(this, x => x.StatusBadge, initialValue: "")
+        var answering = agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
+        var header = sessionsCache.Connect().QueryWhenChanged()
+            .CombineLatest(agentsWithPending, answering, sessionsVisible, (q, set, asked, visible) =>
+                visible ? null : SessionStatusDots.Rollup(q.Items, set, asked))
+            .Replay(1).RefCount();
+        _headerStatus = header
+            .ToProperty(this, x => x.HeaderStatus, initialValue: null)
+            .DisposeWith(_disposables);
+        _showsHeaderBadge = header
+            .Select(status => status is not null)
+            .ToProperty(this, x => x.ShowsHeaderBadge, initialValue: false)
             .DisposeWith(_disposables);
 
         _holdsSelected = sessionsCache.Connect().QueryWhenChanged()
@@ -147,7 +161,7 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
 
         Sessions = new ReadOnlyObservableCollection<RailSessionViewModel>(_sessionsSource);
         sessionsCache.Connect()
-            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale, openLocal, openRemote, time))
+            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale, openLocal, openRemote, time, answering))
             .DisposeMany()
             .SortAndBind(_sessionsSource, SessionComparer)
             .Subscribe()

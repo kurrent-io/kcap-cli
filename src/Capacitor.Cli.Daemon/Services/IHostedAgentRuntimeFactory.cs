@@ -59,6 +59,10 @@ internal interface IHostedAgentRuntimeFactory {
     /// </summary>
     UnattendedSupport DescribeUnattendedSupport() => new(SupportsUnattended, null);
 
+    /// <summary>Whether a <see cref="LaunchKind.Review"/> launch gets the <c>kcap mcp review</c> tools and
+    /// review prompt here. A runtime without them would host a PR reviewer with no review surface.</summary>
+    bool SupportsPrReview => false;
+
     /// <summary>Whether this runtime has a certified containment strategy for review flows that
     /// request the caller's current checkout contents.</summary>
     bool SupportsBorrowedReviewFlow => false;
@@ -112,6 +116,15 @@ internal interface IHostedAgentRuntimeFactory {
     /// model-selection hook is unverified.</para>
     /// </summary>
     bool SupportsModelSelection => true;
+
+    /// <summary>The models this vendor can launch on this machine, or null when it publishes no
+    /// catalog. Null is also every probe failure: consumers then fall through to their other sources
+    /// instead of reading an empty list as "nothing usable".</summary>
+    Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<VendorModelOption>?>(null);
+
+    /// <summary>Files whose fingerprint change means the catalog may have changed. Statted, never read.</summary>
+    IReadOnlyList<string> CatalogFingerprintPaths => [];
 
     /// <summary>Where this runtime's attachments land for a launch of <paramref name="kind"/>. The
     /// question is whether the process can be running, write-contained, while a fetch for it happens:

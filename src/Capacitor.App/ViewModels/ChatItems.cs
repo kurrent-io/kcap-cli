@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reactive;
 using Avalonia.Collections;
+using Capacitor.App.Views;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -21,6 +22,28 @@ public sealed class SystemNoteItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;
 }
 
+/// A bang command the user ran, and the output record that follows it. The output arrives later,
+/// so it is filled in on the same item.
+public sealed class ShellCommandItem : ChatItemViewModel {
+    public ShellCommandItem(string command) { Command = command; }
+
+    public string Command { get; }
+    public bool HasCommand => Command.Length > 0;
+
+    string? _output;
+    public string? Output {
+        get => _output;
+        internal set {
+            if (_output == value) return;
+            _output = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HasOutput));
+        }
+    }
+
+    public bool HasOutput => !string.IsNullOrEmpty(_output);
+}
+
 public enum ToolOutcome { Running, Done, Error }
 
 public sealed class ToolCallItem(string name, string detail, ToolCategory category) : ChatItemViewModel {
@@ -34,6 +57,10 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// True when the transcript carried a useful detail (brighter paint than a bare name).
     public bool HasDetail => !string.IsNullOrEmpty(Detail);
 
+    /// A question's detail is the question itself — prose, read whole and wrapped. Every other
+    /// detail is a command or a path, which the row keeps to one line and elides.
+    public bool DetailIsProse => Category == ToolCategory.Question;
+
     ToolOutcome _outcome;
     /// Flipped in place when the matching tool_result arrives; a result is terminal.
     public ToolOutcome Outcome {
@@ -42,7 +69,6 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
             if (_outcome == value) return;
             _outcome = value;
             this.RaisePropertyChanged();
-            this.RaisePropertyChanged(nameof(OutcomeGlyph));
             this.RaisePropertyChanged(nameof(IsError));
             this.RaisePropertyChanged(nameof(IsSettled));
             this.RaisePropertyChanged(nameof(IsRunning));
@@ -57,7 +83,6 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
             if (_isAwaitingPermission == value) return;
             _isAwaitingPermission = value;
             this.RaisePropertyChanged();
-            this.RaisePropertyChanged(nameof(OutcomeGlyph));
             this.RaisePropertyChanged(nameof(IsRunning));
         }
     }
@@ -67,22 +92,7 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// True while the call is in flight and not waiting on a permission prompt — drives the
     /// pulsing status pill so a live row is never blank.
     public bool IsRunning => _outcome == ToolOutcome.Running && !_isAwaitingPermission;
-    public string OutcomeGlyph => _outcome switch {
-        ToolOutcome.Done  => "✓",
-        ToolOutcome.Error => "✕",
-        _                 => _isAwaitingPermission ? "?" : "",
-    };
 
-    bool _showRowStatus = true;
-    /// False on a lone-call card: status sits in the kind-chip header instead of trailing the detail.
-    public bool ShowRowStatus {
-        get => _showRowStatus;
-        set {
-            if (_showRowStatus == value) return;
-            _showRowStatus = value;
-            this.RaisePropertyChanged();
-        }
-    }
 }
 
 /// A run of consecutive tool calls. Settled calls fold into Summary when there are two or more
@@ -98,6 +108,10 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public IAvaloniaReadOnlyList<ToolCallItem> VisibleCalls =>
         _calls.Count <= 1 || _isExpanded ? _calls : _live;
 
+    /// False when a multi-call group is folded and every call has settled — the list would
+    /// otherwise still occupy a StackPanel slot under the summary.
+    public bool HasVisibleCalls => VisibleCalls.Count > 0;
+
     bool _isExpanded;
     public bool IsExpanded {
         get => _isExpanded;
@@ -105,8 +119,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
             if (_isExpanded == value) return;
             _isExpanded = value;
             this.RaisePropertyChanged();
-            this.RaisePropertyChanged(nameof(VisibleCalls));
-            this.RaisePropertyChanged(nameof(SummaryLine));
+            NotifyVisible();
         }
     }
 
@@ -137,8 +150,13 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public string KindChip =>
         _calls.Count == 1 ? ToolSummary.ChipLabel(_calls[0].Category) : "";
 
-    /// The single call on a lone card — header status binds here.
-    public ToolCallItem? LoneCall => _calls.Count == 1 ? _calls[0] : null;
+    public string HeaderIconData {
+        get {
+            if (_calls.Count == 1) return ToolCategoryIcons.ForCategory(_calls[0].Category);
+            var firstSettled = _calls.FirstOrDefault(c => c.IsSettled);
+            return firstSettled is null ? "" : ToolCategoryIcons.ForCategory(firstSettled.Category);
+        }
+    }
 
     bool _hasFailure;
     public bool HasFailure { get => _hasFailure; private set => this.RaiseAndSetIfChanged(ref _hasFailure, value); }
@@ -151,6 +169,13 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         set => this.RaiseAndSetIfChanged(ref _packsWithCard, value);
     }
 
+    bool _suppressedForPendingQuestion;
+    /// While a question prompt is open, the centered card owns the turn — hide this system bubble.
+    public bool SuppressedForPendingQuestion {
+        get => _suppressedForPendingQuestion;
+        set => this.RaiseAndSetIfChanged(ref _suppressedForPendingQuestion, value);
+    }
+
     public ToolGroupItem() {
         ToggleCommand = ReactiveCommand.Create(Toggle);
     }
@@ -161,19 +186,18 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         _calls.Add(call);
         RefreshLoneChrome();
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
-        this.RaisePropertyChanged(nameof(VisibleCalls));
-        this.RaisePropertyChanged(nameof(SummaryLine));
         if (call.IsSettled) { Recompute(); return; }
         _live.Add(call);
         call.PropertyChanged += OnCallChanged;
+        // After the add: a folded group's VisibleCalls is _live, and HasVisibleCalls read before
+        // the add would publish false for the call's whole run.
+        NotifyVisible();
     }
 
     void RefreshLoneChrome() {
-        var lone = _calls.Count == 1;
-        foreach (var c in _calls) c.ShowRowStatus = !lone;
         this.RaisePropertyChanged(nameof(ShowsKindChip));
         this.RaisePropertyChanged(nameof(KindChip));
-        this.RaisePropertyChanged(nameof(LoneCall));
+        this.RaisePropertyChanged(nameof(HeaderIconData));
     }
 
     void OnCallChanged(object? sender, PropertyChangedEventArgs e) {
@@ -186,10 +210,19 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     void Recompute() {
         var settled = _calls.Where(c => c.IsSettled).ToList();
         Summary = ToolSummary.Describe(settled.Select(c => c.Category));
-        HasFailure = settled.Any(c => c.IsError);
+        var failed = settled.Any(c => c.IsError);
+        // Rising edge only: the reader can still collapse after this opens the error pills.
+        if (failed && !_hasFailure) IsExpanded = true;
+        HasFailure = failed;
         HasSummary = settled.Count > 0;
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
+        this.RaisePropertyChanged(nameof(HeaderIconData));
+        NotifyVisible();
+    }
+
+    void NotifyVisible() {
         this.RaisePropertyChanged(nameof(VisibleCalls));
+        this.RaisePropertyChanged(nameof(HasVisibleCalls));
         this.RaisePropertyChanged(nameof(SummaryLine));
     }
 
@@ -197,9 +230,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     string? PeekDetail() {
         var first = _calls.FirstOrDefault(c => c.IsSettled);
         if (first is null) return null;
-        var text = first.LineText;
-        const int cap = 56;
-        return text.Length <= cap ? text : text[..(cap - 1)] + "…";
+        return first.DetailIsProse ? TextElision.End(first.LineText, 56) : TextElision.Middle(first.LineText, 56);
     }
 }
 

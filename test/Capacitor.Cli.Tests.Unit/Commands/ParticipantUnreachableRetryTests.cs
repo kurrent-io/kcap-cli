@@ -252,6 +252,37 @@ public class ParticipantUnreachableRetryTests {
     }
 
     [Test]
+    public async Task Daemon_flap_codes_are_retried_from_the_global_set_without_an_extra_code() {
+        // The two codes are global retryables (not scoped via extraRetryableCode), so a bare start
+        // rides out a daemon flap; the first 409 heals into success.
+        foreach (var (code, body) in new[] {
+            ("reviewer_certification_transient",
+                """{"error":"reviewer_certification_transient","message":"daemon connection changed"}"""),
+            ("participant_launch_transient",
+                """{"error":"participant_launch_transient","message":"connection is not active"}"""),
+        }) {
+            using var server = WireMockServer.Start();
+            server.Given(Request.Create().WithPath($"/{code}").UsingPost())
+                  .InScenario("heals")
+                  .WillSetStateTo("healed")
+                  .RespondWith(Response.Create().WithStatusCode(409).WithBody(body));
+            server.Given(Request.Create().WithPath($"/{code}").UsingPost())
+                  .InScenario("heals")
+                  .WhenStateIs("healed")
+                  .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"flow_run_id":"flow-1"}"""));
+            using var client = new HttpClient();
+
+            var clock = Clock();
+            using var response = (await McpFlowsServer.SendWithSettlementRetryAsync(
+                client, "https://flows.example.test", (c, ct) => c.PostAsync($"{server.Url}/{code}", null, ct),
+                clock, SettlementBackoff.Seeded(11)) as McpFlowsServer.SettlementSendResult.Response)!.Value;
+
+            await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(server.LogEntries.Count).IsEqualTo(2);
+        }
+    }
+
+    [Test]
     public async Task ExtraRetryableCode_only_matches_the_exact_code_named() {
         // A code that is neither a settlement code nor the caller's named extra code is still refused,
         // even when an extra code IS supplied — proves the gate is an exact-match addition, not a

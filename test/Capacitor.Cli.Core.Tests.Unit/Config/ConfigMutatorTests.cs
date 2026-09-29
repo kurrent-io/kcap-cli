@@ -257,4 +257,26 @@ public class ConfigMutatorTests {
         var reread = JsonDocument.Parse(await File.ReadAllTextAsync(AppConfig.GetConfigPath(Config.Root)));
         await Assert.That(reread.RootElement.TryGetProperty("version", out var v) && v.GetInt32() == 2).IsTrue();
     }
+
+    [Test]
+    public async Task MutateStrict_refuses_a_malformed_file_and_leaves_it_untouched() {
+        var path = AppConfig.GetConfigPath(Config.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{ not json");
+        var invoked = false;
+
+        await Assert.That(async () => await ConfigMutator.MutateStrictAsync(Config.Root, c => { invoked = true; return c with { MachineId = "m" }; }))
+            .Throws<ConfigUnreadableException>();
+
+        await Assert.That(invoked).IsFalse();
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("{ not json");
+    }
+
+    [Test]
+    public async Task MutateStrict_publishes_into_a_fresh_config_when_the_file_is_absent() {
+        var next = await ConfigMutator.MutateStrictAsync(Config.Root, c => c with { MachineId = "m" });
+
+        await Assert.That(next.MachineId).IsEqualTo("m");
+        await Assert.That((await AppConfig.LoadProfileConfig(Config.Root)).MachineId).IsEqualTo("m");
+    }
 }

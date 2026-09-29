@@ -1,16 +1,16 @@
-using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Services.Onboarding;
 
-/// spec §6 coordinator path: applies a pending decision-7 claim to a PRE-EXISTING daemon on every
-/// transition to Connected — the sibling of ShimOfferCoordinator, but re-triggered every time
-/// rather than once-ever, since a claim or a daemon restart can both arrive later.
+/// Applies a pending consent-flip claim to a PRE-EXISTING daemon on every transition to Connected —
+/// the sibling of ShimOfferCoordinator, but re-triggered every time rather than once-ever, since a
+/// claim or a daemon restart can both arrive later.
 public sealed class ConsentFlipCoordinator(
         IDaemonClientService client, ILocalControlOps ops, ConsentFlipClaims claims,
         Func<(string Profile, string Server, string DaemonName)> resolveIdentityUnderConfigLock,
         ILifecycleSurface surface, IAppStateStore appState, CancellationToken lifetime) {
-    internal const string ConsentV3Capability = "consent/3";
+    /// The daemon capability that routes the identity-conditional consent put.
+    public const string ConsentV3Capability = "consent/3";
 
     readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -49,12 +49,8 @@ public sealed class ConsentFlipCoordinator(
         }
     }
 
-    // Both this coordinator's own match AND TryConsume's later re-resolve (called through this
-    // same wrapper) must observe identical canonicalization — the store never re-canonicalizes.
-    (string Profile, string Server, string DaemonName) ResolveCanonical() {
-        var (profile, server, daemonName) = resolveIdentityUnderConfigLock();
-        return (profile, ServerIdentity.Canonicalize(server) ?? server, daemonName);
-    }
+    (string Profile, string Server, string DaemonName) ResolveCanonical() =>
+        ConsentFlipClaims.Canonical(resolveIdentityUnderConfigLock());
 
     async Task ApplyAsync() {
         var pending = await Task.Run(claims.Pending, lifetime).ConfigureAwait(false);
@@ -116,7 +112,7 @@ public sealed class ConsentFlipCoordinator(
                 LifecyclePrompt.KindQuarantine, null, null, false, QuarantineDisclosure(quarantine.PreservedPath));
             // true → explicit Acknowledge; false (declined) or null (never shown) must NOT ack — re-surfaces next start.
             var accepted = await surface.TryConfirmAsync(prompt, lifetime).ConfigureAwait(false);
-            if (accepted == true) await AckQuarantineAsync().ConfigureAwait(false);
+            if (accepted == true) await AckQuarantineAsync(appState).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             // shutdown before the surface could complete
         } catch (Exception ex) {
@@ -124,12 +120,8 @@ public sealed class ConsentFlipCoordinator(
         }
     }
 
-    /// Persists the ack so a later launch never re-surfaces this quarantine — called only from
-    /// SurfaceQuarantineOnceAsync on an explicit true from TryConfirmAsync.
-    public Task<bool> AckQuarantineAsync() => AckQuarantineAsync(appState);
-
-    /// The one ack mutation, shared with the wizard's Sign-in step — which surfaces the same
-    /// disclosure while no coordinator exists (decision 2).
+    /// Persists the ack so a later launch never re-surfaces this quarantine. Shared with the
+    /// wizard's Sign-in step, which surfaces the same disclosure while no coordinator exists.
     internal static Task<bool> AckQuarantineAsync(IAppStateStore appState) =>
         appState.UpdateAsync(s => s.ConsentQuarantineAcked ? s : s with { ConsentQuarantineAcked = true });
 }

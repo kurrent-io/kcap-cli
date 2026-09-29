@@ -5,8 +5,8 @@ using DynamicData;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Scripted IRemoteAgentsService — a SourceCache the test edits directly plus a BehaviorSubject
-/// for Daemons — shared by AgentDirectoryTests and the rail tests that merge remote rows in.
+/// Scripted IRemoteAgentsService: a SourceCache the test edits directly plus a BehaviorSubject
+/// for Daemons, for any suite that needs remote rows in an AgentDirectory.
 sealed class FakeRemoteAgents : IRemoteAgentsService, IDisposable {
     public readonly SourceCache<AgentInstanceDto, string> Cache = new(a => a.AgentId);
     public readonly BehaviorSubject<IReadOnlyList<DaemonInfo>> DaemonsSubject = new([]);

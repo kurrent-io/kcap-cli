@@ -27,7 +27,7 @@ namespace Capacitor.Cli.Core.Harness;
 /// where to look: the search path and the vendor roots are read from the environment once, so a
 /// holder does not see those variables change under it.</para>
 /// </summary>
-public sealed class HarnessRegistry : IReadOnlyList<IHarness> {
+public sealed class HarnessRegistry : IReadOnlyList<IHarness>, IHarnessDetection {
     readonly IReadOnlyList<IHarness> _harnesses;
     readonly BinaryProbe             _binaries;
 

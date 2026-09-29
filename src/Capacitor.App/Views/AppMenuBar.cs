@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Capacitor.App.Services;
+using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Commands;
 
 namespace Capacitor.App.Views;
@@ -51,8 +52,9 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
             // would drop the AppKit registration until the window next becomes key.
             Item("Toggle Full Screen", () => Toggle(window, WindowState.FullScreen),
                 new KeyGesture(Key.F, KeyModifiers.Control | KeyModifiers.Meta), window.CanResize),
-            new NativeMenuItemSeparator(),
         };
+        if (RefreshItem(window) is { } refresh) menu.Add(refresh);
+        menu.Add(new NativeMenuItemSeparator());
 
         if (showMainWindow() is { } show) {
             menu.Add(Item("Kurrent Capacitor", show, new KeyGesture(Key.D0, KeyModifiers.Meta)));
@@ -67,7 +69,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         // Resolved at click time: an item enabled by a later SetFeedbackAction must invoke that action.
         var bug      = Item("Report a Bug…",  () => _openFeedback?.Invoke(FeedbackCategory.Bug),      enabled: _openFeedback is not null);
         var feedback = Item("Send Feedback…", () => _openFeedback?.Invoke(FeedbackCategory.Feedback), enabled: _openFeedback is not null);
-        var items    = new ReportItems(window, bug, feedback);
+        var items    = new ReportItems(bug, feedback);
         _reportItems.Add(items);
         window.Closed += (_, _) => _reportItems.Remove(items);
 
@@ -89,6 +91,18 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         }
 
         invoking.Activate();
+    }
+
+    static NativeMenuItem? RefreshItem(Window window) {
+        if (window is not MainWindow main) return null;
+        var item = new NativeMenuItem("Refresh") { Gesture = RefreshShortcut.Primary, IsEnabled = false };
+        void Apply() {
+            item.Command = (main.DataContext as MainWindowViewModel)?.RefreshWorkCommand;
+            if (item.Command is null) item.IsEnabled = false;
+        }
+        Apply();
+        main.DataContextChanged += (_, _) => Apply();
+        return item;
     }
 
     static NativeMenuItem Item(string header, Action action, KeyGesture? gesture = null, bool enabled = true) {

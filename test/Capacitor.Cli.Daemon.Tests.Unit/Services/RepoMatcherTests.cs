@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -143,6 +144,64 @@ public class RepoMatcherTests {
         var result = await NewMatcher().FindAsync("group", "project", [repo], CancellationToken.None);
 
         await Assert.That(result).IsEmpty();
+    }
+
+    [Test]
+    public async Task FindAsync_LinkedWorktreeCandidates_ResolveToTheMainCheckout() {
+        using var main = GitRepo.CreateWithCommit();
+        main.AddRemote("https://github.com/contoso/widgets.git");
+        using var elsewhere = new TempDir();
+
+        var agentWorktree    = main.AddWorktree(Path.Combine(main.Path, ".claude", "worktrees", "keen-moler"), "wt-agent");
+        var externalWorktree = main.AddWorktree(elsewhere.PathTo("external"), "wt-external");
+
+        var result = await NewMatcher().FindAsync(
+            "contoso", "widgets", [agentWorktree.Path, externalWorktree.Path], CancellationToken.None, resolveWorktrees: true);
+
+        await Assert.That(result).Count().IsEqualTo(1);
+        await Assert.That(CanonicalPath.Resolve(result[0])).IsEqualTo(CanonicalPath.Resolve(main.Path));
+    }
+
+    /// <summary>Flow discovery picks a reviewer's checkout by exact path, and the reviewer branches
+    /// from it — so unless the caller asks, a worktree must come back as itself.</summary>
+    [Test]
+    public async Task FindAsync_WithoutResolveWorktrees_ReturnsEachWorktreeAsItself() {
+        using var main = GitRepo.CreateWithCommit();
+        main.AddRemote("https://github.com/contoso/widgets.git");
+        var worktree = main.AddWorktree(Path.Combine(main.Path, ".claude", "worktrees", "keen-moler"), "wt-agent");
+
+        var result = await NewMatcher().FindAsync(
+            "contoso", "widgets", [worktree.Path, main.Path], CancellationToken.None);
+
+        await Assert.That(result.Select(CanonicalPath.Resolve))
+            .IsEquivalentTo([CanonicalPath.Resolve(worktree.Path), CanonicalPath.Resolve(main.Path)]);
+    }
+
+    /// <summary>Flow discovery exact-matches the requester's repo root against what comes back, so
+    /// unless worktrees are resolved each spelling of a checkout must come back as given.</summary>
+    [Test]
+    public async Task FindAsync_WithoutResolveWorktrees_KeepsEachSpellingOfACheckout() {
+        using var tmp = new TempDir();
+        var repo = MakeTempRepo(tmp, "repo", "https://github.com/contoso/widgets.git");
+        var link = tmp.PathTo("repo-link");
+        Directory.CreateSymbolicLink(link, repo);
+
+        var result = await NewMatcher().FindAsync("contoso", "widgets", [repo, link], CancellationToken.None);
+
+        await Assert.That(result).IsEquivalentTo([Path.GetFullPath(repo), Path.GetFullPath(link)]);
+    }
+
+    [Test]
+    public async Task FindAsync_WorktreeAndMainCheckoutCandidates_DedupedToTheMainCheckout() {
+        using var main = GitRepo.CreateWithCommit();
+        main.AddRemote("https://github.com/contoso/widgets.git");
+        var worktree = main.AddWorktree(Path.Combine(main.Path, ".capacitor", "worktrees", "agent-1"), "wt-agent");
+
+        var result = await NewMatcher().FindAsync(
+            "contoso", "widgets", [worktree.Path, main.Path], CancellationToken.None, resolveWorktrees: true);
+
+        await Assert.That(result).Count().IsEqualTo(1);
+        await Assert.That(CanonicalPath.Resolve(result[0])).IsEqualTo(CanonicalPath.Resolve(main.Path));
     }
 
     [Test]

@@ -173,19 +173,6 @@ public class AppMutationLaneWiringTests {
     }
 
     [Test]
-    public async Task AttentionSkew_uses_human_copy_for_known_ownership_tokens() {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.AttentionSkew("ownership_mismatch"));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("ownership_mismatch")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("ownership_mismatch");
-    }
-
-    [Test]
     public async Task AttentionRepair_uses_human_copy_for_stale_txn_marker() {
         var surface = new FakeLifecycleSurface();
         var envelope = Envelope(new MutationOutcome.AttentionRepair("stale_txn_marker"));
@@ -410,7 +397,7 @@ public class AppMutationLaneWiringTests {
 
     // A presentation failure BEFORE the UI boundary (surface.Attention throwing) must requeue the
     // envelope for a re-presentation, never Ack-and-drop it — the loop itself survives either way
-    // (never faulted/canceled), but the outcome itself is no longer silently skipped.
+    // (never faulted/canceled), and the outcome itself is never silently skipped.
     [Test]
     public async Task ConsumeMutationOutcomesAsync_a_presentation_failure_requeues_and_re_presents_then_acks() {
         var inner = new FakeLifecycleSurface();

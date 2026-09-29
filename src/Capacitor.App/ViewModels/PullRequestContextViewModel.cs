@@ -28,6 +28,10 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly Dictionary<PullRequestSubjectDto, Position> _positions = [];
     readonly HashSet<string> _pageRequests = new(StringComparer.Ordinal);
     readonly AvaloniaList<PullRequestChoice> _choices = [];
+    readonly List<PullRequestLinkDto> _sessionItems = [];
+    /// Lifecycles the card has read for this session's PRs: the server's list carries none, so an
+    /// overview is what tells a merged PR from an open one.
+    readonly Dictionary<PullRequestSubjectDto, string> _lifecycles = [];
     // A subject, not WhenAnyValue: that needs ReactiveUI's global init, which a headless test run does not reliably prime first.
     readonly BehaviorSubject<bool> _hasPullRequest = new(false);
     readonly ITimer _timer;
@@ -53,8 +57,10 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     bool _overviewPending;
     bool _queuedRefresh;
     bool _stopped;
+    string? _worktree;
     bool _disposed;
     bool _legacy;
+    bool _hasListed;
     long? _lastRefresh;
     long? _lastOverview;
     DateTime? _retryAt;
@@ -74,10 +80,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool HasReaderNote => _readerNote is not null;
     public bool ShowsInstallTool => _readerNote?.InstallUrl is not null;
     public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
-    public bool IsReading => _refreshing || _overviewPending || _pageRequests.Count > 0;
+    public bool IsReading => _refreshing || _queuedRefresh || _overviewPending || _pageRequests.Count > 0;
+    bool _userRefresh;
+    /// Progress for a refresh someone asked for; the background poll reads silently.
+    public bool ShowsRefreshing => _userRefresh && IsReading;
     public bool HasChoice => _selected is not null;
     public bool HasPullRequest => _choices.Any(choice => choice.IsAvailable);
     public IObservable<bool> HasPullRequestChanges => _hasPullRequest;
+    public bool HasListed => _hasListed;
     public bool IsLegacy => _legacy;
     public string Section => _section;
     public double ScrollOffset { get; set; }
@@ -118,7 +128,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _primaryRepo = primaryRepo;
         _readers = source as IPullRequestReaders;
         RefreshCommand = ReactiveCommand.Create(Refresh);
-        OpenReaderCommand = ReactiveCommand.Create(() => { _openReader(); SetReaderVisible(true); });
+        OpenReaderCommand = ReactiveCommand.Create(OpenReader);
         ShowSectionCommand = ReactiveCommand.Create<string>(ShowSection);
         LoadMoreCommand = ReactiveCommand.Create(() => { if (CurrentSection?.Next is { } cursor) RequestPage(cursor); });
         ReloadEarlierCommand = ReactiveCommand.Create(() => { if (CurrentSection?.Evicted is { } cursor) RequestPage(cursor, earlier: true); });
@@ -130,9 +140,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         OpenRowCommand = ReactiveCommand.Create<PullRequestRow>(row => {
             if (CanDisplayReader) LinkPolicy.Open(_opener, row.IsCheck ? PullRequestWire.CheckLink(row.Url) : _selected is null ? null : PrLink(row.Url, _selected.Subject));
         });
-        OpenGitHubCommand = ReactiveCommand.Create(() => {
-            if (_selected is { IsAvailable: true } choice) LinkPolicy.Open(_opener, PrLink(choice.Link.Url, choice.Subject));
-        });
+        OpenGitHubCommand = ReactiveCommand.Create(OpenSource);
         OpenBodyLinkCommand = ReactiveCommand.Create<string>(url => { if (CanDisplayReader) LinkPolicy.Open(_opener, PullRequestWire.BodyLink(url)); });
         SignInCommand = ReactiveCommand.Create(() => signIn?.Invoke());
         LinkGitHubCommand = ReactiveCommand.Create(() => linkGitHub?.Invoke());
@@ -145,15 +153,21 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(dto => {
             if (_disposed || dto is null) return;
             _branch = dto.Branch;
+            // The presented checkout, not the snapshot: a borrowed reviewer's snapshot is detached,
+            // so only BorrowedFrom still has the branch live discovery matches.
+            _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
             CancelReads();
             _session = id;
             _choices.Clear();
+            _sessionItems.Clear();
             _selected = null;
             _explicitSelection = false;
             _positions.Clear();
+            _lifecycles.Clear();
             ClearProtected();
             _stopped = false;
+            _hasListed = false;
             _lastRefresh = null;
             SetNotice("Loading pull requests…");
             RequestRefresh();
@@ -184,13 +198,30 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         RequestRefresh();
     }
     /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
-    public void Refresh() => RequestRefresh(manual: true);
+    public void Refresh() { _userRefresh = true; RequestRefresh(manual: true); Notify(); }
+    /// On a legacy or unsupported capability the reader would open onto a notice and nothing else,
+    /// so a caller with a PR in hand opens its URL instead.
+    public bool CanOpenReader => HasPullRequest && !_legacy;
+    /// Title opens Overview; checks/reviews rows use <see cref="ShowSection"/> for their tabs.
+    public void OpenReader() {
+        if (_disposed || !CanOpenReader) return;
+        if (CanReveal) { ShowSection("overview"); return; }
+        _section = "overview";
+        _thread = null;
+        ScrollOffset = 0;
+        _openReader();
+        SetReaderVisible(true);
+    }
+    /// The selected PR on its host, in the browser.
+    public void OpenSource() {
+        if (_selected is { IsAvailable: true } choice) LinkPolicy.Open(_opener, PrLink(choice.Link.Url, choice.Subject));
+    }
     public void SetReaderVisible(bool visible) {
         if (_readerVisible == visible) return;
         _readerVisible = visible;
         if (!visible && _grace) _graceSection = null;
         Notify();
-        if (visible && CanReveal && _section != "overview" && CurrentSection is null) RequestPage(null);
+        if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
     }
     void Select(PullRequestChoice? choice, bool explicitSelection = false) {
         if (_disposed || choice?.Subject == _selected?.Subject) return;
@@ -218,8 +249,15 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _openReader();
         _readerVisible = true;
         Notify();
-        if (section != "overview" && CurrentSection is null) RequestPage(null);
+        if (section != "overview") LoadOrRefreshSection();
     }
+    /// A tab the poll skipped while it was hidden comes back stale; the summary stops trusting rows
+    /// older than 30s, so rows kept past that would disagree with it.
+    void LoadOrRefreshSection() {
+        if (CurrentSection is not { } state) RequestPage(null);
+        else if (state.Completed is not { } at || _time.GetUtcNow().UtcDateTime - at >= RowsFreshFor) RequestPage(null, refresh: true);
+    }
+    internal static readonly TimeSpan RowsFreshFor = TimeSpan.FromSeconds(30);
     void Tick() {
         if (_disposed || !_foreground) return;
         if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) EnterGrace();
@@ -257,6 +295,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         else _retired.Add(_cancel);
         _cancel = new();
         _refreshing = false; _overviewPending = false; _pageRequests.Clear(); _lastOverview = null;
+        // The once-only head recovery belongs to the read just cancelled. A later subject
+        // has to be allowed its own, or its section stops instead of reloading.
+        _headRestartSection = null;
     }
     void Start(Func<CancellationToken, Task<Action>> operation, Action settled) {
         var generation = _generation;

@@ -2,7 +2,7 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// The open/dirty state machine behind the NeedsUpdate-only rebuild cadence (spec §5) — pure, no
+/// The open/dirty state machine behind the NeedsUpdate-only rebuild cadence — pure, no
 /// Avalonia types, so it's testable without a headless session. A model change only records the
 /// latest value and marks dirty; OnNeedsUpdate is the sole place a rebuild is invoked, and only
 /// when dirty. A change arriving while the native menu is open therefore becomes visible only at

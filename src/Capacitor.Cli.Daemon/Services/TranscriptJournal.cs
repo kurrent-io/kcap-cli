@@ -55,8 +55,8 @@ internal sealed class TranscriptJournal : IDisposable {
             FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
     }
 
-    public static TranscriptJournal ForAgent(string stateDir, string agentId, ILogger logger, TimeProvider time) =>
-        new(System.IO.Path.Combine(stateDir, "transcripts", AgentFileNames.For(agentId) + ".jsonl"), logger, time);
+    public static TranscriptJournal ForAgent(string stateDir, string agentId, ILogger logger, TimeProvider time, TimeSpan? completeGrace = null) =>
+        new(System.IO.Path.Combine(stateDir, "transcripts", AgentFileNames.For(agentId) + ".jsonl"), logger, time, completeGrace: completeGrace);
 
     public string Path { get; }
 

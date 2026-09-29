@@ -1,4 +1,5 @@
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
 using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
@@ -32,12 +33,15 @@ public class ToolGroupItemTests {
             a.Outcome = ToolOutcome.Error;
             await Assert.That(group.LiveCalls).IsEmpty();
             await Assert.That(group.Summary).IsEqualTo("Ran a command, read a file");
-            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file · Bash");
             await Assert.That(group.HasFailure).IsTrue();
-            await Assert.That(group.ShowsSummaryHeader).IsTrue();
+            await Assert.That(group.IsExpanded).IsTrue();
+            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
+            await Assert.That(group.HasVisibleCalls).IsTrue();
 
             group.Toggle();
-            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
+            await Assert.That(group.IsExpanded).IsFalse();
+            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file · Bash");
+            await Assert.That(group.HasVisibleCalls).IsFalse();
         });
     }
 
@@ -54,9 +58,24 @@ public class ToolGroupItemTests {
             await Assert.That(group.ShowsSummaryHeader).IsFalse();
             await Assert.That(group.ShowsKindChip).IsTrue();
             await Assert.That(group.KindChip).IsEqualTo("Command");
-            await Assert.That(group.LoneCall).IsSameReferenceAs(call);
-            await Assert.That(call.ShowRowStatus).IsFalse();
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
             await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { call });
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Header_icon_follows_the_first_settled_category() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var a = Call("Bash", ToolCategory.Command);
+            var b = Call("Read", ToolCategory.Read);
+            group.Add(a);
+            group.Add(b);
+            b.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
+            a.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
         });
     }
 
@@ -65,7 +84,7 @@ public class ToolGroupItemTests {
     public async Task Folded_summary_peeks_the_first_settled_detail_and_caps_long_ones() {
         await RunOnUiAsync(async () => {
             var group = new ToolGroupItem();
-            var longDetail = new string('x', 80);
+            var longDetail = new string('x', 40) + new string('y', 40);
             var first = new ToolCallItem("Bash", longDetail, ToolCategory.Command);
             var second = Call("Read", ToolCategory.Read);
             group.Add(first);
@@ -73,9 +92,39 @@ public class ToolGroupItemTests {
             first.Outcome = ToolOutcome.Done;
             second.Outcome = ToolOutcome.Done;
 
-            await Assert.That(group.SummaryLine).IsEqualTo($"Ran a command, read a file · {new string('x', 55)}…");
+            await Assert.That(group.SummaryLine)
+                .IsEqualTo($"Ran a command, read a file · {new string('x', 28)}…{new string('y', 27)}");
             group.Toggle();
             await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
+        });
+    }
+
+    /// The view's IsVisible binds HasVisibleCalls, so the value at the moment it is raised is what
+    /// the view keeps: a folded, all-settled group taking a new live call must raise it true.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_live_call_added_to_a_folded_group_is_published_visible() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var a = Call("Bash", ToolCategory.Command);
+            var b = Call("Read", ToolCategory.Read);
+            group.Add(a);
+            group.Add(b);
+            a.Outcome = ToolOutcome.Done;
+            b.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HasVisibleCalls).IsFalse();
+
+            var published = new List<bool>();
+            group.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(ToolGroupItem.HasVisibleCalls)) published.Add(group.HasVisibleCalls); };
+            var live = Call("Grep", ToolCategory.Search);
+            group.Add(live);
+
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { live });
+            await Assert.That(published).IsEquivalentTo(new[] { true });
+
+            live.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HasVisibleCalls).IsFalse();
+            await Assert.That(published[^1]).IsFalse();
         });
     }
 
@@ -107,21 +156,18 @@ public class ToolGroupItemTests {
     }
 
     [Test]
-    public async Task A_call_glyph_shows_the_question_mark_only_while_running_and_awaiting() {
+    public async Task A_call_awaiting_permission_is_neither_running_nor_settled() {
         var call = Call("Bash", ToolCategory.Command);
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("");
         await Assert.That(call.IsRunning).IsTrue();
         await Assert.That(call.HasDetail).IsFalse();
         call.IsAwaitingPermission = true;
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("?");
         await Assert.That(call.IsSettled).IsFalse();
         await Assert.That(call.IsRunning).IsFalse();
         call.Outcome = ToolOutcome.Done;
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("✓");
         await Assert.That(call.IsSettled).IsTrue();
         await Assert.That(call.IsRunning).IsFalse();
         call.IsAwaitingPermission = false;
-        await Assert.That(call.OutcomeGlyph).IsEqualTo("✓");
+        await Assert.That(call.IsSettled).IsTrue();
     }
 
     [Test]

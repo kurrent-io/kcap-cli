@@ -10,6 +10,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
@@ -72,11 +73,10 @@ class McpFlowsServer(
             try {
                 if (client is null) {
                     client = await http.ForSessionAsync();
-                    // the review-flow endpoints long-poll (start_review_flow /
-                    // submit_review_round block server-side up to ~10 min while the reviewer runs).
-                    // The default 100s timeout would abort the POST, which the server sees as a
-                    // cancel and tears the reviewer down — so disable the client-side deadline and
-                    // let the server's FlowResultWaiter + the harness MCP tool timeout bound it.
+                    // A start or round POST can be held open server-side: an admission wait on a
+                    // current server, the whole round on an older blocking one. The default 100s
+                    // timeout would abort it, which the server sees as a cancel and tears the
+                    // reviewer down — so no client-wide deadline; each lane bounds its own requests.
                     client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
                 }
 
@@ -228,10 +228,10 @@ class McpFlowsServer(
 
                 var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? new SettlementSendResult.Response(await StartFlowAsync(client, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId))
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock)
                         : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     "start_flow"          => wasModelStart
-                        ? new SettlementSendResult.Response(await StartFlowAsync(client, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId))
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock)
                         : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     // Round submission also retries the coded participant_unreachable 409 (see
                     // ParticipantUnreachableCode) — never a start, which can't return it.
@@ -368,6 +368,8 @@ class McpFlowsServer(
                             isError: true);
                     }
 
+                    await RecordStartedRunAsync(retryBody, requestingSessionId, cwd, repoRoot);
+
                     var (retryPayload, retryIsError) = await ResolveRoundResultAsync(client, apiRoot, retryBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt);
 
                     return BuildToolResult(id, $"{PreferenceAppliedPrefix(preference)}\n{retryPayload}", retryIsError);
@@ -376,6 +378,9 @@ class McpFlowsServer(
                 if (!postResponse.IsSuccessStatusCode)
                     return BuildToolResult(id, FormatFlowStartError((int)postResponse.StatusCode, postBody, wasDynamicStart), isError: true);
 
+                if (toolName is "start_review_flow" or "start_flow")
+                    await RecordStartedRunAsync(postBody, requestingSessionId, cwd, repoRoot);
+
                 var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt);
                 return BuildToolResult(id, payload, isError);
             }
@@ -383,6 +388,12 @@ class McpFlowsServer(
             // `wait: true` blocks via bounded repeated GETs instead of the single GET below. Absent or
             // false never reaches this branch — that untouched single-GET path IS the backwards-compat
             // contract for every existing caller.
+            if (toolName is "get_review_flow_status" or "get_flow_status") {
+                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, cwd, repoRoot, clock);
+                if (resolution.Error is { } unresolved) return BuildToolResult(id, unresolved, isError: true);
+                arguments = WithFlowRunId(arguments, resolution.FlowRunId!);
+            }
+
             if (toolName is "get_review_flow_status" or "get_flow_status" && ParseWaitArg(arguments)) {
                 var waitFlowRunId = arguments?["flow_run_id"]?.GetValue<string>()
                     ?? throw new ArgumentException("Missing required argument: flow_run_id");
@@ -432,6 +443,30 @@ class McpFlowsServer(
                 return BuildToolResult(id, JsonSerializer.Serialize(result, McpJsonContext.Default.ReviewerVendorsResult));
             }
 
+            if (toolName is "list_flow_definitions") {
+                var lookup = await GetBoundedAsync(client, apiRoot + "/api/flows/definitions", clock);
+                if (lookup.Response is null)
+                    return BuildToolResult(id, $"Error: listing flow definitions (GET /api/flows/definitions) {lookup.How}; nothing was started — retry the call, or start a built-in definition by id.", isError: true);
+
+                using var definitionsResp = lookup.Response;
+                var definitionsBody       = await definitionsResp.Content.ReadAsStringAsync();
+
+                if (definitionsResp.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
+
+                // A server that predates the route 404s at the routing layer: a capability the driver
+                // works around, not a failed call.
+                if (definitionsResp.StatusCode == HttpStatusCode.NotFound)
+                    return BuildToolResult(id, ServerCannotListDefinitions);
+
+                if (!definitionsResp.IsSuccessStatusCode)
+                    return BuildToolResult(id, FormatFlowStartError((int)definitionsResp.StatusCode, definitionsBody, wasDynamicStart: false), isError: true);
+
+                return FormatFlowDefinitions(definitionsBody) is { } listing
+                    ? BuildToolResult(id, listing)
+                    : BuildToolResult(id, "Error: unreadable flow definition list from GET /api/flows/definitions.", isError: true);
+            }
+
             using var httpResponse = toolName switch {
                 "get_review_flow_status" or "get_flow_status" => await client.GetAsync(BuildFlowUrl(apiRoot, arguments)),
                 "close_review_flow"      or "close_flow"      => await client.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null),
@@ -476,58 +511,67 @@ class McpFlowsServer(
         }
     }
 
+    /// <summary>The shortest tool-call timeout among the harnesses that drive flows: Codex aborts an
+    /// MCP call at 300 s. A call the harness aborts never delivers its reply — for a start, the only
+    /// place the driver is handed its flow_run_id — so every bound below is sized to end the call
+    /// first.</summary>
+    internal static readonly TimeSpan ShortestHarnessToolTimeout = TimeSpan.FromSeconds(300);
+
     /// <summary>
-    /// The no-progress window: how long the start/submit POST lane keeps transparently retrying a
-    /// settlement-layer coded 409 WITHOUT seeing the daemon's sequenced-lane watermark
-    /// (<c>last_processed_seq</c> on the 409 body) advance, measured as ELAPSED time — including
-    /// each request's own duration, not just the sum of the backoff delays. That distinction is the
-    /// whole point: a settlement-aware server absorbs the wait by HOLDING the request open (up to a
-    /// per-launch admission wait on the order of a minute), so a delay-only budget would let
-    /// worst-case wall-clock blow past the MCP tool timeout the kcap plugin pins for its MCP servers
-    /// (MCP_TOOL_TIMEOUT, 10 minutes) and surface as a harness-level timeout instead of a clean
-    /// tool result. Three minutes fits roughly two full server-side admission waits plus backoff
-    /// while staying far under that ceiling. If the harness pin ever changes, re-derive this.
+    /// The no-progress window: how long the start/submit POST lane keeps retrying a settlement-layer
+    /// coded 409 without seeing the daemon's sequenced-lane watermark (<c>last_processed_seq</c> on the
+    /// 409 body) advance. Measured as ELAPSED time, each request's own duration included: the server
+    /// absorbs an admission wait by holding the request open for up to about a minute, so a budget
+    /// that summed only the backoff delays would overrun <see cref="ToolCallBudget"/>.
     ///
-    /// <para>Liveness-supervision spec §5: a retryable 409's <c>last_processed_seq</c> re-arms this
-    /// window from the moment of that response when it is the FIRST seq observed, or STRICTLY higher
-    /// than the previous one. An equal or lower seq is not progress (a frozen lane must still exhaust
-    /// one full window after its single observation; a lower one is a daemon reconnect resetting its
-    /// watermark, not a drain). A missing/null seq is "no evidence" — never a reset, and never a
-    /// reason to tell the caller anything is out of date; it simply keeps the flat window. Clipped by
-    /// <see cref="SettlementAbsoluteDeadline"/>.</para>
+    /// <para>Three minutes is the server's reconcile sweep interval, and the sweep is what proves a
+    /// prior reviewer agent gone and lets a <see cref="ParticipantUnreachableCode"/> retry succeed.
+    /// A window any shorter would routinely expire between two sweeps.</para>
     ///
-    /// <para>A tool call spends AT MOST ONE such window in total, which is what keeps that
-    /// derivation valid: the one caller that sends twice (the preference fallback) threads
-    /// <c>budgetStartedAt</c> so both sends share this budget rather than opening a second. The
-    /// settlement lane and the round-poll lane that follows it likewise share ONE
-    /// <see cref="ToolCallBudget"/> — a second independent window would push the call past the
-    /// harness pin, and precisely in the shape that matters, with a paid reviewer launched by a POST
-    /// whose result nobody is still waiting for.</para>
+    /// <para>A retryable 409's <c>last_processed_seq</c> re-arms the window from that response when it
+    /// is the first seq observed or strictly higher than the previous one. An equal or lower seq is
+    /// not progress — a lower one is a daemon reconnect resetting its watermark — and a missing seq is
+    /// no evidence either way. Clipped by <see cref="SettlementAbsoluteDeadline"/>.</para>
+    ///
+    /// <para>A tool call spends at most one such window: the preference fallback, which sends twice,
+    /// threads <c>budgetStartedAt</c> so both sends share it.</para>
     /// </summary>
     internal static readonly TimeSpan SettlementElapsedDeadline = TimeSpan.FromMinutes(3);
 
-    /// <summary>The hard absolute ceiling on the whole settlement-retry lane, measured from the
-    /// FIRST attempt — continuous daemon-lane progress can keep resetting
-    /// <see cref="SettlementElapsedDeadline"/>'s rolling window indefinitely, so this is what
-    /// actually bounds that lane. It bounds the settlement lane ALONE; the end-to-end bound on a tool
-    /// call is <see cref="ToolCallBudget"/>, which this must stay under.</summary>
-    internal static readonly TimeSpan SettlementAbsoluteDeadline = TimeSpan.FromMinutes(8);
+    /// <summary>Hard ceiling on the settlement-retry lane, measured from its first attempt: continuous
+    /// daemon-lane progress can re-arm <see cref="SettlementElapsedDeadline"/> indefinitely, so this
+    /// is what bounds the lane. Stays under <see cref="ToolCallBudget"/> so that a start admitted at
+    /// the last moment still has time to return its flow_run_id.</summary>
+    internal static readonly TimeSpan SettlementAbsoluteDeadline = TimeSpan.FromSeconds(210);
 
-    /// <summary>The ONE end-to-end budget for a tool call that sends and then polls, anchored at its
-    /// first POST attempt. The settlement lane (<see cref="SettlementAbsoluteDeadline"/>) and the
-    /// round-poll lane (<see cref="PollCap"/>) run SEQUENTIALLY, so bounding them separately bounds
-    /// the call at 8m + 8m against the ~10m MCP tool timeout the kcap plugin pins — the harness would
-    /// kill the call mid-poll with the reviewer already launched and paid for. Sharing this budget
-    /// means whatever settlement spends, the poll no longer has.
+    /// <summary>The one end-to-end budget for a tool call that sends and then polls, anchored at its
+    /// first POST attempt. The settlement lane and the round-poll lane run sequentially, so bounding
+    /// them separately bounds the call at their sum; sharing this budget means whatever settlement
+    /// spends, the poll no longer has. Applied as a clip on <see cref="PollCap"/>, so a call whose
+    /// settlement lane returned at once is bounded by <c>PollCap</c> alone.
     ///
-    /// <para>Applied as a CLIP on <see cref="PollCap"/>, never a replacement: a call whose settlement
-    /// lane returned immediately (the overwhelming majority, and every existing fixture) is bounded by
-    /// <c>PollCap</c> exactly as before. If the harness pin changes, re-derive this ONE value.</para>
-    /// </summary>
-    internal static readonly TimeSpan ToolCallBudget = TimeSpan.FromMinutes(9);
+    /// <para>Sized so that the budget, a GET still in flight when it expires
+    /// (<see cref="PerGetTimeout"/>) and the ack POST after it (<see cref="PerAckPostTimeout"/>) all
+    /// end before <see cref="ShortestHarnessToolTimeout"/>. A harness abort mid-poll leaves a reviewer
+    /// launched and paid for with nobody waiting on its result.</para></summary>
+    internal static readonly TimeSpan ToolCallBudget = TimeSpan.FromMinutes(4);
 
+    /// <summary>The coded 409s the settlement lane retries transparently. The two settlement-layer
+    /// conflicts are native to the lane; the rest are daemon-flap signals the server declares
+    /// retryable and a bounded retry genuinely resolves — a reconnected/re-selected daemon
+    /// (<c>reviewer_certification_transient</c>) or a relaunched participant
+    /// (<c>participant_launch_transient</c>). All are 409 and carry no round consumption, so the
+    /// retry is round-safe. The permanent <c>reviewer_certification_changed</c> (a CLI or launcher
+    /// policy the operator must update) is NOT here — retrying it only delays the required update.
+    /// <c>participant_unreachable</c> is NOT here either — it is scoped to the round-submit lane via
+    /// the extra-code parameter, see below.</summary>
     static readonly HashSet<string> SettlementRetryableCodes =
-        new(StringComparer.Ordinal) { "flow_settlement_busy", "reviewer_launch_incarnation_superseded" };
+        new(StringComparer.Ordinal) {
+            "flow_settlement_busy",
+            "reviewer_launch_incarnation_superseded",
+            "reviewer_certification_transient",
+            "participant_launch_transient",
+        };
 
     /// <summary>The coded, eventually-retryable 409 a round-submit POST returns when a role's prior
     /// reviewer agent isn't durably proven absent yet (e.g. inactivity-stopped) — the server declares
@@ -535,7 +579,7 @@ class McpFlowsServer(
     /// proves the old agent gone. Passed as <see cref="SendWithSettlementRetryAsync"/>'s
     /// <c>extraRetryableCode</c> only by round-submit call sites, never start_review_flow/start_flow:
     /// the server can only return this for a PREVIOUSLY-ASSIGNED role with a completed settlement, a
-    /// shape a start never has. Not in <see cref="SettlementRetryableCodes"/> — unlike those two, it
+    /// shape a start never has. Not in <see cref="SettlementRetryableCodes"/> — unlike those, it
     /// carries no sequenced-lane watermark to observe progress from.</summary>
     internal const string ParticipantUnreachableCode = "participant_unreachable";
 
@@ -577,6 +621,26 @@ class McpFlowsServer(
         }
 
         return null;
+    }
+
+    /// <summary>One POST under <see cref="SettlementElapsedDeadline"/>, never re-sent: the lane for a
+    /// model-bearing start, where a second POST would mint and launch a second run. The server holds
+    /// it open like any other start, so it takes the same bound a first settlement attempt gets; a
+    /// cancelled POST reads server-side as a cancel, which is what tears a half-launched reviewer down.</summary>
+    static async Task<SettlementSendResult> SendOnceWithDeadlineAsync(
+            HttpClient                                                    client,
+            Func<HttpClient, CancellationToken, Task<HttpResponseMessage>> send,
+            FlowRetryClock                                                clock
+        ) {
+        var startedAt = clock.UtcNow;
+
+        using var scope = clock.CreateDeadline(SettlementElapsedDeadline, CancellationToken.None);
+
+        try {
+            return new SettlementSendResult.Response(await send(client, scope.Token));
+        } catch (OperationCanceledException) when (scope.DeadlineFired) {
+            return new SettlementSendResult.DeadlineExhausted(null, null, 1, clock.UtcNow - startedAt);
+        }
     }
 
     /// <summary>
@@ -1207,8 +1271,178 @@ class McpFlowsServer(
         return $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
     }
 
+    record FlowRunIdResolution(string? FlowRunId, string? Error);
+
+    record SessionFlow(string FlowRunId, string Status, string? DefinitionId, string? TargetTitle, int? RoundNumber, string? RoundStatus, string? StartedAt);
+
+    const string PassTheFlowRunId = "Pass the flow_run_id returned by start_review_flow or start_flow.";
+
+    /// <summary>The run a status call reads. Without a flow_run_id it is the newest open flow the
+    /// calling session started — or, when none is open, the newest flow of any state, so a run that
+    /// failed or closed while the driver was away is still readable. A harness that gives this server
+    /// no session is answered from the runs this machine recorded for the workspace instead. Several
+    /// open flows are listed for the driver to choose from, never guessed between.</summary>
+    async Task<FlowRunIdResolution> ResolveStatusFlowRunIdAsync(
+            HttpClient client, string apiRoot, JsonObject? arguments, string? requestingSessionId,
+            string cwd, string? repoRoot, FlowRetryClock clock) {
+        if (arguments?["flow_run_id"] is { } node) {
+            if (node is not JsonValue value || !value.TryGetValue<string>(out var given))
+                throw new ArgumentException("Invalid argument: flow_run_id must be a string");
+            if (!string.IsNullOrWhiteSpace(given)) return new(given, null);
+        }
+
+        if (McpSessionId.TryResolveWithin(arguments, requestingSessionId) is not { } sessionId)
+            return await ResolveFromRunLedgerAsync(client, apiRoot, RunLedgerWorkspace(cwd, repoRoot), clock);
+
+        var url = $"{apiRoot}/api/flows?requesting_session_id={Uri.EscapeDataString(sessionId)}&state=all";
+        var (sent, failure) = await GetForLookupAsync(client, url, "/api/flows", clock);
+        if (sent is null) return new(null, failure);
+        using var resp = sent;
+        var body = await resp.Content.ReadAsStringAsync();
+
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            return new(null, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time));
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+            return new(null, $"Error: this server cannot look up flows by session (GET /api/flows returned 404). {PassTheFlowRunId}");
+        if (!resp.IsSuccessStatusCode)
+            return new(null, FormatFlowStartError((int)resp.StatusCode, body, wasDynamicStart: false));
+
+        List<SessionFlow>? flows;
+        try { flows = ParseSessionFlows(body); } catch (JsonException) { flows = null; }
+        if (flows is null) return new(null, $"Error: unreadable flow list from GET /api/flows. {PassTheFlowRunId}");
+
+        return ChooseFlow(flows, $"session {sessionId}", $"Error: no flow was started by session {sessionId}. {PassTheFlowRunId}");
+    }
+
+    static string RunLedgerWorkspace(string cwd, string? repoRoot) => repoRoot ?? cwd;
+
+    /// <summary>Recorded before the start's poll lane, so a start the harness aborts is still found.
+    /// A session-bearing harness is looked up by session instead and records nothing.</summary>
+    async Task RecordStartedRunAsync(string postBody, string? requestingSessionId, string cwd, string? repoRoot) {
+        if (WorkContextIds.CanonicalSessionId(requestingSessionId) is not null) return;
+
+        string? flowRunId;
+        try { flowRunId = JsonNode.Parse(postBody) is JsonObject root ? TryGetString(root, "flow_run_id") : null; }
+        catch (JsonException) { return; }
+        if (string.IsNullOrWhiteSpace(flowRunId)) return;
+
+        if (!new FlowRunLedger(config, time).Record(flowRunId, RunLedgerWorkspace(cwd, repoRoot)))
+            await Console.Error.WriteLineAsync($"kcap mcp flows: could not record flow {flowRunId} in {FlowRunLedger.FileName}; a status call without its flow_run_id will not find it");
+    }
+
+    /// <summary>Confirms every retained run against the server, newest first, so an open run behind
+    /// newer settled ones is still found. A run the server no longer knows is skipped — unless it
+    /// was recorded within <see cref="NotFoundGrace"/>, when the 404 may only mean the server has
+    /// not caught up with the start. The workspace path is never shown to the model.</summary>
+    async Task<FlowRunIdResolution> ResolveFromRunLedgerAsync(HttpClient client, string apiRoot, string workspace, FlowRetryClock clock) {
+        var recorded = new FlowRunLedger(config, time).Retained(workspace);
+        if (recorded.Count == 0)
+            return new(null, $"Error: this harness gives kcap no session id, and no flow started from this workspace is recorded on this machine. {PassTheFlowRunId}");
+
+        var flows = new List<SessionFlow>();
+        foreach (var (flowRunId, _, startedAt) in recorded) {
+            var route = $"/api/flows/{Uri.EscapeDataString(flowRunId)}";
+            var (sent, failure) = await GetForLookupAsync(client, apiRoot + route, route, clock);
+            if (sent is null) return new(null, failure);
+            using var resp = sent;
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (resp.StatusCode == HttpStatusCode.Unauthorized)
+                return new(null, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time));
+            if (resp.StatusCode == HttpStatusCode.NotFound) {
+                if (time.GetUtcNow() - startedAt < NotFoundGrace)
+                    return new(null, $"Error: flow {flowRunId} was started moments ago and the server cannot read it yet — retry the call.");
+                continue;
+            }
+            if (!resp.IsSuccessStatusCode)
+                return new(null, FormatFlowStartError((int)resp.StatusCode, body, wasDynamicStart: false));
+
+            SessionFlow? flow;
+            try { flow = JsonNode.Parse(body) is JsonObject row ? ParseFlowRow(row) : null; } catch (JsonException) { flow = null; }
+            if (flow is null) return new(null, $"Error: unreadable flow from GET {route}. {PassTheFlowRunId}");
+            flows.Add(flow);
+        }
+
+        return ChooseFlow(flows, "this workspace", $"Error: no flow recorded for this workspace is known to this server. {PassTheFlowRunId}");
+    }
+
+    /// <summary>A null response comes with the actionable error text in its place.</summary>
+    static async Task<(HttpResponseMessage? Response, string Failure)> GetForLookupAsync(
+            HttpClient client, string url, string route, FlowRetryClock clock) {
+        var (response, how) = await GetBoundedAsync(client, url, clock);
+
+        return response is not null
+            ? (response, "")
+            : (null, $"Error: the flow lookup (GET {route}) {how}; the flow itself is unaffected — retry the call. {PassTheFlowRunId}");
+    }
+
+    /// <summary>One GET under <see cref="PerGetTimeout"/>, so a server that stops answering cannot hold the
+    /// serial tool loop open; a null response comes with how it failed.</summary>
+    static async Task<(HttpResponseMessage? Response, string How)> GetBoundedAsync(HttpClient client, string url, FlowRetryClock clock) {
+        using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
+        try {
+            return (await client.GetAsync(url, getCts.Token), "");
+        } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
+            // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
+            return (null, ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}");
+        }
+    }
+
+    static FlowRunIdResolution ChooseFlow(List<SessionFlow> flows, string owner, string noneError) {
+        var open = flows.Where(f => f.Status is not ("closed" or "failed")).ToList();
+        if (open.Count > 1) return new(null, DescribeOpenFlows(owner, open));
+
+        var chosen = open.Count == 1 ? open[0] : flows.FirstOrDefault();
+        return chosen is null ? new(null, noneError) : new(chosen.FlowRunId, null);
+    }
+
+    /// <summary>Null for a body that is not the route's shape — an object with a <c>flows</c> array —
+    /// so a proxy page or another route's JSON reads as unreadable, never as an empty history.</summary>
+    static List<SessionFlow>? ParseSessionFlows(string body) {
+        if (JsonNode.Parse(body) is not JsonObject root || root["flows"] is not JsonArray rows) return null;
+        var flows = new List<SessionFlow>();
+        foreach (var row in rows.OfType<JsonObject>())
+            if (ParseFlowRow(row) is { } flow) flows.Add(flow);
+        return flows;
+    }
+
+    static SessionFlow? ParseFlowRow(JsonObject row) {
+        var flowRunId = TryGetString(row, "flow_run_id");
+        if (string.IsNullOrWhiteSpace(flowRunId)) return null;
+        return new(
+            flowRunId,
+            TryGetString(row, "status") ?? "",
+            TryGetString(row, "definition_id"),
+            TryGetString(row, "target_title"),
+            row["round_number"] is JsonValue round && round.TryGetValue<int>(out var roundNumber) ? roundNumber : null,
+            TryGetString(row, "round_status"),
+            TryGetString(row, "started_at"));
+    }
+
+    static string DescribeOpenFlows(string owner, IReadOnlyList<SessionFlow> open) {
+        var sb = new StringBuilder();
+        sb.Append("Error: ").Append(owner).Append(" has ").Append(open.Count).Append(" open flows. Pass flow_run_id for the one you mean:");
+        foreach (var flow in open) {
+            sb.AppendLine().Append("  ").Append(flow.FlowRunId);
+            if (flow.DefinitionId is { } definitionId) sb.Append("  ").Append(definitionId);
+            if (flow.TargetTitle is { } title)         sb.Append("  \"").Append(title).Append('"');
+            if (flow.RoundNumber is { } roundNumber)   sb.Append("  round ").Append(roundNumber).Append(' ').Append(flow.RoundStatus);
+            if (flow.StartedAt is { } startedAt)       sb.Append("  started ").Append(startedAt);
+        }
+        return sb.ToString();
+    }
+
+    static JsonObject WithFlowRunId(JsonObject? arguments, string flowRunId) {
+        var withId = arguments?.DeepClone().AsObject() ?? new JsonObject();
+        withId["flow_run_id"] = flowRunId;
+        return withId;
+    }
+
     static readonly TimeSpan PollInterval   = TimeSpan.FromSeconds(3);
-    static readonly TimeSpan PollCap        = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
+    // With a GET in flight at the cap and the ack POST after it, a bare status wait still ends before
+    // ShortestHarnessToolTimeout. Under ToolCallBudget, so the budget only clips a call that spent
+    // settlement time.
+    static readonly TimeSpan PollCap        = TimeSpan.FromSeconds(210);
     static readonly TimeSpan PerGetTimeout  = TimeSpan.FromSeconds(20);
     static readonly TimeSpan NotFoundGrace  = TimeSpan.FromSeconds(10);
     // E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
@@ -1267,6 +1501,55 @@ class McpFlowsServer(
     /// sidecar branches in McpFlowResultServer) so the advice can never drift between tools.</summary>
     internal const string ServerCatchingUpGuidance =
         "The server is catching up after a read-model rebuild — try again in a few minutes, or ask the user what to do.";
+
+    /// <summary>What an older server's 404 on the definitions route means for the driver: the built-ins
+    /// still start, nothing else can be discovered.</summary>
+    internal const string ServerCannotListDefinitions =
+        "This server cannot list flow definitions (GET /api/flows/definitions returned 404). " +
+        "The built-in definitions are spec-review and code-review; for any other flow, ask the user for its definition id.";
+
+    /// <summary>Renders GET /api/flows/definitions for the driver, each entry led by the id it passes to
+    /// start_flow. Null when the body is not the expected shape.</summary>
+    internal static string? FormatFlowDefinitions(string body) {
+        JsonNode? root;
+        try { root = JsonNode.Parse(body); } catch (JsonException) { return null; }
+
+        if (root is not JsonObject obj || obj["definitions"] is not JsonArray definitions) return null;
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"flow_definitions ({definitions.Count}):");
+
+        foreach (var node in definitions) {
+            if (node is not JsonObject definition || Str(definition, "id") is not { } definitionId) continue;
+
+            var participants = definition["participants"] as JsonArray ?? new JsonArray();
+            var single       = Bool(definition, "is_single_participant") ?? participants.Count == 1;
+            var version      = definition["version"] is JsonValue v && v.TryGetValue(out int ver) ? $" (v{ver})" : "";
+
+            sb.AppendLine(single
+                ? $"- {definitionId}{version} — single participant: start_flow runs round 1 and accepts vendor/model overrides"
+                : $"- {definitionId}{version} — {participants.Count} participants: start_flow is round-less, address each role with send_to_participant");
+
+            if (Str(definition, "description") is { Length: > 0 } description)
+                sb.AppendLine($"  {description.ReplaceLineEndings(" ").Trim()}");
+
+            foreach (var participant in participants.OfType<JsonObject>()) {
+                var role   = Str(participant, "role") ?? "?";
+                var vendor = Str(participant, "vendor") ?? "vendor unset (the request or your saved flows.reviewer_vendor preference decides)";
+                var model  = Str(participant, "model") ?? "default";
+                sb.AppendLine($"  {role}: {vendor}, model {model}");
+            }
+        }
+
+        sb.Append(definitions.Count == 0
+            ? "No flow definition is runnable on this server. Ask the user for one to publish, or compose one inline with definition_yaml."
+            : "Pass a listed id as definition_id to start_flow (spec-review and code-review also work as kind on start_review_flow).");
+
+        return sb.ToString();
+
+        static string? Str(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue(out string? s) ? s : null;
+        static bool?   Bool(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue(out bool b) ? b : null;
+    }
 
     /// <summary>Renders an exhausted settlement elapsed deadline as tool-error text, in the same
     /// "Error (code): message" shape <see cref="FormatFlowStartError"/> uses for a coded rejection —
@@ -1585,9 +1868,9 @@ class McpFlowsServer(
             await clock.DelayAsync(PollInterval);
         }
 
-        // Genuine 8-min cap: the same benign text the round-submission poll lane returns, minus the
-        // round number (a bare status wait has none pinned) — callers already treat this string as
-        // benign, non-error "try the status tool again" guidance, per the backwards-compat design.
+        // PollCap reached: the same benign text the round-submission poll lane returns, minus the round
+        // number (a bare status wait has none pinned). Agents match on this string as non-error
+        // "call the status tool again" guidance.
         return new(
             $"Flow still running for flow_run_id {flowRunId}. Call {toolName} to retrieve the result when ready.",
             false
@@ -1609,6 +1892,7 @@ class McpFlowsServer(
         if (roundNumber.HasValue) { sb.Append("round_number: "); sb.AppendLine(roundNumber.Value.ToString()); }
         sb.Append("status: ");      AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
         sb.Append("result_kind: "); AppendLine(sb, resultKind);
+        AppendStopDetail(sb, node, "round_result_detail");
         if (TryGetString(node, "requested_reviewer_vendor") is { } requestedVendor) {
             sb.Append("requested_reviewer_vendor: "); AppendLine(sb, requestedVendor);
         }
@@ -1655,6 +1939,7 @@ class McpFlowsServer(
             sb.Append("round_id: ");    AppendLine(sb, roundId);
             sb.Append("status: ");      AppendLine(sb, status);
             sb.Append("result_kind: "); AppendLine(sb, resultKind);
+            AppendStopDetail(sb, node, "result_detail");
             if (requestedVendor is not null) { sb.Append("requested_reviewer_vendor: "); AppendLine(sb, requestedVendor); }
             if (appliedVendor is not null) { sb.Append("applied_reviewer_vendor: "); AppendLine(sb, appliedVendor); }
             if (vendorSource is not null) { sb.Append("reviewer_vendor_source: "); AppendLine(sb, vendorSource); }
@@ -1714,6 +1999,7 @@ class McpFlowsServer(
 
             if (!string.IsNullOrEmpty(lastResultKind)) {
                 sb.Append("result_kind: "); AppendLine(sb, lastResultKind);
+                AppendStopDetail(sb, node, "round_result_detail");
             }
 
             if (!string.IsNullOrEmpty(lastResultText)) {
@@ -1730,6 +2016,14 @@ class McpFlowsServer(
             pendingIds = [];
             return body;
         }
+    }
+
+    /// <summary>The daemon's code for why it ended the reviewer, beside a result text of
+    /// <c>participant_died</c> — which stays exactly that, because drivers match it.</summary>
+    static void AppendStopDetail(StringBuilder sb, JsonObject node, string key) {
+        if (TryGetString(node, key) is not { } detail) return;
+
+        sb.Append("stop_detail: "); AppendLine(sb, detail);
     }
 
     static void AppendParticipants(StringBuilder sb, JsonObject node) {
@@ -2072,6 +2366,11 @@ class McpFlowsServer(
         return envelope.ToJsonString();
     }
 
+    /// <summary>Carried by every tool that holds the call open while a round runs. A harness that
+    /// aborts the call words the error itself, so this is the only guidance the driver has read.</summary>
+    static string HarnessTimeoutGuidance(string statusTool) =>
+        $"This call blocks for minutes while the round runs. If your harness aborts it with a tool timeout, the flow is still running server-side: do not start it again and do not investigate — call {statusTool} with wait: true (flow_run_id may be omitted: it resolves the open flow this session started, or on a harness without a session identity the open flow started from this workspace). ";
+
     internal static McpTool[] BuildToolsList() => [
         new(
             "start_review_flow",
@@ -2080,6 +2379,7 @@ class McpFlowsServer(
             "Only call this when the user explicitly asked for a review *flow* / to submit for review; for an ordinary 'review my PR' or 'code review' request, review directly and do NOT call this tool. " +
             "Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later. " +
+            HarnessTimeoutGuidance("get_review_flow_status") +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
@@ -2095,11 +2395,13 @@ class McpFlowsServer(
                     ["model"]        = new("string", "Optional reviewer model override for this review. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
                 ["kind", "target_kind", "target_ref", "target_title", "context"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "submit_review_round",
             "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            HarnessTimeoutGuidance("get_review_flow_status") +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
@@ -2109,22 +2411,25 @@ class McpFlowsServer(
                     ["instructions"] = new("string", "Optional instructions for this round.")
                 },
                 ["flow_run_id", "context"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "get_review_flow_status",
             "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
             "Long rounds are normal — a reviewer round can legitimately run well past a single check. " +
-            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
+            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on that cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow."),
-                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 8 minutes elapse, instead of returning immediately.")
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow. Optional: when omitted, the newest open flow this session started is read (on a harness that gives this server no session, the newest one started from this workspace on this machine) — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
+                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
-                ["flow_run_id"]
-            )
+                []
+            ),
+            McpToolAnnotations.Additive
         ),
         new(
             "close_review_flow",
@@ -2136,7 +2441,8 @@ class McpFlowsServer(
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow.")
                 },
                 ["flow_run_id"]
-            )
+            ),
+            McpToolAnnotations.Destructive
         ),
         new(
             "start_flow",
@@ -2144,6 +2450,7 @@ class McpFlowsServer(
             "Start a new agent flow from the server's flow-definition catalog (definition_id) or from an inline YAML definition (definition_yaml — dynamic flows). This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
+            HarnessTimeoutGuidance("get_flow_status") +
             "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
@@ -2161,11 +2468,13 @@ class McpFlowsServer(
                     ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
                 ["target_kind", "target_ref", "target_title", "context"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "send_to_participant",
             "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            HarnessTimeoutGuidance("get_flow_status") +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
@@ -2177,22 +2486,25 @@ class McpFlowsServer(
                     ["async"]        = new("boolean", "Optional. Defaults to true.")
                 },
                 ["flow_run_id", "participant", "message"]
-            )
+            ),
+            McpToolAnnotations.Launch
         ),
         new(
             "get_flow_status",
             "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
             "Long rounds are normal — a participant round can legitimately run well past a single check. " +
-            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately; on the 8-minute cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
+            "Optional wait: true blocks (bounded, internally retried GETs — never a raw long-poll) until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately; on that cap it returns the same benign still-running text as an unset/false wait, so re-enter with wait: true again rather than treating that as an error. " +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
-                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow."),
-                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 8 minutes elapse, instead of returning immediately.")
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow. Optional: when omitted, the newest open flow this session started is read (on a harness that gives this server no session, the newest one started from this workspace on this machine) — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
+                    ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
+                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
                 },
-                ["flow_run_id"]
-            )
+                []
+            ),
+            McpToolAnnotations.Additive
         ),
         new(
             "close_flow",
@@ -2204,7 +2516,8 @@ class McpFlowsServer(
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_flow.")
                 },
                 ["flow_run_id"]
-            )
+            ),
+            McpToolAnnotations.Destructive
         ),
         new(
             "list_reviewer_vendors",
@@ -2214,7 +2527,19 @@ class McpFlowsServer(
             "driver_vendor (the harness running THIS session, or absent when it cannot be determined — treat absent as unknown, and do not claim a different model), " +
             "and diagnostics counts. This does NOT start a review — it only reports availability; use start_review_flow to run one. " +
             "Availability is a snapshot: a vendor listed here can still be rejected by start_review_flow if the daemon dropped in between.",
-            new("object", new(), [])
+            new("object", new(), []),
+            McpToolAnnotations.Read
+        ),
+        new(
+            "list_flow_definitions",
+            "List the flow definitions this server can start right now — the catalog start_flow resolves definition_id against, operator-published flows included. " +
+            "Call it before start_flow whenever the user has not named a definition, or named one you have not seen listed. " +
+            "Read-only and side-effect-free: this does NOT start anything. " +
+            "Each entry gives the id to pass as definition_id, its version and description, whether it is single-participant (start_flow runs round 1 and accepts vendor/model overrides) or multi-participant (start_flow is round-less; address each role with send_to_participant), and per participant its role, authored vendor (unset means the request or your saved preference decides) and model. " +
+            "Disabled or deleted definitions are not listed, and start_flow refuses them. " +
+            "A server_catching_up error means the catalog is temporarily unreadable — retry shortly rather than treating the list as empty; an empty list is authoritative.",
+            new("object", new(), []),
+            McpToolAnnotations.Read
         )
     ];
 }

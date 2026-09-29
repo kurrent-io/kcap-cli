@@ -31,7 +31,7 @@ public sealed class CoreTerminalAttachClient(AgentAttachClient inner) : ITermina
 }
 
 /// Deliberately NOT named *Attach*State — AttachStatus/AttachState already
-/// describe the daemon status subscription (spec naming note).
+/// describe the daemon status subscription.
 public enum TerminalSessionPhase { Resolving, NoTerminal, NotFound, Connecting, Attached, Detached, Exited, Failed, SessionEnded }
 
 /// What the composer can do right now, folding the send gate into the terminal state so a hint

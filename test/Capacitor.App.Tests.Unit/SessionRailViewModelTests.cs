@@ -116,7 +116,7 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Counts_and_hosted_text_track_the_cache() {
+    public async Task Counts_track_the_cache() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (service, _, rail) = Build();
             using (rail) {
@@ -124,7 +124,6 @@ public class SessionRailViewModelTests {
                 service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha"));
                 service.Agents.AddOrUpdate(Dto("a2", "/dev/alpha/wt/feature-x"));
                 await Assert.That(rail.IsEmpty).IsFalse();
-                await Assert.That(rail.HostedText).IsEqualTo("2 hosted");
                 await Assert.That(rail.Repos[0].CountText).IsEqualTo("2 sessions");
 
                 service.Agents.RemoveKey("a2");

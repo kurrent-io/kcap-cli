@@ -1,13 +1,16 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 
 namespace Capacitor.App.Views;
 
-/// The Sessions surface's rail. DataContext is the window's own MainWindowViewModel, inherited —
-/// this view never builds or assigns one, same contract as HomeView.
+/// The session rail. DataContext is the window's own MainWindowViewModel, inherited — this view
+/// never builds or assigns one.
 public partial class SessionRailView : UserControl {
     public SessionRailView() => InitializeComponent();
 
     // The rail's 44px chrome row IS the title bar on this surface — see WindowChrome.
     void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
+
+    void OnHelpFlyoutItemClick(object? sender, RoutedEventArgs e) => RailHelpButton.Flyout?.Hide();
 }

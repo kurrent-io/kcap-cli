@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.OpenCode;
+using Capacitor.Cli.Core.Harness.Pi;
 
 namespace Capacitor.Cli.Core;
 
@@ -45,7 +46,8 @@ public static class GatedReviewers {
         For<KiroHarness>       ("KCAP_KIRO_UNATTENDED_REVIEWER"),
         For<GeminiHarness>     ("KCAP_GEMINI_UNATTENDED_REVIEWER"),
         For<AntigravityHarness>("KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER"),
-        For<OpenCodeHarness>   ("KCAP_OPENCODE_UNATTENDED_REVIEWER")
+        For<OpenCodeHarness>   ("KCAP_OPENCODE_UNATTENDED_REVIEWER"),
+        For<PiHarness>         ("KCAP_PI_UNATTENDED_REVIEWER")
     ];
 
     /// <summary>The opt-out switch is the only thing a row states for itself. The vendor token and its
@@ -53,7 +55,7 @@ public static class GatedReviewers {
     static GatedReviewer For<TSelf>(string enableEnvVar) where TSelf : IHarness<TSelf> =>
         new(TSelf.Id.VendorId, TSelf.CliBinary, TSelf.Id.PathEnvVar, enableEnvVar);
 
-    /// <summary>For usage text: <c>kiro | gemini | antigravity | opencode</c>.</summary>
+    /// <summary>For usage text: <c>kiro | gemini | antigravity | opencode | pi</c>.</summary>
     public static string VendorList => string.Join(" | ", All.Select(r => r.Vendor));
 
     /// <summary>Case-insensitive lookup, null when the vendor is not gated (or not a vendor).</summary>

@@ -119,6 +119,22 @@ public class CodexAppServerHostedAgentRuntimeTests {
     }
 
     [Test]
+    public async Task Reroute_notification_updates_the_resolved_model_from_toModel() {
+        // The model/rerouted payload carries fromModel/toModel — a reader on the old bare `model` field
+        // would silently keep the original model and mis-attribute every later token delta to it.
+        var fake = new FakeCodexAppServer { Model = "gpt-5.3-codex", RerouteToModelOnTurn = "gpt-5.4-codex" };
+        var (runtime, _, _) = Build(_ => fake, Launch());
+
+        await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await runtime.SendUserInputAsync("go").WaitAsync(HangGuard);
+        await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(runtime.ResolvedModel).IsEqualTo("gpt-5.4-codex");
+
+        await runtime.DisposeAsync();
+    }
+
+    [Test]
     public async Task Envelope_transcript_emits_a_token_usage_delta_through_the_forward_buffer() {
         // Gate ON: the real HandleNotification path feeds the mapper + forward buffer, so a turn's usage
         // notification surfaces as a token_usage envelope on IAcpTranscriptSource.Envelopes.

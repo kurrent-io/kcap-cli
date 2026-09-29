@@ -10,19 +10,19 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// Ready/Expired are the two INTERACTIVE states — hint expiry is not a verdict (spec §6), so the
+/// Ready/Expired are the two INTERACTIVE states — hint expiry is not a verdict, so the
 /// buttons behave identically in both and only the countdown line differs. Concluded is the
 /// 2-second terminal hold: the pinned request is settled and its disclosure is on screen — either
 /// "Already decided" or an applied decision whose rule did not save.
 public enum ConsentPromptPhase { Ready, Resolving, Concluded, Expired }
 
-/// Renders ONE pinned consent request at a time (spec §6). The pin is what the user is looking at:
+/// Renders ONE pinned consent request at a time. The pin is what the user is looking at:
 /// it is taken from the sorted queue head and released only on an advance — never swapped out from
 /// under a click by an arrival, a prune, or a replay. The ViewModel NEVER removes a cache entry;
-/// conclusive acks and the prune do that inside ConsentService (spec §5), and its identity guard
+/// conclusive acks and the prune do that inside ConsentService, and its identity guard
 /// makes any stale action a no-op.
 ///
-/// Four honesty rules carry the reviewed reasoning:
+/// Five honesty rules:
 ///
 /// * <b>Expiry is never a verdict.</b> The deadline hint is wall-clock and the daemon's deadline is
 ///   monotonic, so a hint that reached zero proves nothing. The countdown line says so and the
@@ -38,7 +38,7 @@ public enum ConsentPromptPhase { Ready, Resolving, Concluded, Expired }
 ///   holds the window for the terminal hold instead of closing under its own toast.
 /// * <b>Only a DECISION closes the window on the spot.</b> A queue the cache emptied — a
 ///   resubscribe's clear, whose replay arrives as a separate changeset — waits one beat before
-///   closing, so a reconnect blip can no longer flicker the window shut and rebuild it (see
+///   closing, so a reconnect blip does not flicker the window shut and rebuild it (see
 ///   Advance).
 public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewModel {
     const string ExpiredCopy     = "Response time elapsed — unanswered requests are denied by the daemon";
@@ -47,7 +47,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
     const string TransportCopy   = "Daemon unreachable — the request is still pending";
     const string UnknownRuleCopy = "Decision applied — this daemon version doesn't report whether the rule was saved";
 
-    // 1 Hz ticker (spec §6: a 2-second hold), counted in ticks so no test ever sleeps.
+    // A 2-second hold on the 1 Hz ticker, counted in ticks so no test ever sleeps.
     const int TerminalHoldTicks = 2;
 
     static readonly IComparer<PendingConsent> QueueComparer = Comparer<PendingConsent>.Create((a, b) => {
@@ -68,9 +68,8 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
     readonly Action? _onConcluded;
     readonly Subject<Unit> _closeRequested = new();
 
-    // ONE stable collection, created once and never replaced (the lesson recorded on
-    // MainWindowViewModel._agentsSource — a swapped instance leaves the view bound to a dead
-    // collection): WhenActivated re-runs on every window, and SortAndBind's IList overload mutates
+    // ONE stable collection, created once and never replaced (a swapped instance leaves the view
+    // bound to a dead collection): WhenActivated re-runs on every window, and SortAndBind's IList overload mutates
     // THIS instance in place.
     readonly ObservableCollectionExtended<PendingConsent> _queueSource = new();
 
@@ -90,8 +89,8 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
 
     public ReadOnlyObservableCollection<PendingConsent> Queue { get; }
 
-    /// Fires when an advance finds nothing left to show. The window closes itself on this (spec
-    /// §6: "the next pending or closes when the queue empties"); the ViewModel owns no window.
+    /// Fires when an advance finds nothing left to show. The window closes itself on this; the
+    /// ViewModel owns no window.
     public IObservable<Unit> CloseRequested => _closeRequested.AsObservable();
 
     PendingConsent? _current;
@@ -108,7 +107,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
     }
 
     string? _phaseText;
-    /// Terminal-state line: "Already decided" with its §4.1 rule-side-effect disclosure, or a
+    /// Terminal-state line: "Already decided" with its rule-side-effect disclosure, or a
     /// rule-not-saved warning being held on screen. Null while the request is still answerable.
     public string? PhaseText {
         get => _phaseText;
@@ -143,7 +142,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
     public string RepoFull => _repoFull.Value;
 
     // Hidden when the requester is null OR empty — the same predicate as ConsentService's save
-    // guard, which stays the real safety boundary (a wildcard allow-everything rule, spec §6).
+    // guard, which stays the real safety boundary (a wildcard allow-everything rule).
     readonly ObservableAsPropertyHelper<bool> _allowRememberVisible;
     public bool AllowRememberVisible => _allowRememberVisible.Value;
 
@@ -165,7 +164,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
     /// <param name="onConcluded">
     /// Invoked after every conclusive ack (AlreadyDecided or a landed decision — never a
     /// TransportFailure, which settles nothing). Composition wires this to the app's single
-    /// ActivityViewModel's RequestRefresh (spec §7): own decisions are eventual, not instant — see
+    /// ActivityViewModel's RequestRefresh: own decisions are eventual, not instant — see
     /// that method's own doc comment.
     /// </param>
     public ConsentPromptViewModel(
@@ -190,9 +189,9 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
             .Select(c => c is not null && !string.IsNullOrEmpty(c.Dto.Requester))
             .ToProperty(this, x => x.AllowRememberVisible, initialValue: false);
 
-        // Constructor-scoped, exactly like MainWindowViewModel's Start/RetryVisible: the commands
-        // must exist and be assertable before any window activates, and these observables only
-        // ever observe THIS object's own property changes (always raised on the UI thread).
+        // Constructor-scoped: the commands must exist and be assertable before any window
+        // activates, and these observables only ever observe THIS object's own property
+        // changes (always raised on the UI thread).
         var canResolve = this
             .WhenAnyValue(x => x.Current, x => x.Phase,
                 (target, phase) => target is not null && phase is ConsentPromptPhase.Ready or ConsentPromptPhase.Expired);
@@ -209,12 +208,12 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
         this.WhenActivated(disposables => {
             // The pipeline below is brand new on every activation while _queueSource is reused —
             // without this Clear a reactivation's initial replay would insert a second copy of
-            // everything currently cached (MainWindowViewModel's identical note).
+            // everything currently cached.
             _queueSource.Clear();
             _closeDeferred = false; // a close armed under the previous activation is not this one's
 
             // ObserveOn BEFORE the binding operator: the cache is mutated on the service's
-            // background continuations (spec §5).
+            // background continuations.
             consent.Pending
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .SortAndBind(_queueSource, QueueComparer)
@@ -249,7 +248,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
 
     /// Cache changes never swap the display while the pinned request is being resolved or is
     /// holding a terminal state; otherwise the pin survives until it leaves the cache (the
-    /// hint-expired prune, spec §6).
+    /// hint-expired prune).
     void OnQueueChanged() {
         if (Phase is ConsentPromptPhase.Resolving or ConsentPromptPhase.Concluded) {
             UpdatePosition();
@@ -281,9 +280,9 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
     /// service evicts a concluded entry, and _settled covers the beat before that eviction shows up.
     ///
     /// <paramref name="settled"/> marks the LOCAL paths — an ack, or the end of its terminal hold —
-    /// which close on this very beat (spec §6). An emptiness the CACHE caused waits one ticker beat
+    /// which close on this very beat. An emptiness the CACHE caused waits one ticker beat
     /// instead: a resubscribe clears and replays as two separate changesets, and closing on the
-    /// intermediate one flickered the window shut and rebuilt it a moment later with a fresh
+    /// intermediate one would flicker the window shut and rebuild it a moment later with a fresh
     /// ViewModel, a reset pin and stolen focus. The pin still releases immediately either way —
     /// nothing that left the cache stays on screen.
     void Advance(bool settled) {
@@ -337,7 +336,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
         if (remaining > TimeSpan.Zero) return $"Expires in {(int)Math.Ceiling(remaining.TotalSeconds)}s";
 
         // Past the hint: an in-flight resolve owns the outcome, otherwise the non-authoritative
-        // copy — and the buttons stay live either way (spec §6).
+        // copy — and the buttons stay live either way.
         return Phase == ConsentPromptPhase.Resolving ? ExpiringCopy : ExpiredCopy;
     }
 
@@ -354,7 +353,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
             Phase = RestingPhase();
         } catch (Exception ex) {
             // ResolveAsync already contains its own unmapped failures; anything still escaping
-            // (e.g. a disposed service, which the §5 shutdown order makes unreachable) must not
+            // (e.g. a disposed service, which the shutdown order makes unreachable) must not
             // reach ReactiveCommand.ThrownExceptions, whose default handler rethrows on the
             // dispatcher and takes the app down.
             Console.Error.WriteLine($"kcap: consent resolve failed unexpectedly: {ex.Message}");
@@ -402,7 +401,7 @@ public sealed class ConsentPromptViewModel : ReactiveObject, IActivatableViewMod
         Phase      = ConsentPromptPhase.Concluded;
     }
 
-    /// Never a silent success (spec §6) — and after an Allow &amp; remember the §4.1 side effect is
+    /// Never a silent success — and after an Allow &amp; remember the rule side effect is
     /// disclosed: the daemon persists a rule BEFORE it attempts the resolution, so a request that
     /// was already decided elsewhere can still have installed one.
     string DecidedText(ConsentRuleOutcome rule) => rule switch {

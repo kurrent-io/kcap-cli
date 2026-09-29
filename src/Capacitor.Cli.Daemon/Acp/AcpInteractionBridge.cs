@@ -785,11 +785,11 @@ internal sealed partial class AcpInteractionBridge(
             PolicySnapshot snapshot, CanonicalAction action, PolicyEvaluation evaluation,
             string sessionId, string? correlationId, string requested, string effective) {
         try {
-            notifyPolicyDecision?.Invoke(new PolicyDecisionEventV1(
-                sessionId, agentId, policyVendor ?? "unknown", PolicySeams.AcpRequestPermission, snapshot.Id,
-                PolicyEngine.Version, "full", requested, effective, PolicyWire.ToWire(action),
-                PolicyWire.ToWire(evaluation.MatchedRules), snapshot.Degraded, null, correlationId, false,
-                time.GetUtcNow().ToString("O")));
+            notifyPolicyDecision?.Invoke(PolicyWire.Decision(
+                sessionId: sessionId, agentId: agentId, vendor: policyVendor ?? "unknown", seam: PolicySeams.AcpRequestPermission,
+                snapshot: snapshot, mode: EvaluationMode.Full, requestedOutcome: requested, effectiveOutcome: effective,
+                action: PolicyWire.ToWire(action), matchedRules: PolicyWire.ToWire(evaluation.MatchedRules), time: time,
+                correlationId: correlationId));
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: policy decision audit notify threw for agent {AgentId}; ignoring", agentId);
         }

@@ -1,6 +1,6 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -11,7 +11,6 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Remote.Models;
 using DynamicData;
-using DynamicData.Binding;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -26,23 +25,24 @@ public sealed record RepositoryOption(string RepoPath, string Vendor, bool Selec
 /// someone else is never surfaced as an option. RepoPaths/SupportedVendors come from DaemonInfo
 /// verbatim for a remote machine; the local entry's come from the existing repo flow. Version is
 /// the remote daemon's own advertised build, which is what the attachment gate reads; null for the
-/// local entry, whose capability comes from the attach handshake instead.
+/// local entry, whose capability comes from the attach handshake instead. VendorModels is the
+/// machine's own model catalog per vendor; null when its daemon advertises none.
 public sealed record MachineOption(
     string DaemonName, bool IsLocal, bool Connected, string? Platform,
-    string[] RepoPaths, string[]? SupportedVendors, bool Selected, string? Version = null);
+    string[] RepoPaths, string[]? SupportedVendors, bool Selected, string? Version = null,
+    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? VendorModels = null);
 
 /// Whether a launch can reach a daemon right now, merged from the local attach state and the
 /// daemon's own upstream connection word — the same two inputs the footer's status line reads.
 internal enum LaunchAvailability { Ready, Pending, DaemonUnavailable, ServerDisconnected }
 
-/// The Home tab's view-model: repository + harness picker, a free-text goal, and
+/// The launcher pane's view-model: repository + harness picker, a free-text goal, and
 /// the Start action that launches a session through ILaunchClient. Constructed once, like
-/// TrayViewModel/ActivityViewModel — not gated behind IActivatableViewModel — since Harnesses and
-/// Sessions must be live from construction, not deferred to a window's activation. Snapshots and
-/// Agents are mutated on the daemon client's own background thread (same as
-/// MainWindowViewModel/ConsentPromptViewModel), so both projections below ObserveOn
-/// RxSchedulers.MainThreadScheduler BEFORE the operator that touches bound state — the
-/// ItemsControl binding must never see a mutation off the UI thread.
+/// TrayViewModel/ActivityViewModel — not gated behind IActivatableViewModel — since Harnesses
+/// must be live from construction, not deferred to a window's activation. Snapshots are mutated
+/// on the daemon client's own background thread (same as MainWindowViewModel/
+/// ConsentPromptViewModel), so projections ObserveOn RxSchedulers.MainThreadScheduler BEFORE the
+/// operator that touches bound state — a binding must never see a mutation off the UI thread.
 public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink {
     /// A repository with no remembered choice falls back to this — never to whatever vendor was
     /// selected for a DIFFERENT repository, which would leak a preference across repositories.
@@ -66,12 +66,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// ownership/connected check at the moment of launch, whatever the UI-affordance state said.
     public const string MachineUnavailableMessage = "This machine is no longer available. Choose a different one.";
 
-    /// The daemon capability that accepts uploaded attachment ids on a launch.
-    internal const string AttachCapability = "input/2";
     internal const string SignInToAttach = "sign in to attach files";
-    internal const string DaemonNeedsAttachments = "attachments need the daemon updated";
 
     internal const string ConnectingNotice     = "Connecting to the server…";
+    /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
+    internal static readonly TimeSpan CatchUpLimit = TimeSpan.FromSeconds(60);
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
@@ -87,14 +86,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly IAppStateStore _state;
     readonly ILaunchClient _launch;
     readonly Func<Task<string[]>> _knownRepos;
-    readonly Action<string>? _openSession;
     readonly Func<int>? _navigationGeneration;
     readonly Action<string, int>? _openSessionIfCurrent;
+    readonly Action<string>? _launchFailed;
     readonly CompositeDisposable _disposables = new();
 
     string _selectedRepoPath = ScratchRepoPath;
     // Subject (not WhenAnyValue) so the ctor can compose StartButtonTip — same reason as
-    // _signInRequired above.
+    // _signInRequired below.
     readonly BehaviorSubject<string> _selectedRepoPathChanges = new(ScratchRepoPath);
     public string SelectedRepoPath {
         get => _selectedRepoPath;
@@ -120,16 +119,38 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         set => this.RaiseAndSetIfChanged(ref _selectedModel, value);
     }
 
-    /// The server's model catalog snapshot (empty until fetched); the agent chip resolves a
-    /// selected model's label against it.
-    public IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> ModelCatalog => _modelCatalog;
+    /// The selected machine's own model catalog merged over the server's (see MergeCatalogs); the
+    /// agent chip resolves a selected model's label against it.
+    public IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> EffectiveModelCatalog => _effectiveModelCatalog.Value;
 
-    /// The model choices to offer for a vendor: the server catalog when it has any, else the
-    /// curated fallback. So a launch is never blocked by an empty or unreachable catalog.
+    /// The model choices to offer for a vendor: the effective catalog's entry, else the curated
+    /// fallback. So a launch is never blocked by an empty or unreachable server catalog.
     public IReadOnlyList<ModelChoice> ModelChoicesFor(string vendor) =>
-        _modelCatalog.TryGetValue(vendor, out var models) && models.Count > 0
-            ? models
-            : HostedHarnessCatalog.ModelChoicesFor(vendor);
+        EffectiveModelCatalog.TryGetValue(vendor, out var models) ? models : HostedHarnessCatalog.ModelChoicesFor(vendor);
+
+    /// Per vendor: the machine's list whenever it has the key, even empty, since the machine is
+    /// the one that launches; else a non-empty server list; else no key.
+    internal static bool ShouldClearSelection(string vendor, string model,
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> previous,
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> next) {
+        if (string.IsNullOrWhiteSpace(model)) return false;
+        if (!previous.TryGetValue(vendor, out var was) || !Lists(was, model)) return false;
+        return next.TryGetValue(vendor, out var now) && !Lists(now, model);
+
+        static bool Lists(IReadOnlyList<ModelChoice> models, string model) =>
+            models.Any(m => string.Equals(m.Slug, model, StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> MergeCatalogs(
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? machine,
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> server) {
+        var merged = new Dictionary<string, IReadOnlyList<ModelChoice>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (vendor, models) in server)
+            if (models.Count > 0) merged[vendor] = models;
+        if (machine is not null)
+            foreach (var (vendor, models) in machine) merged[vendor] = models;
+        return merged;
+    }
 
     string? _selectedEffort;
     /// null = vendor default. Survives vendor changes — the effort vocabulary is shared enough
@@ -208,6 +229,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// True after a successful re-auth until the daemon reports server-connected (or goes down).
     /// Keeps the banner from still asking to Sign in while the daemon catches up.
     readonly BehaviorSubject<bool> _awaitingServerAfterSignIn = new(false);
+    /// True once a Connecting/Finishing notice has lasted CatchUpLimit — Sign in is then the remaining affordance.
+    readonly BehaviorSubject<bool> _catchUpTimedOut = new(false);
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -287,8 +310,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     bool _remoteMachineSelected;
-    /// False ⇒ every existing repo/harness/launch behavior is untouched by a HomeViewModel that
-    /// never wires the machine picker.
+    /// False ⇒ the local repo/harness/launch behavior, which is all a HomeViewModel that never
+    /// wires the machine picker ever sees.
     public bool RemoteMachineSelected {
         get => _remoteMachineSelected;
         private set => this.RaiseAndSetIfChanged(ref _remoteMachineSelected, value);
@@ -307,14 +330,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ObservableAsPropertyHelper<bool> _machinePickerVisible;
     /// The machine chip's visibility: hidden until the viewer owns at least one remote daemon.
     public bool MachinePickerVisible => _machinePickerVisible.Value;
-
-    static readonly IComparer<SessionCardViewModel> RowComparer = Comparer<SessionCardViewModel>.Create((a, b) => {
-        var byCreated = a.CreatedAt.CompareTo(b.CreatedAt);
-        return byCreated != 0 ? byCreated : string.CompareOrdinal(a.Id, b.Id);
-    });
-
-    readonly ObservableCollectionExtended<SessionCardViewModel> _sessionsSource = new();
-    public ReadOnlyObservableCollection<SessionCardViewModel> Sessions { get; }
 
     public ReactiveCommand<Unit, Unit> StartCommand { get; }
 
@@ -355,6 +370,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly IAttachmentUploader _uploader;
     readonly TimeProvider _time;
     readonly ITimer _retentionTimer;
+    readonly ITimer _catchUpTimer;
+    bool _catchUpArmed;
+    long _catchUpGeneration;
+    DateTimeOffset _catchUpDeadline;
 
     // Live mirrors of the attachment gate's inputs, read (never bound) by the in-method re-check
     // StartAsync runs against the captured draft rather than the current selection.
@@ -362,17 +381,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     IReadOnlyList<string>? _currentCapabilities;
     IReadOnlyList<DaemonInfo> _currentDaemons = [];
 
-    /// The server's per-vendor model catalog (empty until the first fetch lands). The launcher's
-    /// model picker prefers it and falls back to HostedHarnessCatalog's curated list per vendor.
-    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> _modelCatalog = ServerVendorModelCatalog.Empty;
+    readonly ObservableAsPropertyHelper<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>> _effectiveModelCatalog;
+    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? _currentLocalCatalog;
 
     /// knownRepos is RepoPathStore.GetSortedPathsAsync in production — the same persisted list
     /// DaemonConnect.RepoPaths feeds the server's launch dialog. Required (no defaulted overload)
     /// so a test can never silently read the developer's own ~/.config/kcap/repos.json.
-    /// <param name="openSession">
-    /// A session card's click (MainWindowViewModel.OpenSession). Null leaves the cards inert — a
-    /// HomeViewModel with no window to navigate.
-    /// </param>
     /// <param name="navigationGeneration">
     /// Read BEFORE the launch call, never after: the captured value is what makes a success that
     /// lands after the user navigated away open nothing.
@@ -398,23 +412,25 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// <param name="directory">The merged local+remote rows (IAgentDirectory.Rows). A row for a
     /// tracked id is success confirmation and stops tracking it. Null ⇒ only a LaunchFailed or the
     /// pending entry's own 10-minute timeout ever stops tracking.</param>
+    /// <param name="launchFailed">A tracked launch failed (MainWindowViewModel.CloseFailedLaunch):
+    /// its auto-opened workspace would otherwise cover the StartError this view just set.</param>
     public HomeViewModel(
             IDaemonClientService daemon, IAppStateStore state, ILaunchClient launch,
             Func<Task<string[]>> knownRepos, TimeProvider time, CancellationToken shutdown = default,
-            Action<string>? openSession = null, Func<int>? navigationGeneration = null,
+            Func<int>? navigationGeneration = null,
             Action<string, int>? openSessionIfCurrent = null, Action? requestSignIn = null,
             IObservable<IReadOnlyList<DaemonInfo>>? daemons = null,
             Func<CancellationToken, Task<string?>>? viewerId = null,
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
             IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            IAttachmentUploader? uploader = null, string? appServerUrl = null) {
+            IAttachmentUploader? uploader = null, string? appServerUrl = null, Action<string>? launchFailed = null) {
+        _launchFailed = launchFailed;
         _daemon = daemon;
         _state = state;
         _launch = launch;
         _knownRepos = knownRepos;
         _shutdown = shutdown;
-        _openSession = openSession;
         _navigationGeneration = navigationGeneration;
         _openSessionIfCurrent = openSessionIfCurrent;
         _requestSignIn = requestSignIn;
@@ -429,6 +445,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _machineSelectionChanges = new((daemon.DaemonName, false));
         _retentionTimer = _time.CreateTimer(
             _ => ReleaseExpired(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+        _catchUpTimer = _time.CreateTimer(
+            _ => OnCatchUpElapsed(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
         // Never starts empty: a null SupportedVendors means "daemon
         // capability unknown", not "hosts nothing" — Build(null) offers everything until the first
@@ -445,11 +463,31 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.Harnesses, HostedHarnessCatalog.Build(null))
             .DisposeWith(_disposables);
 
-        // The server model catalog arrives asynchronously; a change re-renders the agent chip and
-        // the next flyout open reads the new list (RebuildRows runs per open).
-        (modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty))
+        // The machine catalog follows the selection: the local snapshot's, or the selected remote
+        // daemon's in the latest registry emission, resolved by name AND owner. A remote machine the
+        // registry no longer resolves is unknown (null), never its last list. Any change re-renders
+        // the agent chip, and the next flyout open reads the new rows (RebuildRows runs per open).
+        var localCatalog = daemon.Snapshots
+            .Select(s => VendorModelMaps.FromStatus(s.Daemon.VendorModels))
+            .StartWith((IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>?) null);
+        localCatalog.Subscribe(c => _currentLocalCatalog = c).DisposeWith(_disposables);
+        var machineCatalog = localCatalog.CombineLatest(
+            _daemons.StartWith((IReadOnlyList<DaemonInfo>) []), _machineSelectionChanges,
+            (local, list, sel) => sel.Remote ? FindMachine(list, sel.Name, _lastViewerId)?.VendorModels : local);
+        _effectiveModelCatalog = machineCatalog
+            .CombineLatest(modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty), MergeCatalogs)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(catalog => { _modelCatalog = catalog; this.RaisePropertyChanged(nameof(ModelCatalog)); })
+            .ToProperty(this, x => x.EffectiveModelCatalog, ServerVendorModelCatalog.Empty)
+            .DisposeWith(_disposables);
+
+        // A model the previous catalog listed and the next one withdraws resets to the default. A
+        // model the previous catalog never listed (a typed custom id, or a pick made before any
+        // catalog arrived) survives, or the custom row would be unusable.
+        this.WhenAnyValue(x => x.EffectiveModelCatalog)
+            .Scan((Prev: ServerVendorModelCatalog.Empty, Next: ServerVendorModelCatalog.Empty), (acc, next) => (acc.Next, next))
+            .Subscribe(pair => {
+                if (ShouldClearSelection(SelectedVendor, SelectedModel, pair.Prev, pair.Next)) SelectedModel = "";
+            })
             .DisposeWith(_disposables);
 
         // A throw from viewerId (e.g. a claims-file read fault) is a missed visibility recompute,
@@ -467,20 +505,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.MachinePickerVisible, initialValue: false)
             .DisposeWith(_disposables);
 
-        Sessions = new ReadOnlyObservableCollection<SessionCardViewModel>(_sessionsSource);
-        // ObserveOn BEFORE the binding operator (SortAndBind counts as "Bind" here, same as
-        // ConsentPromptViewModel.Pending): the cache is mutated on the
-        // daemon client's background thread. Transform stays upstream of it, which is only safe
-        // because a SessionCardViewModel holds no thread-affine Avalonia object (its status dot is
-        // an ImmutableSolidColorBrush) — adding one would have to move Transform below the
-        // ObserveOn.
-        daemon.Agents.Connect()
-            .Transform(dto => new SessionCardViewModel(dto, _time))
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .SortAndBind(_sessionsSource, RowComparer)
-            .Subscribe()
-            .DisposeWith(_disposables);
-
         // The word is seeded with "" (no snapshot yet): AvailabilityFor only reads it once the
         // attach state is Connected, by which point DaemonClientService's snapshot-before-Connected
         // ordering guarantees a real value is there (MainWindowViewModel's identical seam comment).
@@ -492,9 +516,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
 
         // A remote selection swaps in RemoteAvailabilityFor (lane + the selected daemon's latest
-        // Connected AND still-owned-by-the-viewer) rather than changing AvailabilityFor itself —
-        // the local gate stays exactly what every existing (non-machine-picking) caller already
-        // exercises. FindMachine re-verifies ownership against _lastViewerId on every emission, so
+        // Connected AND still-owned-by-the-viewer) rather than changing AvailabilityFor itself, so
+        // the local gate is the same for a caller that never picks a machine. FindMachine re-verifies ownership against _lastViewerId on every emission, so
         // a registry update that reassigns an already-selected name to a different owner revokes
         // launch readiness rather than trusting the selection made when it was still valid.
         // Shared with notices/signInState/StartButtonTip below — every surface that asks "can I
@@ -589,10 +612,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
                 (status, connection, expired, awaiting, lane) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State));
-        var notices = localNoticeInputs
+        var rawNotices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
                 (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
+        rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
+        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -614,7 +639,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         _signInVisible = signInState
-            .Select(t => !t.Awaiting && (t.Expired || (
+            .CombineLatest(_catchUpTimedOut, (t, timedOut) => !t.Awaiting && (t.Expired || timedOut || (
                 t.Availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
@@ -691,6 +716,42 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public void NotifySignInCompleted() {
         _signInRequired.OnNext(false);
         _awaitingServerAfterSignIn.OnNext(true);
+        RestartCatchUp();
+    }
+
+    void ArmOrResetCatchUp(string? rawNotice) {
+        if (!BusyNotice(rawNotice)) {
+            StopCatchUp();
+            return;
+        }
+        if (_catchUpTimedOut.Value || _catchUpArmed) return;
+        RestartCatchUp();
+    }
+
+    void StopCatchUp() {
+        _catchUpArmed = false;
+        _catchUpGeneration++;
+        _catchUpTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        if (_catchUpTimedOut.Value) _catchUpTimedOut.OnNext(false);
+    }
+
+    void RestartCatchUp() {
+        if (_disposed) return;
+        _catchUpTimedOut.OnNext(false);
+        _catchUpArmed = true;
+        _catchUpGeneration++;
+        _catchUpDeadline = _time.GetUtcNow().Add(CatchUpLimit);
+        _catchUpTimer.Change(CatchUpLimit, Timeout.InfiniteTimeSpan);
+    }
+
+    void OnCatchUpElapsed() {
+        var generation = _catchUpGeneration;
+        RxSchedulers.MainThreadScheduler.Schedule(() => {
+            if (_disposed || generation != _catchUpGeneration || !_catchUpArmed) return;
+            if (_time.GetUtcNow() < _catchUpDeadline) return;
+            _awaitingServerAfterSignIn.OnNext(false);
+            _catchUpTimedOut.OnNext(true);
+        });
     }
 
     /// Local attach state is checked FIRST — the upstream word is only meaningful once the attach
@@ -749,6 +810,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool BusyNotice(string? notice) =>
         notice is ConnectingNotice or FinishingSignInNotice;
 
+    /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up.
+    internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
+        timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
+
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>
         string.IsNullOrEmpty(repoPath) ? "Select a repository to start"
@@ -762,6 +827,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _daemonStartMessageFeed.Dispose();
         _uploadingChanges.Dispose();
         _retentionTimer.Dispose();
+        _catchUpTimer.Dispose();
+        _catchUpTimedOut.Dispose();
         Tray.Clear();
         lock (_launchTrackingLock) _retainedDraft = null;
     }
@@ -773,10 +840,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             string? viewerId, string machine, bool remote) =>
         signedIn && (remote
             ? LaunchAttachments.IsCapable(FindMachine(daemons, machine, viewerId)?.Version)
-            : localCapabilities is { } caps && caps.Contains(AttachCapability));
+            : localCapabilities is { } caps && caps.Contains(LocalFrameChatInput.AttachCapability));
 
     internal static string? AttachHintFor(bool signedIn, bool canAttach) =>
-        !signedIn ? SignInToAttach : canAttach ? null : DaemonNeedsAttachments;
+        !signedIn ? SignInToAttach : canAttach ? null : LocalFrameChatInput.DaemonNeedsAttachments;
 
     bool CanAttachFor(LaunchDraft draft) =>
         CanAttachTo(_signedIn, _currentCapabilities, _currentDaemons, _lastViewerId, draft.Machine, draft.Remote);
@@ -866,7 +933,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         foreach (var key in byRepo?.Keys ?? [])
             Add(key);
         // An agent's RepoPath can be a worktree checkout (review flows launch into the
-        // requester's worktree) — the menu offers the repository, never the checkout (GH #655).
+        // requester's worktree) — the menu offers the repository, never the checkout.
         foreach (var agent in _daemon.Agents.Items)
             if (agent.RepoPath is { Length: > 0 } repoPath)
                 Add(GitRepository.ResolveMainRepoRoot(repoPath));
@@ -888,14 +955,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var (_, localPaths) = await GatherLocalRepoDataAsync();
         var options = new List<MachineOption> {
             new(_daemon.DaemonName, IsLocal: true, _currentAvailability == LaunchAvailability.Ready,
-                Platform: null, localPaths.ToArray(), SupportedVendors: null, Selected: !RemoteMachineSelected),
+                Platform: null, localPaths.ToArray(), SupportedVendors: null, Selected: !RemoteMachineSelected,
+                VendorModels: _currentLocalCatalog),
         };
 
         foreach (var d in await OwnRemoteDaemonsAsync())
             options.Add(new MachineOption(
                 d.Name, IsLocal: false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors,
                 Selected: RemoteMachineSelected && string.Equals(d.Name, SelectedMachine, StringComparison.Ordinal),
-                Version: d.Version));
+                Version: d.Version, VendorModels: VendorModelMaps.FromRegistry(d.VendorModels)));
 
         return options;
     }
@@ -930,7 +998,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (match is null) return; // not one of the viewer's own daemons — never guess ownership
 
         var machine = new MachineOption(match.Name, false, match.Connected, match.Platform,
-            match.RepoPaths ?? [], match.SupportedVendors, true, match.Version);
+            match.RepoPaths ?? [], match.SupportedVendors, true, match.Version, VendorModelMaps.FromRegistry(match.VendorModels));
 
         SetMachineSelection(daemonName, remote: true);
         _selectedRemoteMachine = machine;
@@ -986,7 +1054,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (viewerId is null) return null;
         foreach (var d in daemons)
             if (string.Equals(d.Name, name, StringComparison.Ordinal) && d.OwnerUserId == viewerId)
-                return new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true, d.Version);
+                return new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true, d.Version,
+                    VendorModelMaps.FromRegistry(d.VendorModels));
         return null;
     }
 
@@ -1053,10 +1122,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (vendor != SelectedVendor) SelectedModel = "";
         SelectedVendor = vendor;
     }
-
-    /// A session card's click (HomeView routes it here). No generation is involved — the click IS
-    /// the current navigation, unlike the launch auto-open below.
-    public void OpenSessionRequested(string agentId) => _openSession?.Invoke(agentId);
 
     async Task StartAsync() {
         // Captured before anything can await: an upload takes time the user can spend re-pointing
@@ -1162,7 +1227,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // local target.
         if (tracked && !draft.Remote)
             _directory?.AddPlaceholder(agentId, draft.Vendor, draft.RepoPath, AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
-        if (!draft.Remote) _openSessionIfCurrent?.Invoke(agentId, generation);
+        // Untracked with no row is a failure that beat the call's own return: opening would cover
+        // the launcher that has just worded it.
+        if (!draft.Remote && (tracked || RowExists(agentId, AgentOrigin.Local)))
+            _openSessionIfCurrent?.Invoke(agentId, generation);
     }
 
     async Task<bool> OwnsConnectedAsync(string machine) =>
@@ -1256,6 +1324,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (pending is null) return;
         ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason);
         _directory?.RemovePlaceholder(agentId);
+        _launchFailed?.Invoke(agentId);
     }
 
     /// A text-only launch just renders its reason. A launch that carried files hands the draft

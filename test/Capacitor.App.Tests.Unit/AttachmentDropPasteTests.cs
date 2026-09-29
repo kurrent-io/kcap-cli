@@ -257,8 +257,8 @@ public class AttachmentDropPasteTests {
         });
     }
 
-    /// A drop the sink cannot take stages nothing and says nothing: the disabled pick button's
-    /// tooltip already carries the reason, and the drag never offered to copy.
+    /// A drag source that is gone by the time its payload is read lands as a named refusal, not
+    /// an exception out of the drop handler.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_drop_whose_provider_faults_is_the_stated_refusal_not_an_exception() {

@@ -73,12 +73,7 @@ public static class WorkOSDiscovery {
 
         var result = await proxy.DiscoverWorkOSTenantsAsync(proxyUrl, auth.AccessToken, ct);
         if (result.Error != DiscoveryError.None) {
-            return Failed(progress, result.Error switch {
-                DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
-                DiscoveryError.TokenRejected    => "WorkOS rejected the authentication token. Please sign in again.",
-                DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
-                _                               => "Tenant discovery failed."
-            }, ct);
+            return Failed(progress, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
         }
 
         if (result.Tenants.Length == 0) {
@@ -226,19 +221,27 @@ public static class WorkOSDiscovery {
             ServerUrl      = canonical
         };
 
+        if (await CommitBoundary.SettleLegacyCredentialAsync(root, store, ct) is { } settleError) {
+            progress.Error(settleError);
+
+            return new AuthResult.Failed(settleError);
+        }
+
         var request = new CommitRequest(
             [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
             ConfigMutation: config => TenantDiscovery.MergeProfiles(config, ready.Tenants, picked),
             PublishTokens: async saved => {
-                await store.SaveAsync(picked.ProfileName, tokens, CancellationToken.None);
-                saved();
+                var outcome = await store.SaveGuardedAsync(
+                    picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
+                if (outcome == GuardedWriteOutcome.Written) saved();
+                else progress.Error($"Error: profile '{picked.ProfileName}' was removed during sign-in; nothing saved.");
 
                 return ready.Username;
             });
 
         var result = await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
 
-        if (result is AuthResult.Committed) progress.Notice($"Logged in as {ready.Username} → {picked.Label}");
+        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {ready.Username} → {picked.Label}");
 
         return result;
     }

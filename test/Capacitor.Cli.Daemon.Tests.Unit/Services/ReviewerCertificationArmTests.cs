@@ -15,7 +15,7 @@ public class ReviewerCertificationArmTests {
         new(vendor, ranges, Policy, Policy, connectionId, expectedCliVersion!);
 
     [Test] public async Task A_matching_certification_passes() {
-        var (ok, _) = AgentOrchestrator.EvaluateReviewerCertification("claude", "2.1.212", Conn, Cert());
+        var (ok, _, _) = AgentOrchestrator.EvaluateReviewerCertification("claude", "2.1.212", Conn, Cert());
         await Assert.That(ok).IsTrue();
     }
 
@@ -26,7 +26,7 @@ public class ReviewerCertificationArmTests {
     [Arguments(null)]
     [Arguments("")]
     public async Task A_failed_registration_probe_does_not_reject_a_launch(string? advertised) {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "claude", "2.1.212", Conn, Cert(expectedCliVersion: advertised));
 
         await Assert.That(ok).IsTrue().Because($"advertised '{advertised ?? "null"}' means the probe failed, not that the CLI changed: {reason}");
@@ -37,7 +37,7 @@ public class ReviewerCertificationArmTests {
     // pins the swap arm specifically. The remedy is a retry: the rejection itself re-advertises the
     // installed version, and a restart would tear down every hosted agent for nothing.
     [Test] public async Task A_genuine_in_range_cli_swap_is_rejected_with_a_retry_remedy() {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "claude", "2.9.9", Conn, Cert(expectedCliVersion: "2.1.212"));
 
         await Assert.That(ok).IsFalse();
@@ -50,7 +50,7 @@ public class ReviewerCertificationArmTests {
     // A null ADVERTISED version must still fall through to the RANGE check -- that is the real gate,
     // and relaxing the swap arm must not let an out-of-range CLI through.
     [Test] public async Task A_null_advertisement_still_enforces_the_allowed_range() {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "claude", "1.0.0", Conn, Cert(expectedCliVersion: null));
 
         await Assert.That(ok).IsFalse();
@@ -65,7 +65,7 @@ public class ReviewerCertificationArmTests {
     [Arguments(null)]
     [Arguments("")]
     public async Task A_failed_launch_probe_is_diagnosed_as_transient_not_as_a_swap(string? probed) {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "claude", probed, Conn, Cert(expectedCliVersion: "2.1.212"));
 
         await Assert.That(ok).IsFalse();               // still fails closed
@@ -79,7 +79,7 @@ public class ReviewerCertificationArmTests {
     // to retry -- the re-advertisement carries the same out-of-range version, so that remedy can
     // never work.
     [Test] public async Task An_out_of_range_replacement_reports_the_range_not_a_retry() {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "claude", "9.9.9", Conn, Cert(expectedCliVersion: "2.1.212"));
 
         await Assert.That(ok).IsFalse();
@@ -91,7 +91,7 @@ public class ReviewerCertificationArmTests {
     // Each arm names ITSELF. The old single message reported the certification revision -- which
     // matches on every one of these paths -- and blamed the CLI regardless of the actual cause.
     [Test] public async Task A_vendor_mismatch_names_the_vendors() {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "codex", "2.1.212", Conn, Cert(vendor: "claude"));
 
         await Assert.That(ok).IsFalse();
@@ -100,7 +100,7 @@ public class ReviewerCertificationArmTests {
     }
 
     [Test] public async Task A_reconnect_names_the_connection_change_and_says_retry() {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "claude", "2.1.212", "conn-2", Cert(connectionId: "conn-1"));
 
         await Assert.That(ok).IsFalse();
@@ -111,12 +111,29 @@ public class ReviewerCertificationArmTests {
     // Probe failed AND nothing advertised: still the dedicated transient arm, never an empty-string
     // version in the text (which would read as "the CLI reports no version").
     [Test] public async Task A_failed_probe_with_no_advertisement_still_reports_the_probe() {
-        var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(
+        var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(
             "claude", null, Conn, Cert(expectedCliVersion: null));
 
         await Assert.That(ok).IsFalse();
         await Assert.That(reason).Contains("probe");
         await Assert.That(reason).Contains("retry");
+    }
+
+    // The Transient flag drives the code the server re-codes to (retryable vs terminal), so it must
+    // track the arm's remedy exactly: the retry-resolvable arms (reconnect, failed probe, in-range
+    // swap) are transient; the operator-action arms (vendor, policy, out-of-range) are not.
+    [Test] public async Task Only_the_retry_resolvable_arms_are_flagged_transient() {
+        foreach (var (v, probed, conn, cert, expected) in new (string, string?, string, ReviewerCertificationRequirement, bool)[] {
+            ("claude", "2.1.212", "conn-2", Cert(),                                       true),   // reconnect
+            ("claude", null,      Conn,     Cert(),                                       true),   // failed probe
+            ("claude", "2.9.9",   Conn,     Cert(expectedCliVersion: "2.1.212"),          true),   // in-range swap
+            ("codex",  "2.1.212", Conn,     Cert(vendor: "claude"),                       false),  // vendor
+            ("claude", "1.0.0",   Conn,     Cert(expectedCliVersion: null),               false),  // out of range
+        }) {
+            var (ok, _, transient) = AgentOrchestrator.EvaluateReviewerCertification(v, probed, conn, cert);
+            await Assert.That(ok).IsFalse();
+            await Assert.That(transient).IsEqualTo(expected);
+        }
     }
 
     // No arm may claim the revision matched/mismatched -- the revision is equal on every failure
@@ -129,7 +146,7 @@ public class ReviewerCertificationArmTests {
             ("claude", "1.0.0",   Conn,     Cert(expectedCliVersion: null)),
             ("claude", null,      Conn,     Cert(expectedCliVersion: "2.1.212")),
         }) {
-            var (ok, reason) = AgentOrchestrator.EvaluateReviewerCertification(v, probed, conn, cert);
+            var (ok, reason, _) = AgentOrchestrator.EvaluateReviewerCertification(v, probed, conn, cert);
             await Assert.That(ok).IsFalse();
             await Assert.That(reason).DoesNotContain("revision");
         }

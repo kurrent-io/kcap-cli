@@ -12,9 +12,14 @@ Search and recall past Kurrent Capacitor sessions from inside the agent.
 
 | Tool | Description |
 |------|-------------|
-| `search_sessions` | Free-text + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
-| `get_session_summary` | Concise `summary_text` + `plan` for a session |
+| `search_sessions` | Keyword (one to three terms or identifiers) + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
+| `list_repo_sessions` | List a repository's sessions you can see, running ones first |
+| `get_session_summary` | Concise `summary_text` + `plan` + `declared_plans` for a session |
+| `list_turns` | Per-turn prose outline for a session |
+| `get_turn` | One turn's full transcript, by session id and turn index |
 | `get_session_transcript` | Speaker-tagged transcript window, with `around_event` drill-in for search hits |
+| `list_repo_plans` | List a repository's declared plans you can see, most recently touched first |
+| `get_declared_plans` | A plan's documents and full task list, by `plan_id` or `session_id` |
 
 Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` defaults to *this* repo.
 
@@ -56,6 +61,23 @@ Governed read-only SQL over the org's curated coding-agent analytics views (sess
 | `query_analytics` | Run one governed Postgres SELECT (`sql`, optional `scope` `"repo"`/`"global"`, optional `max_rows`); a rejected query returns the validator's reason to fix and retry |
 
 Repo-aware: defaults to the cwd's repo; pass `scope: "global"` for org-wide questions. Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics` endpoints.
+
+### `kcap-artefacts`
+
+Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. The page is served under a sandbox with no network access, so every style, script and image has to be inlined as a data URI; an external URL renders as nothing.
+
+| Tool | Description |
+|------|-------------|
+| `publish_artefact` | Publish a page (`title`, and either `html` or a local `path`); optional `description`, `visibility`, `grants`, `session_ids`, `response_schema` to make it answerable, and `update_id` to revise an existing artefact without changing its URL |
+| `await_artefact_responses` | Block until people have answered — the human checkpoint. Returns on a respondent count, on a close, or on a timeout (which is not an error) |
+| `get_artefact_results` | Tallies and each person's current answer, without waiting |
+| `close_artefact_responses` | Freeze a version's answers; `closed: false` reopens and clears any deadline |
+| `list_my_artefacts` | The artefacts you can see — id, title, audience, latest version, URL |
+| `set_artefact_visibility` | Replace an artefact's audience (`none` / `org` / `scoped` + grants) |
+
+An artefact is private to its owner until visibility says otherwise. The current session is cited automatically from `KCAP_SESSION_ID`, so a publish is attributed to the work that produced it.
+
+Declaring a `response_schema` turns the page into a form the server validates and tallies: fields of type `choice`, `multi`, `score` or `text`, plus a `results_mode` deciding what other viewers see — `owner` (default, only you), `aggregate` (tallies, no names or free text) or `named` (who said what). Who answered is always the authenticated viewer; there is no field for it to forge. Reading, version history and takedown stay in the web UI.
 
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 

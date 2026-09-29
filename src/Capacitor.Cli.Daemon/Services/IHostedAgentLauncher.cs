@@ -45,6 +45,10 @@ internal interface IHostedAgentLauncher {
     /// </summary>
     bool DisablesApprovalPrompts(LauncherContext ctx) => false;
 
+    /// <summary>Whether <see cref="BuildArgs"/> honours <see cref="LauncherContext.ReviewLaunch"/> for a
+    /// PR-review launch.</summary>
+    bool SupportsPrReview => false;
+
     /// <summary>Whether the launcher has a certified read-only borrowed-checkout review mode.</summary>
     bool SupportsBorrowedReviewFlow => false;
 

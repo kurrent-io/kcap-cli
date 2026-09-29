@@ -76,6 +76,14 @@ public sealed class TempDir : IDisposable {
     public string CreateFile(string relativePath, string[] lines) =>
         Root.CreateFile(relativePath, lines);
 
+    /// <inheritdoc cref="TempDirHandle.CreateExecutable(string,string)"/>
+    public string CreateExecutable(string relativePath, string content) =>
+        Root.CreateExecutable(relativePath, content);
+
+    /// <inheritdoc cref="TempDirHandle.CopyExecutable(string,string)"/>
+    public string CopyExecutable(string source, string relativePath) =>
+        Root.CopyExecutable(source, relativePath);
+
     bool _disposed;
 
     /// <summary>Deleting is best effort; finding it already gone is not. Nothing but this owner may

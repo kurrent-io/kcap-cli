@@ -497,6 +497,38 @@ public class McpSessionsServerTests {
     }
 
     [Test]
+    public async Task MergeWidenedBody_lexical_match_in_widened_scope_clears_no_lexical_match() {
+        var merged = McpSessionsServer.MergeWidenedBody(
+            firstBody: """{"no_lexical_match":true,"hits":[{"session_id":"s1","lanes":["semantic"]}]}""",
+            widenedBody: """{"no_lexical_match":false,"hits":[{"session_id":"s2","lanes":["transcript"]}]}""",
+            limit: 10);
+
+        var root = JsonNode.Parse(merged)!.AsObject();
+
+        await Assert.That(root["no_lexical_match"]!.GetValue<bool>()).IsFalse();
+        await Assert.That(root["widened_to_all_repos"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    [Arguments("true", "true", "true")]
+    [Arguments("false", "true", "false")]
+    [Arguments("null", "true", "true")]
+    [Arguments("true", "null", "true")]
+    [Arguments("null", "null", "null")]
+    [Arguments(null, null, null)]
+    public async Task MergeWidenedBody_combines_no_lexical_match_across_scopes(string? first, string? widened, string? expected) {
+        static string WithFlag(string? flag, string sid) =>
+            flag is null
+                ? Body(sid)
+                : $$"""{"no_lexical_match":{{flag}},"hits":[{"session_id":"{{sid}}"}]}""";
+
+        var merged = McpSessionsServer.MergeWidenedBody(WithFlag(first, "s1"), WithFlag(widened, "s2"), limit: 10);
+        var flag   = JsonNode.Parse(merged)!.AsObject()["no_lexical_match"];
+
+        await Assert.That(flag?.ToJsonString() ?? "null").IsEqualTo(expected ?? "null");
+    }
+
+    [Test]
     public async Task MergeWidenedBody_malformed_widened_body_returns_first_unchanged() {
         var first  = Body("s1");
         var merged = McpSessionsServer.MergeWidenedBody(first, "not json", limit: 10);
@@ -517,5 +549,165 @@ public class McpSessionsServerTests {
         } catch (System.Reflection.TargetInvocationException tie) when (tie.InnerException is not null) {
             throw tie.InnerException;
         }
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_no_args_uses_cwd_hash_and_defaults_state_to_open() {
+        var url = McpSessionsServer.BuildRepoPlansUrl("http://srv", args: null, cwdRepoHash: CwdHash);
+
+        await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/plans?state=open");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_carries_state_owner_and_limit() {
+        var args = new JsonObject { ["state"] = "all", ["owner"] = "github:1 2", ["limit"] = 5 };
+
+        var url = McpSessionsServer.BuildRepoPlansUrl("http://srv", args, CwdHash);
+
+        await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/plans?state=all&owner=github%3A1%202&limit=5");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_rejects_an_unknown_state() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoPlansUrl("http://srv", new JsonObject { ["state"] = "done" }, CwdHash))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("open or all");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_no_repo_and_no_cwd_hash_fails_closed_without_offering_all() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoPlansUrl("http://srv", args: null, cwdRepoHash: null))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("<owner>/<name>");
+        await Assert.That(ex.Message).DoesNotContain("\"all\"");
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_by_plan_id_reads_one_plan() {
+        var url = McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = "p 1" }, out var single);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/plans/p%201");
+        await Assert.That(single).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_by_session_id_reads_the_sessions_plans() {
+        var url = McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["session_id"] = "s1" }, out var single);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/s1/plans");
+        await Assert.That(single).IsFalse();
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_needs_exactly_one_of_plan_id_and_session_id() {
+        var neither = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject(), out _))
+            .Throws<ArgumentException>();
+        var both = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = "p1", ["session_id"] = "s1" }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(neither!.Message).Contains("exactly one");
+        await Assert.That(both!.Message).Contains("exactly one");
+    }
+
+    /// <summary>"current" names a session's pointer and needs a session the route would not get;
+    /// a dot segment would walk the URL path.</summary>
+    [Test]
+    [Arguments("current")]
+    [Arguments(".")]
+    [Arguments("..")]
+    public async Task BuildDeclaredPlansUrl_rejects_a_plan_id_that_is_not_an_id(string planId) {
+        var ex = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = planId }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("session_id");
+    }
+
+    /// <summary>A dot segment in session_id would walk the URL path the same way it does for plan_id.</summary>
+    [Test]
+    [Arguments(".")]
+    [Arguments("..")]
+    public async Task BuildDeclaredPlansUrl_rejects_a_dot_segment_session_id(string sessionId) {
+        var ex = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["session_id"] = sessionId }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("not \".\" or \"..\"");
+    }
+
+    [Test]
+    public async Task Tools_list_exposes_the_two_plan_tools_with_no_required_arguments() {
+        var byName = McpSessionsServer.BuildToolsList().ToDictionary(t => t.Name);
+
+        await Assert.That(byName["list_repo_plans"].InputSchema.Required.Length).IsEqualTo(0);
+        await Assert.That(byName["get_declared_plans"].InputSchema.Required.Length).IsEqualTo(0);
+        await Assert.That(byName["get_declared_plans"].Description).Contains("is_complete");
+        await Assert.That(byName["list_repo_plans"].Description).Contains("finished");
+    }
+
+    const string Recap = """[{"type":"whats_done","content":"did X"}]""";
+
+    static JsonArray? DeclaredPlans(string? plansBody) =>
+        JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary(Recap, plansBody))!["declared_plans"]?.AsArray();
+
+    [Test]
+    public async Task ProjectRecapToSummary_carries_a_pointer_for_each_declared_plan() {
+        const string plans = """
+            [
+              {"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true,"tasks":[{"title":"ignored"}]},
+              {"plan_id":"p-2","progress":{"completed":3,"total":3,"total_known":true,"finished":true},"is_complete":true,"is_current":false}
+            ]
+            """;
+
+        var pointers = DeclaredPlans(plans)!;
+
+        await Assert.That(pointers.Count).IsEqualTo(2);
+        await Assert.That(pointers[0]!.ToJsonString())
+            .IsEqualTo("""{"plan_id":"p-1","completed":2,"total":7,"total_known":true,"finished":false,"is_complete":true,"is_current":true}""");
+        await Assert.That(pointers[1]!["finished"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("[]")]
+    [Arguments("not json")]
+    [Arguments("""{"error":"nope"}""")]
+    public async Task ProjectRecapToSummary_omits_declared_plans_when_there_is_nothing_to_show(string? plansBody) {
+        var projected = JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary(Recap, plansBody))!.AsObject();
+
+        await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+    }
+
+    /// <summary>A server that predates the field omits it. Both zero-task shapes read 0 of 0 and
+    /// differ only in total_known, so completed == total alone would call a plan with no task list
+    /// finished.</summary>
+    [Test]
+    [Arguments("""{"completed":0,"total":0,"total_known":false}""", true,  false)]
+    [Arguments("""{"completed":0,"total":0,"total_known":true}""",  true,  true)]
+    [Arguments("""{"completed":3,"total":3,"total_known":true}""",  false, false)]
+    [Arguments("""{"completed":3,"total":3,"total_known":true}""",  true,  true)]
+    [Arguments("""{"completed":2,"total":3,"total_known":true}""",  true,  false)]
+    public async Task ProjectDeclaredPlans_derives_finished_when_the_server_did_not_send_it(string progress, bool isComplete, bool expected) {
+        var plans = $$"""[{"plan_id":"p-1","progress":{{progress}},"is_complete":{{(isComplete ? "true" : "false")}},"is_current":false}]""";
+
+        await Assert.That(DeclaredPlans(plans)![0]!["finished"]!.GetValue<bool>()).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ProjectDeclaredPlans_trusts_a_finished_the_server_sent() {
+        const string plans = """[{"plan_id":"p-1","progress":{"completed":3,"total":3,"total_known":true,"finished":false},"is_complete":true,"is_current":false}]""";
+
+        await Assert.That(DeclaredPlans(plans)![0]!["finished"]!.GetValue<bool>()).IsFalse();
+    }
+
+    [Test]
+    public async Task ProjectDeclaredPlans_skips_an_entry_with_no_plan_id() {
+        const string plans = """[{"progress":{"completed":0,"total":1,"total_known":true}},{"plan_id":"p-2","progress":{"completed":0,"total":1,"total_known":true},"is_complete":true,"is_current":false}]""";
+
+        var pointers = DeclaredPlans(plans)!;
+
+        await Assert.That(pointers.Count).IsEqualTo(1);
+        await Assert.That(pointers[0]!["plan_id"]!.GetValue<string>()).IsEqualTo("p-2");
     }
 }

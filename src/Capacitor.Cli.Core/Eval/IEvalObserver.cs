@@ -1,8 +1,11 @@
+using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Eval.Evidence;
+
 namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
 /// Progress surface for an eval run. The CLI implementation writes each
-/// callback to stderr; the daemon implementation (DEV-1440 milestone 2)
+/// callback to stderr; the daemon implementation
 /// pushes every per-run and per-question transition
 /// (<see cref="OnStarted"/>, <see cref="OnQuestionStarted"/>,
 /// <see cref="OnQuestionCompleted"/>, <see cref="OnQuestionFailed"/>,
@@ -37,8 +40,12 @@ public interface IEvalObserver {
     /// <summary>Fired just before each judge question is sent to Claude.</summary>
     void OnQuestionStarted(int index, int total, string category, string questionId);
 
-    /// <summary>Fired after a judge question completed successfully and its verdict was parsed.</summary>
-    void OnQuestionCompleted(int index, int total, EvalQuestionVerdict verdict, long inputTokens, long outputTokens);
+    /// <summary>Fired after a judge question completed and its verdict was parsed — including an
+    /// unassessed outcome, which carries no score. <paramref name="route"/> is <c>legacy_text</c>,
+    /// <c>legacy_tools</c>, <c>evidence_one_shot</c> or <c>evidence_retrieval</c>;
+    /// <paramref name="runnerInvocations"/> is how many times the runner was called to
+    /// produce this result.</summary>
+    void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations);
 
     /// <summary>Fired when a judge question fails (null Claude result, unparseable JSON, etc.); the eval continues.</summary>
     void OnQuestionFailed(int index, int total, string category, string questionId, string reason);
@@ -50,14 +57,22 @@ public interface IEvalObserver {
     void OnRetrospectiveStarted();
 
     /// <summary>Fired after the retrospective completed successfully and its payload was parsed.</summary>
-    void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective);
+    void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed);
 
     /// <summary>Fired when retrospective synthesis failed (null Claude result, unparseable JSON, etc.); the eval still completes.</summary>
     void OnRetrospectiveFailed(string reason);
 
     /// <summary>Fired once after all judges finished, results aggregated, and the aggregate POSTed to the server.</summary>
-    void OnFinished(SessionEvalCompletedPayloadV3 aggregate);
+    void OnFinished(SessionEvalCompletedPayloadV4 aggregate);
 
     /// <summary>Fired when the eval failed before producing an aggregate (e.g. context fetch failed, all judges failed, persist failed).</summary>
     void OnFailed(string reason);
+
+    /// <summary>Fired once after the catalog fetch with what the run is configured with: whether the server advertised the
+    /// evidence route, its budgets and the prompt-resource hashes.</summary>
+    void OnTreatment(EvalTreatment treatment) { }
+
+    /// <summary>Fired after every evidence-route <see cref="OnQuestionCompleted"/> with the question's ledger, which exists
+    /// until the run ends; copy it inside the callback to keep it.</summary>
+    void OnQuestionLedger(int index, string questionId, string tempLedgerPath) { }
 }

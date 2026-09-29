@@ -25,10 +25,9 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal Guid? DispatchId { get; private set; }
     /// Queued by another client: shown, never acknowledged here, retired when the server drops it.
     public bool IsForeign { get; private init; }
-    public string Sender { get; private init; } = "";
 
     internal static QueuedChatMessage FromServer(QueuedInputItem item) =>
-        new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true, Sender = item.SenderUserId ?? "" };
+        new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true };
 
     internal void MarkQueued(Guid dispatchId) {
         DispatchId = dispatchId;
@@ -53,11 +52,27 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         if (_generation != generation || _offset is not { } baseline || offset < baseline) return false;
         var sent = Normalize(Text);
         var seen = Normalize(text);
-        if (AttachmentIds.Count == 0) return sent == seen;
-        return seen.Length > sent.Length
-            && seen.StartsWith(sent, StringComparison.Ordinal)
-            && seen.AsSpan(sent.Length).TrimStart().StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
+        if (AttachmentIds.Count == 0) return SamePrompt(sent, seen);
+        // The receipt drops a space after the bang, and the attachment trailer follows that body.
+        if (BangBody(sent) is { } sentBody && BangBody(seen) is { } seenBody)
+            return HasAttachmentTail(sentBody, seenBody);
+        return HasAttachmentTail(sent, seen);
     }
 
+    static bool HasAttachmentTail(string sent, string seen) =>
+        seen.Length > sent.Length
+        && seen.StartsWith(sent, StringComparison.Ordinal)
+        && seen.AsSpan(sent.Length).TrimStart().StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
+
     static string Normalize(string text) => text.Replace("\r\n", "\n").Trim();
+
+    /// A bang command's receipt drops the space the composer may have put after the bang.
+    static bool SamePrompt(string sent, string seen) =>
+        sent == seen || BangBody(sent) is { } a && BangBody(seen) is { } b && a == b;
+
+    static string? BangBody(string text) {
+        if (text.Length == 0 || text[0] != '!') return null;
+        var body = text[1..].TrimStart();
+        return body.Length == 0 ? null : body;
+    }
 }

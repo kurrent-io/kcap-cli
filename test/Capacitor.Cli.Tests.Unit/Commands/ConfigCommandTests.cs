@@ -168,6 +168,39 @@ public class ConfigCommandTests {
     }
 
     [Test]
+    public async Task ApplySet_DisableNextWorkNudge_True_UpdatesProfile() {
+        var updated = ConfigCommand.ApplySet(new Profile(), "disable_nextwork_nudge", "true");
+
+        await Assert.That(updated.DisableNextWorkNudge).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplySet_DisableNextWorkNudge_False_UpdatesProfile() {
+        var updated = ConfigCommand.ApplySet(new Profile { DisableNextWorkNudge = true }, "disable_nextwork_nudge", "false");
+
+        await Assert.That(updated.DisableNextWorkNudge).IsFalse();
+    }
+
+    [Test]
+    public async Task DisableNextWorkNudge_JsonRoundTrip_UsesTheSnakeCaseKey() {
+        var profileConfig = new ProfileConfig {
+            Profiles = new Dictionary<string, Profile> { ["default"] = ConfigCommand.ApplySet(new Profile(), "disable_nextwork_nudge", "true") }
+        };
+
+        var json    = JsonSerializer.Serialize(profileConfig, ProfileConfigJsonContextIndented.Default.ProfileConfig);
+        var decoded = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig);
+
+        await Assert.That(json).Contains("\"disable_nextwork_nudge\": true");
+        await Assert.That(decoded?.Profiles["default"].DisableNextWorkNudge).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplySet_DisableNextWorkNudge_InvalidValue_Throws() {
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "disable_nextwork_nudge", "nope"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task ApplySet_UnknownKey_Throws() {
         var profile = new Profile();
 

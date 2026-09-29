@@ -6,8 +6,8 @@ using Capacitor.App.Views;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Task 6: the thin native-menu/tray-icon adapter (spec §4 icon, §5 menu + rebuild cadence, §6
-/// frozen-desired-value capture). CountBadge and TrayMenuSync are pure — no Avalonia types — so
+/// The thin native-menu/tray-icon adapter: icon, menu and rebuild cadence, and the
+/// frozen-desired-value capture. CountBadge and TrayMenuSync are pure — no Avalonia types — so
 /// they run without a headless session. Everything touching real Avalonia types (NativeMenu,
 /// TrayIcon, Application resources) runs inside AvaloniaSession.DispatchAsync, wrapped in
 /// WithImmediateRxScheduler wherever a TrayViewModel is constructed (its MenuModel OAPH rides
@@ -133,7 +133,7 @@ public class TrayAdapterTests {
         await Assert.That(different).IsTrue();
     }
 
-    // ---- TrayMenuBuilder structure (spec §5, §6) ----
+    // ---- TrayMenuBuilder structure ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -227,7 +227,7 @@ public class TrayAdapterTests {
         });
     }
 
-    // ---- Review pending launches item (spec §8) ----
+    // ---- Review pending launches item ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -281,12 +281,11 @@ public class TrayAdapterTests {
         });
     }
 
-    // Regression coverage (review Critical 1): NativeMenuItem.OnPropertyChanged recomputes
-    // IsEnabled from Command.CanExecute(CommandParameter) whenever Command is (re)assigned
-    // (decompiler-verified) — so IsEnabled must be the LAST property set in BuildPauseItem's
-    // initializer, or an explicit Enabled: false silently comes back as IsEnabled == true. Covers
-    // Enabled: false for BOTH Checked states, not just the Enabled: true cases that let this slip
-    // originally.
+    // NativeMenuItem.OnPropertyChanged recomputes IsEnabled from Command.CanExecute(CommandParameter)
+    // whenever Command is (re)assigned, so IsEnabled must be the LAST property set in
+    // BuildPauseItem's initializer, or an explicit Enabled: false silently comes back as
+    // IsEnabled == true. Covers Enabled: false for BOTH Checked states, which the Enabled: true
+    // cases alone would miss.
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Arguments(false, true, true)]    // unchecked, enabled -> desired true
@@ -347,7 +346,7 @@ public class TrayAdapterTests {
         });
     }
 
-    // ---- "Install command-line tool…" item (spec §5) ----
+    // ---- "Install command-line tool…" item ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -455,21 +454,16 @@ public class TrayAdapterTests {
         });
     }
 
-    // ---- TrayIconManager wiring (spec §5) ----
+    // ---- TrayIconManager wiring ----
     //
-    // NativeMenu.NeedsUpdate can only be RAISED through INativeMenuExporterEventsImplBridge, and
-    // decompiling Avalonia.Controls's REFERENCE assembly (the one the compiler binds against, not
-    // the runtime one) shows its Raise* members are `internal` there — external code cannot
-    // cast-and-call them, by design (only Avalonia's own native exporters may raise them). The
-    // headless platform's CreateTrayIcon() also returns null (decompiler-verified,
-    // AvaloniaHeadlessPlatform.HeadlessWindowingPlatform), so there is no exporter to drive it even
-    // indirectly. The NeedsUpdate-only rebuild and its pause-state refresh kick (moved here from
-    // NativeMenu.Opening, which macOS status-item menus never raise — found in manual acceptance)
-    // are therefore proven at the TrayMenuSync/TrayMenuBuilder unit level above (pure, real
-    // event-independent) plus manual macOS acceptance (spec §12); what's left testable here is
-    // TrayIconManager's own construction/disposal behavior. The edge-triggered on-Connected kick
-    // (spec §6) is covered directly on TrayViewModel in TrayViewModelTests, without needing a real
-    // NativeMenu event at all.
+    // NativeMenu.NeedsUpdate can only be RAISED through INativeMenuExporterEventsImplBridge, whose
+    // Raise* members are `internal` in Avalonia.Controls's reference assembly, and the headless
+    // platform's CreateTrayIcon() returns null, so nothing here can drive the event. The
+    // NeedsUpdate-only rebuild and its pause-state refresh kick (NeedsUpdate because macOS
+    // status-item menus never raise NativeMenu.Opening) are proven at the TrayMenuSync/
+    // TrayMenuBuilder unit level above; what's left testable here is TrayIconManager's own
+    // construction/disposal behavior. The edge-triggered on-Connected kick is covered directly on
+    // TrayViewModel in TrayViewModelTests.
 
     [Test]
     [NotInParallel("AvaloniaSession")]

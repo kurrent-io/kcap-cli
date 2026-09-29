@@ -1,4 +1,5 @@
 using Capacitor.Cli.Daemon.Pty.Unix;
+using Capacitor.Cli.Tests.Unit.NativeTestHost;
 
 // A tiny, disposable process the OUTER test can kill and observe from the outside — the
 // mechanism the PDEATHSIG and spawner-thread-FailFast tests need (you cannot safely assert
@@ -72,6 +73,8 @@ switch (mode) {
         }
         break;
     }
+    case "pty-input-latency":
+        return PtyInputLatencyProbe.Run();
     default:
         Console.Error.WriteLine($"unknown mode: {mode}");
         return 1;

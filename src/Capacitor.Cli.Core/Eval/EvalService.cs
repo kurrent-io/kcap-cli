@@ -2,33 +2,24 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Eval.Evidence;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 
 namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
-/// Core orchestration for an LLM-as-judge eval run. Consumed by the CLI
-/// (<c>kcap eval</c>) and — per DEV-1440 milestone 2 — by the daemon
-/// when the dashboard dispatches an evaluation. All progress is reported
-/// through <see cref="IEvalObserver"/> so the two host environments can
-/// render it differently (stderr logs vs SignalR events) without the
-/// service caring.
+/// Core orchestration for an LLM-as-judge eval run, shared by <c>kcap eval</c> and the daemon. All progress is reported
+/// through <see cref="IEvalObserver"/> so each host renders it its own way.
 /// </summary>
-public static class EvalService {
-    // DEV-1476: every judge invocation is pinned to a JSON Schema via
-    // `claude -p --json-schema`. Without this, judges occasionally emitted
-    // free-form text (including harmony-style `<function_calls>` XML as
-    // prose) which is unparseable as a verdict. The CLI fulfils the schema
-    // through a synthetic `StructuredOutput` tool that costs one extra turn
-    // — callers here pass `maxTurns: 2` to accommodate it.
-    //
-    // Both schemas accept `null` for optional string fields (rather than
-    // omitting them) because `--json-schema` enforces `required` — the
-    // per-question prompt already instructs the judge to emit explicit
-    // nulls, so this matches existing expectations.
+public static partial class EvalService {
+    // Every judge invocation is pinned to a JSON Schema via `claude -p --json-schema`: without one a judge can answer in
+    // free-form text that is unparseable as a verdict. The CLI fulfils the schema through a synthetic StructuredOutput
+    // tool that costs one extra turn. Optional string fields accept null rather than being omitted, because
+    // `--json-schema` enforces `required` and the prompts ask for explicit nulls.
     const string VerdictJsonSchema = """
-        {"type":"object","properties":{"category":{"type":"string"},"question_id":{"type":"string"},"score":{"type":"integer","minimum":1,"maximum":5},"verdict":{"type":"string","enum":["pass","warn","fail"]},"finding":{"type":"string"},"evidence":{"type":["string","null"]},"recommendation":{"type":["string","null"]},"retain_fact":{"type":["string","object","null"],"properties":{"fact":{"type":"string"},"applies_to_vendors":{"type":"array","items":{"type":"string"},"maxItems":16},"applies_to_session_kinds":{"type":"array","items":{"type":"string"},"maxItems":16}},"required":["fact"],"additionalProperties":false}},"required":["category","question_id","score","verdict","finding","evidence","recommendation","retain_fact"],"additionalProperties":false}
+        {"type":"object","properties":{"category":{"type":"string"},"question_id":{"type":"string"},"outcome":{"type":"string","enum":["assessed","insufficient_evidence","not_applicable"]},"score":{"type":["integer","null"],"minimum":1,"maximum":5},"verdict":{"type":["string","null"],"enum":["pass","warn","fail",null]},"finding":{"type":"string","minLength":1},"evidence":{"type":["string","null"]},"recommendation":{"type":["string","null"]},"retain_fact":{"type":["string","object","null"],"properties":{"fact":{"type":"string"},"applies_to_vendors":{"type":"array","items":{"type":"string"},"maxItems":16},"applies_to_session_kinds":{"type":"array","items":{"type":"string"},"maxItems":16}},"required":["fact"],"additionalProperties":false}},"required":["category","question_id","outcome","score","verdict","finding","evidence","recommendation","retain_fact"],"additionalProperties":false}
         """;
 
     // maxItems mirrors the prompt's documented caps: at most three
@@ -36,11 +27,8 @@ public static class EvalService {
     // level keeps retrospectives cheap and prevents the model from padding
     // lists with low-signal bullets just because the schema would let it.
     //
-    // suggestions.items is an object with {text, audience} — NOT a
-    // bare string. The previous string-items schema forced the model to
-    // ignore the prompt's {text, audience} instruction, which meant every
-    // suggestion landed as audience="human" and no agent_guidance was ever
-    // produced by CLI-driven evals.
+    // suggestions.items is a {text, audience} object, not a bare string: a string item makes the model drop the
+    // audience, and every suggestion then lands as audience="human" with no agent guidance.
     const string RetrospectiveJsonSchema = """
         {"type":"object","properties":{"overall":{"type":"string"},"strengths":{"type":"array","maxItems":3,"items":{"type":"string"}},"issues":{"type":"array","maxItems":3,"items":{"type":"string"}},"suggestions":{"type":"array","maxItems":5,"items":{"type":"object","properties":{"text":{"type":"string"},"audience":{"type":"string","enum":["agent","human"]}},"required":["text","audience"],"additionalProperties":false}}},"required":["overall","strengths","issues","suggestions"],"additionalProperties":false}
         """;
@@ -51,6 +39,9 @@ public static class EvalService {
     /// </summary>
     internal static string GetRetrospectiveJsonSchema() => RetrospectiveJsonSchema;
 
+    /// <summary>Exposes <see cref="VerdictJsonSchema"/> for test-time schema validation.</summary>
+    internal static string GetVerdictJsonSchema() => VerdictJsonSchema;
+
     // Claude CLI spends one turn calling the synthetic StructuredOutput tool
     // and a second turn emitting the end-of-turn, so eval calls need at
     // least 2. Using 3 gives headroom when the model emits a reasoning
@@ -59,32 +50,25 @@ public static class EvalService {
     // unpopulated and the call would surface as a null result.
     const int JudgeMaxTurns = 3;
 
-    // DEV-1484: the retrospective judge now pulls session details via MCP
-    // tools (recap/errors/transcript) instead of reading them from the
-    // embedded trace. Each tool call costs a turn, plus one for the final
-    // StructuredOutput reply and one end-of-turn. The prompt's "at most 6
-    // tool calls" budget collides with reasoning-block turns: assistant
-    // tool_use turns and reasoning turns both count, so 6 tool calls can
-    // already burn 8-10 turns before StructuredOutput. DEV-1576 raised
-    // this from 10 → 15 after real runs were hitting error_max_turns
-    // mid-tool-use and producing null results.
+    // The retrospective judge reads session details through MCP tools, and tool-use turns and reasoning turns both count:
+    // the prompt's six tool calls alone can burn 8-10 turns before StructuredOutput. At 10, real runs hit
+    // error_max_turns mid-tool-use and produced null results.
     const int RetrospectiveMaxTurns = 15;
 
     // 15-min wallclock pairs with RetrospectiveMaxTurns=15: gives the judge
     // room for the prompt's 6 MCP tool calls plus structured-output and
     // reasoning headroom even under cold-start claude CLI latency.
-    static readonly TimeSpan RetrospectiveTimeout = TimeSpan.FromMinutes(15);
+    internal static readonly TimeSpan RetrospectiveTimeout = TimeSpan.FromMinutes(15);
 
-    // DEV-1486: tools-enabled per-question judges reuse the retrospective's
-    // MCP tool surface. DEV-1576: original 10 turns / $0.50 was too tight —
-    // judges hit error_max_turns mid-investigation and produced null
-    // verdicts because StructuredOutput never ran. Bumped to 15 turns /
-    // $1.00 to match the retrospective ceiling; the prompt's "at most 6
-    // tool calls" still bounds investigation depth.
-    const int    ToolsPerQuestionMaxTurns     = 15;
-    const double ToolsPerQuestionMaxBudgetUsd = 1.00;
+    // 15 turns and a $1.00 budget bound investigation depth alongside the prompt's own
+    // at-most-6-tool-calls cap.
+    const int             ToolsPerQuestionMaxTurns     = 15;
+    internal const double ToolsPerQuestionMaxBudgetUsd = 1.00;
 
-    static readonly TimeSpan ToolsPerQuestionTimeout = TimeSpan.FromMinutes(10);
+    internal static readonly TimeSpan ToolsPerQuestionTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>The text-only per-question judge's wallclock budget.</summary>
+    internal static readonly TimeSpan OneShotQuestionTimeout = TimeSpan.FromMinutes(5);
 
     // The inline judge MCP server is registered under this key in the
     // --mcp-config we pass to claude; the key becomes the `mcp__<key>__<tool>`
@@ -92,6 +76,14 @@ public static class EvalService {
     // never collides with the plugin-registered `kcap-review` (`kcap mcp
     // review`) server when both load.
     internal const string JudgeMcpServerName = "kcap-judge";
+
+    /// <summary>Equal to the server's <c>EvalCoveragePolicy.Version</c> — the policy version stamped
+    /// on every <see cref="SessionEvalCompletedPayloadV4.CoveragePolicyVersion"/> and on every
+    /// <see cref="EvalEvidenceCoverage.PolicyVersion"/> the CLI attaches.</summary>
+    public const string CoveragePolicyVersion = "coverage-v1";
+
+    /// <summary>The evidence-retrieval route's coverage policy version.</summary>
+    public const string EvidenceCoveragePolicyVersion = "coverage-v2";
 
     // Shared between RunRetrospectiveAsync and the tools-enabled per-question
     // branch of RunQuestionAsync. Built from JudgeMcpServerName so the
@@ -224,7 +216,7 @@ public static class EvalService {
     /// <summary>
     /// Output of <see cref="PrepareAsync"/> — the shared state threaded
     /// through every <see cref="RunQuestionAsync"/> and finally consumed by
-    /// <see cref="FinalizeAsync"/>. All fields are non-null on success.
+    /// <c>FinalizeAsync</c>. All fields are non-null on success.
     /// </summary>
     public sealed record EvalContext(
         string                         EvalRunId,
@@ -232,6 +224,7 @@ public static class EvalService {
         string                         SessionId,
         string                         TraceJson,
         EvalContextResult              ContextResult,
+        EvalContextCompactionSummary   Compaction,
         string                         ToolsPromptTemplate,        // still embedded (no catalog slot)
         string                         RetrospectivePrompt,        // from catalog (rendered)
         string                         RetrospectivePromptVersion, // from catalog
@@ -259,7 +252,7 @@ public static class EvalService {
     /// <see cref="IEvalObserver.OnFailed"/> either way.
     /// </para>
     /// </summary>
-    public static async Task<SessionEvalCompletedPayloadV3?> RunAsync(
+    public static async Task<SessionEvalCompletedPayloadV4?> RunAsync(
             string                          baseUrl,
             HttpClient                      httpClient,
             Profile?                        profile,
@@ -289,10 +282,13 @@ public static class EvalService {
                 return null;
             }
 
-            // Phase 3 — fetch the full catalog (rendered prompts + raw text +
-            // versions) so PrepareAsync can reconcile the run question list from it.
             var catalog = await EvalCatalogClient.FetchAsync(baseUrl, httpClient, observer, time, ct);
             if (catalog is null) return null;   // FetchAsync already emitted OnFailed
+
+            observer.OnTreatment(EvalTreatment.For(catalog));
+            // The advertisement is the only oracle; a chain request stays on the legacy path whatever the server offers.
+            if (catalog.EvidenceRetrieval is not null && !chain)
+                return await RunEvidenceAsync(baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, model, observer, time, ct, evalRunId);
 
             var ctx = await PrepareAsync(
                 baseUrl, httpClient, profile, harnesses, sessionId, questions, catalog, chain, thresholdBytes,
@@ -301,16 +297,18 @@ public static class EvalService {
 
             // Iterate the RECONCILED questions (ctx.Questions) — the text path uses
             // each question's server-rendered Prompt and Aggregate stamps the right
-            // catalog PromptVersion on every verdict.
-            var verdicts = new List<EvalQuestionVerdict>();
+            // catalog PromptVersion on every assessment.
+            var assessments = new List<EvalQuestionAssessment>();
+            var failures    = new List<EvalQuestionFailure>();
             for (var i = 0; i < ctx.Questions.Count; i++) {
-                var verdict = await RunQuestionAsync(
+                var result = await RunQuestionAsync(
                     ctx, httpClient, baseUrl, ctx.Questions[i], model, i + 1, ctx.Questions.Count,
                     observer, time, ct);
-                if (verdict is not null) verdicts.Add(verdict);
+                if (result.Assessment is { } assessment) assessments.Add(assessment);
+                else if (result.Failure is { } failure) failures.Add(failure);
             }
 
-            return await FinalizeAsync(ctx, httpClient, baseUrl, verdicts, model, observer, time, ct);
+            return await FinalizeAsync(ctx, httpClient, baseUrl, assessments, failures, model, observer, time, ct);
         } catch (OperationCanceledException) {
             // Honour the contract that observers always see OnFinished or
             // OnFailed — cancellation isn't an exception path consumers
@@ -457,6 +455,7 @@ public static class EvalService {
             SessionId:                  context.SessionId,
             TraceJson:                  traceJson,
             ContextResult:              context,
+            Compaction:                 context.Compaction,
             Profile:                    profile,
             Harnesses:                  harnesses,
             ToolsPromptTemplate:        toolsPromptTemplate,
@@ -470,7 +469,7 @@ public static class EvalService {
 
     // ── Phase 2: RunQuestion ───────────────────────────────────────────────
 
-    public static async Task<EvalQuestionVerdict?> RunQuestionAsync(
+    public static async Task<QuestionRunResult> RunQuestionAsync(
             EvalContext        ctx,
             HttpClient         httpClient,
             string             baseUrl,
@@ -491,25 +490,22 @@ public static class EvalService {
         // BuildToolsQuestionPrompt caller.
         const string patterns = "";
 
-        // Capture ClaudeCliRunner diagnostics (exit code, stdout preview)
-        // so a null result gets reported with *why* it was null — those
-        // lines are the only signal about API errors or max-turn failures,
-        // and daemon observers log OnInfo at Debug level where they vanish.
-        var              diagnostics = new List<string>();
-        ClaudeCliResult? result;
+        // Capture ClaudeCliRunner diagnostics (exit code, stdout preview) so a
+        // failed run is reported with *why* it failed — those lines are the
+        // only signal about API errors or max-turn failures, and daemon
+        // observers log OnInfo at Debug level where they vanish.
+        var               diagnostics = new List<string>();
+        ClaudeCliOutcome  outcome;
+        var               route       = question.NeedsTools || ctx.ForceTools
+            ? EvidenceRouteExtensions.LegacyToolsObserverRoute
+            : EvidenceRouteExtensions.LegacyTextObserverRoute;
+        var               started     = time.GetTimestamp();
 
         if (question.NeedsTools || ctx.ForceTools) {
-            // DEV-1486 tools-enabled path. Session-scoped MCP tool surface
-            // (same as retrospective) on a per-question budget: 15 turns,
-            // 10-min timeout, $1.00 cap (raised from 10/$0.50 in DEV-1576
-            // after real runs hit error_max_turns mid-tool-use). Prompt
-            // omits the compacted trace — the judge fetches session details
-            // on demand. ctx.ForceTools additionally routes EVERY question
-            // here (not just the NeedsTools four) when the session's trace is
-            // too large to embed — see PrepareAsync's size gate.
-            // Phase 3 — the reconciled question's Prompt is the RENDERED
-            // text-path prompt; the tools template substitutes {QUESTION_TEXT}
-            // from question.Prompt, so feed it the RAW catalog text instead.
+            // The session-scoped MCP tools on a per-question budget; the prompt omits the trace and the judge fetches
+            // what it needs. ForceTools routes every question here when PrepareAsync's size gate finds the trace too
+            // large to embed. The reconciled Prompt is the rendered text-path prompt, so the tools template gets the
+            // raw catalog text.
             var prompt = BuildToolsQuestionPrompt(
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId,
                 question with { Prompt = question.RawText ?? question.Prompt }, patterns);
@@ -517,7 +513,7 @@ public static class EvalService {
             var commandPath = ResolveJudgeCommandPath();
             var mcpConfig   = BuildJudgeMcpConfig(commandPath, ctx.SessionId, baseUrl);
 
-            result = await ClaudeCliRunner.RunAsync(
+            outcome = await ClaudeCliRunner.RunDetailedAsync(
                 prompt,
                 ToolsPerQuestionTimeout,
                 time,
@@ -534,14 +530,12 @@ public static class EvalService {
                 ct:             ct
             );
         } else {
-            // Text-only path (default). Phase 3: the prompt is the catalog's
-            // server-RENDERED prompt carried on the reconciled question — fill the
-            // runtime placeholders and strip any residual {CACHE_BOUNDARY}.
+            // The catalog's server-rendered prompt, with the runtime placeholders filled and any {CACHE_BOUNDARY} stripped.
             var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson);
 
-            result = await ClaudeCliRunner.RunAsync(
+            outcome = await ClaudeCliRunner.RunDetailedAsync(
                 prompt,
-                TimeSpan.FromMinutes(5),
+                OneShotQuestionTimeout,
                 time,
                 msg => { diagnostics.Add(msg); observer.OnInfo($"  {msg}"); },
                 ctx.Profile,
@@ -556,39 +550,44 @@ public static class EvalService {
             );
         }
 
-        if (result is null) {
+        if (outcome.Failure is { } failureKind) {
+            var code = LegacyFailureCode(failureKind);
             var reason = diagnostics.Count == 0
-                ? "null claude result"
-                : $"null claude result; {string.Join(" | ", diagnostics.Select(d => Truncate(d, 300)))}";
+                ? $"claude {code}"
+                : $"claude {code}; {string.Join(" | ", diagnostics.Select(d => Truncate(d, 300)))}";
             observer.OnQuestionFailed(index, total, question.Category, question.Id, reason);
 
-            return null;
+            return new QuestionRunResult(null, new EvalQuestionFailure {
+                Category = question.Category, QuestionId = question.Id, Code = code
+            });
         }
 
-        var verdict = ParseVerdict(
+        var result = outcome.Result!;
+        var assessment = ParseVerdict(
             result.Result,
             question,
             onContractViolation: msg => observer.OnInfo($"  {question.Category}/{question.Id}: {msg}")
         );
-        if (verdict is null) {
+        if (assessment is null) {
             observer.OnQuestionFailed(index, total, question.Category, question.Id,
                 $"verdict JSON could not be parsed; raw response: {Truncate(result.Result, 500)}");
 
-            return null;
+            return new QuestionRunResult(null, new EvalQuestionFailure {
+                Category = question.Category, QuestionId = question.Id, Code = EvalFailureCodes.VerdictParseFailed
+            });
         }
 
-        // DEV-1486: record tool-call count for tools-routed questions.
-        // Derived as num_turns - 1 (the final StructuredOutput turn doesn't
-        // count as investigation). Clamped at 0 for the defensive case
-        // where the CLI reports 0 turns. Null for text-only questions so
-        // the server can distinguish "didn't measure" from "measured zero".
-        // Mirrors the branch condition above so size-gate-forced questions
-        // record their tool usage too.
+        // Tool calls are num_turns - 1, the final StructuredOutput turn being no investigation. A text-only question
+        // leaves the count null, so the server can tell "not measured" from "measured zero".
         if (question.NeedsTools || ctx.ForceTools) {
-            verdict = verdict with { ToolsUsed = Math.Max(0, result.NumTurns - 1) };
+            assessment = assessment with { ToolsUsed = Math.Max(0, result.NumTurns - 1) };
         }
 
-        observer.OnQuestionCompleted(index, total, verdict, result.InputTokens, result.OutputTokens);
+        assessment = assessment with {
+            EvidenceCoverage = ReconcileEvidenceCoverage(assessment.Outcome, CoverageForTextPath(ctx, question))
+        };
+
+        observer.OnQuestionCompleted(index, total, assessment, EvalUsage.FromResult(result), route, time.GetElapsedTime(started), runnerInvocations: 1);
 
         // If the judge emitted a retain_fact, persist it for future evals.
         if (ExtractRetainFact(result.Result) is { } retainedFact) {
@@ -599,11 +598,61 @@ public static class EvalService {
             }
         }
 
-        return verdict;
+        return new QuestionRunResult(assessment, null, EvalUsage.FromResult(result));
     }
+
+    // The legacy routes keep reading every harness failure but a timeout or an unparseable reply as chat_error.
+    internal static string LegacyFailureCode(ClaudeCliFailure failure) => failure switch {
+        ClaudeCliFailure.Timeout           => EvalFailureCodes.JudgeTimeout,
+        ClaudeCliFailure.OutputUnparseable => EvalFailureCodes.VerdictParseFailed,
+        _                                  => EvalFailureCodes.ChatError
+    };
+
+    internal static string EvidenceFailureCode(ClaudeCliOutcome outcome) => outcome switch {
+        { Failure: ClaudeCliFailure.Timeout }           => EvalFailureCodes.JudgeTimeout,
+        { Failure: ClaudeCliFailure.SpendBudget }       => EvalFailureCodes.SpendBudget,
+        { Subtype: "error_max_turns" }                  => EvalFailureCodes.IterationCap,
+        { Failure: ClaudeCliFailure.OutputUnparseable } => EvalFailureCodes.VerdictParseFailed,
+        _                                               => EvalFailureCodes.ChatError
+    };
+
+    /// <summary>Measures retrieval loss for the text path — the trace embeds the whole compacted
+    /// session, so what the run set out to deliver is exactly what <see cref="EvalContext.Compaction"/>
+    /// already accounts for. Null for the tools path (the CLI cannot observe which MCP tools the
+    /// judge called) and for a text-path run whose server-side discovery degraded or skipped a
+    /// stream (an input the run set out to deliver was dropped and cannot be enumerated as an
+    /// omission). A zero-loss text run still returns a non-null, complete record — the CLI observed
+    /// the whole delivery and lost nothing.</summary>
+    internal static EvalEvidenceCoverage? CoverageForTextPath(EvalContext ctx, EvalQuestionDto question) {
+        if (question.NeedsTools || ctx.ForceTools) return null;
+
+        var c = ctx.Compaction;
+        if (c.PlanDiscoveryDegraded || c.SkippedStreams > 0) return null;
+
+        var omissions = new List<EvalEvidenceOmission>();
+        if (c.ToolResultsTruncated > 0)     omissions.Add(new() { Kind = "tool_result_truncated",     Count = c.ToolResultsTruncated });
+        if (c.PlanArtifactsTruncated > 0)   omissions.Add(new() { Kind = "plan_artifact_truncated",   Count = c.PlanArtifactsTruncated });
+        if (c.PlanArtifactsUnavailable > 0) omissions.Add(new() { Kind = "plan_artifact_unavailable", Count = c.PlanArtifactsUnavailable });
+        if (c.PlanArtifactsDropped > 0)     omissions.Add(new() { Kind = "plan_artifact_dropped",     Count = c.PlanArtifactsDropped });
+
+        return new() { PolicyVersion = CoveragePolicyVersion, Omissions = omissions };
+    }
+
+    /// <summary>An <c>insufficient_evidence</c> outcome cannot honestly carry a complete coverage
+    /// record — zero mechanical loss on a question the judge could not answer is "unknown", not
+    /// "complete and still unanswerable" — so a complete record is nulled for that outcome only.
+    /// <c>not_applicable</c> may stay complete: nothing needed to be evaluated. Mirrors the
+    /// server producer's reconciliation of the same two records.</summary>
+    internal static EvalEvidenceCoverage? ReconcileEvidenceCoverage(string? outcome, EvalEvidenceCoverage? coverage) =>
+        outcome == EvalOutcomes.InsufficientEvidence && coverage is { IsComplete: true } ? null : coverage;
 
     // ── Phase 3: Finalize ──────────────────────────────────────────────────
 
+    /// <summary>Legacy verdict-list finalize, kept for a protocol-1 daemon RPC (an old server that
+    /// only speaks <c>FinalizeEval</c>): aggregates as V3 and persists through
+    /// <see cref="PersistAggregateV3Async"/>, never <c>/evals/v4</c>. Every verdict is necessarily
+    /// assessed (the legacy shape has no outcome), so <see cref="IEvalObserver.OnFinished"/> is
+    /// notified with a V4 shadow built from the V3 aggregate rather than a genuine V4 payload.</summary>
     public static async Task<SessionEvalCompletedPayloadV3?> FinalizeAsync(
             EvalContext                        ctx,
             HttpClient                         httpClient,
@@ -666,14 +715,111 @@ public static class EvalService {
             httpClient, baseUrl, ctx.EncodedSessionId, aggregate, observer, time, ct);
         if (!ok) return null;
 
+        observer.OnFinished(ToV4Shadow(aggregate));
+
+        return aggregate;
+    }
+
+    /// <summary>V4 finalize: aggregates <paramref name="assessments"/> and
+    /// <paramref name="failures"/>, runs the retrospective only when at least one question was
+    /// assessed, and persists through <see cref="PersistAggregateV4Async"/>.</summary>
+    public static async Task<SessionEvalCompletedPayloadV4?> FinalizeAsync(
+            EvalContext                            ctx,
+            HttpClient                             httpClient,
+            string                                 baseUrl,
+            IReadOnlyList<EvalQuestionAssessment>  assessments,
+            IReadOnlyList<EvalQuestionFailure>     failures,
+            string                                 model,
+            IEvalObserver                          observer,
+            TimeProvider                           time,
+            CancellationToken                      ct
+        ) {
+        if (assessments.Count == 0) {
+            observer.OnFailed("all judge invocations failed");
+
+            return null;
+        }
+
+        var aggregate = Aggregate(assessments, failures, ctx.EvalRunId, model, ctx.Questions);
+        aggregate = aggregate with { FactsUsed = [] };
+
+        EvalRetrospectiveV2? retrospective = null;
+        if (assessments.Any(a => a.Outcome == EvalOutcomes.Assessed)) {
+            retrospective = await RunRetrospectiveV4Async(
+                evalRunId:           ctx.EvalRunId,
+                profile:             ctx.Profile,
+                harnesses:           ctx.Harnesses,
+                sessionId:           ctx.SessionId,
+                model:               model,
+                baseUrl:             baseUrl,
+                aggregate:           aggregate,
+                assessments:         assessments,
+                retrospectivePrompt: ctx.RetrospectivePrompt,
+                traceJson:           ctx.TraceJson,
+                observer:            observer,
+                time:                time,
+                ct:                  ct
+            );
+        }
+        aggregate = aggregate with {
+            Retrospective              = retrospective,
+            RetrospectivePromptVersion = ctx.RetrospectivePromptVersion
+        };
+
+        var ok = await PersistAggregateV4Async(httpClient, baseUrl, ctx.EncodedSessionId, aggregate, observer, time, ct);
+        if (!ok) return null;
+
         observer.OnFinished(aggregate);
 
         return aggregate;
     }
 
+    /// <summary>Lifts a V3 aggregate (every question necessarily assessed) to the V4 shape purely
+    /// so the legacy verdicts-based <see cref="FinalizeAsync(EvalContext,HttpClient,string,IReadOnlyList{EvalQuestionVerdict},string,IEvalObserver,TimeProvider,CancellationToken)"/>
+    /// can satisfy the single <see cref="IEvalObserver.OnFinished"/> contract — never persisted,
+    /// never posted.</summary>
+    static SessionEvalCompletedPayloadV4 ToV4Shadow(SessionEvalCompletedPayloadV3 v3) {
+        var categories = v3.Categories.Select(c => new EvalCategoryAssessment {
+            Name      = c.Name,
+            Score     = c.Score,
+            Verdict   = c.Verdict,
+            Questions = c.Questions.Select(q => new EvalQuestionAssessment {
+                Category       = q.Category,
+                QuestionId     = q.QuestionId,
+                Outcome        = EvalOutcomes.Assessed,
+                Score          = q.Score,
+                Verdict        = q.Verdict,
+                Finding        = q.Finding,
+                Evidence       = q.Evidence,
+                Recommendation = q.Recommendation,
+                ToolsUsed      = q.ToolsUsed,
+                PromptVersion  = q.PromptVersion
+            }).ToList()
+        }).ToList();
+
+        var questionCount = categories.Sum(c => c.Questions.Count);
+
+        return new SessionEvalCompletedPayloadV4 {
+            EvalRunId                  = v3.EvalRunId,
+            JudgeModel                 = v3.JudgeModel,
+            Categories                 = categories,
+            OverallScore               = v3.OverallScore,
+            Summary                    = v3.Summary,
+            Retrospective              = v3.Retrospective,
+            RetrospectivePromptVersion = v3.RetrospectivePromptVersion,
+            FactsUsed                  = v3.FactsUsed,
+            AssessedQuestions          = questionCount,
+            UnassessedQuestions        = 0,
+            JudgedQuestions            = questionCount,
+            TotalQuestions             = questionCount,
+            FailedQuestions            = [],
+            CoveragePolicyVersion      = CoveragePolicyVersion
+        };
+    }
+
     /// <summary>
     /// Persists a V2 aggregate to <c>POST /api/sessions/{id}/evals/v2</c>.
-    /// Extracted from <see cref="FinalizeAsync"/> as a public seam so the
+    /// Extracted from <c>FinalizeAsync</c> as a public seam so the
     /// daemon's wire-format contract can be tested without driving a full
     /// retrospective synthesis (the latter requires the <c>claude</c> CLI
     /// which isn't available in CI).
@@ -682,7 +828,7 @@ public static class EvalService {
     /// Reports failures through <paramref name="observer"/>.OnFailed and
     /// returns <c>false</c>; on HTTP success returns <c>true</c> without
     /// touching the observer (caller is responsible for firing
-    /// OnFinished — see <see cref="FinalizeAsync"/>).
+    /// OnFinished — see <c>FinalizeAsync</c>).
     /// </para>
     /// </summary>
     public static async Task<bool> PersistAggregateV2Async(
@@ -747,10 +893,42 @@ public static class EvalService {
         return true;
     }
 
+    /// <summary>
+    /// Persists a V4 aggregate to <c>POST /api/sessions/{id}/evals/v4</c> (outcomes, coded
+    /// failures and evidence coverage). Public seam for the daemon's wire-format contract test,
+    /// mirroring <see cref="PersistAggregateV3Async"/>.
+    /// </summary>
+    public static async Task<bool> PersistAggregateV4Async(
+            HttpClient                    httpClient,
+            string                        baseUrl,
+            string                        encodedSessionId,
+            SessionEvalCompletedPayloadV4 aggregate,
+            IEvalObserver                 observer,
+            TimeProvider                  time,
+            CancellationToken             ct
+        ) {
+        var       postUrl     = $"{baseUrl}/api/sessions/{encodedSessionId}/evals/v4";
+        var       payloadJson = JsonSerializer.Serialize(aggregate, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV4);
+        using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+
+        try {
+            using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, time, ct: ct);
+            if (!postResp.IsSuccessStatusCode) {
+                observer.OnFailed($"failed to persist eval result: HTTP {(int)postResp.StatusCode}");
+                return false;
+            }
+        } catch (HttpRequestException ex) {
+            observer.OnFailed($"server unreachable for POST: {ex.Message}");
+            return false;
+        }
+
+        return true;
+    }
+
     // ── Prompt construction ────────────────────────────────────────────────
 
     /// <summary>
-    /// Phase 3 — build the run question list FROM the catalog, preserving the
+    /// Builds the run question list from the catalog, preserving the
     /// order of <paramref name="selectedIds"/>. Each result carries the catalog's
     /// rendered <see cref="EvalQuestionDto.Prompt"/> (text path), raw
     /// <see cref="EvalQuestionDto.RawText"/> (tools path), <see cref="EvalQuestionDto.PromptVersion"/>,
@@ -773,7 +951,10 @@ public static class EvalService {
                 Prompt        = c.Prompt,        // RENDERED — text path uses directly
                 RawText       = c.QuestionText,  // RAW — tools path substitutes this
                 NeedsTools    = c.NeedsTools,
-                PromptVersion = c.PromptVersion
+                PromptVersion = c.PromptVersion,
+                Strategy           = c.Strategy,
+                StrategyVersion    = c.StrategyVersion,
+                ReportsObligations = c.ReportsObligations == true
             });
         }
         return result;
@@ -891,24 +1072,46 @@ public static class EvalService {
     /// recommendation is missing is a worse outcome than a partial verdict.
     /// </para>
     /// </summary>
-    public static EvalQuestionVerdict? ParseVerdict(
+    public static EvalQuestionAssessment? ParseVerdict(
             string          rawResponse,
             EvalQuestionDto question,
             Action<string>? onContractViolation = null
         ) {
         var json = StripCodeFences(rawResponse.Trim());
 
-        EvalQuestionVerdict? parsed;
+        EvalQuestionAssessment? parsed;
+        bool outcomeExplicitlyNull;
         try {
-            parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionVerdict);
+            using var doc = JsonDocument.Parse(json);
+            outcomeExplicitlyNull = doc.RootElement.Prop("outcome") is { IsNull: true };
+            if (doc.RootElement.IsObject && ProducerOwned.Any(name => doc.RootElement.TryGetProperty(name, out _))) json = WithoutMembers(doc.RootElement, ProducerOwned);
+
+            parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionAssessment);
         } catch (JsonException) {
             return null;
         }
 
         if (parsed is null) return null;
 
-        if (parsed.Score is < 1 or > 5) {
-            return null;
+        // Only an ABSENT outcome key defaults to assessed (a model that ignores the field, or
+        // free-form navigating output) — an explicit JSON null is a parse failure, same as the
+        // server's parser. STJ binds a present non-string value to a JsonException above, so the
+        // explicit-null case is the only one a nullable property lets through silently.
+        if (outcomeExplicitlyNull) return null;
+
+        var outcome = parsed.Outcome ?? EvalOutcomes.Assessed;
+        if (!EvalOutcomes.All.Contains(outcome)) return null;
+        if (string.IsNullOrWhiteSpace(parsed.Finding)) return null;
+
+        if (outcome == EvalOutcomes.Assessed) {
+            if (parsed.Score is null or < 1 or > 5) return null;
+        } else if (parsed.Score is not null) {
+            onContractViolation?.Invoke($"{outcome} verdict carried score {parsed.Score} — dropped per contract");
+            parsed = parsed with { Score = null };
+        }
+
+        if (outcome != EvalOutcomes.Assessed) {
+            return parsed with { Category = question.Category, QuestionId = question.Id, Outcome = outcome, Verdict = null };
         }
 
         var normalisedRecommendation = parsed.Recommendation?.Trim();
@@ -930,7 +1133,8 @@ public static class EvalService {
         return parsed with {
             Category       = question.Category,
             QuestionId     = question.Id,
-            Verdict        = VerdictForScore(parsed.Score),
+            Outcome        = outcome,
+            Verdict        = VerdictForScore(parsed.Score!.Value),
             Recommendation = normalisedRecommendation
         };
     }
@@ -1124,6 +1328,21 @@ public static class EvalService {
         return text.Trim();
     }
 
+    // Stamped or reconciled by the producer, never taken from the judge: a reported obligations array is not the persisted
+    // shape and would fail the whole verdict's deserialization.
+    static readonly string[] ProducerOwned = ["strategy", "strategy_version", "obligations"];
+
+    static string WithoutMembers(JsonElement root, IReadOnlyCollection<string> names) {
+        using var buffer = new MemoryStream();
+        using (var w = new Utf8JsonWriter(buffer)) {
+            w.WriteStartObject();
+            foreach (var property in root.EnumerateObject())
+                if (!names.Contains(property.Name)) property.WriteTo(w);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
     // ── Facts-used snapshot ────────────────────────────────────────────────
 
     /// <summary>
@@ -1227,6 +1446,77 @@ public static class EvalService {
         };
     }
 
+    /// <summary>V4 aggregate: overall and category scores are the rounded mean of ASSESSED
+    /// question scores only (never a mean of category means), null when nothing was assessed.
+    /// <paramref name="failures"/> feed <c>failed_questions</c> and <c>total_questions</c>;
+    /// <c>judged_questions</c> counts only entries that produced a question row (assessed or
+    /// unassessed).</summary>
+    public static SessionEvalCompletedPayloadV4 Aggregate(
+            IReadOnlyList<EvalQuestionAssessment> assessments,
+            IReadOnlyList<EvalQuestionFailure>    failures,
+            string                                 evalRunId,
+            string                                 model,
+            IReadOnlyList<EvalQuestionDto>         questions
+        ) {
+        var versionByQuestion = questions
+            .Where(q => q.PromptVersion is not null)
+            .ToDictionary(q => q.Id, q => q.PromptVersion!, StringComparer.Ordinal);
+
+        var stamped = assessments
+            .Select(a => versionByQuestion.TryGetValue(a.QuestionId, out var ver)
+                ? a with { PromptVersion = ver }
+                : a)
+            .ToList();
+
+        var byCategory = stamped
+            .GroupBy(a => a.Category)
+            .Select(g => {
+                var assessedScores = g
+                    .Where(a => a.Outcome == EvalOutcomes.Assessed && a.Score is not null)
+                    .Select(a => a.Score!.Value)
+                    .ToList();
+                int? score = assessedScores.Count > 0 ? (int)Math.Round(assessedScores.Average()) : null;
+
+                return new EvalCategoryAssessment {
+                    Name      = g.Key,
+                    Score     = score,
+                    Verdict   = score is { } s ? VerdictForScore(s) : null,
+                    Questions = g.ToList()
+                };
+            })
+            .OrderBy(c => CategoryOrderFromTaxonomy(c.Name, questions))
+            .ToList();
+
+        var allAssessedScores = stamped
+            .Where(a => a.Outcome == EvalOutcomes.Assessed && a.Score is not null)
+            .Select(a => a.Score!.Value)
+            .ToList();
+        int? overall = allAssessedScores.Count > 0 ? (int)Math.Round(allAssessedScores.Average()) : null;
+
+        var assessedCount   = stamped.Count(a => a.Outcome == EvalOutcomes.Assessed);
+        var unassessedCount = stamped.Count - assessedCount;
+        var judged          = stamped.Count;
+        var total           = judged + failures.Count;
+
+        var summary = $"Evaluated {judged}/{total} questions across {byCategory.Count} categories. "
+            + $"{assessedCount} assessed, {unassessedCount} not assessed. "
+            + (overall is { } o ? $"Overall: {o}/5 ({VerdictForScore(o)})." : "Overall: not scored.");
+
+        return new SessionEvalCompletedPayloadV4 {
+            EvalRunId             = evalRunId,
+            JudgeModel            = model,
+            Categories            = byCategory,
+            OverallScore          = overall,
+            Summary               = summary,
+            AssessedQuestions     = assessedCount,
+            UnassessedQuestions   = unassessedCount,
+            JudgedQuestions       = judged,
+            TotalQuestions        = total,
+            FailedQuestions       = failures.ToList(),
+            CoveragePolicyVersion = CoveragePolicyVersion
+        };
+    }
+
     static int CategoryOrderFromTaxonomy(string category, IReadOnlyList<EvalQuestionDto> questions) {
         var idx  = 0;
         var seen = new HashSet<string>();
@@ -1277,6 +1567,8 @@ public static class EvalService {
         ct.ThrowIfCancellationRequested();
 
         observer.OnRetrospectiveStarted();
+
+        var started = time.GetTimestamp();
 
         var sessionMeta  = $"session-id: {sessionId}\nrun-id: {evalRunId}\nmodel: {model}\noverall-score: {aggregate.OverallScore}/5";
         var verdictsJson = JsonSerializer.Serialize(verdicts, CapacitorJsonContext.Default.IReadOnlyListEvalQuestionVerdict);
@@ -1331,11 +1623,88 @@ public static class EvalService {
                 return null;
             }
 
-            observer.OnRetrospectiveCompleted(retrospective);
+            observer.OnRetrospectiveCompleted(retrospective, EvalUsage.FromResult(result), time.GetElapsedTime(started));
 
             return retrospective;
         } catch (OperationCanceledException) {
             // Upstream cancellation must continue to cancel — don't swallow.
+            throw;
+        } catch (Exception ex) {
+            observer.OnRetrospectiveFailed(ex.Message);
+
+            return null;
+        }
+    }
+
+    /// <summary>V4 retrospective: same synthesis as <see cref="RunRetrospectiveAsync"/> over
+    /// assessments rather than verdicts, so an unassessed question's outcome and finding — not a
+    /// score — is what the judge sees for it. The meta line prints "not scored" for a null
+    /// overall rather than a bare score.</summary>
+    static async Task<EvalRetrospectiveV2?> RunRetrospectiveV4Async(
+            string                                 evalRunId,
+            Profile?                               profile,
+            HarnessRegistry                        harnesses,
+            string                                 sessionId,
+            string                                 model,
+            string                                 baseUrl,
+            SessionEvalCompletedPayloadV4          aggregate,
+            IReadOnlyList<EvalQuestionAssessment>  assessments,
+            string                                 retrospectivePrompt,
+            string                                 traceJson,
+            IEvalObserver                          observer,
+            TimeProvider                           time,
+            CancellationToken                      ct
+        ) {
+        ct.ThrowIfCancellationRequested();
+
+        observer.OnRetrospectiveStarted();
+
+        var started = time.GetTimestamp();
+
+        var overallText  = aggregate.OverallScore is { } score ? $"{score}/5" : "not scored";
+        var sessionMeta  = $"session-id: {sessionId}\nrun-id: {evalRunId}\nmodel: {model}\noverall-score: {overallText}";
+        var verdictsJson = JsonSerializer.Serialize(assessments, CapacitorJsonContext.Default.ListEvalQuestionAssessment);
+
+        var prompt = BuildRetrospectivePrompt(
+            retrospectivePrompt, sessionMeta, verdictsJson, knownPatterns: "", traceJson);
+
+        var commandPath = ResolveJudgeCommandPath();
+        var mcpConfig   = BuildJudgeMcpConfig(commandPath, sessionId, baseUrl);
+
+        try {
+            var result = await ClaudeCliRunner.RunAsync(
+                prompt,
+                RetrospectiveTimeout,
+                time,
+                msg => observer.OnInfo($"  {msg}"),
+                profile,
+                harnesses,
+                model:          JudgeModelFor(model),
+                maxTurns:       RetrospectiveMaxTurns,
+                promptViaStdin: true,
+                jsonSchema:     RetrospectiveJsonSchema,
+                mcpConfigJson:  mcpConfig,
+                allowedTools:   JudgeMcpAllowedTools,
+                ct:             ct
+            );
+
+            if (result is null) {
+                observer.OnRetrospectiveFailed("claude returned null (timeout, non-zero exit, or unparseable response)");
+
+                return null;
+            }
+
+            var retrospective = ParseRetrospectiveV2(result.Result);
+            if (retrospective is null) {
+                observer.OnRetrospectiveFailed($"retrospective response did not parse as expected JSON shape; raw response: {Truncate(result.Result, 500)}");
+
+                return null;
+            }
+
+            observer.OnRetrospectiveCompleted(retrospective, EvalUsage.FromResult(result), time.GetElapsedTime(started));
+
+            return retrospective;
+        } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
             observer.OnRetrospectiveFailed(ex.Message);
@@ -1395,7 +1764,7 @@ public static class EvalService {
     /// outside CI sandboxes), we swallow that too rather than risk
     /// corrupting eval state for a logging side effect.
     /// </summary>
-    sealed class SafeObserver(IEvalObserver inner) : IEvalObserver {
+    internal sealed class SafeObserver(IEvalObserver inner) : IEvalObserver {
         public void OnInfo(string message) => Safe(() => inner.OnInfo(message), nameof(OnInfo));
 
         public void OnStarted(string evalRunId, string judgeModel, int totalQuestions) =>
@@ -1407,8 +1776,8 @@ public static class EvalService {
         public void OnQuestionStarted(int index, int total, string category, string questionId) =>
             Safe(() => inner.OnQuestionStarted(index, total, category, questionId), nameof(OnQuestionStarted));
 
-        public void OnQuestionCompleted(int index, int total, EvalQuestionVerdict verdict, long inputTokens, long outputTokens) =>
-            Safe(() => inner.OnQuestionCompleted(index, total, verdict, inputTokens, outputTokens), nameof(OnQuestionCompleted));
+        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations) =>
+            Safe(() => inner.OnQuestionCompleted(index, total, assessment, usage, route, elapsed, runnerInvocations), nameof(OnQuestionCompleted));
 
         public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) =>
             Safe(() => inner.OnQuestionFailed(index, total, category, questionId, reason), nameof(OnQuestionFailed));
@@ -1419,17 +1788,23 @@ public static class EvalService {
         public void OnRetrospectiveStarted() =>
             Safe(inner.OnRetrospectiveStarted, nameof(OnRetrospectiveStarted));
 
-        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) =>
-            Safe(() => inner.OnRetrospectiveCompleted(retrospective), nameof(OnRetrospectiveCompleted));
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed) =>
+            Safe(() => inner.OnRetrospectiveCompleted(retrospective, usage, elapsed), nameof(OnRetrospectiveCompleted));
 
         public void OnRetrospectiveFailed(string reason) =>
             Safe(() => inner.OnRetrospectiveFailed(reason), nameof(OnRetrospectiveFailed));
 
-        public void OnFinished(SessionEvalCompletedPayloadV3 aggregate) =>
+        public void OnFinished(SessionEvalCompletedPayloadV4 aggregate) =>
             Safe(() => inner.OnFinished(aggregate), nameof(OnFinished));
 
         public void OnFailed(string reason) =>
             Safe(() => inner.OnFailed(reason), nameof(OnFailed));
+
+        public void OnTreatment(EvalTreatment treatment) =>
+            Safe(() => inner.OnTreatment(treatment), nameof(OnTreatment));
+
+        public void OnQuestionLedger(int index, string questionId, string tempLedgerPath) =>
+            Safe(() => inner.OnQuestionLedger(index, questionId, tempLedgerPath), nameof(OnQuestionLedger));
 
         static void Safe(Action notify, string callbackName) {
             try {

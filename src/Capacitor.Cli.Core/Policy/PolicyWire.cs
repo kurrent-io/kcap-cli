@@ -36,6 +36,25 @@ public sealed record PolicySnapshotDocV1(string Scope, string SourcePath, string
 public static class PolicyWire {
     public const int MaxRawPayloadBytes = 16 * 1024;
 
+    // The one place a PolicyDecisionEventV1 is built. Engine version, decided-at, the mode's wire
+    // spelling, and the snapshot id/degraded pair are derived rather than passed, so the same-typed
+    // strings a caller could transpose (vendor, seam, the outcomes) are the only ones left to name.
+    // A null snapshot is an ungoverned decision the seam still has to account for — id "unknown",
+    // undegraded.
+    public static PolicyDecisionEventV1 Decision(
+            string sessionId, string? agentId, string vendor, string seam,
+            PolicySnapshot? snapshot, EvaluationMode mode,
+            string requestedOutcome, string effectiveOutcome,
+            PolicyActionV1 action, PolicyMatchedRuleV1[] matchedRules, TimeProvider time,
+            string? failureClass = null, string? correlationId = null, bool correlationAmbiguous = false,
+            bool? pendingAskConsumed = null, string? freshOutcome = null) =>
+        new(
+            sessionId, agentId, vendor, seam, snapshot?.Id ?? "unknown", PolicyEngine.Version,
+            mode == EvaluationMode.Full ? "full" : "tighten_only", requestedOutcome, effectiveOutcome,
+            action, matchedRules, snapshot?.Degraded ?? false, failureClass,
+            correlationId, correlationAmbiguous, time.GetUtcNow().ToString("O"),
+            pendingAskConsumed, freshOutcome);
+
     public static PolicyActionV1 ToWire(CanonicalAction a) {
         var raw = a.RawPayloadJson;
         var truncated = false;

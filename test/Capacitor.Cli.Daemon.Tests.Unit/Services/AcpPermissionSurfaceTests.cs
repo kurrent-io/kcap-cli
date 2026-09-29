@@ -48,6 +48,107 @@ public class AcpPermissionSurfaceTests {
     }
 
     [Test]
+    [Arguments("allow_once", true, false)]
+    [Arguments("allow_always", false, true)]
+    [Arguments("allow_custom", false, false)]
+    [Arguments(null, false, false)]
+    [Arguments("reject_once", false, false)]
+    public async Task Local_capabilities_describe_the_offered_grant_scope(string? kind, bool once, bool always) {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System);
+        var task = surface.RequestAsync(Request(options: [new("choice", "Choice", null, kind)]), CancellationToken.None);
+        var pending = await NextPending(reader);
+        broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision, "deny", PermissionSettlements.SourceApp);
+        await task;
+
+        await Assert.That(pending.SupportsAllowOnce).IsEqualTo(once);
+        await Assert.That(pending.SupportsAllowAlways).IsEqualTo(always);
+    }
+
+    [Test]
+    [Arguments("allow_once", "first", "second", "allow_once")]
+    [Arguments("allow_always", "first", "second", "allow_always")]
+    [Arguments("allow_once", "shared", "shared", "reject_once")]
+    [Arguments("allow_always", "shared", "shared", "reject_once")]
+    [Arguments("allow_once", "", "reject", "reject_once")]
+    [Arguments("allow_always", "", "reject", "reject_once")]
+    [Arguments("allow_once", "  ", "reject", "reject_once")]
+    [Arguments("allow_always", "  ", "reject", "reject_once")]
+    public async Task Ambiguous_or_unaddressable_grants_offer_no_notification_approval(
+            string kind, string optionId, string otherId, string otherKind) {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System);
+        var task = surface.RequestAsync(Request(options: [
+            new(optionId, "First scope", null, kind), new(otherId, "Other scope", null, otherKind),
+        ]), CancellationToken.None);
+        var pending = await NextPending(reader);
+        broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision, "deny", PermissionSettlements.SourceApp);
+        await task;
+
+        await Assert.That(pending.SupportsAllowOnce).IsFalse();
+        await Assert.That(pending.SupportsAllowAlways).IsFalse();
+    }
+
+    [Test]
+    public async Task Explicit_always_selects_the_standing_grant_and_preserves_capabilities_on_correlation() {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer("srv-1"), TimeProvider.System);
+        var task = surface.RequestAsync(Request(options: [
+            new("once", "Allow", null, "allow_once"), new("always", "Always", null, "allow_always"),
+        ]), CancellationToken.None);
+        var pending = await NextPending(reader, dto => dto.ServerRequestId is not null);
+        using var apply = JsonDocument.Parse("true");
+        broker.TrySettle(pending.RequestId, new PermissionDecision("allow", apply.RootElement.Clone(), null), "allow", PermissionSettlements.SourceApp);
+        var decision = await task;
+
+        await Assert.That(pending.SupportsAllowOnce).IsTrue();
+        await Assert.That(pending.SupportsAllowAlways).IsTrue();
+        await Assert.That(decision.SelectedOptionId).IsEqualTo("always");
+    }
+
+    [Test]
+    [Arguments(false, "deny", null)]
+    [Arguments(true, "allow_always", "first")]
+    public async Task Multiple_standing_options_never_become_a_one_time_grant(bool explicitAlways, string outcome, string? optionId) {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System);
+        var task = surface.RequestAsync(Request(options: [
+            new("first", "Always for this tool", null, "allow_always"),
+            new("second", "Always for this project", null, "allow_always"),
+        ]), CancellationToken.None);
+        var pending = await NextPending(reader);
+        using var marker = JsonDocument.Parse("true");
+        broker.TrySettle(pending.RequestId, new PermissionDecision("allow", explicitAlways ? marker.RootElement.Clone() : null, null),
+            "allow", PermissionSettlements.SourceApp);
+        var decision = await task;
+
+        await Assert.That(decision.Outcome).IsEqualTo(outcome);
+        await Assert.That(decision.SelectedOptionId).IsEqualTo(optionId);
+        await Assert.That(pending.SupportsAllowOnce).IsFalse();
+        await Assert.That(pending.SupportsAllowAlways).IsFalse();
+    }
+
+    [Test]
+    [Arguments("claude")]
+    [Arguments("codex")]
+    public async Task Acp_options_override_hook_vendor_grant_defaults(string vendor) {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(broker, vendor, BlockingServer(), TimeProvider.System);
+        var task = surface.RequestAsync(Request(options: [new("standing", "Always", null, "allow_always")]), CancellationToken.None);
+        var pending = await NextPending(reader);
+        broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision, "deny", PermissionSettlements.SourceApp);
+        await task;
+
+        await Assert.That(pending.SupportsAllowOnce).IsFalse();
+        await Assert.That(pending.SupportsAllowAlways).IsTrue();
+    }
+
+    [Test]
     public async Task DesktopAllow_MapsToTheAgentsAllowOption() {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();

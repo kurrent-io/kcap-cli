@@ -81,4 +81,48 @@ public class DaemonStatusDtoTests {
 
         await Assert.That(back.Daemon.SupportedVendors).IsNull();
     }
+
+    [Test]
+    public async Task DaemonConnect_serializes_vendor_models_as_snake_case_and_round_trips() {
+        var connect = new DaemonConnect("d", "mac", [], 1, [],
+            VendorModels: new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal) {
+                ["pi"] = [new("anthropic/claude-opus-5", "Claude Opus 5 · anthropic")],
+                ["kiro"] = [],
+            });
+
+        var json = JsonSerializer.Serialize(connect, CapacitorJsonContext.Default.DaemonConnect);
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(json).Contains("\"vendor_models\"");
+        await Assert.That(back.VendorModels!["pi"][0].Value).IsEqualTo("anthropic/claude-opus-5");
+        await Assert.That(back.VendorModels["kiro"]).IsEmpty();
+    }
+
+    [Test]
+    public async Task DaemonConnect_without_vendor_models_deserializes_to_null() {
+        var json = JsonSerializer.Serialize(new DaemonConnect("d", "mac", [], 1, []), CapacitorJsonContext.Default.DaemonConnect);
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.DaemonConnect);
+        await Assert.That(back.VendorModels).IsNull();
+    }
+
+    [Test]
+    public async Task DaemonInfoDto_vendor_models_round_trips_through_status_context() {
+        var dto = new DaemonStatusDto(
+            new DaemonInfoDto("d", "1", "http://s", "connected", 1, 0,
+                VendorModels: new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal) { ["pi"] = [] }),
+            []);
+
+        var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
+        var back = JsonSerializer.Deserialize(json, StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+        await Assert.That(json).Contains("\"vendor_models\"");
+        await Assert.That(back.Daemon.VendorModels!["pi"]).IsEmpty();
+    }
+
+    [Test]
+    public async Task DaemonInfoDto_from_an_older_daemon_has_null_vendor_models() {
+        var json = """{"daemon":{"name":"d","version":"1","server_url":"http://s","connection":"connected","max_agents":1,"active_agents":0},"agents":[]}""";
+        var back = JsonSerializer.Deserialize(json, StatusIpcJsonContext.Default.DaemonStatusDto)!;
+        await Assert.That(back.Daemon.VendorModels).IsNull();
+    }
 }

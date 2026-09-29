@@ -3,13 +3,11 @@ using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Regression coverage for a Bug found in review: Notify pushes into a raw Rx Subject from
-/// concurrent background Task.Run bodies (AgentActionService's per-agent stops, pause ops) — Rx's
-/// grammar requires OnNext calls to a single Subject be serialized, which a bare Subject does not
-/// do on its own. AppNotifier.Notify now holds one lock around both the Subject push and the
-/// Console.Error write. A genuine concurrency race is inherently non-deterministic and not
-/// asserted here — this instead pins the simpler, deterministic invariant that ordinary sequential
-/// calls still deliver in the same relative order to both channels.
+/// Notify is called from concurrent Task.Run bodies (AgentActionService's per-agent stops, pause
+/// ops), and Rx requires OnNext on one Subject to be serialized, so AppNotifier.Notify holds one
+/// lock around both the Subject push and the Console.Error write. The race itself is
+/// non-deterministic and not asserted here; this pins that sequential calls deliver in the same
+/// relative order to both channels.
 public class AppNotifierTests {
     // Swaps the process-global Console.Error — bare NotInParallel (not just a group key) is
     // required, same reasoning as ImportVisibilityTests' Console-redirecting tests: a group key

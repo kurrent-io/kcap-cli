@@ -28,6 +28,8 @@ public static class KcapMcpRegistry {
         ["kcap-workitems"] = new("kcap-workitems", ["mcp", "workitems"], false),
         ["kcap-plans"]     = new("kcap-plans",     ["mcp", "plans"],     false),
         ["kcap-analytics"] = new("kcap-analytics", ["mcp", "analytics"], false),
+        ["kcap-artefacts"] = new("kcap-artefacts", ["mcp", "artefacts"], false),
+        ["kcap-knowledge"] = new("kcap-knowledge", ["mcp", "knowledge"], false),
     };
 
     /// <summary>Every registered id. Exposed so a conformance test can compare this list against the
@@ -99,7 +101,7 @@ public static class KcapMcpRegistry {
             },
             ["kcap-sessions"] = new HashSet<string>(StringComparer.Ordinal) {
                 "search_sessions", "list_repo_sessions", "get_session_summary", "get_session_transcript",
-                "get_turn", "list_turns",
+                "get_turn", "list_turns", "list_repo_plans", "get_declared_plans",
             },
         };
 

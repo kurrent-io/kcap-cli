@@ -119,6 +119,58 @@ public class AgentActivityClockTests {
         await Assert.That(seen).IsEquivalentTo([true, false], CollectionOrdering.Matching);
     }
 
+    /// No output and no live subagent for the quiet window is a finished turn, even when the stop
+    /// notice never landed. Output after that mark means a turn is running again; a hook stop is
+    /// not undone by the next chunk.
+    [Test]
+    public async Task Silence_marks_a_wait_that_output_clears_and_a_hook_stop_keeps() {
+        var time  = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsFalse();
+
+        time.Advance(AgentActivityClock.QuietTurn);
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsTrue();
+        await Assert.That(clock.AwaitingInput).IsTrue();
+
+        clock.Advance();
+        await Assert.That(clock.AwaitingInput).IsFalse();
+
+        time.Advance(AgentActivityClock.QuietTurn);
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsTrue();
+        clock.SetAwaitingInput(true);
+        clock.Advance();
+        await Assert.That(clock.AwaitingInput).IsTrue();
+    }
+
+    /// A key that clears the wait starts its own quiet window. The idle time already elapsed
+    /// must not mark the agent waiting again in the same instant.
+    [Test]
+    public async Task A_cleared_wait_is_not_re_marked_until_the_quiet_window_elapses_again() {
+        var time  = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn);
+        clock.SetAwaitingInput(true);
+
+        clock.ClearAwaitingInputSince(clock.WaitGeneration);
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsFalse();
+
+        time.Advance(AgentActivityClock.QuietTurn);
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsTrue();
+    }
+
+    /// A live subagent keeps the parent working through a quiet terminal.
+    [Test]
+    public async Task A_live_subagent_is_not_a_quiet_turn() {
+        var time  = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        clock.SubagentSeen("child", time.GetUtcNow().ToUnixTimeMilliseconds());
+        time.Advance(AgentActivityClock.QuietTurn);
+
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsFalse();
+        await Assert.That(clock.QuietDue(AgentActivityClock.QuietTurn)).IsNull();
+    }
+
     /// A gate cleared without ever being held (a runtime going terminal) is not a turn ending.
     [Test]
     public async Task Clearing_a_gate_that_was_never_held_does_not_mark_awaiting_input() {

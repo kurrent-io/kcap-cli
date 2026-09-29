@@ -4,9 +4,9 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.LauncherPaneView"
              x:DataType="vm:HomeViewModel">
-    <!-- The Sessions surface's empty state: launching IS the pane — a fixed question over an
+    <!-- The main window's empty state: launching IS the pane — a fixed question over an
          optional repo subtitle, then one big composer. DataContext is a HomeViewModel supplied
-         externally (MainWindow binds Home), same contract as HomeView. Connection / sign-in
+         externally (MainWindow binds Home). Connection / sign-in
          status overlays the top of the pane so showing it does not shift the composer. -->
     <Grid Margin="24,16,24,0">
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Stretch" MaxWidth="680"
@@ -37,7 +37,7 @@
                     <TextBox x:Name="GoalInput" Classes="kcapEmbedded" Text="{Binding Goal}"
                              PlaceholderText="What should we build? Type a goal or paste an issue, PR, or work-item URL…"
                              Background="Transparent" Foreground="{StaticResource KcapTextBrush}"
-                             BorderThickness="0" MinHeight="72" MaxHeight="220" TextWrapping="Wrap" FontSize="14"
+                             BorderThickness="0" MinHeight="72" MaxHeight="220" TextWrapping="Wrap"
                              VerticalContentAlignment="Top" AcceptsReturn="True" />
 
                     <!-- Repo on its own row (capped width + ellipsis); settings + Start below so a
@@ -93,7 +93,7 @@
                                                     <Binding Path="Harnesses" />
                                                     <Binding Path="SelectedVendor" />
                                                     <Binding Path="SelectedModel" />
-                                                    <Binding Path="ModelCatalog" />
+                                                    <Binding Path="EffectiveModelCatalog" />
                                                 </MultiBinding>
                                             </TextBlock.Text>
                                         </TextBlock>

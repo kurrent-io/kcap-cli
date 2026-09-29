@@ -84,6 +84,42 @@ public class FlowsDriverSchemaConformanceTests {
         await Assert.That(props.ContainsKey("model")).IsFalse();
     }
 
+    /// <summary>The two STATUS tools: the only follow-ups a driver can make without the id, since a
+    /// harness abort of the start is exactly the case where it never received one.</summary>
+    public static IEnumerable<Func<string>> StatusTools() { yield return () => "get_review_flow_status"; yield return () => "get_flow_status"; }
+
+    [Test]
+    [MethodDataSource(nameof(StatusTools))]
+    public async Task A_status_tool_takes_flow_run_id_and_session_id_as_optional_strings(string toolName) {
+        var schema = Tool(toolName).InputSchema;
+
+        await Assert.That(schema.Properties["flow_run_id"].Type).IsEqualTo("string");
+        await Assert.That(schema.Properties["session_id"].Type).IsEqualTo("string");
+        await Assert.That(schema.Required).IsEmpty();
+    }
+
+    /// <summary>The four tools that hold the call open while a round runs.</summary>
+    public static IEnumerable<Func<string>> BlockingTools() {
+        yield return () => "start_review_flow";
+        yield return () => "submit_review_round";
+        yield return () => "start_flow";
+        yield return () => "send_to_participant";
+    }
+
+    // A harness that aborts the call words the error itself, so this description is the only
+    // guidance the driver can have read beforehand: what the abort means and the one call to make.
+    [Test]
+    [MethodDataSource(nameof(BlockingTools))]
+    public async Task A_blocking_tool_says_what_a_harness_timeout_means(string toolName) {
+        var description = Tool(toolName).Description;
+        var statusTool  = toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
+
+        await Assert.That(description).Contains("blocks for minutes");
+        await Assert.That(description).Contains("still running");
+        await Assert.That(description).Contains("do not start it again");
+        await Assert.That(description).Contains($"{statusTool} with wait: true");
+    }
+
     // The description is the whole mechanism by which a driver LLM learns to pass the parameter.
     // A correct schema with a description that never mentions naming a reviewer produces a driver
     // that silently takes the default — which is the exact failure this contract exists to prevent,
@@ -414,7 +450,7 @@ public class FlowsDriverSchemaConformanceTests {
         await Assert.That(flows!.Args)
             .IsEquivalentTo(new[] { "mcp", "flows", "--driver", projection.Harness }, CollectionOrdering.Matching);
         // Flows launches a PAID hosted reviewer, so it must never be auto-approved on registration.
-        await Assert.That(flows.ReadOnly).IsFalse();
+        await Assert.That(flows.AutoApprove).IsFalse();
     }
 
     // Install/uninstall must read the SAME ownership tuple. If the remove paths or Kiro's "is the MCP

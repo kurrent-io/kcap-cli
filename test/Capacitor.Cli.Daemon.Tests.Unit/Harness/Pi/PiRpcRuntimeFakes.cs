@@ -39,6 +39,17 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
     /// gone" shape.</summary>
     public bool FailWrites { get; set; }
 
+    /// <summary>When set, a written line is recorded as usual but the write completes via this
+    /// delegate instead of <see cref="Task.CompletedTask"/> — lets a test park (a
+    /// <see cref="TaskCompletionSource"/> that never completes) or fault one specific command, such
+    /// as the reap's <c>abort</c>, without affecting every other write.</summary>
+    public Func<string, Task>? WriteOverride { get; set; }
+
+    /// <summary>When set, <see cref="TerminateAsync"/> returns this instead of completing — lets a test
+    /// park the child's termination to prove dispose stays bounded when a reap's terminate hangs. The
+    /// call is still counted.</summary>
+    public Func<Task>? TerminateOverride { get; set; }
+
     public int  Pid            { get; }              = 4242;
     public bool HasExited      { get; private set; }
     public int? ExitCode       { get; private set; }
@@ -83,13 +94,30 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 
         OnWrite?.Invoke(json);
 
-        return Task.CompletedTask;
+        return WriteOverride?.Invoke(json) ?? Task.CompletedTask;
     }
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
 
+    /// <summary>When true, closing stdin ends the child with exit code 0, as real Pi does.</summary>
+    public bool ExitsOnInputClose { get; set; }
+    public int  InputCloseCalls   { get; private set; }
+
+    /// <summary>Lines the child writes to stdout as it exits on input close.</summary>
+    public IReadOnlyList<string> LinesOnInputClose { get; set; } = [];
+
+    public Task CloseInputAsync(TimeSpan timeout) {
+        InputCloseCalls++;
+        if (!ExitsOnInputClose) return Task.CompletedTask;
+
+        foreach (var line in LinesOnInputClose) Push(line);
+        EndOfStream(0);
+        return Task.CompletedTask;
+    }
+
     public Task TerminateAsync(TimeSpan? timeout = null) {
         TerminateCalls++;
+        if (TerminateOverride is { } o) return o();
         HasExited = true;
         ExitCode ??= -1;
         _lines.Writer.TryComplete();
@@ -107,7 +135,7 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 /// <see cref="PiRpcHostedAgentRuntime"/>'s tests. Every literal here is a Pi JSONL-RPC frame in the
 /// pinned upstream shape — kept in ONE place so a protocol correction lands once.</summary>
 internal static class PiRpcRuntimeFakes {
-    public const string SessionId      = "pi-session-abc123";
+    public const string PiSessionId    = "pi-session-abc123";
     public const string StateModelId   = "anthropic/claude-sonnet-4";
     public const string RequestedModel = "requested-model";
 
@@ -116,7 +144,7 @@ internal static class PiRpcRuntimeFakes {
     /// fallback to the requested model.</summary>
     public static string GetStateResponse(
             string  id          = "init-state",
-            string? sessionId   = SessionId,
+            string? sessionId   = PiSessionId,
             string? modelId     = StateModelId,
             bool    isStreaming = false,
             bool    success     = true) {
@@ -176,6 +204,12 @@ internal static class PiRpcRuntimeFakes {
     public const string AgentStart   = """{"type":"agent_start"}""";
     public const string AgentSettled = """{"type":"agent_settled"}""";
 
+    /// <summary>A blocking (or display-only) <c>extension_ui_request</c> frame — see
+    /// <c>PiRpc.ToEnvelopes</c>'s class doc for which <paramref name="method"/> values block Pi on
+    /// stdin.</summary>
+    public static string DialogRequest(string method) =>
+        $$"""{"type":"extension_ui_request","id":"ui-1","method":"{{method}}","title":"t"}""";
+
     /// <summary>Builds a runtime over a fresh <see cref="FakePiRpcProcess"/>. The caller owns
     /// disposing the runtime (which disposes the process).</summary>
     public static (PiRpcHostedAgentRuntime Runtime, FakePiRpcProcess Process) NewRuntime(
@@ -185,7 +219,9 @@ internal static class PiRpcRuntimeFakes {
             TimeSpan?  readyDeadline  = null,
             TimeSpan?  stopGrace      = null,
             Action?    onDisposed     = null,
-            TranscriptJournal? journal = null) {
+            TranscriptJournal? journal = null,
+            PiReviewerGuards?  reviewerGuards = null,
+            TimeProvider?      time    = null) {
         var process = new FakePiRpcProcess {
             AutoStateResponse = answerGetState ? stateResponse ?? GetStateResponse() : null,
         };
@@ -196,11 +232,12 @@ internal static class PiRpcRuntimeFakes {
             agentId:        "agent-1",
             requestedModel: requestedModel,
             cwd:            "/w",
-            time:           TimeProvider.System,
+            time:           time ?? TimeProvider.System,
             readyDeadline:  readyDeadline,
             stopGrace:      stopGrace,
             onDisposed:     onDisposed,
-            journal:        journal);
+            journal:        journal,
+            reviewerGuards: reviewerGuards);
 
         return (runtime, process);
     }

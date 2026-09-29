@@ -15,18 +15,33 @@ public class VendorCliWatcherTests {
     static readonly CliBinaryStat Old = new("/versions/2.1.259/claude", 100, 1);
     static readonly CliBinaryStat New = new("/versions/2.1.263/claude", 100, 2);
 
+    const string Auth = "/home/u/.pi/agent/auth.json";
+
     sealed class Harness {
-        public readonly List<string>                          Refreshes = [];
-        public readonly Dictionary<string, CliBinaryStat?>    Stats     = new(StringComparer.Ordinal);
+        public readonly List<string>                          Refreshes    = [];
+        public readonly Dictionary<string, CliBinaryStat?>    Stats        = new(StringComparer.Ordinal);
+        public readonly Dictionary<string, CatalogPathStat>   CatalogStats = new(StringComparer.Ordinal);
         public readonly VendorCliWatcher                      Watcher;
 
-        public Harness(params (string Vendor, string CliPath)[] watched) {
+        public Harness(params (string Vendor, string CliPath)[] watched)
+            : this(null, [.. watched.Select(w => (w.Vendor, w.CliPath, (IReadOnlyList<string>) []))]) { }
+
+        public Harness(IReadOnlyDictionary<string, CatalogPathStat[]>? catalogBaselines,
+                params (string Vendor, string CliPath, IReadOnlyList<string> CatalogPaths)[] watched) {
             Watcher = VendorCliWatcher.ForTest(
                 watched,
                 refresh: Refreshes.Add,
                 stat: path => Stats.GetValueOrDefault(path),
-                time: TimeProvider.System);
+                time: TimeProvider.System,
+                statCatalog: path => CatalogStats.TryGetValue(path, out var stat) ? stat : new(path, false, 0, 0),
+                catalogBaselines: catalogBaselines);
         }
+    }
+
+    static Harness PiWithAuth(IReadOnlyDictionary<string, CatalogPathStat[]>? catalogBaselines = null) {
+        var h = new Harness(catalogBaselines, ("pi", "/bin/pi", [Auth]));
+        h.Stats["/bin/pi"] = Old;
+        return h;
     }
 
     [Test]
@@ -131,7 +146,7 @@ public class VendorCliWatcherTests {
     public async Task A_baseline_recorded_before_the_startup_probe_wins_over_the_file_at_start() {
         var refreshes = new List<string>();
         var watcher = VendorCliWatcher.ForTest(
-            [("claude", "/bin/claude")], refreshes.Add, _ => New, TimeProvider.System,
+            [("claude", "/bin/claude", [])], refreshes.Add, _ => New, TimeProvider.System,
             baselines: new Dictionary<string, CliBinaryStat?> { ["claude"] = Old });
         watcher.PrimeBaselines();
 
@@ -165,5 +180,97 @@ public class VendorCliWatcherTests {
         using var tmp = new TempDir();
 
         await Assert.That(VendorCliWatcher.StatCliBinary(Binaries, tmp.PathTo("nope"))).IsNull();
+    }
+
+    [Test]
+    public async Task A_changed_catalog_path_requests_one_refresh_naming_the_vendor() {
+        var h = PiWithAuth();
+        h.CatalogStats[Auth] = new(Auth, true, 10, 1);
+        h.Watcher.PrimeBaselines();
+
+        h.CatalogStats[Auth] = new(Auth, true, 12, 2);
+        h.Watcher.Tick();
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+        await Assert.That(h.Refreshes[0]).Contains("pi");
+    }
+
+    [Test]
+    public async Task An_unchanged_catalog_path_requests_nothing() {
+        var h = PiWithAuth();
+        h.CatalogStats[Auth] = new(Auth, true, 10, 1);
+        h.Watcher.PrimeBaselines();
+
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_deleted_catalog_file_is_a_change() {
+        var h = PiWithAuth();
+        h.CatalogStats[Auth] = new(Auth, true, 10, 1);
+        h.Watcher.PrimeBaselines();
+
+        h.CatalogStats.Remove(Auth);
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_catalog_file_created_after_start_is_a_change() {
+        var h = PiWithAuth();
+        h.Watcher.PrimeBaselines();
+
+        h.CatalogStats[Auth] = new(Auth, true, 10, 1);
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_recorded_catalog_baseline_that_differs_at_start_fires_on_the_first_tick() {
+        var h = PiWithAuth(new Dictionary<string, CatalogPathStat[]> { ["pi"] = [new(Auth, true, 10, 1)] });
+        h.CatalogStats[Auth] = new(Auth, true, 10, 2);
+        h.Watcher.PrimeBaselines();
+
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_catalog_only_vendors_recorded_binary_that_differs_at_start_fires_on_the_first_tick() {
+        var refreshes = new List<string>();
+        var watcher = VendorCliWatcher.ForTest(
+            [("pi", "/bin/pi", [])], refreshes.Add, _ => New, TimeProvider.System,
+            baselines: new Dictionary<string, CliBinaryStat?> { ["pi"] = Old },
+            catalogBaselines: new Dictionary<string, CatalogPathStat[]> { ["pi"] = [] });
+        watcher.PrimeBaselines();
+
+        watcher.Tick();
+
+        await Assert.That(refreshes.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task WatchSet_includes_a_catalog_only_vendor_and_a_vendor_known_only_by_its_catalog() {
+        var config = new DaemonConfig {
+            UnattendedVendors = ["claude"],
+            VendorModels      = new(StringComparer.Ordinal) { ["silent"] = [] },
+        };
+        var factories = new Dictionary<string, IHostedAgentRuntimeFactory>(StringComparer.Ordinal) {
+            ["claude"] = new StubCatalogFactory("claude", null),
+            ["pi"]     = new StubCatalogFactory("pi", null, paths: ["/a"]),
+            ["silent"] = new StubCatalogFactory("silent", null),
+            ["codex"]  = new StubCatalogFactory("codex", null),
+        };
+
+        var set = VendorCliWatcher.WatchSet(config, factories);
+
+        await Assert.That(set.Select(w => w.Vendor)).IsEquivalentTo(["claude", "pi", "silent"]);
+        await Assert.That(set.Single(w => w.Vendor == "pi").CatalogPaths).IsEquivalentTo(["/a"]);
     }
 }

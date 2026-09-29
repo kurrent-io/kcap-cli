@@ -41,11 +41,15 @@ internal static class AgentOrchestratorHarness {
             bool                                                deferProcessorPublication = false,
             // Defaults to the no-network stub. A test that exercises attachment downloads passes a
             // factory pointed at its own stub server.
-            IHttpClientFactory?                                 httpClientFactory      = null
+            IHttpClientFactory?                                 httpClientFactory      = null,
+            // The clock behind the subagent-expiry timer and every activity clock a seeded agent
+            // gets by default; a test that drives expiry passes its own.
+            TimeProvider?                                       timeProvider           = null
         ) {
         var daemonStore    = new TempDaemonStore();
         var configRoot   = new TempConfigRoot();
         var home         = new TempHome();
+        var time         = timeProvider ?? TimeProvider.System;
         var config = new DaemonConfig {
             Name                = "test",
             ServerUrl           = "http://127.0.0.1:1",
@@ -75,7 +79,7 @@ internal static class AgentOrchestratorHarness {
         var httpFactory      = httpClientFactory ?? new StubHttpClientFactory();
         var http             = new FixedCapacitorHttpClient();
         var tokens           = AuthFixtures.NewTokenStore(configRoot.Root);
-        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
+        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, time);
 
         // Mirror DaemonRunner's DI wiring: one PtyHostedAgentRuntimeFactory per registered launcher,
         // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
@@ -113,7 +117,8 @@ internal static class AgentOrchestratorHarness {
             lifetime ?? new StubHostLifetime(),
             logger ?? NullLogger<AgentOrchestrator>.Instance,
             consentGate,
-            deferProcessorPublication
+            deferProcessorPublication,
+            time
         );
     }
 
@@ -144,7 +149,8 @@ internal static class AgentOrchestratorHarness {
                 IHostApplicationLifetime                                lifetime,
                 ILogger<AgentOrchestrator>                              logger,
                 LaunchConsentGate                                       consentGate,
-                bool                                                    deferProcessorPublication
+                bool                                                    deferProcessorPublication,
+                TimeProvider                                            time
             ) : base(
             config,
             configRoot.Root,
@@ -162,7 +168,7 @@ internal static class AgentOrchestratorHarness {
             lifetime,
             logger,
             consentGate,
-            TimeProvider.System,
+            time,
             deferProcessorPublication,
             // Wired unconditionally so the launch path builds a snapshot exactly as production does.
             // The scratch config root and a fresh checkout carry no approval documents, so every test

@@ -364,8 +364,20 @@ public class LocalPermissionBridgeTests {
 
             await bridge.StopAsync(CancellationToken.None);
 
-            probe = new TcpListener(IPAddress.Loopback, RebindablePort);
-            probe.Start();
+            // Close() has returned, but the kernel can still report the port busy for a moment.
+            // A failed Start() leaves that listener's socket unusable, so each attempt builds a new one.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (true) {
+                probe = new TcpListener(IPAddress.Loopback, RebindablePort);
+                try {
+                    probe.Start();
+                    break;
+                } catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse && DateTime.UtcNow < deadline) {
+                    probe.Stop();
+                    probe = null;
+                    await Task.Delay(20);
+                }
+            }
 
             // Disposed while the replacement listener holds the port: shutting down a bridge that
             // no longer owns what it bound must not fault.

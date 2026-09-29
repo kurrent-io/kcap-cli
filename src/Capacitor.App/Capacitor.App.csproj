@@ -16,6 +16,7 @@
         <ProjectReference Include="..\Capacitor.Remote.Models\Capacitor.Remote.Models.csproj" />
         <PackageReference Include="Avalonia" />
         <PackageReference Include="Avalonia.Desktop" />
+        <PackageReference Include="Avalonia.Labs.Notifications" />
         <PackageReference Include="Avalonia.Themes.Fluent" />
         <PackageReference Include="ReactiveUI.Avalonia.Reactive" />
         <PackageReference Include="DynamicData" />
@@ -24,13 +25,14 @@
         <PackageReference Include="MarkView.Avalonia.SyntaxHighlighting" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
         <PackageReference Include="Eventuous.SignalR.Client" />
+        <PackageReference Include="Svg.Controls.Skia.Avalonia" />
         <PackageReference Include="SvcSystems.UI.Terminal" />
         <PackageReference Include="Velopack" />
         <PackageReference Include="XTerm.NET" />
     </ItemGroup>
     <ItemGroup>
         <!-- .axaml files are auto-included as AvaloniaXaml by Avalonia's build props; plain
-             assets (the product-mark bitmap, spec §4) need an explicit AvaloniaResource entry
+             assets (the product-mark bitmap) need an explicit AvaloniaResource entry
              to ship inside the assembly's avares:// resource set. -->
         <AvaloniaResource Include="Assets\kcap-icon.png" />
     </ItemGroup>

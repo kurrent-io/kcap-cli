@@ -8,6 +8,22 @@ public class PermissionWireContractsTests {
     static JsonElement El(string json) { using var d = JsonDocument.Parse(json); return d.RootElement.Clone(); }
 
     [Test]
+    public async Task Optional_grant_capabilities_roundtrip_and_older_payloads_leave_them_unknown() {
+        var oldJson = """{"request_id":"r1","agent_id":"a1","session_id":"s1","vendor":"copilot","tool_name":"Bash","requested_at":"t"}""";
+        var older = JsonSerializer.Deserialize(oldJson, PermissionIpcJsonContext.Default.PermissionPendingDto)!;
+        await Assert.That(older.SupportsAllowOnce).IsNull();
+        await Assert.That(older.SupportsAllowAlways).IsNull();
+        var json = JsonSerializer.Serialize(older with { SupportsAllowOnce = false, SupportsAllowAlways = true },
+            PermissionIpcJsonContext.Default.PermissionPendingDto);
+        using var wire = JsonDocument.Parse(json);
+        await Assert.That(wire.RootElement.GetProperty("supports_allow_once").GetBoolean()).IsFalse();
+        await Assert.That(wire.RootElement.GetProperty("supports_allow_always").GetBoolean()).IsTrue();
+        var restored = JsonSerializer.Deserialize(json, PermissionIpcJsonContext.Default.PermissionPendingDto)!;
+        await Assert.That(restored.SupportsAllowOnce).IsFalse();
+        await Assert.That(restored.SupportsAllowAlways).IsTrue();
+    }
+
+    [Test]
     public async Task Pending_dto_roundtrips_and_writes_snake_case_with_nulls_and_flags() {
         var dto = new PermissionPendingDto("r1", "a1", "s1", "claude", "Bash", El("""{"command":"ls"}"""), null, false, true, "2026-08-28T10:00:00.0000000+00:00");
         var json = JsonSerializer.Serialize(dto, PermissionIpcJsonContext.Default.PermissionPendingDto);

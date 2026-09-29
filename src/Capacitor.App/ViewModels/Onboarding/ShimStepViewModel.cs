@@ -5,7 +5,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// spec §3 step 1: the PATH shim. Reuses PathShimInstaller as-is (AppleScript sudo, non-forcing
+/// The PATH shim step. Reuses PathShimInstaller as-is (AppleScript sudo, non-forcing
 /// symlink, post-install re-probe) and claims ShimOffered so the post-wizard ShimOfferCoordinator
 /// never re-offers this machine.
 public sealed class ShimStepViewModel : ReactiveObject, IWizardStep {
@@ -34,7 +34,7 @@ public sealed class ShimStepViewModel : ReactiveObject, IWizardStep {
         InstallCommand = ReactiveCommand.CreateFromTask(RunInstallAsync, this.WhenAnyValue(x => x.Idle));
     }
 
-    /// Pure decision (spec §3 step 1): macOS AND a resolved absolute CLI path AND the login-shell
+    /// Pure decision: macOS AND a resolved absolute CLI path AND the login-shell
     /// probe positively found no kcap on the terminal PATH. A null (unknown) probe fails quiet —
     /// never offer on an inconclusive read. Called by the composition root with a pre-probed
     /// value, since Applicable is sync and the probe is async.

@@ -5,11 +5,11 @@ using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// spec §5 offer surface: the once-ever auto-offer gated on PhaseClosed + a positive
+/// The shim offer surface: the once-ever auto-offer gated on PhaseClosed + a positive
 /// probe result, and the "Install command-line tool…" tray item's independent visibility/manual
 /// retry. FakeLoginShellProbe and FakeLifecycleSurface are shared from
 /// DaemonLifecycleControllerTests.cs (same namespace); PathShimInstaller is real (sealed, no
-/// interface — Task 23), driven through the internal destination-override constructor so nothing
+/// interface), driven through the internal destination-override constructor so nothing
 /// here ever touches the real /usr/local/bin/kcap.
 public class ShimOfferCoordinatorTests {
     static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null, string what = "condition") {
@@ -113,7 +113,7 @@ public class ShimOfferCoordinatorTests {
         await WaitUntilAsync(() => h.OfferableValues.Contains(true), what: "the item to become visible");
     }
 
-    // ---- spec §3.3: macOS-only, no-op elsewhere ----
+    // ---- macOS-only, no-op elsewhere ----
 
     [Test]
     public async Task Off_macOS_never_probes_never_offers_and_the_menu_item_stays_hidden() {
@@ -188,7 +188,7 @@ public class ShimOfferCoordinatorTests {
         await Assert.That(h.Surface.Prompts[0].PathDegraded).IsFalse();
     }
 
-    // ---- Task 15 round-1 review: autoOfferSuppressed (carve-out mode) ----
+    // ---- autoOfferSuppressed (carve-out mode) ----
 
     [Test]
     public async Task AutoOfferSuppressed_still_becomes_offerable_but_never_shows_the_dialog() {
@@ -331,8 +331,8 @@ public class ShimOfferCoordinatorTests {
         await Assert.That(h.Store.State.ShimDenied).IsFalse();
     }
 
-    // Regression: a confirmed on-PATH install used to leave Offerable stuck at true forever, so
-    // the "Install command-line tool…" tray item never disappeared after a successful install.
+    // A confirmed on-PATH install must reset Offerable, or the "Install command-line tool…" tray
+    // item never disappears after a successful install.
     [Test]
     public async Task Accept_then_Installed_resets_Offerable_to_false() {
         using var h = new Harness(immediatePhaseClosed: true);

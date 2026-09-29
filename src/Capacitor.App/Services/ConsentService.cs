@@ -7,18 +7,18 @@ using DynamicData;
 
 namespace Capacitor.App.Services;
 
-/// Sole owner of the pending-consent cache (spec §5): it subscribes to the daemon's consent
+/// Sole owner of the pending-consent cache: it subscribes to the daemon's consent
 /// stream, holds the pending queue, and is the only place entries are inserted or removed —
 /// ViewModels read and pin, never mutate.
 ///
-/// Four guards carry the reviewed reasoning:
+/// Four guards:
 ///
 /// * <b>EntryAdded is the FIRST SURFACING of a PromptId, never a new cache key</b> — the signal
-///   is the raise trigger (spec §6), so it has to mean "a request the user has not been offered
-///   yet". Keyed on the cache key it was wrong in both directions: a successor B under A's
-///   RequestId (a relaunch — the likeliest second prompt there is) replaced the slot in silence
-///   and never raised, while a resubscribe's clear+replay made every replayed entry look new and
-///   re-raised a window the user had explicitly deferred. `_surfaced` is therefore a
+///   is the raise trigger, so it has to mean "a request the user has not been offered yet".
+///   Keyed on the cache key it would be wrong in both directions: a successor B under A's
+///   RequestId (a relaunch — the likeliest second prompt there is) would replace the slot in
+///   silence and never raise, while a resubscribe's clear+replay would make every replayed entry
+///   look new and re-raise a window the user had explicitly deferred. `_surfaced` is therefore a
 ///   service-lifetime PromptId set with the tombstone argument behind it — never-reused GUIDs, so
 ///   it can never suppress a future request, at ~50 bytes per request ever seen. Tombstones are a
 ///   subset of it (a concluded request was surfaced first) and stay separate because they do a
@@ -92,7 +92,7 @@ public sealed class ConsentService : IConsentService {
             var resolve  = new ConsentResolveDto(
                 target.RequestId, allow ? "allow" : "deny",
                 sendRule ? new ConsentRuleDto("allow", target.Dto.Requester, null, null, null) : null,
-                target.PromptId); // ALWAYS the echo — the daemon's identity check (spec §4.1)
+                target.PromptId); // ALWAYS the echo — the daemon's identity check
 
             lock (_lock) _inFlightPromptId = target.PromptId;
 
@@ -131,7 +131,7 @@ public sealed class ConsentService : IConsentService {
                     true  => ConsentRuleOutcome.Saved,
                     false => ConsentRuleOutcome.Rejected,
                     // A pre-rule_saved ack that applied cleanly reported success the only way it
-                    // could: Ok with no warning (spec §4.1's carve-out).
+                    // could: Ok with no warning.
                     _     => a is { Ok: true, Error: null } ? ConsentRuleOutcome.Saved : ConsentRuleOutcome.Unknown,
                 };
         } finally {
@@ -239,7 +239,7 @@ public sealed class ConsentService : IConsentService {
 
     /// Records the concluded identity and evicts it in one critical section. The eviction compares
     /// PromptIds, not object references, so a REPLAYED instance of the same request goes too — while
-    /// a successor sharing only the RequestId survives (spec §5's ABA defense).
+    /// a successor sharing only the RequestId survives (the ABA defense).
     void Conclude(PendingConsent target) {
         lock (_lock) {
             _tombstones.Add(target.PromptId);

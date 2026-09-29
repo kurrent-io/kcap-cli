@@ -8,7 +8,14 @@ namespace Capacitor.App.ViewModels;
 /// rebuilds the rows. Ended is the lane's verdict that nothing more will arrive.
 public sealed record ChatSessionInfo(
         string Status, string StatusLabel, string Vendor, string? Model, string? Root, bool? AwaitingInput, bool Ended,
-        string ReadOnlyNotice, string? FeedKey) {
+        string ReadOnlyNotice, string? FeedKey,
+        // The daemon's count of running subagents; null on the remote lane and from an older daemon.
+        int? LiveSubagents = null,
+        // The local daemon's usage-limit notice. Null on the remote lane and from an older daemon.
+        UsageLimitNoticeDto? UsageLimit = null) {
+    /// True when this session is waiting on the user. Independent of the status word.
+    public bool WaitsOnUser { get; init; }
+
     /// The daemon dropped the agent before this pane ever saw it.
     public static readonly ChatSessionInfo Gone = new("Completed", "Completed", "", null, null, null, true, "", null);
 
@@ -18,9 +25,12 @@ public sealed record ChatSessionInfo(
         // RepoPath: the repository for a primary, whose worktree beneath it ToolDetail strips, or
         // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
-        ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath);
+        ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath,
+        dto.LiveSubagents, dto.UsageLimit) { WaitsOnUser = SessionStatusDots.WaitsOnUser(dto) };
 
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended) => new(
-        row.Status, SessionStatusDots.WaitsOnUser(row) ? "Waiting for input" : row.Status, row.Vendor, row.Model,
-        row.RepoPath, row.AwaitingInput, ended || SessionStatusDots.IsTerminal(row.Status), "", row.SessionId);
+        row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,
+        row.RepoPath, row.AwaitingInput, ended || SessionStatusDots.IsTerminal(row.Status), "", row.SessionId) {
+        WaitsOnUser = SessionStatusDots.WaitsOnUser(row),
+    };
 }

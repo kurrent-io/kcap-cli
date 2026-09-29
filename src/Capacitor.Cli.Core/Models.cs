@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.RepoEvidence;
@@ -39,6 +40,11 @@ record TranscriptBatch {
     [JsonPropertyName("strict")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Strict { get; init; }
+
+    // Non-null, even empty, and the server reads no commits from the lines' shell commands.
+    [JsonPropertyName("observed_commits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ObservedCommit[]? ObservedCommits { get; init; }
 }
 
 public record ErrorEntry(
@@ -157,6 +163,9 @@ class WatchState {
     public List<int>    BufferedLineNumbers { get; } = [];
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
+
+    public CommitObservation Commits           { get; set; } = new CommitObservation.Uncovered();
+    public DateTimeOffset    LastCoverageCheck { get; set; }
 
     // Set by the shutdown final drain when it held back an unterminated/unparseable final line
     // rather than consuming it, so RunWatch can flag the session needs-import and never drop a
@@ -357,6 +366,11 @@ public record EvalContextEntry {
 
     [JsonPropertyName("tool")]
     public string? Tool { get; init; }
+
+    // Plan entries only: the artifact's full size when the server truncated it. The CLI does not
+    // read this field; it exists so a response that carries it still deserializes.
+    [JsonPropertyName("original_bytes")]
+    public long? OriginalBytes { get; init; }
 }
 
 public record EvalContextCompactionSummary {
@@ -374,6 +388,23 @@ public record EvalContextCompactionSummary {
 
     [JsonPropertyName("bytes_saved")]
     public required long BytesSaved { get; init; }
+
+    // Additive loss signals — false/0 from a server that predates them, which reads as "nothing
+    // lost" and matches that server's actual behavior (it couldn't report a loss it didn't measure).
+    [JsonPropertyName("plan_discovery_degraded")]
+    public bool PlanDiscoveryDegraded { get; init; }
+
+    [JsonPropertyName("skipped_streams")]
+    public int SkippedStreams { get; init; }
+
+    [JsonPropertyName("plan_artifacts_truncated")]
+    public int PlanArtifactsTruncated { get; init; }
+
+    [JsonPropertyName("plan_artifacts_unavailable")]
+    public int PlanArtifactsUnavailable { get; init; }
+
+    [JsonPropertyName("plan_artifacts_dropped")]
+    public int PlanArtifactsDropped { get; init; }
 }
 
 public record EvalContextResult {
@@ -410,24 +441,27 @@ public record EvalQuestionDto {
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
 
-    // DEV-1486: server-owned flag that opts this question into tools-enabled
-    // judging. Defaults to false so older servers that don't send the field
-    // keep producing text-only judge runs.
+    // Server-owned opt-in to tools-enabled judging; false when an older server omits it, keeping those runs text-only.
     [JsonPropertyName("needs_tools")]
     public bool NeedsTools { get; init; }
 
-    // Phase 3 — the catalog prompt version this question's rendered prompt
-    // ran against. Null on the back-compat /api/eval/questions alias (which does
-    // not emit it) and on older servers; populated only by /api/eval/catalog.
+    // The catalog prompt version the rendered prompt ran against. Only /api/eval/catalog sends it; the
+    // /api/eval/questions alias and older servers leave it null.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
 
-    // Phase 3 — RAW question text from the catalog, used by the tools path
-    // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
-    // the alias / older servers. Distinct from Prompt, which on a reconciled
-    // text-path question holds the server-RENDERED prompt.
+    // The raw catalog question text the tools template substitutes into {QUESTION_TEXT}; null from the alias and older
+    // servers. On a reconciled text-path question Prompt holds the server-rendered prompt instead.
     [JsonPropertyName("raw_text")]
     public string? RawText { get; init; }
+
+    // The daemon wire carries only the strategy id; the version and the reporting mark come from the reconciled catalog.
+    [JsonPropertyName("strategy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Strategy { get; init; }
+
+    [JsonIgnore] public string? StrategyVersion    { get; init; }
+    [JsonIgnore] public bool    ReportsObligations { get; init; }
 }
 
 /// <summary>
@@ -449,6 +483,10 @@ public record EvalCatalogDto {
 
     [JsonPropertyName("questions")]
     public List<EvalCatalogQuestionDto> Questions { get; init; } = [];
+
+    // Present only when the server enables the CLI evidence route; absent on every older server and with the gate off.
+    [JsonPropertyName("evidence_retrieval")]
+    public Eval.Evidence.EvalEvidenceAdvertisementDto? EvidenceRetrieval { get; init; }
 }
 
 /// <summary>A single active question from <c>GET /api/eval/catalog</c>.</summary>
@@ -477,6 +515,12 @@ public record EvalCatalogQuestionDto {
     // members — a missing `needs_tools` throws JsonException. See the missing-field test.
     [JsonPropertyName("needs_tools")]
     public required bool NeedsTools { get; init; }
+
+    // Absent from a server without question strategies; an id this build does not know behaves as general.
+    [JsonPropertyName("strategy")]            public string? Strategy           { get; init; }
+    [JsonPropertyName("strategy_version")]    public string? StrategyVersion    { get; init; }
+    [JsonPropertyName("strategy_guidance")]   public string? StrategyGuidance   { get; init; }
+    [JsonPropertyName("reports_obligations")] public bool?   ReportsObligations { get; init; }
 }
 
 // Per-question verdict returned by each judge invocation. Matches the server
@@ -973,6 +1017,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(PlanArtifactDto))]
 [JsonSerializable(typeof(PlanArtifactsResponseDto))]
 [JsonSerializable(typeof(Plans.PlanLedgerDto))]
+[JsonSerializable(typeof(List<Plans.SessionPlanDto>))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]
@@ -990,6 +1035,33 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCatalogDto))]
 [JsonSerializable(typeof(EvalCatalogQuestionDto))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
+[JsonSerializable(typeof(EvalQuestionAssessment))]
+[JsonSerializable(typeof(List<EvalQuestionAssessment>))]
+[JsonSerializable(typeof(EvalCategoryAssessment))]
+[JsonSerializable(typeof(EvalEvidenceCoverage))]
+[JsonSerializable(typeof(EvalEvidenceCitation))]
+[JsonSerializable(typeof(EvalObligationResult))]
+[JsonSerializable(typeof(EvalEvidenceOmission))]
+[JsonSerializable(typeof(EvalQuestionFailure))]
+[JsonSerializable(typeof(List<EvalQuestionFailure>))]
+[JsonSerializable(typeof(SessionEvalCompletedPayloadV4))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.EvalUsage))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineQuestionOutput))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineQuestionFailure))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineRetrospectiveOutput))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineOutput))]
+[JsonSerializable(typeof(QuestionResultV2))]
+[JsonSerializable(typeof(FinalizeEvalV2Command))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeManifestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceReadErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsResponseDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceEventPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceTurnPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceBodyChunkDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvalTreatment))]
+[JsonSerializable(typeof(EvalTraceCoverage))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(List<CliProjectSummary>))]
 [JsonSerializable(typeof(CliProjectDetail))]
@@ -1174,11 +1246,20 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.MachineSummary[]))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Skills.SkillsSnapshotResponse))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Skills.SkillsManifest))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Skills.SkillsLedger))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.FeedbackSubmitRequest))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.FeedbackSubmitContext))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Commands.FeedbackSubmitResponse))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Policy.PolicyDecisionEventV1))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Policy.PolicySnapshotUploadV1))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactDetailDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactListDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactGrantDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactBody))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactVersionBody))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.SetArtefactVisibilityBody))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     UseStringEnumConverter = true
@@ -1974,10 +2055,14 @@ public readonly record struct ReviewLaunchInfo(
 /// own knowledge, walks each up to a git root, validates origin, and returns
 /// the confirmed roots.
 /// </summary>
+/// <param name="ResolveWorktrees">Report a linked worktree as its main checkout. Set only by a
+/// picker that lists repositories; flow discovery needs the worktree itself, because a reviewer
+/// branches from the checkout it is given. A server predating the field never sends it.</param>
 public readonly record struct FindRepoForRemoteRequest(
         string   Owner,
         string   Repo,
-        string[] CandidatePaths
+        string[] CandidatePaths,
+        bool     ResolveWorktrees = false
     );
 
 /// <summary>
@@ -2082,7 +2167,18 @@ public readonly record struct DaemonConnect(
         bool                                       SupportsCorrelatedStatusReports = false,
         // Vendor tokens this daemon accepts a launch-time permission mode for (Claude when hosted).
         // Null from a daemon predating this field, which the server reads as "refuse a mode".
-        string[]?                                  PermissionModeVendors = null
+        string[]?                                  PermissionModeVendors = null,
+        // 1 = verdict-only RunQuestion/FinalizeEval; 2 = RunQuestionV2/FinalizeEvalV2 with outcomes
+        // and coded failures. A daemon predating this field sends nothing, which the server reads
+        // as 1.
+        int                                         EvalProtocolVersion = 1,
+        // Vendor tokens this daemon can host a single-pass PR review on. A daemon predating this
+        // field sends nothing, which the server reads as Claude only.
+        string[]?                                   PrReviewVendors = null,
+        // Per-vendor launchable models probed from the installed CLI. Null from a daemon that
+        // predates the field; a missing key means no catalog for that vendor; an empty array
+        // means probed and nothing usable.
+        Dictionary<string, VendorModelOption[]>?    VendorModels = null
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2140,7 +2236,23 @@ public readonly record struct AgentStatusChanged(
         string? SessionId
     );
 
-public readonly record struct AgentUnregistered(string AgentId);
+/// <summary>One slash command a hosted agent's harness offers, for the composer's `/` picker. JSON
+/// mirror of the server's <c>Capacitor.Api.Public.Abstractions.Agents.AgentSlashCommand</c> — the
+/// property names must keep matching that record.</summary>
+public record HostedAgentCommand(string Name, string? Description, string? ArgumentHint);
+
+/// <summary>The daemon's post-launch report of a hosted agent's slash commands (an ACP
+/// available_commands_update, a Codex skills/list, a Claude probe). Single-record payload so the wire
+/// shape evolves additively; a later report replaces the list. JSON mirror of the server's
+/// <c>ReportAgentCommandsArgs</c>.</summary>
+public readonly record struct ReportAgentCommandsArgs(
+        string                            AgentId,
+        IReadOnlyList<HostedAgentCommand> Commands
+    );
+
+/// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.
+/// A server that predates it ignores the field.</param>
+public readonly record struct AgentUnregistered(string AgentId, string? StopReason = null);
 
 public readonly record struct LaunchFailed(
         string AgentId,
@@ -2152,7 +2264,7 @@ public readonly record struct TerminalOutput(
         string Base64Data
     );
 
-// ── Per-question eval dispatch (DEV-1463 PR 2) ────────────────────────────
+// ── Per-question eval dispatch ───────────────────────────────────────────────
 // Plain PascalCase records — no [JsonPropertyName] attrs — so they round-trip
 // via SignalR's default JSON protocol with the matching server-side records.
 // Inner DTOs (EvalQuestionDto, EvalQuestionVerdict) carry their own snake_case
@@ -2187,16 +2299,25 @@ public readonly record struct FinalizeEvalCommand(
 /// <summary>Server → daemon: discard any cached context for this run (e.g. dashboard aborted).</summary>
 public readonly record struct CancelEvalCommand(string EvalRunId);
 
-/// <summary>Daemon → server: prepare-phase result.</summary>
+/// <summary>Daemon → server: prepare-phase result. The trailing fields are set on the evidence route;
+/// Route is legacy, evidence_one_shot or evidence_retrieval.</summary>
 public readonly record struct PrepareResult(
-        bool    Success,
-        string? Error,
-        string? CanonicalSessionId,
-        int     TraceEntries,
-        int     TraceChars,
-        int     ToolResultsTotal,
-        int     ToolResultsTruncated,
-        long    BytesSaved
+        bool            Success,
+        string?         Error,
+        string?         CanonicalSessionId,
+        int             TraceEntries,
+        int             TraceChars,
+        int             ToolResultsTotal,
+        int             ToolResultsTruncated,
+        long            BytesSaved,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         EvidenceScopeVersion = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         Route                = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        int?            SourceCount          = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        DateTimeOffset? ExpiresAt            = null
     );
 
 /// <summary>Daemon → server: per-question judge result.</summary>
@@ -2233,16 +2354,19 @@ public readonly record struct EvalQuestionStarted(
         string QuestionId
     );
 
-/// <summary>Daemon → server: a judge question completed with a verdict.</summary>
+/// <summary>Daemon → server: a judge question completed. <c>Score</c>/<c>Verdict</c> are null for
+/// an unassessed outcome; <c>Outcome</c> is trailing so an older daemon that omits it is read as
+/// assessed.</summary>
 public readonly record struct EvalQuestionCompleted(
-        string EvalRunId,
-        string SessionId,
-        int    Index,
-        int    Total,
-        string Category,
-        string QuestionId,
-        int    Score,
-        string Verdict
+        string  EvalRunId,
+        string  SessionId,
+        int     Index,
+        int     Total,
+        string  Category,
+        string  QuestionId,
+        int?    Score,
+        string? Verdict,
+        string? Outcome = null
     );
 
 /// <summary>Daemon → server: a judge question failed (claude returned no/unparseable result, timed out, or emitted an out-of-range score). The overall eval continues to the next question.</summary>
@@ -2256,11 +2380,12 @@ public readonly record struct EvalQuestionFailed(
         string Reason
     );
 
-/// <summary>Daemon → server: eval run finished end-to-end and aggregate has been persisted.</summary>
+/// <summary>Daemon → server: eval run finished end-to-end and aggregate has been persisted.
+/// <c>OverallScore</c> is null when no question was assessed.</summary>
 public readonly record struct EvalFinished(
         string EvalRunId,
         string SessionId,
-        int    OverallScore,
+        int?   OverallScore,
         string Summary
     );
 

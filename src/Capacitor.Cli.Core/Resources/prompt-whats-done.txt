@@ -19,8 +19,10 @@ Write:
 **Key decisions:** Design choices, trade-offs, or alternatives that were considered
 and rejected. Only include decisions where the reasoning matters for future work.
 
-**Unfinished/Risks:** Anything deferred, left incomplete, or flagged as risky.
-Skip this section if everything was cleanly completed.
+**Unfinished:** Work that remains to be done — one bullet per item, phrased as the action
+left (what to do, not what happened). Omit this section entirely when nothing remains.
+
+**Risks:** Anything flagged as risky or uncertain about what was done. Omit when none.
 
 Rules:
 - Under 300 words.

@@ -31,6 +31,10 @@ static partial class ProcessHelpers {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     private static partial int setsid_native();
 
+    [LibraryImport("libc", EntryPoint = "signal", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial nint signal_native(int signum, nint handler);
+
     // ioctl(fd, FIOCLEX) marks a single descriptor close-on-exec — the SAME effect as
     // fcntl(fd, F_SETFD, FD_CLOEXEC), deliberately reached through a different syscall.
     // fcntl's signature is `int fcntl(int fd, int cmd, ...)` — genuinely variadic in C —
@@ -289,10 +293,12 @@ static partial class ProcessHelpers {
     /// from the Agent/Task tool, and the watcher is then orphaned because the disrupted flow
     /// never fires the matching <c>SubagentStop</c> that would reap it.
     ///
-    /// On Windows, fds 0/1/2 (the std handles .NET redirects) are the whole story: a plain
-    /// <c>fork</c>+<c>exec</c> equivalent doesn't exist there, so <c>CreateProcess</c>'s
-    /// blanket handle inheritance is the only leak path, and clearing
-    /// <c>HANDLE_FLAG_INHERIT</c> on those three handles closes it.
+    /// On Windows the std handles are NOT the whole story, so a detached spawn must not rely
+    /// on this: <c>CreateProcess</c> inherits every handle marked inheritable, and an agent
+    /// invokes its hook holding further inheritable copies of its own pipes, under values
+    /// <c>GetStdHandle</c> never reports. Clearing these three applies cleanly and still
+    /// leaves the leak open, which is why <see cref="StartDetachedWindows"/> spawns with
+    /// <c>bInheritHandles: false</c> rather than calling this.
     ///
     /// Unix is different in a way that makes the std-handle-only mitigation insufficient:
     /// <c>fork</c>+<c>exec</c> <c>dup2</c>s the redirect pipes over fds 0/1/2 in the child,
@@ -963,6 +969,22 @@ static partial class ProcessHelpers {
         // kill the watcher in that edge case, but the worst outcome is the
         // pre-existing bug, not a regression.
         return setsid_native() != -1;
+    }
+
+    /// <summary>
+    /// Sets SIGHUP to SIG_IGN so a detached process survives its parent exiting. setsid() alone is
+    /// not enough: the kernel still delivers SIGHUP when the parent's session ends, and a managed
+    /// PosixSignalRegistration does not reliably suppress its default (terminate) here — the kernel
+    /// disposition does. No-op on Windows.
+    /// </summary>
+    public static void IgnoreHangup() {
+        if (OperatingSystem.IsWindows()) {
+            return;
+        }
+
+        const int SIGHUP = 1;
+        const nint SIG_IGN = 1;
+        signal_native(SIGHUP, SIG_IGN);
     }
 
     /// <summary>

@@ -12,7 +12,7 @@ namespace Capacitor.App.Tests.Unit;
 /// Plain TUnit tests — no Avalonia session, nothing touches Avalonia/Rx globals. Each test
 /// scripts LocalControlEvent through its own Script/DaemonClientService pair, so tests do not
 /// need [NotInParallel]. They ARE concurrency-sensitive (single-flight restart, disposal
-/// races), hence the "run the class 3x" step in the task brief.
+/// races), so run the class several times when changing them.
 public class DaemonClientServiceTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
 
@@ -53,8 +53,8 @@ public class DaemonClientServiceTests {
     }
 
     /// Scripted stand-in for the lane's RunAsync as injected via DaemonClientService's ctor
-    /// (Task 10: the service no longer owns a process runner at all — every
-    /// StartDaemonAsync call goes through exactly this seam).
+    /// (the service owns no process runner: every StartDaemonAsync call goes through exactly
+    /// this seam).
     sealed class FakeStartDaemon {
         public int CallCount;
         public CancellationToken? SeenCt;
@@ -185,7 +185,7 @@ public class DaemonClientServiceTests {
         await Assert.That(seen[1]).IsEqualTo(new AttachStatus(AttachState.Connected, null, caps, null, identity));
     }
 
-    [Test] // spec decision 6: hello DaemonVersion propagates Unreachable → AttachStatus
+    [Test] // hello DaemonVersion propagates Unreachable → AttachStatus
     public async Task Unreachable_daemon_version_propagates_into_attach_status() {
         var script = new Script();
         await using var svc = new DaemonClientService("daemon-a", script.Run, NoOpStart());
@@ -210,7 +210,7 @@ public class DaemonClientServiceTests {
         // Captures (status, latest Snapshots value, current Agents keys) all read SYNCHRONOUSLY
         // from inside the Status subscription callback, i.e. at the exact moment Apply()
         // publishes AttachStatus — the point after which Snapshots/EditDiff are pinned to have
-        // already run (no-stale pin, spec §5). Sampling Agents.Keys from OUTSIDE this callback
+        // already run (no-stale pin). Sampling Agents.Keys from OUTSIDE this callback
         // (e.g. after a separate poll) would not prove the ordering — only this synchronous
         // read does, and it's cheap enough to take on every status transition.
         var pairs = new List<(AttachState Status, DaemonStatusDto? LatestSnapshot, string[] AgentKeys)>();
@@ -393,7 +393,7 @@ public class DaemonClientServiceTests {
 
         await Assert.That(result.Ok).IsTrue();
         await Assert.That(result.Message).IsNull();
-        // Task 10: the service owns no process runner at all any more — the ONLY way it
+        // The service owns no process runner: the ONLY way it
         // can start a daemon is through the injected delegate, exercised exactly once here.
         await Assert.That(fakeStart.CallCount).IsEqualTo(1);
 
@@ -423,7 +423,7 @@ public class DaemonClientServiceTests {
         await WaitUntilAsync(() => script.StartCount > startCountBefore, TimeSpan.FromSeconds(2), what: "restart kick after SucceededAfterTimeout");
     }
 
-    // Blocker 1 (final review): the reattach kick must fire even when the mutation attempt did NOT
+    // The reattach kick must fire even when the mutation attempt did NOT
     // succeed — a mutation that restarts the daemon (takeover Replace, StartVerified,
     // DetachedStart) may have torn down the app's own attach regardless of its own outcome, and
     // kicking reattach is idempotent.
@@ -492,7 +492,7 @@ public class DaemonClientServiceTests {
         }
     }
 
-    // Task 10: DaemonClientService.BuildStartDaemon is the extracted request-building seam
+    // DaemonClientService.BuildStartDaemon is the request-building seam
     // CreateResolved wires to the resolution the gate was evaluated on — this drives it directly
     // against a scripted profile resolver, proving the main-window Start path produces a
     // DetachedStart MutationRequest through the lane rather than any direct process spawn.

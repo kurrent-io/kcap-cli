@@ -13,10 +13,16 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel),
-/// same contract as HomeView — this view never builds its own ViewModel.
+/// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel);
+/// this view never builds its own ViewModel.
 public partial class LauncherPaneView : UserControl {
     AttachmentDropPaste? _attachments;
+
+    /// A picker search term matches a model by its label or its launch id, so a Pi row is found by
+    /// model name, provider, or `provider/` prefix alike.
+    internal static bool RowMatches(ModelChoice model, string term) =>
+        model.Label.Contains(term, StringComparison.OrdinalIgnoreCase)
+     || model.Slug.Contains(term, StringComparison.OrdinalIgnoreCase);
 
     public LauncherPaneView() {
         InitializeComponent();
@@ -57,7 +63,7 @@ public partial class LauncherPaneView : UserControl {
     }
 
     // Repository picker: one flyout item per ListRepositoriesAsync entry — leaf name over full
-    // path, remembered-harness pill on the right, per the settled design. The scratch entry and
+    // path, remembered-harness pill on the right. The scratch entry and
     // the folder-picker affordance sit last, each behind a separator. Built as a kcapPanel Flyout
     // (same shape as the agent picker) rather than MenuFlyout — Fluent's radio MenuItem chrome
     // fights the dark palette.
@@ -171,7 +177,7 @@ public partial class LauncherPaneView : UserControl {
 
         var check = new TextBlock {
             Text = "✓", FontSize = 13, IsVisible = option.Selected,
-            Foreground = Brush("KcapSuccessBrush"), Margin = new Thickness(12, 0, 0, 0),
+            Foreground = Brush("KcapInfoBrush"), Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
 
@@ -335,7 +341,7 @@ public partial class LauncherPaneView : UserControl {
         };
     }
 
-    // The combined harness+model picker, T3-shaped: a vendor icon rail on the left, an underlined
+    // The combined harness+model picker: a vendor icon rail on the left, an underlined
     // search over the model rows on the right. No search term = the active vendor tab's models;
     // typing searches ACROSS vendors and always offers the term verbatim as a custom model id, so
     // the curated catalog can drift without ever blocking a launch. Unavailable vendors stay
@@ -343,12 +349,12 @@ public partial class LauncherPaneView : UserControl {
     void OnAgentChipClick(object? sender, RoutedEventArgs e) {
         if (DataContext is not HomeViewModel vm || sender is not Control anchor) return;
 
-        var text = (IBrush)this.FindResource("KcapTextBrush")!;
-        var muted = (IBrush)this.FindResource("KcapMutedBrush")!;
-        var faint = (IBrush)this.FindResource("KcapFaintBrush")!;
-        var success = (IBrush)this.FindResource("KcapSuccessBrush")!;
-        var raised = (IBrush)this.FindResource("KcapSurfaceRaisedBrush")!;
-        var border = (IBrush)this.FindResource("KcapBorderBrush")!;
+        var text = Brush("KcapTextBrush");
+        var muted = Brush("KcapMutedBrush");
+        var faint = Brush("KcapFaintBrush");
+        var info = Brush("KcapInfoBrush");
+        var raised = Brush("KcapSurfaceRaisedBrush");
+        var border = Brush("KcapBorderBrush");
 
         var currentTab = vm.SelectedVendor;
 
@@ -409,7 +415,7 @@ public partial class LauncherPaneView : UserControl {
             var body = new StackPanel();
             body.Children.Add(new TextBlock {
                 Text = label, FontSize = 13.5, FontWeight = FontWeight.SemiBold,
-                Foreground = selected ? success : enabled ? text : faint,
+                Foreground = selected ? info : enabled ? text : faint,
             });
             body.Children.Add(sub);
 
@@ -425,15 +431,14 @@ public partial class LauncherPaneView : UserControl {
             return row;
         }
 
-        void AddVendorRows(HarnessOption option, Func<string, bool> matches, bool includeDefault) {
+        void AddVendorRows(HarnessOption option, Func<ModelChoice, bool> matches, bool includeDefault) {
             var vendor = option.Vendor;
             var isCurrentVendor = string.Equals(vm.SelectedVendor, vendor, StringComparison.OrdinalIgnoreCase);
             if (includeDefault)
                 rows.Children.Add(Row(
                     vendor, option.Label, $"Default — {option.Label} chooses", option.Available,
                     isCurrentVendor && vm.SelectedModel.Length == 0, () => Pick(vendor, "")));
-            foreach (var model in vm.ModelChoicesFor(vendor)
-                         .Where(m => matches(m.Label) || matches(m.Slug)))
+            foreach (var model in vm.ModelChoicesFor(vendor).Where(matches))
                 rows.Children.Add(Row(
                     vendor, option.Label, model.Label, option.Available,
                     isCurrentVendor && string.Equals(vm.SelectedModel, model.Slug, StringComparison.OrdinalIgnoreCase),
@@ -456,7 +461,7 @@ public partial class LauncherPaneView : UserControl {
                 var vendorMatches = Matches(option.Label) || Matches(option.Vendor);
                 AddVendorRows(
                     option,
-                    vendorMatches ? _ => true : Matches,
+                    vendorMatches ? _ => true : m => RowMatches(m, term),
                     includeDefault: vendorMatches || Matches("default"));
             }
 
@@ -521,7 +526,7 @@ public sealed class VendorGlyphConverter : IValueConverter {
 }
 
 /// AgentChip's label: "Claude · Fable 5" — vendor label plus the model's label, resolved first
-/// against the server catalog (4th binding), then the curated fallback (raw slug when neither
+/// against the effective model catalog (4th binding), then the curated fallback (raw slug when neither
 /// carries it, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions.
 public sealed class AgentChipTextConverter : IMultiValueConverter {
     public static readonly AgentChipTextConverter Instance = new();

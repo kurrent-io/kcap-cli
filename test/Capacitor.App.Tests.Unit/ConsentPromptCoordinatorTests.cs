@@ -10,7 +10,7 @@ using static Capacitor.App.Tests.Unit.ConsentEntries;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The window-lifetime half of spec §6: at most one prompt window, raised only when it is not
+/// The prompt window's lifetime: at most one prompt window, raised only when it is not
 /// already visible, and always from the UI thread — the entry-added signal originates on a socket
 /// continuation. Real headless ConsentPromptWindows over a real ConsentPromptViewModel, so this
 /// also exercises the production composition App's factory builds.
@@ -145,9 +145,9 @@ public class ConsentPromptCoordinatorTests {
         await Assert.That(pinnedAfterNew).IsEqualTo("a1"); // over the whole still-pending queue
     }
 
-    /// The window-level half of the same defect: an OPEN window used to close on the clear's
-    /// empty changeset and be rebuilt by the replay — a fresh ViewModel, the pin reset, focus
-    /// stolen mid-decision. The same window survives, still pinned on the same request.
+    /// An OPEN window must not close on the clear's empty changeset and be rebuilt by the replay
+    /// (a fresh ViewModel, the pin reset, focus stolen mid-decision). The same window survives,
+    /// still pinned on the same request.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Open_window_survives_a_resubscribe_clear_and_replay() {
@@ -178,7 +178,7 @@ public class ConsentPromptCoordinatorTests {
         await Assert.That(pinned).IsEqualTo("a1");
     }
 
-    /// The window's own close: an advance that finds nothing left (spec §6). Proves the
+    /// The window's own close: an advance that finds nothing left. Proves the
     /// ViewModel→window wiring, and that the coordinator releases the instance so the next
     /// arrival raises a fresh one rather than trying to Show() a closed window.
     [Test]
@@ -209,12 +209,10 @@ public class ConsentPromptCoordinatorTests {
         await Assert.That(reopenedVisible).IsTrue();
     }
 
-    /// Regression coverage for an Important defect found in review: on the LAST pending request —
-    /// the common single-prompt case — the rule-not-saved warning was notified and then thrown
-    /// away, because the advance emptied the queue and closed the window on the same beat, before
-    /// the posted toast ever rendered. Exactly the disclosure spec §6's "never a silent success"
-    /// exists for. Asserted on what the user can observe: the window still up, with the warning on
-    /// screen.
+    /// On the LAST pending request (the common single-prompt case) the advance empties the queue,
+    /// and closing the window on that beat would throw away the rule-not-saved warning before its
+    /// toast renders: a silent success. Asserted on what the user can observe: the window still up,
+    /// with the warning on screen.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rule_warning_on_the_last_pending_request_is_actually_shown() {
@@ -246,7 +244,7 @@ public class ConsentPromptCoordinatorTests {
         await Assert.That(builds).IsEqualTo(1);
     }
 
-    /// Rendering acceptance for the §6 copy: the bound text actually reaches the screen (a
+    /// Rendering acceptance for the prompt copy: the bound text actually reaches the screen (a
     /// mistyped binding path renders empty), including the toast overlay this window owns because
     /// the main window may be closed.
     [Test]
@@ -282,7 +280,7 @@ public class ConsentPromptCoordinatorTests {
             "Saves a rule allowing future launches from this requester. Existing deny rules — including Pause — take precedence until removed.");
     }
 
-    /// Shutdown (spec §5): the coordinator is disposed BEFORE ConsentService, so the window — and
+    /// Shutdown: the coordinator is disposed BEFORE ConsentService, so the window — and
     /// any resolve it has in flight — is gone before the service it would call into.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -313,7 +311,7 @@ public class ConsentPromptCoordinatorTests {
 
     /// The gap Dispose_closes_the_window doesn't cover: that test's post-dispose signal travels
     /// through the (already-torn-down) EntryAdded subscription, never reaching ShowPromptWindow.
-    /// The tray's "Review pending launches…" item (spec §8) calls ShowPromptWindow directly — a
+    /// The tray's "Review pending launches…" item calls ShowPromptWindow directly — a
     /// click racing shutdown must not rebuild a window during teardown.
     [Test]
     [NotInParallel("AvaloniaSession")]

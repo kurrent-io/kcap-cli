@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -19,7 +20,7 @@ public class ProfileCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient()).AddProfile(
+        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient(), AuthFixtures.NewTokenStore(Config.Root)).AddProfile(
             "contoso", "https://contoso.kcap.io",
             ["github.com/contoso/*"]
         );
@@ -47,7 +48,7 @@ public class ProfileCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient()).RemoveProfile("contoso");
+        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient(), AuthFixtures.NewTokenStore(Config.Root)).RemoveProfile("contoso");
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -70,7 +71,7 @@ public class ProfileCommandTests {
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
         // skipProbe defaults to true → no network, falls back to loopback heuristic.
-        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient()).AddProfile(
+        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient(), AuthFixtures.NewTokenStore(Config.Root)).AddProfile(
             "contoso", "contoso.kcap.io", remotes: []);
 
         await Assert.That(result).IsEqualTo(0);
@@ -94,12 +95,50 @@ public class ProfileCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient()).RemoveProfile("default");
+        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient(), AuthFixtures.NewTokenStore(Config.Root)).RemoveProfile("default");
 
         await Assert.That(result).IsEqualTo(1);
 
         var json = await File.ReadAllTextAsync(configPath);
         var config = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig)!;
         await Assert.That(config.Profiles).ContainsKey("default");
+    }
+
+    [Test]
+    public async Task RemoveProfile_DeletesTheToken() {
+        var configPath = AppConfig.GetConfigPath(Config.Root);
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new ProfileConfig {
+            Profiles = new() { ["default"] = new() { ServerUrl = "https://default.com" }, ["contoso"] = new() { ServerUrl = "https://contoso.com" } }
+        }, ProfileConfigJsonContextIndented.Default.ProfileConfig));
+        var tokens = AuthFixtures.NewTokenStore(Config.Root);
+        await tokens.SaveAsync("contoso", new StoredTokens { AccessToken = "at", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), GitHubUsername = "test", Provider = AuthProvider.GitHubApp });
+
+        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient(), tokens).RemoveProfile("contoso");
+
+        await Assert.That(result).IsEqualTo(0);
+        await Assert.That(File.Exists(Config.PathTo("tokens", "contoso.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task RemoveProfile_RefusesTheActiveProfile() {
+        var configPath = AppConfig.GetConfigPath(Config.Root);
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new ProfileConfig {
+            ActiveProfile = "contoso",
+            Profiles = new() { ["default"] = new() { ServerUrl = "https://default.com" }, ["contoso"] = new() { ServerUrl = "https://contoso.com" } }
+        }, ProfileConfigJsonContextIndented.Default.ProfileConfig));
+
+        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient(), AuthFixtures.NewTokenStore(Config.Root)).RemoveProfile("contoso");
+
+        await Assert.That(result).IsEqualTo(1);
+        var config = JsonSerializer.Deserialize(await File.ReadAllTextAsync(configPath), ProfileConfigJsonContext.Default.ProfileConfig)!;
+        await Assert.That(config.Profiles).ContainsKey("contoso");
+        await Assert.That(config.ActiveProfile).IsEqualTo("contoso");
+    }
+
+    [Test]
+    public async Task RemoveProfile_UnknownProfileFails() {
+        var result = await new ProfileCommand(Config.Root, new FixedCapacitorHttpClient(), AuthFixtures.NewTokenStore(Config.Root)).RemoveProfile("nope");
+
+        await Assert.That(result).IsEqualTo(1);
     }
 }

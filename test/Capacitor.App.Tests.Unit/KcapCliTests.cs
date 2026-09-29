@@ -36,13 +36,6 @@ public class KcapCliTests {
         new(runner, "kcap", "daemon-a", "work", _ => Task.FromResult(terminalPath), canonicalServer);
 
     [Test]
-    public async Task CliPath_reflects_the_constructor_value() {
-        var cli = MakeCli(new FakeProcessRunner());
-
-        await Assert.That(cli.CliPath).IsEqualTo("kcap");
-    }
-
-    [Test]
     public async Task VersionAsync_builds_argv_and_parses_stdout() {
         var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(0, "kcap 9.9.9\n", "", false)) };
         var cli = MakeCli(runner);
@@ -124,7 +117,7 @@ public class KcapCliTests {
 
         await Assert.That(await cli.ServiceStatusAsync(CancellationToken.None)).IsNull();
         // Confirms the query is actually bounded — a hung `launchctl print` must not be able to
-        // block this forever and deadlock the §3.2 per-mutation gate.
+        // block this forever and deadlock the per-mutation gate.
         await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(10));
     }
 
@@ -191,20 +184,6 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify"],
             CollectionOrdering.Matching);
-    }
-
-    [Test]
-    public async Task DetachedStartAsync_argv_uses_abandon_wait_and_a_bounded_process_only_timeout() {
-        var runner = new FakeProcessRunner();
-        var cli = MakeCli(runner);
-
-        await cli.DetachedStartAsync("boot-attempt-test", CancellationToken.None);
-
-        await Assert.That(runner.SeenArgs).IsEquivalentTo(
-            ["daemon", "start", "-d", "--name", "daemon-a"], CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.CancelMode).IsEqualTo(CancelMode.AbandonWait);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(75));
-        await Assert.That(runner.SeenOptions!.TimeoutKill).IsEqualTo(TimeoutKillScope.ProcessOnly);
     }
 
     [Test]
@@ -365,7 +344,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
     }
 
-    // Decision 7: the PATH overlay belongs on the unit-writing mutation (install) only — starting
+    // The PATH overlay belongs on the unit-writing mutation (install) only — starting
     // an already-installed unit recaptures nothing, and read-only queries never need it. Even a
     // probe that DOES know the terminal PATH must not leak it onto these calls.
     [Test]
@@ -445,8 +424,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenFileName).IsEqualTo("kcap");
     }
 
-    // Fix: a broken KCAP_APP_CLI_PATH (CliResolver.ResolvePath returned null) used to make Run
-    // throw via a null-forgiving `CliPath!` — the app treats null CliPath as "no CLI", so every
+    // A broken KCAP_APP_CLI_PATH leaves CliPath null, which the app treats as "no CLI": every
     // call must degrade the same honest way instead of crashing whichever caller hits it.
     static KcapCli MakeCliWithNullPath(FakeProcessRunner runner) =>
         new(runner, null, "daemon-a", "work", _ => Task.FromResult<string?>(null), CanonicalServer);

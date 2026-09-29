@@ -31,6 +31,20 @@ internal static class CodexAppServerSchemaSubset {
         "ThreadTokenUsageUpdatedNotification",
         "HooksListParams",     "HooksListResponse",
         "SandboxPolicy",       "AskForApproval",
+
+        // Notifications the notification mapper turns into transcript content, plus the ones the
+        // runtime switches on directly. Without these the generated subset omits them entirely and
+        // the binary-gated comparison cannot catch their drift — which is how the model/rerouted
+        // fromModel/toModel rename slipped through to the reader below.
+        "ModelReroutedNotification",
+        "ItemStartedNotification",    "ItemCompletedNotification",
+        "TurnPlanUpdatedNotification",
+        "AgentMessageDeltaNotification",
+        "ReasoningTextDeltaNotification", "ReasoningSummaryTextDeltaNotification",
+        "PlanDeltaNotification",
+        "CommandExecutionOutputDeltaNotification",
+        "FileChangeOutputDeltaNotification", "FileChangePatchUpdatedNotification",
+        "ErrorNotification",
     ];
 
     /// <summary>Server→client approval / elicitation request+response shapes the decline bridge answers

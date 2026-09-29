@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.App.Services;
 
-/// Mirrors Capacitor.Cli.Commands.ServiceStatusJson field-for-field; snake_case on the wire.
+/// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
     int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive);
@@ -15,7 +15,7 @@ public sealed record ServiceSnapshot(
 public partial class KcapCliJsonContext : JsonSerializerContext;
 
 /// Domain classification of ServiceSnapshot.State's wire string, with an explicit Unknown arm —
-/// positive-evidence-only (spec §6): an unrecognized/future/typo'd value must never silently read
+/// positive-evidence-only: an unrecognized/future/typo'd value must never silently read
 /// as NotInstalled and enter a positive-mutation path.
 public enum ServiceState { Running, Installed, NotInstalled, Unknown }
 
@@ -32,8 +32,8 @@ public enum ImportScopeChoice { Everything, Org, Repo }
 
 public sealed record ImportRequest(ImportScopeChoice Scope, string? OrgOrRepo, IReadOnlyList<string> VendorFlags);
 
-/// Typed facade over every CLI call the app shells out to (spec §3.1/§3.6, decision 1:
-/// everything through the CLI). Consumed by the lifecycle controller and faked in tests behind
+/// Typed facade over every CLI call the app shells out to — every daemon mutation goes through
+/// the CLI. Consumed by the lifecycle controller and faked in tests behind
 /// IProcessRunner.
 public interface IKcapCli {
     string? CliPath { get; }
@@ -71,7 +71,7 @@ public sealed class KcapCli : IKcapCli {
     static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(100);
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can
-    // never block the §3.2 per-mutation gate forever once the lifecycle controller polls this.
+    // never block the per-mutation gate forever once the lifecycle controller polls this.
     static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(10);
     // Above MutationTimeout's 60s — bounds the wrapper without killing a still-forking detach (ProcessOnly).
     static readonly TimeSpan DetachedStartTimeout = TimeSpan.FromSeconds(75);
@@ -184,7 +184,7 @@ public sealed class KcapCli : IKcapCli {
     }
 
     // Neither this nor ImportAsync overlays MutationEnv — non-daemon shelling keeps lenient
-    // classification (spec §4); the vendor flag itself is the caller's exclusive-flag choice.
+    // classification; the vendor flag itself is the caller's exclusive-flag choice.
     public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct) {
         if (CliPath is not { } cliPath) return NoCliResult();
 
@@ -237,7 +237,7 @@ public sealed class KcapCli : IKcapCli {
         return env;
     }
 
-    // PATH overlaid ONLY here (spec decision 7): install is the sole unit-writing mutation, so it's
+    // PATH overlaid ONLY here: install is the sole unit-writing mutation, so it's
     // the only call that needs the terminal's PATH baked into the launchd unit. Start-verify
     // (bootstrap/kickstart of an already-installed unit) and every read-only query are exempt.
     // Resolved lazily against the mutation's own token, never a detached one; an unknown probe

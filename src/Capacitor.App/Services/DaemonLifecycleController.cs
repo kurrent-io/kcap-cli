@@ -8,7 +8,6 @@ namespace Capacitor.App.Services;
 /// app never references the CLI project, so the coded exits are duplicated here deliberately — the
 /// one shared home for every coded daemon-mutation exit, reused by DaemonMutationLane's classifier.
 internal static class VerifyExitCodes {
-    public const int Ok                  = 0;
     public const int Contended           = 20;
     public const int Viability           = 21;
     public const int BootoutUnknown      = 22;
@@ -39,8 +38,8 @@ internal static class VerifyExitCodes {
     };
 }
 
-/// The state machine of the lifecycle slice (spec §3.2/§4.2): reacts to IDaemonClientService's attach
-/// stream, drives the §4.2 startup matrix through IKcapCli, and surfaces every inconsistency via
+/// The state machine of the lifecycle slice: reacts to IDaemonClientService's attach stream,
+/// drives the startup matrix through IKcapCli, and surfaces every inconsistency via
 /// ILifecycleSurface — never a silent mutation outside the matrix's own explicit rows.
 public sealed class DaemonLifecycleController : IAsyncDisposable {
     const string IncompatibleReason = "daemon_incompatible";
@@ -195,7 +194,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// General-purpose status query for reconciliation/requery/Start-action callers: one retry on
     /// stale evidence (never silently walks away with zero query), and a genuine CLI-level
-    /// failure — on either attempt — surfaces an honest line and is logged (spec §6 "unknown").
+    /// failure — on either attempt — surfaces an honest line and is logged.
     async Task<ServiceSnapshot?> QueryStatusForActionAsync(CancellationToken ct) {
         var (snap, outcome) = await QueryStatusAsync(ct).ConfigureAwait(false);
         if (outcome == QueryOutcome.Stale) (snap, outcome) = await QueryStatusAsync(ct).ConfigureAwait(false);
@@ -246,7 +245,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    /// §4.2: the startup branch. Runs at most once per app run (the arm claimed synchronously in
+    /// The startup branch. Runs at most once per app run (the arm claimed synchronously in
     /// OnAttachStatus); closes the startup phase only once this full flow — query, optional
     /// txn-active wait, matrix decision, any mutation, and its confirmation wait — has completed.
     async Task RunStartupBranchAsync((AttachState State, string? Reason) triggering) {
@@ -259,7 +258,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
             try {
                 var snap = await QueryForStartupBranchAsync(triggering, _lifetime.Token).ConfigureAwait(false);
-                if (snap is null) return; // query failure/unknown — already surfaced above, no mutation (spec §6)
+                if (snap is null) return; // query failure/unknown — already surfaced above, no mutation
 
                 // The true CURRENT attach state, not the (possibly stale) reason this branch was
                 // triggered by: when QueryForStartupBranchAsync had to re-evaluate against a
@@ -269,7 +268,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 Reconcile(snap, IsCurrentlyAttached(), allowTxnActiveRequery: false);
 
                 if (snap.TxnActive) {
-                    // spec §6: a held flock is waited out, never mutated into. One bounded
+                    // A held flock is waited out, never mutated into. One bounded
                     // re-query (not offered as repair); still active afterward → no action this
                     // run rather than risk contending the CLI's own transaction lock.
                     snap = await AwaitOneTxnActiveRequeryAsync(_lifetime.Token).ConfigureAwait(false);
@@ -289,7 +288,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    /// §4.2 table, keyed on the loaded-label/job state before plist presence. An unrecognized wire
+    /// The startup matrix, keyed on the loaded-label/job state before plist presence. An unrecognized wire
     /// state is Unknown, not NotInstalled — positive evidence only, never a silent entry into the
     /// auto-install/start path below.
     async Task RunStartupMatrixAsync(ServiceSnapshot snap, CancellationToken ct) {
@@ -333,7 +332,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         // No DaemonPid check here, unlike the start rows above: a racing/wedged manual daemon on
         // this name is the install --verify transaction's own job to detect and safely roll back
-        // from (post-install ownership + hello verification, spec §3.4; E2E item 2) — not a
+        // from (post-install ownership + hello verification) — not a
         // pre-flight guess by the app.
         await RunLaneMutationAsync(MutationVerb.Install, ct).ConfigureAwait(false);
     }
@@ -342,7 +341,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _surface.Attention(
             $"A daemon is already running (PID {daemonPid}) alongside the installed service — not starting a second one.");
 
-    /// §4.1 preconditions, install-only — start performs no viability check (spec §3.4), so this
+    /// Install-only preconditions — start performs no viability check, so this
     /// is never called on a start row. Returns the honest line to surface on failure, or null
     /// once every precondition passes.
     async Task<string?> FailingPreconditionAsync(ServiceSnapshot snap, CancellationToken ct) {
@@ -415,7 +414,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         return null;
     }
 
-    /// Reconciliation (spec §3.2): surfaces every inconsistent combination found in one
+    /// Reconciliation: surfaces every inconsistent combination found in one
     /// ServiceStatusAsync snapshot — never mutates. The attached-only checks only make sense (or
     /// would otherwise double-report a startup-matrix row's own Attention for the exact same
     /// evidence) while genuinely connected.
@@ -457,9 +456,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     // (Connected/incompatible reconciliation-only paths, which don't otherwise hold the gate for
     // this). The delay itself runs UNGATED — a passive background check must never block a user's
     // Start click for the whole wait — only the query+reconcile is gate-scoped, exactly like
-    // every other mutation-adjacent evidence read (spec §3.2). Exactly one follow-up query
+    // every other mutation-adjacent evidence read. Exactly one follow-up query
     // (allowTxnActiveRequery: false on the way back in) — an orphaned grandchild that outlives a
-    // force-quit is waited out, not repaired (spec §6). Same freshest-read rule as above:
+    // force-quit is waited out, not repaired. Same freshest-read rule as above:
     // `attached` comes from IsCurrentlyAttached() at reconcile time, never a captured parameter.
     async Task RunTxnActiveRequeryAsync() {
         try {
@@ -481,7 +480,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    /// §4.4: the Start action. Branches on the loaded-label/job state BEFORE plist presence, same
+    /// The Start action. Branches on the loaded-label/job state BEFORE plist presence, same
     /// precedence as the startup matrix — but unlike that matrix, a Start click is NEVER itself
     /// consent to rewrite a unit: a mismatched/orphaned/coexisting
     /// unit always goes through the dialoged repair affordance (OfferRepairAsync) instead of a

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using ReactiveUI.Primitives.Reactive.Concurrency;
 using ReactiveUI.Reactive;
 using ReactiveUI.Reactive.Builder;
@@ -34,7 +35,12 @@ internal static class AvaloniaSession {
     /// first instead makes the session's later app build fail VerifyAccess in the compositor ctor.
     /// Forcing one dispatch before any test in this assembly runs claims the thread first.
     [Before(Assembly)]
-    public static Task ClaimUiThread() => DispatchAsync(static () => { });
+    public static Task ClaimUiThread() {
+        // The image fetcher is process-global and would reach for the network; a test that
+        // wants bytes back installs its own for the duration.
+        MarkdownImages.Fetch = static (_, _) => Task.FromResult<byte[]?>(null);
+        return DispatchAsync(static () => { });
+    }
 
     /// ReactiveUI's builder state is process-global and effectively one-shot: whatever ran first
     /// keeps its registrations, so every later test inherits an Avalonia scheduler bound to a
@@ -76,9 +82,8 @@ internal static class AvaloniaSession {
     /// Pins RxSchedulers.MainThreadScheduler to an immediate System.Reactive IScheduler for
     /// the body and RESTORES the prior scheduler in finally (it is process-global). This is
     /// also the flavor pin: it only compiles if the scheduler IS a System.Reactive IScheduler
-    /// consumed by ObserveOn — the spec's scheduler-identity acceptance. (ReactiveUI 23.2.28
-    /// moved the ambient scheduler off the classic static `RxApp` type onto `RxSchedulers`;
-    /// `RxApp` scheduler properties no longer exist in this ReactiveUI line.)
+    /// consumed by ObserveOn. (The ambient scheduler lives on `RxSchedulers`; this ReactiveUI line
+    /// has no `RxApp` scheduler properties.)
     public static async Task WithImmediateRxScheduler(Func<Task> body) {
         // Start the process-wide session before snapshotting "prior": outside a dispatch nothing
         // has configured MainThreadScheduler yet, and the finally below would restore that

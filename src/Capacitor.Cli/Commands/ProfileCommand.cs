@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
 
@@ -5,7 +6,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class ProfileCommand(ConfigRoot config, ICapacitorHttpClient http) {
+public sealed class ProfileCommand(ConfigRoot config, ICapacitorHttpClient http, TokenStore tokens) {
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             await PrintUsage();
@@ -97,38 +98,29 @@ public sealed class ProfileCommand(ConfigRoot config, ICapacitorHttpClient http)
     }
 
     internal async Task<int> RemoveProfile(string name) {
-        if (name == "default") {
-            await Console.Error.WriteLineAsync("Cannot remove the default profile.");
+        var result = await ProfileRemoval.RemoveAsync(config, tokens, name);
 
-            return 1;
+        switch (result.Outcome) {
+            case ProfileRemovalOutcome.Removed:
+                await Console.Out.WriteLineAsync($"Profile '{name}' removed.");
+                return 0;
+            case ProfileRemovalOutcome.RemovedTokenRetained:
+                await Console.Out.WriteLineAsync($"Profile '{name}' removed.");
+                await Console.Error.WriteLineAsync($"Its saved sign-in could not be deleted ({result.Detail}); remove the file by hand.");
+                return 0;
+            case ProfileRemovalOutcome.IsDefault:
+                await Console.Error.WriteLineAsync("Cannot remove the default profile.");
+                return 1;
+            case ProfileRemovalOutcome.NotFound:
+                await Console.Error.WriteLineAsync($"Profile '{name}' not found.");
+                return 1;
+            case ProfileRemovalOutcome.IsActive:
+                await Console.Error.WriteLineAsync($"Profile '{name}' is the active profile. Select another first: kcap use <other> --global");
+                return 1;
+            default:
+                await Console.Error.WriteLineAsync("The configuration file could not be read; nothing was removed.");
+                return 1;
         }
-
-        var stored = await LoadConfig();
-
-        if (!stored.Profiles.ContainsKey(name)) {
-            await Console.Error.WriteLineAsync($"Profile '{name}' not found.");
-
-            return 1;
-        }
-
-        await ConfigMutator.MutateAsync(config, c => {
-            var profiles = new Dictionary<string, Profile>(c.Profiles);
-            profiles.Remove(name);
-
-            var bindings  = new Dictionary<string, string>(c.ProfileBindings);
-            var staleKeys = bindings.Where(kv => kv.Value == name).Select(kv => kv.Key).ToList();
-            foreach (var key in staleKeys) bindings.Remove(key);
-
-            return c with {
-                Profiles = profiles,
-                ProfileBindings = bindings,
-                ActiveProfile = c.ActiveProfile == name ? "default" : c.ActiveProfile
-            };
-        });
-
-        await Console.Out.WriteLineAsync($"Profile '{name}' removed.");
-
-        return 0;
     }
 
     async Task<int> HandleShow(string[] args) {

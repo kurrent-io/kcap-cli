@@ -300,7 +300,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
         return envelope.ToJsonString();
     }
 
-    static McpTool[] BuildToolsList() {
+    internal static McpTool[] BuildToolsList() {
         const string PrArgDescription =
             "Optional PR reference (e.g. 'owner/repo#123' or a github.com PR URL). " +
             "Defaults to the session's PR if launched via `kcap review`, otherwise auto-detected from current branch.";
@@ -309,12 +309,14 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
             new(
                 "get_pr_summary",
                 "Get an overview of the PR: which Claude Code sessions contributed, which files were changed (with event counts), and what test commands were run with their pass/fail outcomes. Call this first to orient yourself. When reviewing a PR or asking why code was written this way, reach for this before git blame or git log — and alongside the diff — because it surfaces the implementer's actual reasoning from the session transcript, which commits and diffs don't capture.",
-                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, []),
+                McpToolAnnotations.Read
             ),
             new(
                 "list_pr_files",
                 "List all files changed in the PR with aggregated metadata: change types (read/edit/create), how many sessions touched each file, and total event count. Use this to understand the scope of changes.",
-                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, []),
+                McpToolAnnotations.Read
             ),
             new(
                 "get_file_context",
@@ -326,7 +328,8 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                         ["pr"]        = new("string", PrArgDescription)
                     },
                     ["file_path"]
-                )
+                ),
+                McpToolAnnotations.Read
             ),
             new(
                 "search_context",
@@ -338,12 +341,14 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                         ["pr"]    = new("string", PrArgDescription)
                     },
                     ["query"]
-                )
+                ),
+                McpToolAnnotations.Read
             ),
             new(
                 "list_sessions",
                 "List all Claude Code sessions that contributed to this PR, with session IDs, titles, timestamps, and models used. Use this to understand the work timeline and pick sessions to drill into with get_transcript.",
-                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, []),
+                McpToolAnnotations.Read
             ),
             new(
                 "get_transcript",
@@ -357,7 +362,8 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                         ["take"]       = new("integer", "Number of events to return (for pagination)")
                     },
                     ["session_id"]
-                )
+                ),
+                McpToolAnnotations.Read
             )
         ];
     }
@@ -426,7 +432,7 @@ record McpServerInfo(string Name, string Version);
 
 record McpToolsResult(McpTool[] Tools);
 
-record McpTool(string Name, string Description, McpInputSchema InputSchema);
+record McpTool(string Name, string Description, McpInputSchema InputSchema, McpToolAnnotations Annotations);
 
 record McpInputSchema(string Type, Dictionary<string, McpSchemaProperty> Properties, string[] Required);
 

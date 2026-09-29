@@ -2,6 +2,9 @@ using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Capacitor.App.GitHubHtml;
 using MarkView.Avalonia;
 using MarkView.Avalonia.SyntaxHighlighting;
 
@@ -15,6 +18,9 @@ public sealed class MarkdownView : ContentControl {
     public static readonly StyledProperty<ICommand?> OpenLinkProperty =
         AvaloniaProperty.Register<MarkdownView, ICommand?>(nameof(OpenLink));
 
+    public static readonly StyledProperty<MarkdownFlavor> FlavorProperty =
+        AvaloniaProperty.Register<MarkdownView, MarkdownFlavor>(nameof(Flavor));
+
     /// Takes a code block's text. Left unset on a surface with nowhere to run it, which is what
     /// withdraws the offer from the block.
     public static readonly StyledProperty<ICommand?> RunCodeProperty =
@@ -23,20 +29,25 @@ public sealed class MarkdownView : ContentControl {
     // The extension builds its TextMate highlighters on first use and keeps them, so one
     // instance serves the app; a per-view instance rebuilds them on every render.
     static readonly TextMateExtension Highlighting = new();
-    static readonly KcapMarkdownExtension Kcap = new();
 
     readonly MarkdownViewer _viewer = new();
+    readonly DetailsState _details = new();
+    readonly DetailsExtension _detailsExtension;
+    readonly CodeBlockActions _codeActions;
 
     static MarkdownView() {
-        TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
-        RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
+        TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => {
+            view._details.Clear();
+            view.Render();
+        });
+        RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._codeActions.ApplyRunCode());
+        FlavorProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.ApplyFlavor());
     }
 
     public MarkdownView() {
-        _viewer.Extensions.Add(Kcap);
-        _viewer.Extensions.Add(Highlighting);
-        // After the highlighter, whose code block renderer this one wraps.
-        _viewer.Extensions.Add(new CodeBlockActions(this));
+        _detailsExtension = new(_details, OnDetailsToggled);
+        _codeActions = new(this);
+        ApplyFlavor();
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
         ScrollViewer.SetHorizontalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
@@ -47,10 +58,8 @@ public sealed class MarkdownView : ContentControl {
         Content = _viewer;
     }
 
-    /// A code block reads RunCode as it is built, so a command arriving after the first render —
-    /// the order a binding on this property lands in — needs the document built again. Clearing
-    /// first is what makes that second build happen at all: the viewer renders on a change, and
-    /// the markdown it already holds is not one.
+    /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
+    /// a change, and the markdown it already holds is not one.
     void Render() {
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         _viewer.Markdown = Text;
@@ -66,8 +75,67 @@ public sealed class MarkdownView : ContentControl {
         set => SetValue(OpenLinkProperty, value);
     }
 
+    public MarkdownFlavor Flavor {
+        get => GetValue(FlavorProperty);
+        set => SetValue(FlavorProperty, value);
+    }
+
     public ICommand? RunCode {
         get => GetValue(RunCodeProperty);
         set => SetValue(RunCodeProperty, value);
     }
+
+    void ApplyFlavor() {
+        _details.Clear();
+        _viewer.Extensions.Clear();
+        if (Flavor == MarkdownFlavor.GitHub) {
+            _viewer.Extensions.Add(KcapMarkdownExtension.GitHub);
+            _viewer.Extensions.Add(_detailsExtension);
+        } else {
+            _viewer.Extensions.Add(KcapMarkdownExtension.Chat);
+        }
+        _viewer.Extensions.Add(Highlighting);
+        // After the highlighter, whose code block renderer this one wraps.
+        _viewer.Extensions.Add(_codeActions);
+        // Only the pipeline change re-renders, so it goes last.
+        _viewer.Pipeline = Flavor == MarkdownFlavor.GitHub ? GitHubPipeline.Instance : null;
+    }
+
+    /// Re-rendering rebuilds MarkView's selection index, so it always matches what is visible.
+    /// The header that was pressed is gone with the old tree; its successor gets the focus back
+    /// and is held at the viewport Y the reader pressed it at: the height change lands above or
+    /// below it, and the scroll offset alone would let the header wander with it.
+    void OnDetailsToggled(int ordinal, bool expanded) {
+        _details.Set(ordinal, expanded);
+        var header = Header(ordinal);
+        var hadFocus = header?.IsFocused == true;
+        var scroll = this.FindAncestorOfType<ScrollViewer>();
+        var anchorY = scroll is not null ? header?.TranslatePoint(new Point(0, 0), scroll)?.Y : null;
+        Dispatcher.UIThread.Post(() => {
+            Render();
+            if (hadFocus) Header(ordinal)?.Focus();
+            if (anchorY is { } y && scroll is not null) new ToggleAnchor(scroll, () => Header(ordinal), y).Hold();
+        });
+    }
+
+    /// Restores the header once the new tree is laid out, and once more after the frame's
+    /// remaining layout has settled — then lets go, so a reader's own scroll a moment later is
+    /// not undone.
+    sealed class ToggleAnchor(ScrollViewer scroll, Func<ToggleButton?> header, double y) {
+        public void Hold() {
+            scroll.UpdateLayout();
+            Restore();
+            Dispatcher.UIThread.Post(Restore, DispatcherPriority.Background);
+        }
+
+        void Restore() {
+            if (header()?.TranslatePoint(new Point(0, 0), scroll) is not { } after) return;
+            var delta = after.Y - y;
+            if (Math.Abs(delta) >= 0.5) scroll.Offset = new Vector(scroll.Offset.X, scroll.Offset.Y + delta);
+        }
+    }
+
+    ToggleButton? Header(int ordinal) =>
+        this.GetVisualDescendants().OfType<ToggleButton>().FirstOrDefault(button =>
+            button.Classes.Contains("markdown-details-summary") && button.Tag is int tag && tag == ordinal);
 }

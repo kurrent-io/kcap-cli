@@ -21,7 +21,10 @@ review context via MCP tools.
 ## Invariants
 
 Deliberate choices a change can silently undo — each looks like a bug until you know why.
-`docs/CHANGES.md` carries the reasoning per feature; `docs/superpowers/specs/` holds the designs.
+`docs/superpowers/specs/` holds the designs. There is no changelog file: the reasoning behind a
+change lives in its PR description and the recorded sessions that produced it — trace it with the
+kcap-review and kcap-sessions MCP tools (`search_context`, `search_sessions`), and do not add a
+running notes file that every PR edits.
 
 - **A vendor either contains borrowed review or does not offer it.** Cursor and Copilot read a
   daemon-owned snapshot, Codex its own tool clamp; Claude declares no containment, so a borrowed
@@ -80,6 +83,36 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **The PTY read loop never awaits a consumer.** Local sinks and the cloud sink take chunks through
+  a non-blocking `TryEnqueue` under `SinksLock`, and each drains on its own pump. A consumer that
+  falls behind is cut off and replayed from the ring — a local client by reattaching, the cloud
+  mirror by an in-band terminal reset — never allowed to back-pressure the PTY, which would freeze
+  every other surface of that agent.
+- **Desktop-app green / orange / yellow are status only.** `KcapSuccess*` is shipped, settled,
+  passing; `KcapWarning*` is blocked, stale, needs-you. Identity must not share them: a work-item
+  key, vendor chip, "this session" mark, or title in success green reads as done, and a Claude chip
+  in warning orange reads as attention. Location uses purple (in-flight, you-are-here); selection
+  uses info blue; labels and keys use text/muted/surface tokens.
+- **Desktop-app chrome is the Kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
+  in `App.axaml`; menus, flyouts, buttons, fields and list rows opt into `kcapPanel`, `kcapGhost`,
+  `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
+  canvas. Copy the launcher pickers and the rail help flyout (`kcapPanel` + ghost rows), do not add
+  an unstyled control.
+- **The work-context pane hosts the full PR card, not a title line.** `PullRequestCard` is the
+  only place to switch between a session's linked PRs, and its checks and review rows are the live
+  status a user reads without opening the reader tab. A compact header that collapses it to the
+  first PR's title drops both, and the pane smoke test pins the picker and the status rows.
+- **Skills materialization nests one pair of locks only — migration outside the per-worktree
+  manifest lock — and holds no shared lock across a network request.** The repository lock is taken
+  alone, before any target starts and while nothing else is held, so it nests with neither and the
+  exclusion block can go in ahead of the first file. Acquiring the nested pair the other way round
+  deadlocks two checkouts of one repository against each other, and holding migration or repository
+  across a snapshot fetch serializes unrelated repositories on someone else's network.
+- **A skills identity retirement deletes before it fetches.** When the account or server a manifest
+  records is not the current one, every local path and every global copy that identity owned is
+  deleted first and unconditionally, and the ledger is saved owning nothing and carrying no refresh
+  stamp. Fetching first and deleting on success leaves a revoked account's skills loadable exactly
+  when the credential that would have replaced them has stopped working.
 
 ## Tech stack
 
@@ -98,9 +131,10 @@ dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj
 **Layout:** one test project per prod project, each mirroring that project's directories — `test/Capacitor.Cli.Core.Tests.Unit/`, `test/Capacitor.Cli.Tests.Unit/`, `test/Capacitor.Cli.Daemon.Tests.Unit/`, `test/Capacitor.Models.Transcripts.Tests.Unit/`, plus `test/Capacitor.Cli.Tests.Integration/`. A test project references its own prod project and `test/Capacitor.Tests.Helpers/`, never another test project: anything shared across suites goes in Helpers, with a `public` surface (no `InternalsVisibleTo`). Helpers' `Guards/` holds the process-global pins every assembly needs, and Helpers is a global `using` everywhere, so its types need no import.
 
 - Throwaway directories come from Helpers' `TempDir` — `using var tmp = new TempDir();` — never a per-class copy. Build paths under it with its own members — `tmp.PathTo(…)` for a path that must not exist yet, `tmp.CreateDir(…)`, `tmp.CreateFile(…)` — not `Path.Combine(tmp.Path, …)` + `Directory.CreateDirectory`/`File.WriteAllText`. When the code under test refuses a symlinked path component, hand it `tmp.GetResolvedPath(…)` instead: a Mac's temp root is under `/var`, a symlink into `/private`, so the plain path is rejected there and nowhere else — CI has no macOS leg to catch it. It is not the default because resolving costs 8 characters of the `sockaddr_un` budget.
+- A file the test will *run* — a stub script, a copied binary — comes from `tmp.CreateExecutable(…)` / `CopyExecutable(…)`, never `CreateFile` + `SetUnixFileMode`. A write handle opened in the test host is copied into whatever child a concurrent test forks, and until that child execs Linux fails the spawn with ETXTBSY; code that swallows a failed spawn turns that into a wrong-value assertion a few milliseconds in. macOS never shows it. A file that only needs the execute bit (a PATH lookup, `access(X_OK)`) is not exposed.
 - When every test in a class needs one, inject it instead of holding a field: `[TempDir] public required TempDir Tmp { get; init; }` (or `[TempDaemonPaths]` for a `TempDaemonPaths`; both take an optional hint, `[TempDir("short")]`). TUnit builds one per test and disposes it, so the class needs no `IDisposable` — which is also how CA1001 stops applying. `Shared` widens the lifetime (`SharedType.PerClass` and friends) but hands one directory to tests that run concurrently, so it fits a read-only fixture only. The property is set *after* construction, so a ctor or another field initializer cannot read it (make those members lazy) and a `static` helper cannot see it at all; a `[Before(Test)]` hook can, because injection runs first.
 - Outside a test class — a nested harness type, a fixture object — keep the field and implement `IDisposable`: TUnit only injects into test classes. CA1001 is an error there, so an `[After(Test)]` hook will not build.
-- A class whose time goes into real child processes (git, a vendor CLI, a PTY) can draw from `[ParallelLimiter<SubprocessLimit>]` — one pool of half the cores, shared by every class in the assembly that names it. TUnit's own cap is 4x the cores, sized for IO-bound tests; at that width these classes starve each other's timing assertions. Pool the CPU hogs, not the test that failed. Today the pool is the daemon suite's; elsewhere a whole-class `[NotInParallel(nameof(TheClass))]` is the cheaper tool when the point is to keep one class's own tests apart.
+- A class whose time goes into real child processes (git, a vendor CLI, a PTY) can draw from `[ParallelLimiter<SubprocessLimit>]` — one pool of half the cores, shared by every class in the assembly that names it. TUnit keys the semaphore by the limiter type, per process, so each test assembly has its own pool. TUnit's own cap is 4x the cores, sized for IO-bound tests; at that width these classes starve each other's timing assertions. Pool the CPU hogs, not the test that failed. A whole-class `[NotInParallel(nameof(TheClass))]` is the cheaper tool when the point is to keep one class's own tests apart.
 - Spawning the real `kcap` binary goes through Helpers' `KcapProcess`, which requires a `DaemonStore` and pins it for the child. The assembly-wide `KCAP_DAEMONS_DIR` pin is a path that cannot be created, so a hand-rolled spawn dies with a bare ENOTDIR `IOException` instead of quietly resolving the developer's own daemons directory.
 - Capture console output with `ConsoleOutput.StartCapture()` / `StartErrorCapture()`, never a hand-rolled `Console.SetOut`/`SetError` save-restore — TUnit0055 is an error. Console is process-global, so every caller needs bare `[NotInParallel]`; a group key is not enough.
 - Never assert that an environment variable is *absent* from a built `ProcessStartInfo`: its environment is seeded from the current process, and the repo's own `.envrc` exports several. Assert what the code under test contributed, by comparing against the inherited value.
@@ -198,6 +232,17 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 **No `InternalsVisibleTo` to a production assembly.** If a shipping project needs a member, that member is not internal — make it public. Test-assembly grants are fine, and most of the grants here are those. `Capacitor.Cli.Core` keeps its grants to `kcap` and `kcap-daemon`, the two shipping executables; that is grandfathered, not a precedent, and **new projects start with none**.
 
 **One type per file, named after the type.** Several types in one file is discouraged, whatever the neighbouring files do — and plenty here do. Three exceptions: an enum plus its extension methods; a closely-related hierarchy (an interface plus many small implementations); a registry of descriptors. The last two are rare — reach for them when splitting would leave files that only make sense read together, not to save a file.
+
+**Desktop app UI** lives under `src/Capacitor.App/`. Palette and control classes are in `App.axaml`.
+
+- Status tokens: `KcapSuccess*` (green) and `KcapWarning*` (orange/yellow) only on badges, pills, and
+  glyphs that mean outcome or attention. Never on keys, titles, vendor/model chips, or "you are here".
+- Location / in-flight: `KcapPurple*`. Selection / open session: `KcapInfo*`. Everything else:
+  `KcapTextBrush`, `KcapMutedBrush`, surface brushes.
+- Controls: `kcapPanel` flyouts, `kcapGhost` rows and icon buttons, `kcapChip` compact buttons,
+  `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
+  Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
+  Kcap class restyles it.
 
 ## Dos and donts
 

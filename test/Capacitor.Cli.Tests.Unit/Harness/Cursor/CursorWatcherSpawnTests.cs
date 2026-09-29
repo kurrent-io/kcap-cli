@@ -1,5 +1,6 @@
 using System.Net;
 using Capacitor.Cli.Commands;
+using Microsoft.Extensions.Time.Testing;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Cursor;
@@ -156,7 +157,10 @@ public class CursorWatcherSpawnTests {
                 : new HttpResponseMessage(HttpStatusCode.OK);
         });
         using var client = new HttpClient(handler);
-        var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
+        // The hook abandons HandleCore at a wall-clock ceiling, and the drain stops on its own
+        // budget. Neither clock moves here, so a loaded runner cannot return before the spawn.
+        var time = new FakeTimeProvider();
+        var spool = new HookSpool(tmp.PathTo("spool"), time: time);
 
         // Seed the undelivered subagent-start DIRECTLY (as a prior transient POST failure
         // would have left it), rather than producing one by driving the child's own
@@ -169,7 +173,7 @@ public class CursorWatcherSpawnTests {
         // stays queued. Asserting "no spawn" only means something after a real drain attempt:
         // straight after Append no production code has run, so the assertion could not fail.
         startFails = true;
-        await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(time), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             client,
             new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{child}}","tool_name":"Bash"}"""),
             spool);
@@ -182,7 +186,7 @@ public class CursorWatcherSpawnTests {
         // (before the isSubagentChild divert even runs), and that success is what must
         // trigger the deferred spawn.
         startFails = false;
-        await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(time), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             client,
             new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{child}}","tool_name":"Bash"}"""),
             spool);

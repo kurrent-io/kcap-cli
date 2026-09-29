@@ -5,13 +5,10 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Views;
 
-/// The thin, dumb adapter wiring TrayViewModel.MenuModel into a real TrayIcon/NativeMenu (spec
-/// §5): the icon (glyph + count) updates IMMEDIATELY on every model change; menu items rebuild
-/// ONLY inside NativeMenu.NeedsUpdate, via TrayMenuSync's dirty-flag state machine. macOS
-/// status-item menus never raise NativeMenu.Opening (confirmed live in manual acceptance) —
-/// NeedsUpdate is the pre-display hook that DOES fire, so it also fire-and-forgets the
-/// pause-state refresh, kicked before the rebuild it triggers; the refresh only starts async
-/// socket work through the §6 serialized lane and never touches menu structure itself.
+/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu: the icon updates on every model
+/// change; menu items rebuild ONLY inside NativeMenu.NeedsUpdate, via TrayMenuSync. macOS
+/// status-item menus never raise NativeMenu.Opening, so NeedsUpdate also kicks the pause-state
+/// refresh, which only starts async socket work and never touches menu structure itself.
 public sealed class TrayIconManager : IDisposable {
     readonly Application _app;
     readonly TrayIcon _trayIcon;

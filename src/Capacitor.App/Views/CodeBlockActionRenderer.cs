@@ -1,3 +1,4 @@
+using System.Windows.Input;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -12,7 +13,7 @@ namespace Capacitor.App.Views;
 /// A code block under a Copy button, and under a Run it button when its text is a command. The
 /// highlighting and its theme switch stay with MarkView's own renderer: this one captures the
 /// block that renderer wrote and overlays it, so a MarkView upgrade keeps owning both.
-public sealed class CodeBlockActionRenderer(MarkdownView view) : AvaloniaObjectRenderer<CodeBlock> {
+public sealed class CodeBlockActionRenderer(MarkdownView view, CodeBlockActions actions) : AvaloniaObjectRenderer<CodeBlock> {
     static readonly TimeSpan CopiedFor = TimeSpan.FromSeconds(1.5);
 
     readonly TextMateCodeBlockRenderer _inner = new();
@@ -31,6 +32,11 @@ public sealed class CodeBlockActionRenderer(MarkdownView view) : AvaloniaObjectR
         renderer.WriteBlock(Host(block, obj.Lines.ToString()));
     }
 
+    /// The bang is what makes the block a command the composer can run rather than prose, and it
+    /// has to be the text's own first character: the text is sent verbatim, so a block that only
+    /// reaches a bang past some whitespace would send something that is not a command after all.
+    internal static bool IsRunnable(string text) => text.StartsWith('!');
+
     Control Host(Control block, string text) {
         var strip = new StackPanel {
             Orientation = Orientation.Horizontal,
@@ -40,11 +46,9 @@ public sealed class CodeBlockActionRenderer(MarkdownView view) : AvaloniaObjectR
         };
         strip.Classes.Add("markdown-code-actions");
         strip.Children.Add(CopyButton(text));
-        // The bang is what makes the block a command the composer can run rather than prose, and it
-        // has to be the text's own first character: the text is sent verbatim, so a block that only
-        // reaches a bang past some whitespace would send something that is not a command after all.
-        // A view with no RunCode — the pull request reader — has nowhere to run one either way.
-        if (view.RunCode is not null && text.StartsWith('!')) strip.Children.Add(RunButton(text));
+        // A view with no RunCode — the pull request reader — has nowhere to run one.
+        if (view.RunCode is { } command && IsRunnable(text)) strip.Children.Add(RunButton(command, text));
+        actions.Track(strip, text);
 
         var host = new Panel { Children = { block, strip } };
         host.Classes.Add("markdown-code-host");
@@ -74,9 +78,9 @@ public sealed class CodeBlockActionRenderer(MarkdownView view) : AvaloniaObjectR
     /// whenever the composer cannot take the command, instead of leaving a live-looking control
     /// whose click does nothing. The button unsubscribes when it leaves the tree, so a render per
     /// streamed delta leaves nothing behind on a command the view model owns for the session.
-    Button RunButton(string text) {
+    internal static Button RunButton(ICommand command, string text) {
         var button = ActionButton("Run it", "markdown-code-run");
-        button.Command = view.RunCode;
+        button.Command = command;
         button.CommandParameter = text;
         return button;
     }

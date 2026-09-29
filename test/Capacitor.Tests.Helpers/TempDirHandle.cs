@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Runtime.Versioning;
+
 namespace Capacitor.Tests.Helpers;
 
 /// <summary>
@@ -27,6 +30,17 @@ public readonly record struct TempDirHandle(string Path) {
     public TempDirHandle CreateDir(params ReadOnlySpan<string> segments) =>
         new(Directory.CreateDirectory(PathTo(segments)).FullName);
 
+    /// <summary>Creates a chain of <paramref name="depth"/> nested directories and returns the
+    /// deepest — for a test that needs a path with many components. Each segment is one character,
+    /// so a deep chain still fits inside Windows' 260-character classic path limit.</summary>
+    public TempDirHandle Nest(int depth) {
+        var dir = this;
+
+        for (var i = 0; i < depth; i++) dir = dir.CreateDir("d");
+
+        return dir;
+    }
+
     /// <summary>Writes a file, creating any missing parent directories, and returns its path.</summary>
     public string CreateFile(string relativePath, string content = "") =>
         Write(PathTo(relativePath), content);
@@ -44,6 +58,50 @@ public readonly record struct TempDirHandle(string Path) {
 
         EnsureParent(path);
         File.WriteAllLines(path, lines);
+
+        return path;
+    }
+
+    /// <summary>Writes a file the test will run, owner-executable, and returns its path. A child
+    /// process writes the bytes: a write handle opened here is copied into whatever a concurrent
+    /// test forks, and until that child execs Linux refuses to run the file with ETXTBSY — which
+    /// code that swallows a failed spawn reports as an ordinary miss. The content travels as one
+    /// argument, so it is bounded by the OS limit on one (128 KiB on Linux).</summary>
+    public string CreateExecutable(string relativePath, string content) {
+        var path = PathTo(relativePath);
+
+        if (OperatingSystem.IsWindows()) return Write(path, content);
+
+        // printf is a shell builtin, so this holds whatever the test has done to PATH.
+        return WriteFromChild(path, "printf %s \"$2\" > \"$1\"", content);
+    }
+
+    /// <summary>As <see cref="CreateExecutable"/>, for a copy of an existing binary.</summary>
+    public string CopyExecutable(string source, string relativePath) {
+        var path = PathTo(relativePath);
+
+        if (!OperatingSystem.IsWindows()) return WriteFromChild(path, "/bin/cp \"$2\" \"$1\"", source);
+
+        EnsureParent(path);
+        File.Copy(source, path);
+
+        return path;
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    static string WriteFromChild(string path, string command, string operand) {
+        EnsureParent(path);
+
+        using var writer = Process.Start(new ProcessStartInfo("/bin/sh") {
+            UseShellExecute = false,
+            ArgumentList    = { "-c", command, "sh", path, operand }
+        }) ?? throw new InvalidOperationException($"Could not start /bin/sh to write {path}.");
+
+        writer.WaitForExit();
+
+        if (writer.ExitCode != 0) throw new IOException($"Writing {path} exited {writer.ExitCode}.");
+
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         return path;
     }

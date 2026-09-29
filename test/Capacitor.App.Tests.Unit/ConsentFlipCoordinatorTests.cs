@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// spec §6 coordinator path: capability gate → get → factory guard → identity-conditional v2 put
+/// The coordinator path: capability gate → get → factory guard → identity-conditional v2 put
 /// → two-lock conditional clear, against a real `ConsentFlipClaims` on temp paths (so the actual
 /// TryConsume re-resolve/compare logic is exercised, not a mock of it) plus a scripted
 /// `ILocalControlOps` and a scripted resolver.
@@ -118,7 +118,7 @@ public class ConsentFlipCoordinatorTests {
         await Assert.That(h.Claims.Pending()).IsEquivalentTo([Claim]);
     }
 
-    // P2-6/P1-1: a resurrected claim (crash between a successful put and TryConsume) finds the
+    // A resurrected claim (crash between a successful put and TryConsume) finds the
     // policy ALREADY "prompt" on a later pass — the identity-conditional put still runs (of the
     // UNCHANGED prompt policy, a daemon-side no-op) as the only live proof that the daemon
     // answering Get is genuinely the one named by the currently-resolved identity; only its Ok ack
@@ -144,9 +144,9 @@ public class ConsentFlipCoordinatorTests {
         await Assert.That(put.Policy.PromptTimeoutSeconds).IsEqualTo(30);
     }
 
-    // The rename hazard P1-1 closes: a pinned client answering Get for a daemon the config has
-    // since renamed away from must not have its "already prompt" reading trusted — the identity
-    // check now lives in the put itself, so an identity_mismatch ack retains the claim exactly
+    // The rename hazard: a pinned client answering Get for a daemon the config has since renamed
+    // away from must not have its "already prompt" reading trusted. The identity check lives in
+    // the put itself, so an identity_mismatch ack retains the claim exactly
     // like the factory-flip arm's own ack failure.
     [Test]
     public async Task Default_prompt_identity_mismatch_ack_retains_the_claim() {
@@ -277,12 +277,12 @@ public class ConsentFlipCoordinatorTests {
         h.Coordinator.Start();
         h.Client.StatusSubject.OnNext(Connected(ConsentFlipCoordinator.ConsentV3Capability));
 
-        await Task.Delay(150); // give a wrongly-firing get every chance to appear
+        await WaitUntilAsync(() => h.Coordinator.PassCount >= 1, what: "the pass to settle");
         await Assert.That(h.Ops.GetCalls).IsEqualTo(0);
         await Assert.That(h.Claims.Pending()).IsEquivalentTo([Claim]);
     }
 
-    // ---- §10 rename-injection rows: a rename landing at each point of the sequence must retain ----
+    // ---- rename injection: a rename landing at each point of the sequence must retain ----
 
     [Test]
     public async Task Rename_landing_right_after_the_initial_resolve_retains_the_claim() {
@@ -354,7 +354,7 @@ public class ConsentFlipCoordinatorTests {
         h.Coordinator.Start();
         h.Client.StatusSubject.OnNext(Connected(ConsentFlipCoordinator.ConsentV3Capability));
 
-        await Task.Delay(150); // give a wrongly-firing get every chance to appear
+        await WaitUntilAsync(() => h.Coordinator.PassCount >= 1, what: "the pass to settle");
         await Assert.That(h.Ops.GetCalls).IsEqualTo(0);
         await Assert.That(h.Claims.Pending()).IsEquivalentTo([other]);
     }
@@ -416,7 +416,6 @@ public class ConsentFlipCoordinatorTests {
 
         h.Coordinator.Start();
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the confirm prompt");
-        await Task.Delay(150); // give a wrongly-firing ack every chance to appear
         await Assert.That(h.Store.State.ConsentQuarantineAcked).IsFalse();
 
         var freshSurface = new FakeLifecycleSurface();
@@ -437,7 +436,6 @@ public class ConsentFlipCoordinatorTests {
 
         h.Coordinator.Start();
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the confirm prompt");
-
         await Task.Delay(150); // give a wrongly-firing ack every chance to appear
         await Assert.That(h.Store.State.ConsentQuarantineAcked).IsFalse();
     }

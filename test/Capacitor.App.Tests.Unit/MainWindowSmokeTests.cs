@@ -1,26 +1,32 @@
+using System.Globalization;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
+using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using SvcSystems.UI.Terminal;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Headless rendering acceptance for the deliverable's identity block (spec §8): boot a real
-/// MainWindow against a fake service pre-fed (Connected, snapshot), Show() it, and assert the
-/// rendered text actually contains the daemon name/version/server URL/agent count — not just
-/// that the VM's properties hold the right values (MainWindowViewModelTests already covers
-/// that in isolation).
+/// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
+/// connection and tenant on one line, then the daemon's name, version and agent count.
 public class MainWindowSmokeTests {
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
@@ -43,9 +49,25 @@ public class MainWindowSmokeTests {
             () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
             new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
 
+    // A tip's bindings only resolve once it is parented to its adorner. String tips need no
+    // open; two-line panels do. Always open so callers can treat both the same.
+    static string[] VisibleTipLines(Control control) {
+        ToolTip.SetIsOpen(control, true);
+        Dispatcher.UIThread.RunJobs();
+        var tip = ToolTip.GetTip(control);
+        var lines = tip as string is { } text
+            ? new[] { text }
+            : (tip as StackPanel)!.Children.OfType<TextBlock>()
+                .Where(t => t.IsVisible)
+                .Select(t => t.Text ?? "")
+                .ToArray();
+        ToolTip.SetIsOpen(control, false);
+        return lines;
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task MainWindow_renders_the_connection_word_and_tenant_not_the_identity_block() {
+    public async Task MainWindow_renders_compact_footer_with_server_daemon_and_version() {
         // Rendered text, so no immediate scheduler: an OAPH delivered immediately notifies
         // before its value is readable, and a binding that reads on the notification keeps the
         // stale one. The dispatcher scheduler sets the value first, as it does in the app.
@@ -69,7 +91,9 @@ public class MainWindowSmokeTests {
 
             var texts = string.Join('\n', window.GetVisualDescendants()
                 .OfType<TextBlock>()
-                .Select(t => t.Text ?? ""));
+                .Select(t => t.Text is { Length: > 0 } text
+                    ? text
+                    : string.Concat((t.Inlines ?? []).OfType<Run>().Select(r => r.Text ?? ""))));
 
             window.Close();
             Dispatcher.UIThread.RunJobs(); // flush the deferred Unloaded post so the VM's WhenActivated-scoped subscriptions actually get disposed before the next test runs
@@ -77,26 +101,23 @@ public class MainWindowSmokeTests {
             return texts;
         });
 
-        // The rail footer is the one daemon indicator: word + tenant on screen, the identity
-        // block (name/version/URL) demoted to its hover tooltip — rendered text must NOT
-        // carry it.
         await Assert.That(rendered).Contains("Connected");
-        await Assert.That(rendered).Contains("kurrent");
-        await Assert.That(rendered).DoesNotContain("daemon-a");
+        await Assert.That(rendered).Contains("1 of 5 agents");
         await Assert.That(rendered).DoesNotContain("http://localhost:9999");
+        await Assert.That(rendered).Contains("kurrent");
+        await Assert.That(rendered).Contains("daemon-a");
+        await Assert.That(rendered).Contains("1.2.3");
     }
 
-    /// Regression coverage for a Critical bug found in review: canStart/canRetry were built
-    /// straight off service.Status with no ObserveOn, and ReactiveCommand does NOT reschedule a
-    /// SUPPLIED canExecute onto its outputScheduler (only IsExecuting/ThrownExceptions ride it) —
-    /// so a Status event arriving on a background thread carried CanExecuteChanged, and therefore
-    /// a bound Button's IsEnabled write, onto that same background thread, tripping Avalonia's
-    /// dispatcher thread-affinity check.
+    /// ReactiveCommand does NOT reschedule a SUPPLIED canExecute onto its outputScheduler (only
+    /// IsExecuting/ThrownExceptions ride it), so canStart/canRetry built off service.Status without
+    /// an ObserveOn would carry a background-thread Status event's CanExecuteChanged, and a bound
+    /// Button's IsEnabled write, onto that thread, tripping Avalonia's thread-affinity check.
     ///
     /// Deliberately NOT wrapped in AvaloniaSession.WithImmediateRxScheduler: that swaps
     /// RxSchedulers.MainThreadScheduler for ImmediateScheduler.Instance, which would deliver the
     /// background-thread OnNext synchronously on the CALLING (background) thread regardless of
-    /// whether an ObserveOn is present — it could never catch this bug either way. This test
+    /// whether an ObserveOn is present, so it could never catch a missing one. This test
     /// needs the REAL Avalonia-dispatcher scheduler that UseReactiveUI() installs for the whole
     /// headless session, so a background-thread publish actually has to cross a real dispatcher
     /// boundary to reach the Button.
@@ -136,22 +157,18 @@ public class MainWindowSmokeTests {
         await Assert.That(startEnabledAfter).IsTrue();
     }
 
-    /// Regression coverage for a Critical bug found in review: RunStartAsync did not catch
-    /// OperationCanceledException, but DaemonClientService.StartDaemonAsync deliberately
-    /// rethrows it when the caller-supplied ct fires mid-wait (App's `_shutdown` token — spec
-    /// §5, "ct abandons the WAIT, not the started daemon"). App.OnShutdownRequested cancels
-    /// that very token on Cmd+Q while a start may still be in flight. Nothing subscribes to
-    /// StartDaemonCommand.ThrownExceptions, so ReactiveCommand's own default handler
-    /// (decompile-verified: ReactiveUI.RxState.DefaultExceptionHandler) reschedules an
-    /// UnhandledErrorException onto RxSchedulers.MainThreadScheduler — the still-alive
-    /// dispatcher — crashing the app.
+    /// DaemonClientService.StartDaemonAsync deliberately rethrows OperationCanceledException when
+    /// the caller-supplied ct fires mid-wait (App's `_shutdown` token: ct abandons the WAIT, not the
+    /// started daemon), and App.OnShutdownRequested cancels that token on Cmd+Q while a start may
+    /// be in flight. Nothing subscribes to StartDaemonCommand.ThrownExceptions, so an uncaught OCE
+    /// in RunStartAsync would reach ReactiveUI.RxState.DefaultExceptionHandler, which reschedules
+    /// an UnhandledErrorException onto the still-alive dispatcher and crashes the app.
     ///
     /// Deliberately NOT wrapped in WithImmediateRxScheduler, for the same reason as the sibling
     /// test above: only a REAL dispatcher round-trip (via Dispatcher.UIThread.RunJobs(), which
-    /// decompile-verified drains Avalonia's dispatcher queue including jobs enqueued mid-drain,
-    /// and re-throws an unhandled job exception out of the call since nothing subscribes to
-    /// Dispatcher.UIThread.UnhandledException) actually reproduces — and proves the fix for — a
-    /// scheduler-rescheduled exception.
+    /// drains Avalonia's dispatcher queue including jobs enqueued mid-drain, and re-throws an
+    /// unhandled job exception out of the call since nothing subscribes to
+    /// Dispatcher.UIThread.UnhandledException) reproduces a scheduler-rescheduled exception.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Quit_during_start_does_not_crash() {
@@ -247,7 +264,7 @@ public class MainWindowSmokeTests {
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 
-    // ---- Toast overlay (spec §11: WindowNotificationManager replaces the inline banner) ----
+    // ---- Toast overlay (WindowNotificationManager) ----
     //
     // Proves the real production wiring end to end: MainWindow.Notifier assigned exactly as
     // App.BuildAndShowMainWindow does, a WindowNotificationManager actually constructible and
@@ -278,18 +295,17 @@ public class MainWindowSmokeTests {
         await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 
-    // ---- Activity gate (spec §4) ----
+    // ---- Activity gate ----
     //
     // Proves the real production wiring end to end — the Activity flyout's open state, the
-    // launcher pane being on screen (Sessions surface with NO workspace open), and the window's
+    // launcher pane being on screen (NO workspace open), and the window's
     // own IsVisible (Show()/Hide()) all drive ActivityViewModel.OnTabVisibleChanged through the
     // code-behind, not just that the ViewModel reacts correctly in isolation
     // (ActivityViewModelTests already covers that). Each gate flips the polling off on its own;
     // each TRUE transition issues exactly one more immediate read, awaited via
     // PendingRefreshForTesting — the VM's stat+read hops off the UI thread, so RunJobs() alone no
-    // longer guarantees the read has landed. Swapping the pane under the popup (leaving Sessions,
-    // or opening a workspace) CLOSES the flyout, so coming back does not auto-resume — the feed
-    // reopens by click.
+    // longer guarantees the read has landed. Opening a workspace under the popup CLOSES the
+    // flyout, so coming back does not auto-resume — the feed reopens by click.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Activity_polls_only_while_open_on_the_launcher_pane_in_a_visible_window() {
@@ -317,19 +333,6 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await activity.PendingRefreshForTesting!;
             var opened = reader.ReadCalls;
-
-            vm.ShowHomeCommand.Execute().Subscribe(); // off the Sessions surface (hidden Home)
-            Dispatcher.UIThread.RunJobs();
-            var onHome = reader.ReadCalls;
-
-            vm.ShowSessionsCommand.Execute().Subscribe();
-            Dispatcher.UIThread.RunJobs();
-            var backClosed = reader.ReadCalls; // the swap closed the feed — no auto-resume
-
-            flyout.ShowAt(button);
-            Dispatcher.UIThread.RunJobs();
-            await activity.PendingRefreshForTesting!;
-            var reopened = reader.ReadCalls;
 
             vm.OpenSession("0123456789abcdef0123456789abcdef"); // workspace replaces the launcher
             Dispatcher.UIThread.RunJobs();
@@ -361,19 +364,16 @@ public class MainWindowSmokeTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (closed, opened, onHome, backClosed, reopened, workspaceOpen, launcherBack, afterReopen, afterHide, afterReshow);
+            return (closed, opened, workspaceOpen, launcherBack, afterReopen, afterHide, afterReshow);
         });
 
         await Assert.That(reads.closed).IsEqualTo(0);
         await Assert.That(reads.opened).IsEqualTo(1); // opening on the launcher: one immediate read
-        await Assert.That(reads.onHome).IsEqualTo(1); // leaving Sessions is a FALSE transition
-        await Assert.That(reads.backClosed).IsEqualTo(1);
-        await Assert.That(reads.reopened).IsEqualTo(2);
-        await Assert.That(reads.workspaceOpen).IsEqualTo(2); // a workspace opening is a FALSE transition
-        await Assert.That(reads.launcherBack).IsEqualTo(2);
-        await Assert.That(reads.afterReopen).IsEqualTo(3);
-        await Assert.That(reads.afterHide).IsEqualTo(3); // hiding is a FALSE transition
-        await Assert.That(reads.afterReshow).IsEqualTo(4);
+        await Assert.That(reads.workspaceOpen).IsEqualTo(1); // a workspace opening is a FALSE transition
+        await Assert.That(reads.launcherBack).IsEqualTo(1);
+        await Assert.That(reads.afterReopen).IsEqualTo(2);
+        await Assert.That(reads.afterHide).IsEqualTo(2); // hiding is a FALSE transition
+        await Assert.That(reads.afterReshow).IsEqualTo(3);
     }
 
     /// What the OS does when another app takes focus. The platform layer's Deactivated hook is
@@ -440,7 +440,7 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// The surface swap itself (spec §3) — the XAML side of what WorkspaceNavigationTests pins on
+    /// The surface swap itself: the XAML side of what WorkspaceNavigationTests pins on
     /// the ViewModel. WorkspaceView is materialized from a template rather than always present, so
     /// this also proves the terminal control is CONSTRUCTED only once a workspace exists; closing
     /// it lands on the Sessions surface's placeholder, never back on Home.
@@ -464,8 +464,6 @@ public class MainWindowSmokeTests {
                 Control Surface(string name) =>
                     window.GetVisualDescendants().OfType<Control>().First(c => c.Name == name);
 
-                var bootsOnSessions = Surface("SessionsSurface").IsVisible;
-                var homeHiddenAtBoot = Surface("HomeSurface").IsVisible;
                 var launcherAtBoot = Surface("LauncherPane").IsVisible;
                 var workspacesBefore = window.GetVisualDescendants().OfType<WorkspaceView>().Count();
 
@@ -479,42 +477,48 @@ public class MainWindowSmokeTests {
 
                 vm.CloseWorkspace();
                 Dispatcher.UIThread.RunJobs();
-                var stillSessions = Surface("SessionsSurface").IsVisible;
                 var launcherBack = Surface("LauncherPane").IsVisible;
                 var workspacesAfter = window.GetVisualDescendants().OfType<WorkspaceView>().Count();
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
 
-                return (bootsOnSessions, homeHiddenAtBoot, launcherAtBoot, workspacesBefore, launcherGone,
-                    OpenedCount: opened.Count, boundToWorkspace, stillSessions, launcherBack, workspacesAfter);
+                return (launcherAtBoot, workspacesBefore, launcherGone,
+                    OpenedCount: opened.Count, boundToWorkspace, launcherBack, workspacesAfter);
             });
 
-            await Assert.That(swap.bootsOnSessions).IsTrue();
-            await Assert.That(swap.homeHiddenAtBoot).IsFalse(); // Home stays in the tree, hidden
             await Assert.That(swap.launcherAtBoot).IsTrue(); // the empty state IS the launcher
             await Assert.That(swap.workspacesBefore).IsEqualTo(0); // nothing terminal-shaped until a session is opened
             await Assert.That(swap.launcherGone).IsFalse();
             await Assert.That(swap.OpenedCount).IsEqualTo(1);
             await Assert.That(swap.boundToWorkspace).IsTrue();
-            await Assert.That(swap.stillSessions).IsTrue();
             await Assert.That(swap.launcherBack).IsTrue();
             await Assert.That(swap.workspacesAfter).IsEqualTo(0);
         });
     }
 
-    /// A shown MainWindow on the Sessions surface whose rail holds two rows, "Fix the flaky test"
-    /// and "Leave this one alone", under one worktree named feature-x.
-    static (MainWindowViewModel Vm, MainWindow Window) RailWindow() {
+    /// A shown MainWindow whose rail holds two rows, "Fix the flaky test"
+    /// and "Leave this one alone", under one worktree named feature-x. A sibling worktree
+    /// adds one more row under that name.
+    static (MainWindowViewModel Vm, MainWindow Window) RailWindow(
+            bool awaitingInput = false, int? liveSubagents = null, string? model = null, string? siblingWorktree = null,
+            string? firstStatus = null, IReadOnlySet<string>? pendingIds = null, PendingLaunchDto? pending = null) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        if (pending is not null) service.Pending.AddOrUpdate(pending);
         service.Agents.AddOrUpdate(new AgentStatusDto(
-            "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-            null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test"));
+            "a1", "agent", "claude", "/dev/alpha/wt/feature-x", firstStatus ?? "Running",
+            null, null, null, DateTime.UtcNow, model, null, Title: "Fix the flaky test",
+            AwaitingInput: awaitingInput ? true : null, LiveSubagents: liveSubagents));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
             null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
+        if (siblingWorktree is not null)
+            service.Agents.AddOrUpdate(new AgentStatusDto(
+                "a3", "agent", "claude", $"/dev/alpha/wt/{siblingWorktree}", "Running",
+                null, null, null, DateTime.UtcNow, null, null, Title: "Sibling work",
+                AwaitingInput: awaitingInput ? true : null));
 
         var (actions, _) = NewActions(service);
         MainWindowViewModel? vm = null;
@@ -525,23 +529,22 @@ public class MainWindowSmokeTests {
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
             resolveRepoRoot, null, null, TimeProvider.System);
         var rail = new SessionRailViewModel(
-            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System, resolveRepoRoot);
+            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System, resolveRepoRoot,
+            agentsWithPending: pendingIds is null ? null : Observable.Return(pendingIds));
         vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
         var window = new MainWindow { DataContext = vm };
         window.Show();
         Dispatcher.UIThread.RunJobs();
 
-        vm.ShowSessionsCommand.Execute().Subscribe();
-        Dispatcher.UIThread.RunJobs();
         return (vm, window);
     }
 
     static Button RailRow(MainWindow window, string text) => window.GetVisualDescendants().OfType<Button>()
         .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
 
-    /// The rail's own click path (spec §3): a session row rendered by SessionRailView carries the
-    /// VM's OpenCommand, and executing it opens that agent's workspace on the Sessions surface.
+    /// The rail's own click path: a session row rendered by SessionRailView carries the
+    /// VM's OpenCommand, and executing it opens that agent's workspace.
     ///
     /// Also pins the selection highlight as RENDERED state, not just as a bound class. A row's
     /// resting Background must come from the `railRow` class style: a local `Background` attribute
@@ -561,7 +564,7 @@ public class MainWindowSmokeTests {
                 Row("Fix the flaky test").Command!.Execute(null);
                 Dispatcher.UIThread.RunJobs();
 
-                var result = (vm.IsSessionsView, vm.CurrentWorkspace?.AgentId,
+                var result = (vm.CurrentWorkspace?.AgentId,
                     SelectedClass: Row("Fix the flaky test").Classes.Contains("selected"),
                     SelectedAlpha: Alpha(Row("Fix the flaky test")),
                     SiblingAlpha: Alpha(Row("Leave this one alone")),
@@ -571,8 +574,7 @@ public class MainWindowSmokeTests {
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
-            await Assert.That(opened.Item1).IsTrue();
-            await Assert.That(opened.Item2).IsEqualTo("a1");
+            await Assert.That(opened.AgentId).IsEqualTo("a1");
             await Assert.That(opened.SelectedClass).IsTrue();
             await Assert.That(opened.SelectedAlpha).IsGreaterThan((byte)0); // the highlight actually paints
             await Assert.That(opened.SiblingAlpha).IsEqualTo((byte)0); // an unopened row stays transparent
@@ -580,8 +582,28 @@ public class MainWindowSmokeTests {
         });
     }
 
+    /// A parent that stopped to wait for the user while its subagents run keeps the pulsing dot
+    /// visible beside the attention badge — the one state the pulse exists to show.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_dot_stays_visible_beside_the_wait_badge_while_subagents_run() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var visible = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(awaitingInput: true, liveSubagents: 2);
+                var row = RailRow(window, "Fix the flaky test");
+                var dot = row.GetVisualDescendants().OfType<Ellipse>().First();
+                var result = dot.IsVisible;
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(visible).IsTrue();
+        });
+    }
+
     /// A selected row must read as selected next to a hovered one: hover paints the raised surface
-    /// brush, so the selection needs its own background, an accent edge and a heavier title.
+    /// brush, so the selection needs its own background and a heavier title, not a leading edge
+    /// that would inset that row past its siblings.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Selected_row_is_distinct_from_a_hovered_row() {
@@ -601,19 +623,224 @@ public class MainWindowSmokeTests {
                     SelectedEdge: selected.BorderThickness.Left,
                     SiblingEdge: sibling.BorderThickness.Left,
                     SelectedWeight: Title(selected).FontWeight,
-                    SiblingWeight: Title(sibling).FontWeight);
+                    SiblingWeight: Title(sibling).FontWeight,
+                    TitleTip: ToolTip.GetTip(Title(selected)));
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
             await Assert.That(seen.SelectedBackground).IsNotNull();
             await Assert.That(seen.SelectedBackground).IsNotEqualTo(seen.Hover);
-            await Assert.That(seen.SelectedEdge).IsGreaterThanOrEqualTo(3);
+            await Assert.That(seen.SelectedEdge).IsEqualTo(0);
             await Assert.That(seen.SiblingEdge).IsEqualTo(0);
             await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
             await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
+            await Assert.That(seen.TitleTip).IsEqualTo("Fix the flaky test");
         });
     }
+
+    /// The worktree header is as tall as its attention badge while expanded, so collapsing onto
+    /// the badge does not grow the row.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Collapsing_a_waiting_worktree_does_not_grow_the_header() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(awaitingInput: true);
+                var header = RailRow(window, "feature-x");
+                var expanded = header.Bounds.Height;
+                header.Command!.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                var collapsed = header.Bounds.Height;
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return (expanded, collapsed);
+            });
+            await Assert.That(seen.expanded).IsGreaterThanOrEqualTo(32);
+            await Assert.That(seen.collapsed).IsEqualTo(seen.expanded);
+        });
+    }
+
+    /// The count sits tight against the chevron on the right edge, expanded or collapsed.
+    /// Collapsed, the status mark sits in a fixed column, so worktrees whose names differ in
+    /// length show their statuses at one x.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Worktree_statuses_line_up_beside_a_tight_count() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(awaitingInput: true, siblingWorktree: "x");
+                window.UpdateLayout();
+                var header = RailRow(window, "feature-x");
+                var sibling = RailRow(window, "x");
+                double Left(Control control) => control.TranslatePoint(default, window)!.Value.X;
+                double Right(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), window)!.Value.X;
+                Avalonia.Controls.Shapes.Path Chevron(Button row) => row.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First(p => p.IsVisible && p.StrokeThickness == 1.8);
+                TextBlock Count(Button row, string text) => row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == text);
+                AgentStatusMark Mark(Button row) => row.GetVisualDescendants().OfType<AgentStatusMark>().First(m => m.IsVisible);
+                var label = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "feature-x");
+                var branch = header.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First(p => p.StrokeThickness == 1.5);
+                var expandedGap = Left(Chevron(header)) - Right(Count(header, "2"));
+                header.Command!.Execute(null);
+                sibling.Command!.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var result = (
+                    ExpandedGap: expandedGap,
+                    CollapsedGap: Left(Chevron(header)) - Right(Count(header, "2")),
+                    MarkOffset: Math.Abs(Left(Mark(header)) - Left(Mark(sibling))),
+                    MarkClearsCount: Left(Count(header, "2")) - Right(Mark(header)),
+                    ChevronOffset: Math.Abs(Left(Chevron(header)) - Left(Chevron(sibling))),
+                    BranchBeforeTitle: Right(branch) <= Left(label),
+                    Parenthetical: header.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "(2)"));
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.ExpandedGap).IsGreaterThan(0);
+            await Assert.That(seen.ExpandedGap).IsLessThan(8);
+            await Assert.That(seen.CollapsedGap).IsGreaterThan(0);
+            await Assert.That(seen.CollapsedGap).IsLessThan(8);
+            await Assert.That(seen.MarkOffset).IsLessThan(0.5);
+            await Assert.That(seen.MarkClearsCount).IsGreaterThan(0);
+            await Assert.That(seen.ChevronOffset).IsLessThan(0.5);
+            await Assert.That(seen.BranchBeforeTitle).IsTrue();
+            await Assert.That(seen.Parenthetical).IsFalse();
+        });
+    }
+
+    /// The vendor mark, the status word, and the age share one baseline. The age has no extra
+    /// padding, or it sits below that line.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Vendor_mark_model_chip_and_running_time_share_the_status_line() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(model: "opus");
+                window.UpdateLayout();
+                var row = RailRow(window, "Fix the flaky test");
+                var mark = row.GetVisualDescendants().OfType<AgentStatusMark>().First();
+                var word = mark.FindControl<TextBlock>("StatusWord")!;
+                var vendor = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("vendorMark"));
+                var chip = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("railChip"));
+                var label = chip.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railChipLabel"));
+                var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                ToolTip.SetIsOpen(vendor, true);
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var tip = (StackPanel)ToolTip.GetTip(vendor)!;
+                var tipLines = tip.Children.OfType<TextBlock>().Select(t => t.Text).ToArray();
+                double Center(Control control) =>
+                    control.TranslatePoint(new Point(0, control.Bounds.Height / 2), row)!.Value.Y;
+                double Baseline(TextBlock text) =>
+                    text.TranslatePoint(new Point(0, text.TextLayout.Baseline), row)!.Value.Y;
+                double Left(Control control) => control.TranslatePoint(default, row)!.Value.X;
+                double Right(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), row)!.Value.X;
+                var glyph = mark.FindControl<Panel>("Glyph")!;
+                var result = (
+                    Word: Center(word),
+                    WordBaseline: Baseline(word),
+                    MetaBaseline: Baseline(meta),
+                    Vendor: Center(vendor),
+                    Glyph: Center(glyph),
+                    Model: Center(label),
+                    Meta: Center(meta),
+                    VendorName: AutomationProperties.GetName(vendor),
+                    VendorLeft: Left(vendor),
+                    MarkLeft: Left(mark),
+                    MetaGap: row.Bounds.Width - Right(meta),
+                    ChipToMeta: Left(meta) - Right(chip),
+                    TipVendor: tipLines[0],
+                    TipModel: tipLines[1],
+                    HasMark: vendor.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Any(),
+                    ChipAlign: chip.VerticalAlignment,
+                    MetaAlign: meta.VerticalAlignment);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.VendorName).IsEqualTo("Claude Code");
+            await Assert.That(seen.TipVendor).IsEqualTo("Claude Code");
+            await Assert.That(seen.TipModel).IsEqualTo("opus");
+            await Assert.That(seen.VendorLeft).IsLessThan(seen.MarkLeft);
+            await Assert.That(seen.MetaGap).IsLessThan(16);
+            await Assert.That(seen.ChipToMeta).IsGreaterThan(24);
+            await Assert.That(seen.HasMark).IsTrue();
+            await Assert.That(Math.Abs(seen.WordBaseline - seen.MetaBaseline)).IsLessThan(1);
+            await Assert.That(Math.Abs(seen.Word - seen.Vendor)).IsLessThan(2);
+            await Assert.That(Math.Abs(seen.Word - seen.Glyph)).IsLessThan(2);
+            await Assert.That(Math.Abs(seen.Word - seen.Model)).IsLessThan(2);
+            await Assert.That(Math.Abs(seen.Word - seen.Meta)).IsLessThan(2);
+            await Assert.That(seen.ChipAlign).IsEqualTo(VerticalAlignment.Center);
+            await Assert.That(seen.MetaAlign).IsEqualTo(VerticalAlignment.Center);
+        });
+    }
+
+    /// A raw daemon status and an unknown launch stage are open text. The row caps both so they
+    /// stay inside the rail; "Needs you" and a known stage still fit whole.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_status_and_launch_stage_stay_inside_the_row() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            const string longStatus = "synchronizing_remote_workspace_credentials_before_the_session_can_start";
+            const string longStage = "waiting_for_the_runtime_to_finish_its_handshake_and_publish_the_session";
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow(
+                    firstStatus: longStatus,
+                    pendingIds: new HashSet<string> { "a2" },
+                    pending: new PendingLaunchDto("p1", "claude", "/dev/alpha", "Pending launch", DateTime.UtcNow, longStage));
+                window.UpdateLayout();
+
+                bool Trimmed(TextBlock block) => NaturalWidth(block) > block.Bounds.Width + 4;
+                double Slack(TextBlock block) => block.Bounds.Width - NaturalWidth(block);
+                double Right(Control control, Visual relative) =>
+                    control.TranslatePoint(new Point(control.Bounds.Width, 0), relative)!.Value.X;
+                double Left(Control control, Visual relative) => control.TranslatePoint(default, relative)!.Value.X;
+                double CenterY(Control control, Visual relative) =>
+                    control.TranslatePoint(new Point(0, control.Bounds.Height / 2), relative)!.Value.Y;
+
+                var longRow = RailRow(window, "Fix the flaky test");
+                var needsYouRow = RailRow(window, "Leave this one alone");
+                var pendingRow = RailRow(window, "Pending launch");
+                var longWord = longRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
+                var needsYouWord = needsYouRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
+                var pendingMeta = pendingRow.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var pendingMark = pendingRow.GetVisualDescendants().OfType<AgentStatusMark>().First();
+                var stageWidth = NaturalWidth(pendingMeta, LaunchStages.Label("session_created"));
+                var result = (
+                    LongTrimmed: Trimmed(longWord),
+                    LongInside: Right(longWord, longRow) <= longRow.Bounds.Width + 1,
+                    NeedsYou: needsYouWord.Text,
+                    NeedsYouSlack: Slack(needsYouWord),
+                    StageWidth: stageWidth,
+                    MetaMax: pendingMeta.MaxWidth,
+                    MetaText: pendingMeta.Text,
+                    MetaTip: ToolTip.GetTip(pendingMeta) as string,
+                    MetaTrimmed: Trimmed(pendingMeta),
+                    MetaInside: Right(pendingMeta, pendingRow) <= pendingRow.Bounds.Width + 1,
+                    MarkClearsMeta: Math.Abs(CenterY(pendingMark, pendingRow) - CenterY(pendingMeta, pendingRow)) > 8
+                        || Right(pendingMark, pendingRow) <= Left(pendingMeta, pendingRow) + 1);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.LongTrimmed).IsTrue();
+            await Assert.That(seen.LongInside).IsTrue();
+            await Assert.That(seen.NeedsYou).IsEqualTo("Needs you");
+            await Assert.That(seen.NeedsYouSlack).IsGreaterThan(-4);
+            await Assert.That(seen.StageWidth).IsLessThanOrEqualTo(seen.MetaMax);
+            await Assert.That(seen.MetaText).IsEqualTo(LaunchStages.Label(longStage));
+            await Assert.That(seen.MetaTip).IsEqualTo(seen.MetaText);
+            await Assert.That(seen.MetaTrimmed).IsTrue();
+            await Assert.That(seen.MetaInside).IsTrue();
+            await Assert.That(seen.MarkClearsMeta).IsTrue();
+        });
+    }
+
+    static double NaturalWidth(TextBlock block, string? text = null) =>
+        new FormattedText(
+            text ?? block.Text ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            new Typeface(block.FontFamily, block.FontStyle, block.FontWeight), block.FontSize, null).Width;
 
     /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
     /// which drops an open workspace back to the launcher (the new-session empty state).
@@ -656,7 +883,119 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// The tabless boot (spec §3, revised): the window opens on the Sessions surface — rail plus
+    /// Command+R runs the header refresh, including while the terminal has focus. Linux and Windows
+    /// also bind Ctrl+R, except while the terminal has focus, where that key stays unhandled so the
+    /// terminal keeps reverse-i-search. Ctrl+Shift+R refreshes there too. The menu stays Ctrl+R and
+    /// stays enabled. The shortcut stays disabled on the launcher, before a session id, and while a
+    /// refresh the user asked for is running. A poll does not count as that.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Refresh_shortcut_runs_the_open_works_refresh_and_follows_the_button() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            const string id = "0123456789abcdef0123456789abcdef";
+            var service = new FakeDaemonClientService();
+            var (actions, _) = NewActions(service);
+            var source = new FakeWorkContextSource();
+            var time = new FakeTimeProvider();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                workspaceFactory: agentId => new WorkspaceViewModel(
+                    agentId, service, actions, new FakeTerminalAttachClientFactory().Factory,
+                    () => new FakeTerminalSurface(), time, new RecordingOpener(), new FakePermissionService(),
+                    source, new ScriptedLocalControlOps(), new NoAttachmentUploader()));
+            var window = new MainWindow { DataContext = vm };
+            var windowMenu = new AppMenuBar(new RecordingOpener(), () => [], () => null).Build(window)
+                .Items.OfType<NativeMenuItem>().Single(i => i.Header == "Window").Menu!;
+            var refreshItem = windowMenu.Items.OfType<NativeMenuItem>().Single(i => i.Header == "Refresh");
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            try {
+                var bindings = window.KeyBindings.Where(k => k.Gesture is { Key: Key.R }).ToArray();
+                bool Bound(KeyModifiers mod) => bindings.Any(k => k.Gesture!.KeyModifiers == mod);
+                bool Can() => bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Meta).Command!.CanExecute(null);
+                var yield = new RefreshUnlessTerminalFocused(window);
+
+                await Assert.That(Bound(KeyModifiers.Meta)).IsTrue();
+                await Assert.That(Bound(KeyModifiers.Control)).IsEqualTo(RefreshShortcut.UsesControl);
+                await Assert.That(Bound(KeyModifiers.Control | KeyModifiers.Shift)).IsEqualTo(RefreshShortcut.UsesControl);
+                await Assert.That(bindings.Where(k => k.Gesture!.KeyModifiers != KeyModifiers.Control)
+                    .All(k => ReferenceEquals(k.Command, vm.RefreshWorkCommand))).IsTrue();
+                if (RefreshShortcut.UsesControl) {
+                    await Assert.That(bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Control).Command)
+                        .IsNotSameReferenceAs(vm.RefreshWorkCommand);
+                }
+                await Assert.That(refreshItem.Command).IsSameReferenceAs(vm.RefreshWorkCommand);
+                await Assert.That(refreshItem.Gesture).IsEqualTo(RefreshShortcut.Primary);
+                await Assert.That(Can()).IsFalse();
+                await Assert.That(refreshItem.IsEnabled).IsFalse();
+
+                vm.OpenSession(id);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(Can()).IsFalse();
+
+                service.Agents.AddOrUpdate(WorkspaceFixtures.Agent(id, "claude", true, "/repo/myproj", sessionId: id));
+                var work = ((WorkspaceViewModel)vm.CurrentWorkspace!).WorkContext;
+                await work.PendingReadForTesting!;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(work.HasSession).IsTrue();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(refreshItem.IsEnabled).IsTrue();
+
+                var tip = VisibleTipLines(window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "RefreshButton"));
+                await Assert.That(tip).Contains(WorkContextViewModel.RefreshShortcutCaption);
+
+                await Assert.That(yield.CanExecute(null)).IsTrue();
+                var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
+                workspace.ShowTerminalCommand.Execute().Subscribe();
+                Dispatcher.UIThread.RunJobs();
+                var terminal = window.GetVisualDescendants().OfType<TerminalControl>().Single();
+                await Assert.That(terminal.Focus()).IsTrue();
+                await Assert.That(yield.CanExecute(null)).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(refreshItem.IsEnabled).IsTrue();
+                var passedThrough = new KeyEventArgs { Key = Key.R, KeyModifiers = KeyModifiers.Control };
+                new KeyBinding { Gesture = new KeyGesture(Key.R, KeyModifiers.Control), Command = yield }.TryHandle(passedThrough);
+                await Assert.That(passedThrough.Handled).IsFalse();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                workspace.ShowChatCommand.Execute().Subscribe();
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(yield.CanExecute(null)).IsTrue();
+
+                var gate = source.Gate();
+                var beforePoll = source.Requested.Count;
+                time.Advance(WorkContextViewModel.PollInterval);
+                await Assert.That(work.IsReading).IsTrue();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(source.Requested.Count).IsEqualTo(beforePoll + 1);
+
+                bindings[0].Command!.Execute(null);
+                await Assert.That(work.IsRefreshing).IsTrue();
+                await Assert.That(source.Requested.Count).IsEqualTo(beforePoll + 1);
+                await Assert.That(Can()).IsFalse();
+                await Assert.That(refreshItem.IsEnabled).IsFalse();
+
+                var parked = work.PendingReadForTesting!;
+                gate.SetResult(WorkContextRead.Of(WorkContextReadKind.SessionUnknown));
+                await parked;
+                if (work.PendingReadForTesting is { } follow && !ReferenceEquals(follow, parked)) await follow;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(work.IsRefreshing).IsFalse();
+                await Assert.That(Can()).IsTrue();
+                await Assert.That(refreshItem.IsEnabled).IsTrue();
+
+                vm.CloseWorkspace();
+                await Assert.That(Can()).IsFalse();
+                await Assert.That(refreshItem.IsEnabled).IsFalse();
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
+
+    /// The tabless boot: the window opens on the Sessions surface — rail plus
     /// the launcher pane — with no TabControl anywhere in its visual tree; the rail's New session
     /// row is the deselect-to-launcher affordance.
     [Test]
@@ -698,29 +1037,30 @@ public class MainWindowSmokeTests {
 
             var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
             await Assert.That(help.IsEnabled).IsTrue();
-            // It leads the right-docked footer stack; the hosted-count text follows it.
-            await Assert.That(((StackPanel)help.Parent!).Children[0]).IsSameReferenceAs(help);
+            await Assert.That(DockPanel.GetDock(help)).IsEqualTo(Dock.Right);
             await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
             await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
 
-            // Opened, because a MenuFlyout's items only join a tree — and so only bind — once its
-            // presenter exists; unopened they all read disabled, which Documentation below catches.
-            var flyout = (MenuFlyout)help.Flyout!;
+            // Opened, because Flyout content only joins a tree — and so only binds — once its
+            // presenter exists; unopened the report rows would all read enabled from unset CanExecute.
+            var flyout = (Flyout)help.Flyout!;
             flyout.ShowAt(help);
             Dispatcher.UIThread.RunJobs();
-            var items = flyout.Items.OfType<MenuItem>().ToList();
-            await Assert.That(items.Select(i => (string)i.Header!)).IsEquivalentTo(["Documentation", "Report a bug…", "Send feedback…"]);
-            // A command's CanExecute reaches a MenuItem through IsEffectivelyEnabled; IsEnabled
-            // stays at its unset true, so reading it here would assert nothing.
-            await Assert.That(items[0].IsEffectivelyEnabled).IsTrue();
-            await Assert.That(items[1].IsEffectivelyEnabled).IsFalse();
-            await Assert.That(items[2].IsEffectivelyEnabled).IsFalse();
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var docs = rail.FindControl<Button>("RailHelpDocsButton")!;
+            var bug = rail.FindControl<Button>("RailHelpBugButton")!;
+            var feedback = rail.FindControl<Button>("RailHelpFeedbackButton")!;
+            await Assert.That(docs.Content).IsEqualTo("Documentation");
+            await Assert.That(bug.Content).IsEqualTo("Report a bug…");
+            await Assert.That(feedback.Content).IsEqualTo("Send feedback…");
+            await Assert.That(docs.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(bug.IsEffectivelyEnabled).IsFalse();
+            await Assert.That(feedback.IsEffectivelyEnabled).IsFalse();
 
-            // The class reaching the presenter is only the positive control — it lands there
-            // whether or not a style matches it. The corner radius is what pins the kit chrome.
-            var presenter = items[0].FindAncestorOfType<MenuFlyoutPresenter>()!;
+            var presenter = docs.FindAncestorOfType<FlyoutPresenter>()!;
             await Assert.That(presenter.Classes.Contains("kcapPanel")).IsTrue();
             await Assert.That(presenter.CornerRadius).IsEqualTo(new CornerRadius(12));
+            await Assert.That(docs.Classes.Contains("kcapGhost")).IsTrue();
 
             flyout.Hide();
             Dispatcher.UIThread.RunJobs();
@@ -730,15 +1070,216 @@ public class MainWindowSmokeTests {
         }
     });
 
-    /// 310 of rail plus 400 of pane must never squeeze the center column to nothing.
+    /// Hover copy names what each footer fragment is. Extra info the compact row dropped (URL,
+    /// lane diagnostic, pending-update copy) sits on the lighter line; the fragment's name is
+    /// the darker caption under it, or the whole tip when there is nothing extra. Visible
+    /// strings (org slug, daemon name, semver) do not repeat. Same dispatcher scheduler as the
+    /// compact-footer render test: an immediate OAPH notifies before its value is readable and
+    /// a binding keeps the stale one.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task MainWindow_pins_its_minimum_width_to_the_default_width() {
+    public async Task Rail_footer_tooltips_identify_org_daemon_version_and_server() {
+        var tips = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "daemon-a", version: "1.2.3+abc", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 1, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent", laneStatus: lane.Status);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var connection = rail.FindControl<StackPanel>("RailConnectionStatus")!;
+            var tenant = rail.FindControl<TextBlock>("RailTenantText")!;
+            var daemon = rail.FindControl<TextBlock>("RailDaemonNameText")!;
+            var version = rail.FindControl<TextBlock>("RailVersionText")!;
+            var agents = rail.FindControl<TextBlock>("RailAgentCountText")!;
+            var connectionLines = VisibleTipLines(connection);
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
+            Dispatcher.UIThread.RunJobs();
+            var connectionDetailLines = VisibleTipLines(connection);
+            var result = (
+                ConnectionLines: connectionLines,
+                ConnectionDetailLines: connectionDetailLines,
+                TenantLines: VisibleTipLines(tenant),
+                TenantText: tenant.Text,
+                DaemonLines: VisibleTipLines(daemon),
+                DaemonText: daemon.Text,
+                VersionText: version.Text,
+                VersionLines: VisibleTipLines(version),
+                AgentLines: VisibleTipLines(agents));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return result;
+        });
+
+        await Assert.That(tips.ConnectionLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.ConnectionDetailLines).IsEquivalentTo(
+            new[] { "diagnostic-marker", MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.TenantLines).IsEquivalentTo(
+            new[] { "http://localhost:9999", MainWindowViewModel.ServerUrlTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.TenantText).IsEqualTo("kurrent");
+        await Assert.That(tips.DaemonLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.DaemonNameTip }, CollectionOrdering.Matching);
+        await Assert.That(tips.DaemonText).IsEqualTo("daemon-a");
+        await Assert.That(tips.VersionText).IsEqualTo("1.2.3");
+        await Assert.That(tips.VersionLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.VersionIdentityTip }, CollectionOrdering.Matching);
+        await Assert.That(string.Join('\n', tips.VersionLines)).DoesNotContain("1.2.3+abc");
+        await Assert.That(tips.AgentLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.AgentCountTip }, CollectionOrdering.Matching);
+    }
+
+    /// A dot belongs BETWEEN two fragments, never dangling: the count drops out the moment the
+    /// attach does (the service keeps its snapshot, so name and version stay), and its separator
+    /// has to leave with it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
+        var (connected, detached) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "daemon-a", version: "1.2.3", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 1, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent");
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var row = window.FindDescendantOfType<SessionRailView>()!.FindControl<Panel>("RailDaemonRow")!;
+            string[] Fragments() => row.Children.OfType<TextBlock>()
+                .Where(t => t.IsVisible).Select(t => t.Text ?? "").ToArray();
+
+            var whileConnected = Fragments();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            Dispatcher.UIThread.RunJobs();
+            var whileDetached = Fragments();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (whileConnected, whileDetached);
+        });
+
+        await Assert.That(connected).IsEquivalentTo(
+            new[] { "daemon-a", "\u00b7", "1.2.3", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
+        await Assert.That(detached).IsEquivalentTo(
+            new[] { "daemon-a", "\u00b7", "1.2.3" }, CollectionOrdering.Matching);
+    }
+
+    /// A queued daemon update is the version's own status: warning paint on the semver, the
+    /// pending copy on its hover, and no extra fragment that would collide with the help chip.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_version_warns_when_an_update_is_pending() {
+        var shown = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var restartPending = new BehaviorSubject<bool>(true);
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "nortonandreev", version: "1.1.0", serverUrl: "http://localhost:9999",
+                connection: "connected", active: 2, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent", restartPending: restartPending);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var version = rail.FindControl<TextBlock>("RailVersionText")!;
+            var tipLines = VisibleTipLines(version);
+            var helpOrigin = help.TranslatePoint(new Point(0, 0), rail)!.Value;
+            var versionOrigin = version.TranslatePoint(new Point(0, 0), rail)!.Value;
+            var result = (
+                PendingLabel: rail.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "update pending" && t.IsVisible),
+                VersionText: version.Text,
+                Warning: ReferenceEquals(version.Foreground, window.FindResource("KcapWarningBrush")),
+                TipLines: tipLines,
+                OverlapsHelp: new Rect(helpOrigin, help.Bounds.Size)
+                    .Intersects(new Rect(versionOrigin, version.Bounds.Size)));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return result;
+        });
+
+        await Assert.That(shown.PendingLabel).IsFalse();
+        await Assert.That(shown.VersionText).IsEqualTo("1.1.0");
+        await Assert.That(shown.Warning).IsTrue();
+        await Assert.That(shown.TipLines).IsEquivalentTo(
+            new[] { MainWindowViewModel.RestartPendingMessage, MainWindowViewModel.VersionIdentityTip },
+            CollectionOrdering.Matching);
+        await Assert.That(shown.OverlapsHelp).IsFalse();
+    }
+
+    /// Signed-out is a rail diagnosis; the launcher's Sign in is on the other pane and hidden
+    /// once a workspace is open, so the help flyout has to offer the same action (not the footer).
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_help_flyout_offers_sign_in_when_signed_out() {
+        var (visibleWhileOut, clicks, visibleWhileIn) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var clicks = 0;
+            service.SnapshotsSubject.OnNext(Snap(
+                daemon: "nortonandreev", version: "1.1.0", connection: "connected", active: 2, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent", laneStatus: lane.Status, requestSignIn: () => clicks++);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+            var signIn = rail.FindControl<Button>("RailHelpSignInButton")!;
+            var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled && signIn.Classes.Contains("kcapGhost");
+            vm.SignInCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var whileIn = signIn.IsVisible;
+
+            flyout.Hide();
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (whileOut, clicks, whileIn);
+        });
+
+        await Assert.That(visibleWhileOut).IsTrue();
+        await Assert.That(clicks).IsEqualTo(1);
+        await Assert.That(visibleWhileIn).IsFalse();
+    }
+
+    /// 330 of rail plus 400 of pane must never squeeze the center column to nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task MainWindow_keeps_a_layout_floor_and_a_wider_default() {
         await AvaloniaSession.RunOnUiAsync(async () => {
             var window = new MainWindow { DataContext = new MainWindowViewModel(new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System) };
 
-            await Assert.That(window.MinWidth).IsEqualTo(1200);
-            await Assert.That(window.Width).IsEqualTo(1200);
+            await Assert.That(window.MinWidth).IsEqualTo(WindowSizeMemory.MinWidth);
+            await Assert.That(window.Width).IsEqualTo(WindowSizeMemory.DefaultWidth);
+            await Assert.That(window.MinHeight).IsEqualTo(WindowSizeMemory.MinHeight);
+            await Assert.That(window.Height).IsEqualTo(WindowSizeMemory.DefaultHeight);
         });
     }
 }

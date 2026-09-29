@@ -2,7 +2,7 @@ namespace Capacitor.App.Services;
 
 /// App-lifetime navigation state, owned by the composition root and shared by every
 /// MainWindowViewModel the coordinator builds — including one built BETWEEN the two shutdown
-/// passes, which is exactly why the latch cannot live on a single window's ViewModel (spec §3).
+/// passes, which is exactly why the latch cannot live on a single window's ViewModel.
 ///
 /// Generation is the launch auto-open's staleness token: a launch captures it before the call, and
 /// a success arriving at a different one opens nothing. Every navigation, every close-to-hide and

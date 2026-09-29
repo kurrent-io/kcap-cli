@@ -25,10 +25,7 @@ public class ProcessHelpersSubprocessTests {
         using var tmp = new TempDir();
 
         var dir    = tmp.CreateDir("claude", "versions");
-        var binary = dir.PathTo("9.9.9");
-
-        File.Copy(sleep, binary);
-        File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var binary = dir.CopyExecutable(sleep, "9.9.9");
 
         using var child = System.Diagnostics.Process.Start(binary, "30")!;
 

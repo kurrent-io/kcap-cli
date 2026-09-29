@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Capture;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -103,17 +104,12 @@ static class SessionImporter {
             }
 
             if (!string.IsNullOrWhiteSpace(line)) {
-                var bytes = TranscriptBatchBuffer.SizeOf(line);
-
-                if (bytes > TranscriptBatchBuffer.MaxBytes) {
-                    progress?.Report(new LineSkipped(sessionId, AgentId: null, lineIndex, bytes));
-                } else {
-                    if (!batch.Fits(bytes)) await FlushAsync();
-
-                    batch.Add(line, lineIndex, bytes);
-
-                    if (batch.IsFull) await FlushAsync();
-                }
+                var captured = TranscriptCapture.Encode(line);
+                if (captured.Loss is { } loss) progress?.Report(new CaptureLineLost(sessionId, null, lineIndex, loss));
+                var bytes = TranscriptBatchBuffer.SizeOf(captured.Line);
+                if (!batch.Fits(bytes)) await FlushAsync();
+                batch.Add(captured.Line, lineIndex, bytes);
+                if (batch.IsFull) await FlushAsync();
             }
 
             lineIndex++;
@@ -557,18 +553,14 @@ static class SessionImporter {
             }
 
             if (!string.IsNullOrWhiteSpace(line)) {
-                var bytes      = TranscriptBatchBuffer.SizeOf(line);
+                var captured   = TranscriptCapture.Encode(line);
+                var bytes      = TranscriptBatchBuffer.SizeOf(captured.Line);
                 var lineNumber = checked(lineIndex + lineNumberOffset);
 
-                if (bytes > TranscriptBatchBuffer.MaxBytes) {
-                    progress?.Report(new LineSkipped(sessionId, agentId, lineNumber, bytes));
-                } else {
-                    if (!batch.Fits(bytes)) await FlushAsync();
-
-                    batch.Add(line, lineNumber, bytes);
-
-                    if (batch.IsFull) await FlushAsync();
-                }
+                if (captured.Loss is { } loss) progress?.Report(new CaptureLineLost(sessionId, agentId, lineNumber, loss));
+                if (!batch.Fits(bytes)) await FlushAsync();
+                batch.Add(captured.Line, lineNumber, bytes);
+                if (batch.IsFull) await FlushAsync();
             }
 
             lineIndex++;
@@ -694,9 +686,7 @@ static class SessionImporter {
             var lineIndex = 0;
 
             while (reader.ReadLine() is { } line) {
-                if (lineIndex >= startLine
-                 && !string.IsNullOrWhiteSpace(line)
-                 && TranscriptBatchBuffer.SizeOf(line) <= TranscriptBatchBuffer.MaxBytes) count++;
+                if (lineIndex >= startLine && !string.IsNullOrWhiteSpace(line)) count++;
 
                 lineIndex++;
             }

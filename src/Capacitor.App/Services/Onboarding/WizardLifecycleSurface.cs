@@ -2,7 +2,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Services.Onboarding;
 
-/// ILifecycleSurface for wizard-first mode: decision 2 builds no tray and no main window while
+/// ILifecycleSurface for wizard-first mode: the app builds no tray and no main window while
 /// the wizard is open, so Status/Attention become step-local observable text instead of the
 /// tray/start-message lanes, and confirmations open a dialog windowed over OnboardingWindow. The
 /// same ConsumeMutationOutcomesAsync consumer therefore runs unchanged during onboarding. Dialog

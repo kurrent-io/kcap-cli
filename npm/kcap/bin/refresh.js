@@ -78,7 +78,9 @@ const PLUGIN_MCP_SERVERS = {
   "kcap-memory":    "memory",
   "kcap-workitems": "workitems",
   "kcap-plans":     "plans",
+  "kcap-artefacts": "artefacts",
   "kcap-analytics": "analytics",
+  "kcap-knowledge": "knowledge",
 };
 
 // A command this patcher may rewrite: the shipped literal "kcap", or an

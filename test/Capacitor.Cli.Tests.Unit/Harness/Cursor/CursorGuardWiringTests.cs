@@ -192,7 +192,7 @@ public class CursorGuardWiringTests {
         using var tmp = new TempDir();
         var transcriptPath = tmp.PathTo("t.jsonl");
         var padding = string.Concat(Enumerable.Repeat("p", 50_000)); // one huge already-checkpointed line
-        await File.WriteAllTextAsync(transcriptPath, padding + "\nkept\nnew\n");
+        await File.WriteAllTextAsync(transcriptPath, padding + "\nkept\n{}\n");
 
         var paddingLineByteLength = padding.Length + 1; // "ppp...p\n"
         var keptLineByteLength    = "kept\n".Length;
@@ -239,7 +239,7 @@ public class CursorGuardWiringTests {
         using var tmp = new TempDir();
         var transcriptPath = tmp.PathTo("t.jsonl");
         var padding = string.Concat(Enumerable.Repeat("p", 50_000));
-        await File.WriteAllTextAsync(transcriptPath, padding + "\nkept\nnew\n");
+        await File.WriteAllTextAsync(transcriptPath, padding + "\nkept\n{}\n");
 
         var paddingLineByteLength = padding.Length + 1;
         var checkpointOffset      = (long)(paddingLineByteLength + "kept\n".Length);
@@ -264,7 +264,7 @@ public class CursorGuardWiringTests {
             hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
             cursorGuard: guard, onCursorRewriteDetected: () => { });
 
-        await Assert.That(result).IsEquivalentTo(new[] { "new" });
+        await Assert.That(result).IsEquivalentTo(new[] { "{}" });
         await Assert.That(Markers.IsQuarantined(sid)).IsFalse();
     }
 

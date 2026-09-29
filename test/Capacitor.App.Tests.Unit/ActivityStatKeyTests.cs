@@ -2,11 +2,9 @@ using AppUnderTest = Capacitor.App.App;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Regression coverage for a Critical bug found in review: the original
-/// ActivityStatKey wrapped BOTH log files in one try/catch, so a missing `.1` rotation file
-/// (every fresh install, until the first 1MB rotation) collapsed the WHOLE key to the "absent"
-/// constant — appends to the live file never changed it, and the Activity tab went stale until
-/// the tab was reselected. Drives the two-path testable overload directly against a temp
+/// A missing `.1` rotation file (every fresh install, until the first 1MB rotation) must not
+/// collapse the WHOLE key to the "absent" constant, or appends to the live file never change it
+/// and the Activity tab goes stale until reselected. Drives the two-path testable overload directly against a temp
 /// directory; never touches the real daemon-dir resolution under ~/.config/kcap/daemons.
 public class ActivityStatKeyTests {
     [Test]

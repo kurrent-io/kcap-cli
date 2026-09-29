@@ -1,12 +1,10 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Eval.Contracts;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -22,6 +20,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly RegistrationGate          _gate                = new();
     readonly PendingPermissionRegistry _pendingPermissions  = new();
     readonly PendingAcpInteractionRegistry _pendingAcpInteractions = new();
+    readonly AgentRunEventQueue        _eventQueue;
 
     // The change-generation counter behind the DaemonStatus push. Optional so a subclass can
     // construct without naming one, and so DI still resolves the registered singleton when
@@ -77,6 +76,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<RunQuestionCommand,  Task<QuestionResult>>? RunQuestionHandler  { get; set; }
     public Func<FinalizeEvalCommand, Task<FinalizeResult>>? FinalizeEvalHandler { get; set; }
     public Func<CancelEvalCommand,   Task>?                 CancelEvalHandler   { get; set; }
+
+    // Eval protocol 2 (outcomes + coded failures) client-result invocations, registered beside
+    // the protocol-1 ones above. Null (early startup / an unwired test) fails closed with a
+    // server-authored chat_error rather than silently answering as protocol 1.
+    public Func<RunQuestionCommand,    Task<QuestionResultV2>>? RunQuestionV2Handler  { get; set; }
+    public Func<FinalizeEvalV2Command, Task<FinalizeResult>>?   FinalizeEvalV2Handler { get; set; }
 
     /// <summary>Task 8: handler for the server's <c>ResolveReviewerModel</c> client-result
     /// invocation — the side-effect-free reviewer-model preflight. Set by <see cref="AgentOrchestrator"/>
@@ -204,6 +209,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _tokens          = tokens;
         _logger          = logger;
         _statusNotifier  = statusNotifier ?? new();
+        _eventQueue      = new(config, tokens, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient());
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
@@ -284,6 +290,17 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.On<CancelEvalCommand>("CancelEval",
             cmd => CancelEvalHandler?.Invoke(cmd) ?? Task.CompletedTask);
 
+        // Eval protocol 2.
+        _hub.On<RunQuestionCommand, QuestionResultV2>("RunQuestionV2",
+            cmd => RunQuestionV2Handler?.Invoke(cmd)
+                ?? Task.FromResult(new QuestionResultV2(null,
+                    new EvalQuestionFailure { Category = cmd.Question.Category, QuestionId = cmd.Question.Id, Code = EvalFailureCodes.ChatError },
+                    "no handler", 0, 0)));
+
+        _hub.On<FinalizeEvalV2Command, FinalizeResult>("FinalizeEvalV2",
+            cmd => FinalizeEvalV2Handler?.Invoke(cmd)
+                ?? Task.FromResult(new FinalizeResult(false, "no handler", null)));
+
         // Task 8: side-effect-free reviewer-model preflight (server→daemon client-result
         // invocation). When the orchestrator hasn't wired the handler (early startup), fail closed with
         // an "unavailable" reply that still echoes RequestId/Vendor so the server's correlation guard
@@ -333,13 +350,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.Reconnecting += OnReconnecting;
         _hub.Reconnected  += OnReconnected;
         _hub.Closed       += OnClosed;
-
-        _terminalSender = new TerminalOutputSender(
-            (agentId, base64, ct) => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64), ct),
-            isConnected: () => _hub.State == HubConnectionState.Connected,
-            logger,
-            _time
-        );
     }
 
     /// <summary>
@@ -395,20 +405,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     internal int DisposeBodyRuns => Volatile.Read(ref _disposeBodyRuns);
 
-    /// <summary>Test seam: the terminal-sender CTS, so tests can assert it ends cancelled AND
-    /// disposed after the first dispose pass (removal of the Dispose call fails the suite).</summary>
-    internal CancellationTokenSource? TerminalSenderCtsForTests => _terminalSenderCts;
-
     /// <summary>Test seam: lets a test swap in a faulting awaited task and assert the failure is
     /// contained + logged while the mandatory resource release still runs.</summary>
     internal Task? EventProcessorTaskForTests {
         get => _eventProcessorTask;
         set => _eventProcessorTask = value;
     }
-
-    readonly TerminalOutputSender    _terminalSender;
-    Task?                            _terminalSenderTask;
-    CancellationTokenSource?         _terminalSenderCts;
 
     /// <summary>
     /// A monotonic timestamp taken each time the hub reaches a
@@ -444,12 +446,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     public async Task ConnectAsync(CancellationToken ct) {
         _ct                 = ct;
-        _eventProcessorTask = ProcessEventQueueAsync(ct);
-        // Linked to ct but separately cancellable so DisposeAsync can stop the
-        // sender even if the caller's token never fires — otherwise a chunk held
-        // through an outage could block disposal.
-        _terminalSenderCts  = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _terminalSenderTask = _terminalSender.RunAsync(_terminalSenderCts.Token);
+        _eventProcessorTask = _eventQueue.RunAsync(ct);
         await ConnectWithRetryAsync(ct);
     }
 
@@ -643,6 +640,35 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
+    internal DaemonConnect BuildDaemonConnect(string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents) =>
+        new(
+            _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
+            _config.InstanceId, _config.Version, _config.SupportedVendors, new MachineId(_config.ConfigRoot).Get(), liveAgents,
+            _config.UnattendedVendors,
+            // Re-reported on every connect until the server prunes it via AckResolvedCandidates.
+            RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible,
+            ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke(),
+            StartupReapComplete: GetStartupReapComplete?.Invoke(),
+            UnresolvedStartupCandidates: GetUnresolvedStartupCandidates?.Invoke(),
+            StartupDiscovery: GetStartupDiscovery?.Invoke(),
+            Quarantined: GetQuarantined?.Invoke(),
+            // The orchestrator's per-boot epoch is the single source; the config value is what an
+            // unwired connection falls back to.
+            Epoch: GetDaemonEpoch?.Invoke() ?? _config.DaemonEpoch,
+            HighestAcceptedSeq: GetHighestAcceptedSeq?.Invoke(),
+            LastProcessedSeq: GetLastProcessedSeq?.Invoke(),
+            SupportsSequencedCommands: true,
+            HighestResolutionGeneration: GetHighestResolutionGeneration?.Invoke(),
+            UnattendedVendorCapabilities: _config.UnattendedVendorCapabilities,
+            AcpPresetVendors: _config.AcpPresetVendors,
+            PermissionModeVendors: _config.PermissionModeVendors,
+            PrReviewVendors: _config.PrReviewVendors,
+            // Read off the handler, never asserted: an unwired connection would otherwise invite
+            // RequestStatusReport2 frames its null-conditional invoke answers with silence.
+            SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports,
+            EvalProtocolVersion: 2,
+            VendorModels: _config.VendorModels);
+
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoStore = FingerprintRepoStore();
@@ -653,50 +679,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         try {
             await _hub.InvokeAsync(
                 "DaemonConnect",
-                new DaemonConnect(
-                    _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
-                    _config.InstanceId, _config.Version, _config.SupportedVendors, new MachineId(_config.ConfigRoot).Get(), liveAgents,
-                    _config.UnattendedVendors,
-                    // Phase B2-b (sequenced-settlement design §4.2.3/§4.2.4): advertise the durable
-                    // coverage boot-chain verdict plus the un-acked resolved-candidates ledger snapshot,
-                    // re-reported on every connect until the server prunes it via AckResolvedCandidates.
-                    // The full enriched sequenced-settlement payload lands in a later task; these
-                    // additive fields are wire-compatible with old servers (ignored) and inert until the
-                    // paired server PR consumes them.
-                    RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible,
-                    ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke(),
-                    // Phase B2-b (sequenced-settlement design): the per-platform startup-completeness
-                    // signals. Null getters (tests / early startup) leave the additive fields at their
-                    // defaults, wire-compatible with old servers.
-                    StartupReapComplete: GetStartupReapComplete?.Invoke(),
-                    UnresolvedStartupCandidates: GetUnresolvedStartupCandidates?.Invoke(),
-                    StartupDiscovery: GetStartupDiscovery?.Invoke(),
-                    // Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-settlement capability
-                    // + its epoch/watermark counters + the kill-quarantine snapshot. SupportsSequencedCommands
-                    // is THE gate: advertised true here but inert until the paired server PR consumes it. Epoch
-                    // is read from the orchestrator's own per-boot _daemonEpoch via GetDaemonEpoch — the SINGLE
-                    // source the orchestrator + processor use — so the connect epoch can't diverge from it.
-                    // Unwired (tests / early startup) falls back to _config.DaemonEpoch, which DaemonRunner
-                    // pins before services build, so prod behaviour is unchanged.
-                    Quarantined: GetQuarantined?.Invoke(),
-                    Epoch: GetDaemonEpoch?.Invoke() ?? _config.DaemonEpoch,
-                    HighestAcceptedSeq: GetHighestAcceptedSeq?.Invoke(),
-                    LastProcessedSeq: GetLastProcessedSeq?.Invoke(),
-                    SupportsSequencedCommands: true,
-                    // Phase B2-b (sequenced-settlement design §5.5): the resolved-candidates ledger's
-                    // monotonic high-water alongside the re-advertised snapshot above.
-                    HighestResolutionGeneration: GetHighestResolutionGeneration?.Invoke(),
-                    UnattendedVendorCapabilities: _config.UnattendedVendorCapabilities,
-                    // Launch-time ACP permission-preset advertisement: the supported vendors that route
-                    // permissions through the ACP bridge. Null on an unwired/early-startup config;
-                    // wire-compatible with old servers (ignored).
-                    AcpPresetVendors: _config.AcpPresetVendors,
-                    PermissionModeVendors: _config.PermissionModeVendors,
-                    // Read off the handler, never asserted: an unwired connection (early startup,
-                    // a test, a second ServerConnection) would otherwise invite RequestStatusReport2
-                    // frames that its null-conditional invoke answers with silence.
-                    SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports
-                ),
+                BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents),
                 cancellationToken: _ct
             );
             _advertisedRepoStore = repoStore;
@@ -902,6 +885,21 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>
+    /// Best-effort: report the slash commands a hosted agent's harness offers, for the composer's `/`
+    /// picker. A single-record (arity 1) payload so the wire shape evolves additively; a later report
+    /// supersedes the previous list. Fire-and-forget over the persistent connection, swallowed when
+    /// the connected server is older and has no <c>ReportAgentCommands</c> hub method, so a
+    /// mixed-version rollout never surfaces this as a failure. Virtual so tests can capture it.
+    /// </summary>
+    public virtual async Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
+        try {
+            await _hub.SendAsync("ReportAgentCommands", new ReportAgentCommandsArgs(agentId, commands), cancellationToken: _ct);
+        } catch (Exception ex) {
+            LogReportCommandsFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
     /// Task 8: reports the CONCRETE resolved model an explicit-model reviewer actually launched
     /// with (the post-launch counterpart of the preflight RPC), over the persistent connection to the
     /// server's <c>ReportExplicitReviewerModelResolved</c> hub method — a single-record (arity 1)
@@ -935,8 +933,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
-    public virtual Task AgentUnregisteredAsync(string agentId)
-        => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId), cancellationToken: _ct);
+    public virtual Task AgentUnregisteredAsync(string agentId, string? stopReason = null)
+        => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, stopReason), cancellationToken: _ct);
 
     /// <summary>Tells the server this daemon dropped a dispatched input rather than delivering it.
     /// Without it a drop is visible only in this log, while the sender is shown a message that was
@@ -976,14 +974,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             agentId, "status");
 
         await SafeShutdownStepAsync(
-            () => PostAgentRunEventAsync(agentId, new AgentRunStopped(reason, exitCode), ct), agentId, "run-stopped");
+            () => _eventQueue.PostDirectAsync(agentId, new AgentRunStopped(reason, exitCode), ct), agentId, "run-stopped");
 
         await SafeShutdownStepAsync(
             () => _hub.InvokeAsync<EndAgentSessionResult>("EndAgentSession", agentId, reason, cancellationToken: ct),
             agentId, "session-end");
 
         await SafeShutdownStepAsync(
-            () => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId), cancellationToken: ct),
+            () => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, reason), cancellationToken: ct),
             agentId, "unregister");
     }
 
@@ -993,26 +991,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         } catch (Exception ex) {
             LogShutdownReportStepFailed(ex, agentId, label);
         }
-    }
-
-    /// <summary>The queued run-event POST, sent directly on the caller's token. Same endpoint and
-    /// payload shape as the drain, without its retry loop.</summary>
-    async Task PostAgentRunEventAsync(string agentId, object evt, CancellationToken ct) {
-        var data = JsonSerializer.SerializeToNode(evt, evt.GetType(), CapacitorJsonContext.Default)!.AsObject();
-        var payload = new JsonObject { ["event_type"] = evt.GetType().Name, ["data"] = data }.ToJsonString();
-
-        _httpClient ??= new();
-
-        var resolution = await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct);
-
-        if (resolution.Tokens?.AccessToken is not null)
-            _httpClient.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);
-
-        var response = await _httpClient.PostAsync(
-            $"{_config.ServerUrl.TrimEnd('/')}/api/agent-runs/{agentId}/events",
-            new StringContent(payload, Encoding.UTF8, "application/json"), ct);
-
-        response.EnsureSuccessStatusCode();
     }
 
     public virtual Task LaunchFailedAsync(string agentId, string reason)
@@ -1569,133 +1547,50 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         ) => _hub.InvokeAsync<ParkParticipantOutcome>("ReportParticipantParked", agentId, canonicalSessionId, reason, cancellationToken: ct);
 
     /// <summary>
-    /// Queues a base64 PTY chunk for the hosted-agent terminal mirror:
-    /// chunks are drained by <see cref="TerminalOutputSender"/>'s single ordered loop
-    /// instead of being fired at <c>SendAsync</c> fire-and-forget, so they reach the
-    /// server in PTY order. The enqueue awaits when the queue is full — the caller
-    /// (the PTY read loop) awaits this, so a stalled transport back-pressures the PTY
-    /// rather than dropping bytes mid-escape-sequence.
+    /// One terminal chunk, straight to the hub. Throws when the send fails and honours
+    /// <paramref name="ct"/> while a write is blocked in the transport; the caller owns ordering
+    /// and retry. Cancelling ends the wait, not necessarily the delivery — the bytes may already
+    /// be in the transport pipe.
     /// </summary>
-    /// <param name="ct">
-    /// Cancels a blocked (back-pressured) enqueue. The read loop passes a token tied
-    /// to BOTH the per-agent stop (<c>ReadCts</c>) and daemon shutdown, so stopping a
-    /// single agent releases its read loop even mid-outage — otherwise the loop's
-    /// finally-block finalization/cleanup would stall until daemon shutdown.
-    /// </param>
     public virtual Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) =>
-        _terminalSender.EnqueueAsync(agentId, base64Data, ct).AsTask();
-
-    /// <summary>
-    /// Non-blocking terminal-output enqueue for local-first agents (see
-    /// <see cref="TerminalOutputSender.TryEnqueue"/>): never back-pressures the caller, so a
-    /// registered local agent's PTY read loop and live terminal stay responsive through a tunnel
-    /// stall. Returns false if the chunk was dropped (backlog full).
-    /// </summary>
-    public virtual bool TrySendTerminalOutput(string agentId, string base64Data) =>
-        _terminalSender.TryEnqueue(agentId, base64Data);
+        _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64Data), ct);
 
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
 
-    public Task EvalStartedAsync(string evalRunId, string sessionId, string judgeModel, int totalQuestions)
+    public virtual Task EvalStartedAsync(string evalRunId, string sessionId, string judgeModel, int totalQuestions)
         => _hub.SendAsync("EvalStarted", new EvalStarted(evalRunId, sessionId, judgeModel, totalQuestions), cancellationToken: _ct);
 
-    public Task EvalQuestionStartedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId)
+    public virtual Task EvalQuestionStartedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId)
         => _hub.SendAsync("EvalQuestionStarted", new EvalQuestionStarted(evalRunId, sessionId, index, total, category, questionId), cancellationToken: _ct);
 
-    public Task EvalQuestionCompletedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, int score, string verdict)
-        => _hub.SendAsync("EvalQuestionCompleted", new EvalQuestionCompleted(evalRunId, sessionId, index, total, category, questionId, score, verdict), cancellationToken: _ct);
+    public virtual Task EvalQuestionCompletedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string outcome, int? score, string? verdict)
+        => _hub.SendAsync("EvalQuestionCompleted", new EvalQuestionCompleted(evalRunId, sessionId, index, total, category, questionId, score, verdict, outcome), cancellationToken: _ct);
 
-    public Task EvalQuestionFailedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string reason)
+    public virtual Task EvalQuestionFailedAsync(string evalRunId, string sessionId, int index, int total, string category, string questionId, string reason)
         => _hub.SendAsync("EvalQuestionFailed", new EvalQuestionFailed(evalRunId, sessionId, index, total, category, questionId, reason), cancellationToken: _ct);
 
-    public Task EvalFinishedAsync(string evalRunId, string sessionId, int overallScore, string summary)
+    public virtual Task EvalFinishedAsync(string evalRunId, string sessionId, int? overallScore, string summary)
         => _hub.SendAsync("EvalFinished", new EvalFinished(evalRunId, sessionId, overallScore, summary), cancellationToken: _ct);
 
-    public Task EvalFailedAsync(string evalRunId, string sessionId, string reason)
+    public virtual Task EvalFailedAsync(string evalRunId, string sessionId, string reason)
         => _hub.SendAsync("EvalFailed", new EvalFailed(evalRunId, sessionId, reason), cancellationToken: _ct);
 
     // ── Retrospective progress events (DEV-1470) ───────────────────────────
 
-    public Task EvalRetrospectiveStartedAsync(string sessionId, string evalRunId)
+    public virtual Task EvalRetrospectiveStartedAsync(string sessionId, string evalRunId)
         => _hub.SendAsync("EvalRetrospectiveStarted", new EvalRetrospectiveStarted(sessionId, evalRunId), cancellationToken: _ct);
 
-    public Task EvalRetrospectiveCompletedAsync(string sessionId, string evalRunId)
+    public virtual Task EvalRetrospectiveCompletedAsync(string sessionId, string evalRunId)
         => _hub.SendAsync("EvalRetrospectiveCompleted", new EvalRetrospectiveCompleted(sessionId, evalRunId), cancellationToken: _ct);
 
-    public Task EvalRetrospectiveFailedAsync(string sessionId, string evalRunId, string reason)
+    public virtual Task EvalRetrospectiveFailedAsync(string sessionId, string evalRunId, string reason)
         => _hub.SendAsync("EvalRetrospectiveFailed", new EvalRetrospectiveFailed(sessionId, evalRunId, reason), cancellationToken: _ct);
 
     public virtual Task AppendAgentRunEventAsync(string agentId, object evt) {
-        _eventChannel.Writer.TryWrite(new PendingEvent(agentId, evt));
+        _eventQueue.Enqueue(agentId, evt);
 
         return Task.CompletedTask;
     }
-
-    readonly Channel<PendingEvent> _eventChannel = Channel.CreateBounded<PendingEvent>(
-        new BoundedChannelOptions(1000) { FullMode = BoundedChannelFullMode.DropOldest }
-    );
-
-    HttpClient? _httpClient;
-
-    async Task ProcessEventQueueAsync(CancellationToken ct) {
-        try {
-            await foreach (var evt in _eventChannel.Reader.ReadAllAsync(ct)) {
-                string payload;
-
-                try {
-                    var eventType = evt.Event.GetType().Name;
-                    var data      = JsonSerializer.SerializeToNode(evt.Event, evt.Event.GetType(), CapacitorJsonContext.Default)!.AsObject();
-
-                    var payloadObj = new JsonObject {
-                        ["event_type"] = eventType,
-                        ["data"]       = data
-                    };
-                    payload = payloadObj.ToJsonString();
-                } catch (Exception ex) {
-                    LogEventSerializationFailed(ex, evt.Event.GetType().Name, evt.AgentId);
-
-                    continue;
-                }
-
-                var url        = $"{_config.ServerUrl.TrimEnd('/')}/api/agent-runs/{evt.AgentId}/events";
-                var retryDelay = TimeSpan.FromSeconds(1);
-
-                while (!ct.IsCancellationRequested) {
-                    try {
-                        _httpClient ??= new();
-                        var resolution = await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct);
-
-                        if (resolution.Tokens?.AccessToken is not null) {
-                            _httpClient.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);
-                        }
-
-                        var response = await _httpClient.PostAsync(url, new StringContent(payload, Encoding.UTF8, "application/json"), ct);
-                        response.EnsureSuccessStatusCode();
-
-                        break;
-                    } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-                        return;
-                    } catch (Exception ex) {
-                        LogEventPostFailed(ex, retryDelay.TotalSeconds);
-
-                        try {
-                            await Task.Delay(retryDelay, _time, ct);
-                        } catch (OperationCanceledException) {
-                            return;
-                        }
-
-#pragma warning disable IDE0059
-                        retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 2, 30));
-#pragma warning restore IDE0059
-                    }
-                }
-            }
-        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-            // Graceful shutdown — channel read cancelled
-        }
-    }
-
-    record PendingEvent(string AgentId, object Event);
 
     public async ValueTask DisposeAsync() {
         if (Interlocked.Exchange(ref _disposeOnce, 1) != 0) return;
@@ -1704,15 +1599,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         _disposed = true; // live-path flag read by OnClosed — separate from the run-once guard
 
-        var cts = _terminalSenderCts;
-
         try {
             // Faultable awaits — each contained + logged individually so one faulted pipeline
             // task can't skip its sibling or the mandatory resource release in the finally below.
             // A disposal path must never throw into DI teardown (NativeAOT: unhandled → abort()).
             try {
-                _eventChannel.Writer.TryComplete();
-                _terminalSender.Complete();
+                _eventQueue.Complete();
 
                 if (_eventProcessorTask is not null) {
                     await _eventProcessorTask;
@@ -1720,37 +1612,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             } catch (Exception ex) {
                 LogDisposeStepFailed(ex, "event-processor");
             }
-
-            try {
-                // Cancel the sender's own token so a chunk being held through an outage
-                // can't block disposal regardless of the caller's token state.
-                if (cts is not null) {
-                    try {
-                        await cts.CancelAsync();
-                    } catch (ObjectDisposedException) {
-                        // Already torn down elsewhere — nothing left to cancel.
-                    }
-                }
-
-                if (_terminalSenderTask is not null) {
-                    await _terminalSenderTask;
-                }
-            } catch (Exception ex) {
-                LogDisposeStepFailed(ex, "terminal-sender");
-            }
         } finally {
             // Mandatory release — each step individually guarded so one failure can't skip the
             // rest, and nothing here can throw into DI teardown.
             try {
-                cts?.Dispose();
+                _eventQueue.Dispose();
             } catch (Exception ex) {
-                LogDisposeStepFailed(ex, "terminal-sender-cts");
-            }
-
-            try {
-                _httpClient?.Dispose();
-            } catch (Exception ex) {
-                LogDisposeStepFailed(ex, "http-client");
+                LogDisposeStepFailed(ex, "event-queue");
             }
 
             try {
@@ -1824,17 +1692,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     [LoggerMessage(Level = LogLevel.Information, Message = "Skipping reconnect re-bind of ACP session {AcpSessionId} for agent {AgentId} — the agent is no longer hosted as live; unregistering the stale binding")]
     partial void LogAcpRebindSkippedNotLive(string agentId, string acpSessionId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to post agent run event, retrying in {Delay}s")]
-    partial void LogEventPostFailed(Exception ex, double delay);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to serialize {EventType} for agent {AgentId}, dropping event")]
-    partial void LogEventSerializationFailed(Exception ex, string eventType, string agentId);
-
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to update repo paths on server")]
     partial void LogRepoPathUpdateFailed(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (server may not support it)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report slash commands for agent {AgentId} (server may not support it)")]
+    partial void LogReportCommandsFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to send ACP auto-approval audit for agent {AgentId} (server may not support it)")]
     partial void LogNotifyAcpAutoApprovalFailed(Exception ex, string agentId);

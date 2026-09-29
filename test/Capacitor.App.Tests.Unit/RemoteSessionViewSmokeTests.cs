@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
@@ -82,14 +83,17 @@ public class RemoteSessionViewSmokeTests {
                 DateTimeOffset.UtcNow);
             card.AgentId = "a1";
             host.Permissions.Add(card);
-            await host.SettleUntilAsync(() => host.Vm.Cards.HasPendingCards, "the card");
+            await host.SettleUntilAsync(() => host.Vm.Chat.Cards.HasPendingCards, "the card");
 
             await Assert.That(chat.GetVisualDescendants().OfType<Border>().Any(b => b.Name == "AcpQuestionCard")).IsTrue();
-            var labels = chat.GetVisualDescendants().OfType<Button>()
+            var options = chat.GetVisualDescendants().OfType<Button>()
                 .Where(b => b is not ToggleButton && b.Classes.Contains("acpOption"))
-                .Select(b => b.Content as string ?? "")
                 .ToList();
+            var labels = options.Select(b => ((TextBlock)b.Content!).Text ?? "").ToList();
             await Assert.That(labels).IsEquivalentTo(new[] { "main", "next" });
+            // A long option has to wrap in the stretched row rather than run off its edge.
+            await Assert.That(options.Select(b => ((TextBlock)b.Content!).TextWrapping).Distinct())
+                .IsEquivalentTo(new[] { TextWrapping.Wrap });
 
             await host.Vm.TeardownAsync();
             return true;

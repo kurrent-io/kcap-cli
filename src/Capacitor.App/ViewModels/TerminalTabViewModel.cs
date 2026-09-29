@@ -58,8 +58,6 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     // inside that window into a newline.
     static readonly TimeSpan SubmitDelay = TimeSpan.FromMilliseconds(150);
 
-    const int DefaultCols = 80, DefaultRows = 24;
-
     readonly string _agentId;
     readonly IDaemonClientService _daemon;
     readonly TerminalAttachClientFactory _factory;
@@ -215,6 +213,25 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     /// A control key bypasses bracketed paste and submit. The same attach gate protects it from
     /// reaching a retired or read-only client, and an in-flight paste must finish before Escape.
+    /// A single key, with no bracketed paste and no trailing submit. Used to answer a menu the
+    /// TUI is already showing.
+    public async Task<bool> SendRawAsync(byte key, CancellationToken ct) {
+        var token = Volatile.Read(ref _openingToken);
+        if (!CanInterrupt || _client is not { } client || ct.IsCancellationRequested) return false;
+        if (Volatile.Read(ref _openingToken) != token) return false;
+        try {
+            while (_delivery is { IsCompleted: false } delivery) await delivery.WaitAsync(ct);
+            if (!CanInterrupt || Volatile.Read(ref _openingToken) != token || ct.IsCancellationRequested) return false;
+            await client.SendInputAsync([key]);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return false; }
+        catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: usage-limit choice failed: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task SendEscapeAsync(CancellationToken ct) {
         var token = Volatile.Read(ref _openingToken);
         if (!CanInterrupt || _client is not { } client || ct.IsCancellationRequested) return;
@@ -421,9 +438,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// TeardownAsync is idempotent) nor let this attempt publish over what teardown already tore
     /// down. Every suspension point is followed by a re-check of BOTH `_resolveState ==
     /// ResolveDisposed` (teardown ran, at any point, regardless of generation ordering) and
-    /// `generation != _attemptGeneration` (a DIFFERENT concurrent attempt retired this one, the
-    /// pre-existing non-teardown case) -- disposing anything this attempt already built before
-    /// bailing.
+    /// `generation != _attemptGeneration` (a DIFFERENT concurrent attempt retired this one) --
+    /// disposing anything this attempt already built before bailing.
     async Task TryStartAttemptAsync() {
         if (!_attachLane.Wait(0)) return;
         try {
@@ -456,19 +472,12 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             var token = cts.Token;
             _attemptCts = cts;
 
-            // Pre-swap fallback -- overwritten below once the real surface exists. Never actually
-            // observed as RunAsync's argument on the success path (the only way past the dispatch
-            // below without a real surface is the OperationCanceledException catch, which returns
-            // before cols/rows are ever read), but keeps the constant genuinely load-bearing rather
-            // than a stray literal.
-            var (cols, rows) = (DefaultCols, DefaultRows);
-
             ITerminalSurface surface;
             Utf8StreamDecoder decoder;
             try {
                 // Construction happens INSIDE the dispatch, not just the property assignment: the
-                // surface factory wraps an Avalonia-affine control model (Task 11/12), so even
-                // building it off the UI thread would be unsafe -- not only assigning it.
+                // surface factory wraps an Avalonia-affine control model, so building it off the UI
+                // thread is unsafe too.
                 (surface, decoder) = await Dispatcher.UIThread.InvokeAsync(() => {
                     var s = _surfaceFactory();
                     var d = new Utf8StreamDecoder();
@@ -480,16 +489,13 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 return; // retired before the swap even finished
             }
 
-            // By now the dispatched swap above has run the view's Model binding AND the control's
-            // own synchronous Model-assignment resize (Task 11/12) -- CurrentSize is the real pane
-            // size, not the phantom default above. Read it BEFORE RunAsync starts (not resent
-            // after Attached, final review I1/I1-rework): AgentAttachClient's own post-attach nudge
-            // writes at whatever size RunAsync was given, and the pump's OWN follow-on write beat a
-            // same-callback resend in practice -- last write wins on the wire, so a resend from
-            // inside OnAttachedAsync is a structurally defeated no-op. A never-laid-out first open
-            // still reads the ctor's own 80x24 (App.axaml.cs's XtermTerminalSurface(80, 24)) here
-            // too; WireSurface's Resized lane self-heals that once the control is actually measured.
-            (cols, rows) = surface.CurrentSize;
+            // The dispatched swap has run the view's Model binding and the control's synchronous
+            // resize, so CurrentSize is the real pane size. Read it before RunAsync starts rather
+            // than resending after Attached: the client's post-attach nudge writes at RunAsync's
+            // size and last write wins, so a resend from OnAttachedAsync is a no-op. A
+            // never-laid-out first open reads the surface's constructor size; WireSurface's Resized
+            // lane corrects it once the control is measured.
+            var (cols, rows) = surface.CurrentSize;
 
             // Suspension point 2 (the one most likely to straddle a concurrent TeardownAsync):
             // never call the factory for a retired attempt.
@@ -609,7 +615,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         catch (Exception ex) { Console.Error.WriteLine($"kcap: terminal detach failed: {ex.Message}"); }
     }
 
-    /// Bounded teardown (Task 13's tracker calls this when the tab closes): generation bump so any
+    /// Bounded teardown, called when the tab closes: generation bump so any
     /// still-in-flight completion becomes silently retired, then detach/dispose/the run task each
     /// draw from a SINGLE 3s-total budget in turn (detach itself additionally capped at 1s) --
     /// every step abandons rather than blocks once its share is exhausted: an abandoned task's
@@ -658,8 +664,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             var dispose = client.DisposeAsync().AsTask();
             var disposeWinner = await Task.WhenAny(dispose, Task.Delay(Remaining(), _time)).ConfigureAwait(false);
             if (ReferenceEquals(disposeWinner, dispose)) {
-                // Completed within budget -- still observe (never re-throw) a fault the same way
-                // the old direct-await's containment did.
+                // Completed within budget -- still observe (never re-throw) a fault.
                 if (dispose.IsFaulted) _ = dispose.Exception;
             } else {
                 ObserveAbandoned(dispose, "dispose");

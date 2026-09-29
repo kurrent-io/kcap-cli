@@ -117,4 +117,40 @@ public class CrossProcessRefreshTests {
 
         await Assert.That(AuthFixtures.NewTokenStore(Config.Root).LockWait).IsGreaterThan(budget);
     }
+
+    [Test]
+    public async Task A_token_deleted_while_waiting_for_the_lock_is_not_resurrected() {
+        Directory.CreateDirectory(TokensDir);
+        var current = Token("old", DateTimeOffset.UtcNow.AddMinutes(-10));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("alpha", current);
+        var refreshCalled = false;
+
+        Task<StoredTokens?> refresh;
+        using (new FileStream(Path.Combine(TokensDir, "alpha.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            refresh = AuthFixtures.NewTokenStore(Config.Root).RefreshWithCrossProcessLockAsync(
+                "alpha", current, _ => { refreshCalled = true; return Task.FromResult<StoredTokens?>(Token("new", DateTimeOffset.UtcNow.AddHours(1))); });
+            await Task.Delay(200);
+            File.Delete(Path.Combine(TokensDir, "alpha.json"));
+        }
+
+        await Assert.That(await refresh).IsNull();
+        await Assert.That(refreshCalled).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "alpha.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_legacy_only_token_is_refreshed_and_migrated_under_the_lock() {
+        var legacyPath = Config.PathTo("tokens.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+        var current = Token("legacy", DateTimeOffset.UtcNow.AddMinutes(-10));
+        await File.WriteAllTextAsync(legacyPath,
+            System.Text.Json.JsonSerializer.Serialize(current, CapacitorJsonContext.Default.StoredTokens));
+
+        var result = await AuthFixtures.NewTokenStore(Config.Root).RefreshWithCrossProcessLockAsync(
+            "default", current, _ => Task.FromResult<StoredTokens?>(Token("fresh", DateTimeOffset.UtcNow.AddHours(1))));
+
+        await Assert.That(result!.AccessToken).IsEqualTo("fresh");
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("default"))!.AccessToken).IsEqualTo("fresh");
+        await Assert.That(File.Exists(legacyPath)).IsFalse();
+    }
 }

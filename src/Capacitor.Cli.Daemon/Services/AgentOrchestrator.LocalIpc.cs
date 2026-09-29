@@ -78,7 +78,11 @@ internal partial class AgentOrchestrator {
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
                 AwaitingInput: a.Status == "Running" && a.ActivityClock.AwaitingInput,
-                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor))];
+                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor,
+                // Null until the agent's first subagent report, a number from then on: the clock's
+                // count only while the agent is live, since nothing runs under a terminal one.
+                LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
+                UsageLimit: a.Status == "Running" ? a.UsageLimit : null))];
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame
@@ -87,7 +91,7 @@ internal partial class AgentOrchestrator {
     /// way to override.
     /// </summary>
     public Task HandleLocalStopAsync(string agentId, Stream stream, CancellationToken ct) =>
-        HandleLocalStopV2Async(force: true, agentId, stream, ct);
+        HandleLocalStopCoreAsync(force: true, agentId, stream, ct, reportMissing: false);
 
     /// <summary>
     /// `kcap agent stop` with protection. A review or flow agent is refused unless the user
@@ -97,7 +101,10 @@ internal partial class AgentOrchestrator {
     /// 0600 socket is the owner's. Stops run concurrently — each can take up to 25s (graceful
     /// wait plus terminate), so serial teardown would be unusable.
     /// </summary>
-    public async Task HandleLocalStopV2Async(bool force, string agentId, Stream stream, CancellationToken ct) {
+    public Task HandleLocalStopV2Async(bool force, string agentId, Stream stream, CancellationToken ct) =>
+        HandleLocalStopCoreAsync(force, agentId, stream, ct, reportMissing: true);
+
+    async Task HandleLocalStopCoreAsync(bool force, string agentId, Stream stream, CancellationToken ct, bool reportMissing) {
         if (agentId.Length == 0) {
             var all       = _agents.Values.ToList();
             var eligible  = all.Where(a => force || a.Kind == LaunchKind.Default).ToList();
@@ -139,9 +146,23 @@ internal partial class AgentOrchestrator {
         // record can still reap. This is why the client sends full ids verbatim. The record
         // carries the same Kind/FlowRunId/FlowRole the live agent would have, so protection still
         // applies — a review-flow survivor from a prior incarnation is refused exactly like a
-        // live one. TryStopByPidRecordAsync itself stays policy-free (it's shared with the
+        // live one. StopByPidRecordAsync itself stays policy-free (it's shared with the
         // server-origin HandleStopAgent path); the decision is made here, before it ever runs.
-        if (!force && FindPidRecord(agentId) is { Kind: not nameof(LaunchKind.Default) } record) {
+        if (_pidRecords is null || !_pidRecords.TryRead(agentId, out var found)) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\tfailed"), ct);
+
+            return;
+        }
+
+        if (found is not { } record) {
+            // A confirmed snapshot target may have finished while the owner read the prompt.
+            await FrameCodec.WriteAsync(stream,
+                reportMissing ? LocalFrame.StopAck($"{agentId}\tmissing") : LocalFrame.Error($"no such agent {agentId}"), ct);
+
+            return;
+        }
+
+        if (!force && record.Kind != nameof(LaunchKind.Default)) {
             var consequence = record.Kind == nameof(LaunchKind.ReviewFlow)
                 ? "Stopping it mid-round leaves the flow without a participant."
                 : "Stopping it discards the review before it can report back.";
@@ -152,12 +173,9 @@ internal partial class AgentOrchestrator {
             return;
         }
 
-        var reaped = await TryStopByPidRecordAsync(agentId);
+        var reaped = await StopByPidRecordAsync(record);
 
-        await FrameCodec.WriteAsync(
-            stream,
-            reaped ? LocalFrame.StopAck($"{agentId}\t{StatusText(true)}") : LocalFrame.Error($"no such agent {agentId}"),
-            ct);
+        await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(reaped)}"), ct);
     }
 
     static string StatusText(bool confirmedStopped) => confirmedStopped ? "stopped" : "failed";
@@ -333,7 +351,6 @@ internal partial class AgentOrchestrator {
                 // missing the day this path grows an ACP runtime.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
-                IsLocalSpawned = true,
                 Work           = work,
                 McpConfigPath  = built.McpConfigPath,
                 CurrentCols    = cols,

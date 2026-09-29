@@ -29,6 +29,7 @@ public class SetupChosenServerTests {
             new AuthProviderDiscovery(factory, TimeProvider.System), NoTelemetry.Facade, AuthEndpoints.Defaults,
             new FakeFacadeFactory(_ => throw new InvalidOperationException("no façade in these tests")),
             FakeImportRunner.Succeeding(),
+            FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(),
             new ChosenServerHttp(Config.Root, startup, ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System,
             TestBinaries.None);
     }

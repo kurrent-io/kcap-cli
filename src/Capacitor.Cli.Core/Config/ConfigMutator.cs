@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Config;
 
-/// The ONE writer of config.json (spec decision 10). Field-scoped mutation under
+/// The ONE writer of config.json. Field-scoped mutation under
 /// ConfigFileLock: lock → re-read fresh → migrate in memory → apply the caller's mutation →
 /// publish via UNIQUE temp + rename. The critical section is synchronous on one thread —
 /// ConfigFileLock is a thread-affine named Mutex (WaitOne/ReleaseMutex), so no await may
@@ -26,9 +26,27 @@ public static class ConfigMutator {
         }
     }
 
-    /// Pure load: parse + migrate in memory, NEVER writes (decision 10 — the legacy
-    /// LoadProfileConfig persisted the v1→v2 migration during load, which under this API
-    /// would recursively acquire the same thread-affine mutex).
+    /// <see cref="MutateAsync"/> for a mutation whose decision depends on what the file says: an
+    /// unreadable file aborts before the callback runs and nothing is published. An absent file is a
+    /// fresh config, as in <see cref="Mutate"/>.
+    public static Task<ProfileConfig> MutateStrictAsync(
+            ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, CancellationToken ct = default) =>
+        Task.Run(() => MutateStrict(config, mutate), ct);
+
+    public static ProfileConfig MutateStrict(ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate) {
+        var path = AppConfig.GetConfigPath(config);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+        using (config.AcquireLock(AppConfig.ConfigFileName)) {
+            if (!TryLoadPure(path, out var current)) throw new ConfigUnreadableException(path);
+            var next = mutate(current);
+            Publish(path, next);
+            return next;
+        }
+    }
+
+    /// Pure load: parse + migrate in memory, NEVER writes — persisting the v1→v2 migration during
+    /// a load would recursively acquire the same thread-affine mutex.
     public static ProfileConfig LoadPure(string path) {
         TryLoadPure(path, out var config);
         return config;

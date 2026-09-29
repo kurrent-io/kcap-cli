@@ -1,0 +1,137 @@
+using Avalonia;
+using Avalonia.Controls;
+using Capacitor.App.Services;
+
+namespace Capacitor.App.Tests.Unit;
+
+public class WindowSizeMemoryTests {
+    static readonly PixelRect Screen = new(0, 0, 1920, 1080);
+    static readonly PixelSize Frame = new(1400, 760);
+
+    [Test]
+    public async Task Missing_size_uses_the_defaults() {
+        var (width, height) = WindowSizeMemory.Resolve(null, null);
+        await Assert.That(width).IsEqualTo(WindowSizeMemory.DefaultWidth);
+        await Assert.That(height).IsEqualTo(WindowSizeMemory.DefaultHeight);
+    }
+
+    [Test]
+    public async Task Saved_size_is_kept_when_at_or_above_the_floor() {
+        var (width, height) = WindowSizeMemory.Resolve(1552, 888);
+        await Assert.That(width).IsEqualTo(1552);
+        await Assert.That(height).IsEqualTo(888);
+    }
+
+    [Test]
+    public async Task Saved_size_below_the_floor_is_raised() {
+        var (width, height) = WindowSizeMemory.Resolve(800, 400);
+        await Assert.That(width).IsEqualTo(WindowSizeMemory.MinWidth);
+        await Assert.That(height).IsEqualTo(WindowSizeMemory.MinHeight);
+    }
+
+    [Test]
+    public async Task Non_finite_size_uses_the_defaults() {
+        var (width, height) = WindowSizeMemory.Resolve(double.NaN, double.PositiveInfinity);
+        await Assert.That(width).IsEqualTo(WindowSizeMemory.DefaultWidth);
+        await Assert.That(height).IsEqualTo(WindowSizeMemory.DefaultHeight);
+    }
+
+    [Test]
+    public async Task Missing_position_is_left_unspecified() {
+        await Assert.That(WindowSizeMemory.ResolvePosition(null, null, Frame, [Screen])).IsNull();
+    }
+
+    [Test]
+    public async Task Saved_position_on_a_screen_is_kept() {
+        await Assert.That(WindowSizeMemory.ResolvePosition(120, 80, Frame, [Screen])).IsEqualTo(new PixelPoint(120, 80));
+    }
+
+    /// A top-left on a screen stays put even when the frame runs past that screen's edge: that is
+    /// where a window straddling two monitors lives.
+    [Test]
+    public async Task Saved_position_on_a_screen_is_kept_when_the_frame_overhangs_it() {
+        var right = new PixelRect(1920, 0, 1920, 1080);
+        await Assert.That(WindowSizeMemory.ResolvePosition(1500, 80, Frame, [Screen, right])).IsEqualTo(new PixelPoint(1500, 80));
+    }
+
+    /// The whole frame comes back, not just its top-left pixel, so a window from a removed monitor
+    /// is fully on the first screen after the restore.
+    [Test]
+    public async Task Saved_position_off_every_screen_brings_the_whole_frame_onto_the_first() {
+        await Assert.That(WindowSizeMemory.ResolvePosition(8000, -400, Frame, [Screen])).IsEqualTo(new PixelPoint(520, 0));
+        await Assert.That(WindowSizeMemory.ResolvePosition(-3000, 4000, Frame, [Screen])).IsEqualTo(new PixelPoint(0, 320));
+    }
+
+    [Test]
+    public async Task Off_screen_clamp_respects_a_working_area_with_a_non_zero_origin() {
+        var area = new PixelRect(-1920, 40, 1920, 1040);
+        await Assert.That(WindowSizeMemory.ResolvePosition(5000, 5000, Frame, [area])).IsEqualTo(new PixelPoint(-1400, 320));
+    }
+
+    [Test]
+    public async Task A_frame_larger_than_the_screen_keeps_its_top_left_edge_on_it() {
+        await Assert.That(WindowSizeMemory.ResolvePosition(8000, 8000, new PixelSize(2600, 1400), [Screen])).IsEqualTo(new PixelPoint(0, 0));
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Apply_restores_the_remembered_placement() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var window = WindowAt(WindowSizeMemory.DefaultWidth, WindowSizeMemory.DefaultHeight);
+            WindowSizeMemory.Apply(window, new AppState(WindowWidth: 1552, WindowHeight: 888, WindowX: 120, WindowY: 80));
+            await Assert.That(window.Width).IsEqualTo(1552);
+            await Assert.That(window.Height).IsEqualTo(888);
+            await Assert.That(window.Position).IsEqualTo(new PixelPoint(120, 80));
+            window.Close();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Attach_persists_placement_on_close() {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var store = new AppStateStore(path);
+
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var window = WindowAt(1552, 888);
+            WindowSizeMemory.Attach(window, store);
+            window.Show();
+            window.Position = new PixelPoint(120, 80);
+            window.Close();
+        });
+
+        var state = await store.LoadAsync();
+        await Assert.That(state.WindowWidth).IsEqualTo(1552);
+        await Assert.That(state.WindowHeight).IsEqualTo(888);
+        await Assert.That(state.WindowX).IsEqualTo(120);
+        await Assert.That(state.WindowY).IsEqualTo(80);
+        await Assert.That(state.WindowMaximized).IsFalse();
+    }
+
+    /// Quitting from the dock while minimized must not forget that the window was maximized.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_window_minimized_from_maximized_is_remembered_as_maximized() {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var store = new AppStateStore(path);
+
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var window = WindowAt(1552, 888);
+            WindowSizeMemory.Attach(window, store);
+            window.Show();
+            window.WindowState = WindowState.Maximized;
+            window.WindowState = WindowState.Minimized;
+            window.Close();
+        });
+
+        var state = await store.LoadAsync();
+        await Assert.That(state.WindowMaximized).IsTrue();
+    }
+
+    static Window WindowAt(double width, double height) => new() {
+        MinWidth = WindowSizeMemory.MinWidth,
+        MinHeight = WindowSizeMemory.MinHeight,
+        Width = width,
+        Height = height,
+    };
+}

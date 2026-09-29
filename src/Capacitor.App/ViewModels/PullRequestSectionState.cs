@@ -9,12 +9,9 @@ internal sealed class PullRequestSectionState(string key) {
     internal string Key { get; } = key;
     internal List<Page> Pages { get; } = [];
     internal string? Snapshot;
-    internal DateTime? Started;
     internal DateTime? Completed;
-    internal DateTime? Fetched;
     internal string? Head;
     internal string Coverage = "limited";
-    internal string? CoverageReason;
     internal PullRequestCountDto? Total;
     internal PullRequestCountDto? Excluded;
     internal string? Next;

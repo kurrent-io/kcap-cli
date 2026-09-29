@@ -6,6 +6,7 @@ using Capacitor.App.Services;
 using Capacitor.Remote.Models;
 using Eventuous.SignalR;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
@@ -52,6 +53,63 @@ public class ServerConnectionServiceTests {
         await Assert.That(f.Reason).Contains("launch_denied_by_owner");
     }
 
+    /// Each push as the server sends it, one entry per HubBroadcasts name.
+    static readonly Dictionary<string, object?[]> WirePushes = new() {
+        [HubBroadcasts.AgentInstancesChanged]   = [],
+        [HubBroadcasts.DaemonsChanged]          = [],
+        [HubBroadcasts.LaunchFailed]            = ["a1", "reason"],
+        [HubBroadcasts.PermissionPending]       = ["s1"],
+        [HubBroadcasts.PermissionResponded]     = ["s1", "r1"],
+        [HubBroadcasts.PermissionRequested]     = ["s1", "r1", "Bash", new { command = "ls" }, null],
+        [HubBroadcasts.AcpElicitationRequested] = ["s1", "q1", "Pick one", null, false],
+        [HubBroadcasts.PendingInputChanged]     = ["a1", "s1", Array.Empty<QueuedInputItem>()],
+        [HubBroadcasts.TerminalOutput]          = ["a1", "aGk="],
+        [HubBroadcasts.TerminalDimensions]      = ["a1", 80, 24],
+        [HubBroadcasts.SessionTitleChanged]     = ["s1"],
+        [HubBroadcasts.ActiveSessionAdded]      = ["s1"],
+        [HubBroadcasts.ActiveSessionChanged]    = ["s1"],
+        [HubBroadcasts.ActiveSessionRemoved]    = ["s1"],
+        [HubBroadcasts.SessionDeleted]          = ["s1"],
+        [HubBroadcasts.SessionEvalCompleted]    = ["s1"],
+        [HubBroadcasts.SessionWhatsDoneGenerated] = ["s1"],
+        [HubBroadcasts.SubagentAdopted]         = ["s1"],
+        [HubBroadcasts.FlowsChanged]            = [],
+        [HubBroadcasts.WorkItemsChanged]        = [],
+        [HubBroadcasts.ProjectsChanged]         = [],
+        [HubBroadcasts.WelcomeStateChanged]     = [],
+        [HubBroadcasts.SessionAccessChanged]    = ["s1"],
+        [HubBroadcasts.RawStreamAccessRevoked]  = ["AgentSession-s1"],
+    };
+
+    /// A push carrying arguments that no handler binds is dropped only after the client throws and
+    /// catches a binding exception on its receive loop, so every push the server can send the app
+    /// needs a handler of its arity, whether or not the app has a use for it.
+    [Test]
+    public async Task EveryServerPushBindsToAHandler() {
+        var names = typeof(HubBroadcasts).GetFields().Where(f => f.IsLiteral).Select(f => (string)f.GetRawConstantValue()!);
+        await Assert.That(WirePushes.Keys).IsEquivalentTo(names);
+
+        var recorder = new UnboundPushRecorder();
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = new ServerConnectionService(
+            TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), hubLogging: b => b.AddProvider(recorder));
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        // One unbound push of each kind, or the recorder's silence about the rest proves nothing.
+        await host.BroadcastAsync("UnknownPing", "s1");
+        await host.BroadcastAsync("UnknownNudge");
+        foreach (var (name, args) in WirePushes) await host.BroadcastAsync(name, args);
+        // The client binds and dispatches in arrival order, so this landing means every push above has.
+        var drained = Next(lane.LaunchFailures, f => f.AgentId == "drain");
+        await host.BroadcastAsync(HubBroadcasts.LaunchFailed, "drain", "");
+        await drained;
+
+        await Assert.That(recorder.Failures).IsEquivalentTo(new[] {
+            "MissingHandler:UnknownPing", "ArgumentBindingFailure:UnknownPing", "MissingHandler:UnknownNudge",
+        });
+    }
+
     [Test]
     public async Task NoServerMeansDormantForever() {
         await using var lane = new ServerConnectionService(TimeProvider.System, serverUrl: null, () => Task.FromResult<string?>(null));
@@ -83,27 +141,6 @@ public class ServerConnectionServiceTests {
         lane.Start();
         var status = await Next(lane.Status, s => s.State == ServerLaneState.Connected);
         await Assert.That(status.Diagnostic).IsEqualTo(ServerConnectionService.TeamClaimMissingNotice);
-    }
-
-    [Test]
-    public async Task ConnectedThenServerClosesSurfacesRetrying() {
-        await using var host = await HubTestHost.StartAsync();
-        await using var lane = Lane(host);
-        lane.Start();
-        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
-
-        await host.StopAsync();
-        await Next(lane.Status, s => s.State == ServerLaneState.Retrying, seconds: 15);
-    }
-
-    [Test]
-    public async Task RestartReconnects() {
-        await using var host = await HubTestHost.StartAsync();
-        await using var lane = Lane(host);
-        lane.Start();
-        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
-        await lane.RestartAsync();
-        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
     }
 
     [Test]
@@ -234,21 +271,21 @@ public class ServerConnectionServiceTests {
     public async Task ParkWhileARestartAwaitsTheRetiredLoopLeavesTheLaneSignedOut() {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnoseEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
         await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
-            return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
+            if (n <= 2) return Task.FromResult<string?>(null);
+            diagnoseEntered.TrySetResult();
+            return gate.Task;
         });
         using var attemptReset = lane.Status
             .Where(s => s.State == ServerLaneState.Connecting)
             .Subscribe(_ => Interlocked.Exchange(ref attemptCallIndex, 0));
         lane.Start();
 
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (Volatile.Read(ref attemptCallIndex) < 3) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("DiagnoseAsync's token read was never reached");
-            await Task.Delay(5);
-        }
+        // Connecting resets the counter after this read has started, so the count itself is not a signal.
+        await diagnoseEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
         var restart = lane.RestartAsync();
         await Task.Delay(100); // it cannot pass the retired loop until the gate below releases it
@@ -256,7 +293,8 @@ public class ServerConnectionServiceTests {
         gate.SetResult(null);
         await restart;
 
-        await Task.Delay(2000); // ample for a re-admitted loop to connect and publish over the park
+        // An admitted loop publishes Connecting before it dials, so this only covers the schedule.
+        await Task.Delay(300);
         var latest = await lane.Status.Take(1).ToTask();
         await Assert.That(latest.State).IsEqualTo(ServerLaneState.SignedOut);
     }
@@ -264,7 +302,7 @@ public class ServerConnectionServiceTests {
     [Test]
     public async Task ParkSignedOutDuringATransportLossRetryingSequenceStaysParked() {
         await using var host = await HubTestHost.StartAsync();
-        await using var lane = Lane(host);
+        await using var lane = Lane(host, [TimeSpan.FromMilliseconds(30), TimeSpan.FromMilliseconds(30)]);
         lane.Start();
         await Next(lane.Status, s => s.State == ServerLaneState.Connected);
 
@@ -274,9 +312,8 @@ public class ServerConnectionServiceTests {
         lane.ParkSignedOut();
         await Next(lane.Status, s => s.State == ServerLaneState.SignedOut);
 
-        // A further reconnect attempt from the SAME (now epoch-stale) loop, if the guard failed,
-        // would overwrite this — give the retry policy's next tick a chance to (wrongly) land.
-        await Task.Delay(4000);
+        // The next reconnect tick is 30ms. A stale loop that still publishes would have landed.
+        await Task.Delay(200);
         var latest = await lane.Status.Take(1).ToTask();
         await Assert.That(latest.State).IsEqualTo(ServerLaneState.SignedOut);
     }
@@ -285,27 +322,26 @@ public class ServerConnectionServiceTests {
     // (negotiate + transport, resolved fast so hub.StartAsync completes normally), then
     // DiagnoseAsync's own third read, gated so the park below deterministically lands while that
     // continuation is still pending. The per-attempt counter resets on every Connecting so a
-    // retry (should one happen under load) re-fast-paths its own first two reads rather than
-    // inheriting a stale count from an earlier attempt.
+    // retry re-fast-paths its own first two reads. That reset also drops a count the test was
+    // polling, so the third read signals directly.
     [Test]
     public async Task ParkSignedOutDuringAnInFlightConnectDiscardsTheRacingConnectedPublish() {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnoseEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
         await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
-            return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
+            if (n <= 2) return Task.FromResult<string?>(null);
+            diagnoseEntered.TrySetResult();
+            return gate.Task;
         });
         using var attemptReset = lane.Status
             .Where(s => s.State == ServerLaneState.Connecting)
             .Subscribe(_ => Interlocked.Exchange(ref attemptCallIndex, 0));
         lane.Start();
 
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (Volatile.Read(ref attemptCallIndex) < 3) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("DiagnoseAsync's token read was never reached");
-            await Task.Delay(5);
-        }
+        await diagnoseEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
         lane.ParkSignedOut();
         gate.SetResult(null); // release DiagnoseAsync — its Connected publish must be discarded

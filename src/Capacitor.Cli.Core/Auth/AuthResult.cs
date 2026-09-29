@@ -22,12 +22,15 @@ public enum AuthFailureReason { Other, Unreachable, SigninDenied, NoTenantsFound
 /// a workspace" answer: nothing durable, and the caller resolves the input against its own server.
 /// </summary>
 public abstract record AuthResult {
+    /// <param name="CredentialSaved">False when the boundary published config but the token save
+    /// was refused or failed, so the profile exists without a usable sign-in.</param>
     public sealed record Committed(
         string                      ActiveProfile,
         string                      CanonicalServer,
         string                      Provider,
         string?                     Username,
-        IReadOnlyList<AuthIdentity> Published) : AuthResult;
+        IReadOnlyList<AuthIdentity> Published,
+        bool                        CredentialSaved = true) : AuthResult;
 
     public sealed record Cancelled : AuthResult;
 

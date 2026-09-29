@@ -4,15 +4,14 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// One entry in the visibility picker (spec §3 step 4). A dedicated record rather than a
+/// One entry in the visibility picker. A dedicated record rather than a
 /// ValueTuple — Avalonia's reflection-based bindings need real CLR properties, not a tuple's
 /// compiler-only element-name aliases.
 public sealed record VisibilityOption(string Value, string Label);
 
-/// spec §3 step 4 / decision 5: visibility picker + daemon-name field, written to the active
-/// profile on Next only (decision 10's ConfigMutator). No claim maintenance — claims key on
-/// {profile, server} and resolve the daemon name at application time (decision 7), so a rename
-/// here needs no second-store write.
+/// Visibility picker + daemon-name field, written to the active profile through ConfigMutator on
+/// Next only. No claim maintenance — claims key on {profile, server} and resolve the daemon name
+/// at application time, so a rename here needs no second-store write.
 public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
     /// The SAME four labels SetupCommand's interactive visibility prompt uses (Step 3/6), over
     /// the SAME value set as <see cref="AppConfig.ValidVisibilities"/>.

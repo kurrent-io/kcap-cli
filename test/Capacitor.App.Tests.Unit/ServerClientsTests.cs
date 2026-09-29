@@ -64,6 +64,16 @@ public class ServerClientsTests {
     }
 
     [Test]
+    public async Task The_holder_disposes_the_pull_request_and_plan_sources_after_the_work_context_source() {
+        var log = new List<string>();
+        var holder = new ServerClients(new Spy(log, "launch"), new Spy(log, "source"), new Spy(log, "pull-requests"), new Spy(log, "plans"));
+
+        await holder.DisposeAsync();
+
+        await Assert.That(log).IsEquivalentTo(new[] { "launch", "source", "pull-requests", "plans" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test]
     public async Task Sign_in_completion_reaches_subscribers_before_cleanup_and_is_inert_after() {
         var holder = new ServerClients(null, null);
         var seen = 0;

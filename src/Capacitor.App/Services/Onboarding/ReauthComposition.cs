@@ -29,12 +29,20 @@ internal static class ReauthComposition {
             GitHubOAuthClient github, WorkOSClient workos,
             string profile, string serverUrl, WizardBridges bridges,
             ConsentFlipClaims claims, IAppStateStore appState, IUrlOpener urlOpener, TimeProvider time,
-            Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation) {
+            Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation,
+            bool refreshAppState, CommitPrecondition? precondition = null) {
         var auth = new WizardAuthService(WizardComposition.BuildOperation(
-            root, tokenStore, httpFactory, proxy, github, workos, profile, bridges, claims, time, operation));
+            root, tokenStore, httpFactory, proxy, github, workos, profile, bridges, claims, time, operation,
+            precondition));
         var connect = new ConnectStepViewModel();
         connect.Prefill(serverUrl);
 
-        return new ReauthGraph(new SignInStepViewModel(auth, connect, bridges, claims, appState, urlOpener), auth);
+        // Only a sign-in to the profile the app runs on refreshes it; any other profile's dialog
+        // just closes, so it must not promise a refresh.
+        return new ReauthGraph(
+            new SignInStepViewModel(
+                auth, connect, bridges, claims, appState, urlOpener,
+                committedDetail: refreshAppState ? "You're signed in. Refreshing…" : null),
+            auth);
     }
 }

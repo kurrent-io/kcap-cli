@@ -2,15 +2,14 @@ using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Fake ILocalControlOps whose Get/Put/Stop calls are gated by per-call TaskCompletionSources: a
-/// test arms the NEXT call's outcome before triggering it, so hold/release is explicit and
-/// deterministic rather than timing-based. *Calls counters increment BEFORE the gate is awaited,
-/// so they double as proof a call actually reached the ops layer (as opposed to being
-/// dropped/ignored inside the caller). Mirrors ExchangeAsync's real already-cancelled-token
-/// short-circuit (spec §10) so a permanently cancelled shutdown token behaves the same as the
-/// real LocalControlOps. Shared by PauseControllerTests (Get/Put) and AgentActionServiceTests
-/// (Stop) — one scripted fake for every ILocalControlOps consumer in Capacitor.App.
+/// Fake ILocalControlOps whose calls are gated by per-call TaskCompletionSources: a test arms the
+/// NEXT call's outcome before triggering it, so hold/release is explicit rather than timing-based.
+/// *Calls counters increment before the gate is taken, so they prove a call reached the ops layer.
+/// An already-cancelled token short-circuits the way the real ExchangeAsync does.
+/// Callers run on pool threads concurrently, so every queue and payload list is guarded by one
+/// lock and the payload properties return snapshots.
 sealed class ScriptedLocalControlOps : ILocalControlOps {
+    readonly Lock _lock = new();
     readonly Queue<TaskCompletionSource<ConsentPolicyDto>> _gets = new();
     readonly Queue<TaskCompletionSource<ConsentAckDto>> _puts = new();
     readonly Queue<TaskCompletionSource<ConsentAckDto>> _putV2s = new();
@@ -19,6 +18,14 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     readonly Queue<TaskCompletionSource<PermissionAckDto>> _permissionResolves = new();
     readonly Queue<TaskCompletionSource<SendTextResult>> _sendTexts = new();
     readonly Queue<TaskCompletionSource<DaemonSettingsAckDto>> _settingsPuts = new();
+    readonly List<ConsentPolicyDto> _putPayloads = [];
+    readonly List<ConsentPolicyPutV2Dto> _putV2Payloads = [];
+    readonly List<(string AgentId, bool Force)> _stopPayloads = [];
+    readonly List<ConsentResolveDto> _resolvePayloads = [];
+    readonly List<PermissionResolveDto> _permissionResolvePayloads = [];
+    readonly List<(string AgentId, string Text)> _sendTextPayloads = [];
+    readonly List<(string AgentId, string Text, IReadOnlyList<string> Ids)> _sendTextWithAttachmentsPayloads = [];
+    readonly List<DaemonSettingsPutDto> _putSettingsPayloads = [];
 
     public int GetCalls;
     public int PutCalls;
@@ -30,172 +37,136 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public int SendTextWithAttachmentsCalls;
     public int PutSettingsCalls;
     public Action? SettingsPutStarted;
-    public readonly List<ConsentPolicyDto> PutPayloads = [];
-    public readonly List<ConsentPolicyPutV2Dto> PutV2Payloads = [];
-    public readonly List<(string AgentId, bool Force)> StopPayloads = [];
-    public readonly List<ConsentResolveDto> ResolvePayloads = [];
-    public readonly List<PermissionResolveDto> PermissionResolvePayloads = [];
-    public readonly List<(string AgentId, string Text)> SendTextPayloads = [];
-    public readonly List<(string AgentId, string Text, IReadOnlyList<string> Ids)> SendTextWithAttachmentsPayloads = [];
-    public readonly List<DaemonSettingsPutDto> PutSettingsPayloads = [];
 
-    public TaskCompletionSource<ConsentPolicyDto> ArmGet() {
-        var tcs = new TaskCompletionSource<ConsentPolicyDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _gets.Enqueue(tcs);
-        return tcs;
-    }
+    public IReadOnlyList<ConsentPolicyDto> PutPayloads => Snapshot(_putPayloads);
+    public IReadOnlyList<ConsentPolicyPutV2Dto> PutV2Payloads => Snapshot(_putV2Payloads);
+    public IReadOnlyList<(string AgentId, bool Force)> StopPayloads => Snapshot(_stopPayloads);
+    public IReadOnlyList<ConsentResolveDto> ResolvePayloads => Snapshot(_resolvePayloads);
+    public IReadOnlyList<PermissionResolveDto> PermissionResolvePayloads => Snapshot(_permissionResolvePayloads);
+    public IReadOnlyList<(string AgentId, string Text)> SendTextPayloads => Snapshot(_sendTextPayloads);
+    public IReadOnlyList<(string AgentId, string Text, IReadOnlyList<string> Ids)> SendTextWithAttachmentsPayloads => Snapshot(_sendTextWithAttachmentsPayloads);
+    public IReadOnlyList<DaemonSettingsPutDto> PutSettingsPayloads => Snapshot(_putSettingsPayloads);
 
+    public TaskCompletionSource<ConsentPolicyDto> ArmGet() => Arm(_gets);
     public void QueueGet(ConsentPolicyDto policy) => ArmGet().SetResult(policy);
     public void QueueGetFailure(string reason) => ArmGet().SetException(new LocalControlOpsException(reason, reason));
     public void QueueGetUnmappedFailure(Exception ex) => ArmGet().SetException(ex);
 
-    public TaskCompletionSource<ConsentAckDto> ArmPut() {
-        var tcs = new TaskCompletionSource<ConsentAckDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _puts.Enqueue(tcs);
-        return tcs;
-    }
-
+    public TaskCompletionSource<ConsentAckDto> ArmPut() => Arm(_puts);
     public void QueueAck(bool ok, string? error) => ArmPut().SetResult(new ConsentAckDto(ok, error, null));
 
-    public TaskCompletionSource<ConsentAckDto> ArmPutV2() {
-        var tcs = new TaskCompletionSource<ConsentAckDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _putV2s.Enqueue(tcs);
-        return tcs;
-    }
-
+    public TaskCompletionSource<ConsentAckDto> ArmPutV2() => Arm(_putV2s);
     public void QueuePutV2(bool ok, string? error) => ArmPutV2().SetResult(new ConsentAckDto(ok, error, null));
     public void QueuePutV2Failure(string reason) => ArmPutV2().SetException(new LocalControlOpsException(reason, reason));
-    public void QueuePutV2UnmappedFailure(Exception ex) => ArmPutV2().SetException(ex);
 
-    public TaskCompletionSource<StopAgentResult> ArmStop() {
-        var tcs = new TaskCompletionSource<StopAgentResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _stops.Enqueue(tcs);
-        return tcs;
-    }
-
+    public TaskCompletionSource<StopAgentResult> ArmStop() => Arm(_stops);
     public void QueueStop(StopAgentResult result) => ArmStop().SetResult(result);
     public void QueueStopFailure(string reason) => ArmStop().SetException(new LocalControlOpsException(reason, reason));
     public void QueueStopUnmappedFailure(Exception ex) => ArmStop().SetException(ex);
 
-    public TaskCompletionSource<ConsentAckDto> ArmResolve() {
-        var tcs = new TaskCompletionSource<ConsentAckDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _resolves.Enqueue(tcs);
-        return tcs;
-    }
-
+    public TaskCompletionSource<ConsentAckDto> ArmResolve() => Arm(_resolves);
     public void QueueResolve(bool ok, string? error, bool? ruleSaved = null) => ArmResolve().SetResult(new ConsentAckDto(ok, error, ruleSaved));
     public void QueueResolveFailure(string reason) => ArmResolve().SetException(new LocalControlOpsException(reason, reason));
     public void QueueResolveUnmappedFailure(Exception ex) => ArmResolve().SetException(ex);
 
-    public TaskCompletionSource<PermissionAckDto> ArmPermissionResolve() {
-        var tcs = new TaskCompletionSource<PermissionAckDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _permissionResolves.Enqueue(tcs);
-        return tcs;
-    }
-
+    public TaskCompletionSource<PermissionAckDto> ArmPermissionResolve() => Arm(_permissionResolves);
     public void QueuePermissionResolve(bool ok, string? error = null) => ArmPermissionResolve().SetResult(new PermissionAckDto(ok, error));
     public void QueuePermissionResolveFailure(string reason) => ArmPermissionResolve().SetException(new LocalControlOpsException(reason, reason));
 
-    public TaskCompletionSource<SendTextResult> ArmSendText() {
-        var tcs = new TaskCompletionSource<SendTextResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _sendTexts.Enqueue(tcs);
-        return tcs;
-    }
-
+    public TaskCompletionSource<SendTextResult> ArmSendText() => Arm(_sendTexts);
     public void QueueSendText(SendTextResult result) => ArmSendText().SetResult(result);
 
-    public TaskCompletionSource<DaemonSettingsAckDto> ArmPutSettings() {
-        var tcs = new TaskCompletionSource<DaemonSettingsAckDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _settingsPuts.Enqueue(tcs);
-        return tcs;
-    }
-
+    public TaskCompletionSource<DaemonSettingsAckDto> ArmPutSettings() => Arm(_settingsPuts);
     public void QueuePutSettings(bool ok, string? reason, int? maxAgents) => ArmPutSettings().SetResult(new DaemonSettingsAckDto(ok, reason, maxAgents));
     public void QueuePutSettingsFailure(string reason) => ArmPutSettings().SetException(new LocalControlOpsException(reason, reason));
 
     public Task<ConsentPolicyDto> GetConsentPolicyAsync(CancellationToken ct) {
         Interlocked.Increment(ref GetCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentPolicyDto>(ct);
-        if (_gets.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted Get call");
-        var tcs = _gets.Dequeue();
-        ct.Register(() => tcs.TrySetCanceled(ct));
-        return tcs.Task;
+        return Gated(Take(_gets, "Get"), ct);
     }
 
     public Task<ConsentAckDto> PutConsentPolicyAsync(ConsentPolicyDto policy, CancellationToken ct) {
         Interlocked.Increment(ref PutCalls);
-        PutPayloads.Add(policy);
+        Record(_putPayloads, policy);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentAckDto>(ct);
-        if (_puts.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted Put call");
-        var tcs = _puts.Dequeue();
-        ct.Register(() => tcs.TrySetCanceled(ct));
-        return tcs.Task;
+        return Gated(Take(_puts, "Put"), ct);
     }
 
     public Task<ConsentAckDto> PutConsentPolicyV2Async(ConsentPolicyPutV2Dto put, CancellationToken ct) {
         Interlocked.Increment(ref PutV2Calls);
-        PutV2Payloads.Add(put);
+        Record(_putV2Payloads, put);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentAckDto>(ct);
-        if (_putV2s.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted PutV2 call");
-        var tcs = _putV2s.Dequeue();
-        ct.Register(() => tcs.TrySetCanceled(ct));
-        return tcs.Task;
+        return Gated(Take(_putV2s, "PutV2"), ct);
     }
 
     public Task<StopAgentResult> StopAgentAsync(string agentId, bool force, CancellationToken ct) {
         Interlocked.Increment(ref StopCalls);
-        StopPayloads.Add((agentId, force));
+        Record(_stopPayloads, (agentId, force));
         if (ct.IsCancellationRequested) return Task.FromCanceled<StopAgentResult>(ct);
-        if (_stops.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted Stop call");
-        var tcs = _stops.Dequeue();
-        ct.Register(() => tcs.TrySetCanceled(ct));
-        return tcs.Task;
+        return Gated(Take(_stops, "Stop"), ct);
     }
 
     public Task<ConsentAckDto> ResolveConsentAsync(ConsentResolveDto resolve, CancellationToken ct) {
         Interlocked.Increment(ref ResolveCalls);
-        ResolvePayloads.Add(resolve);
+        Record(_resolvePayloads, resolve);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentAckDto>(ct);
-        if (_resolves.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted Resolve call");
-        var tcs = _resolves.Dequeue();
-        ct.Register(() => tcs.TrySetCanceled(ct));
-        return tcs.Task;
+        return Gated(Take(_resolves, "Resolve"), ct);
     }
 
     public Task<PermissionAckDto> ResolvePermissionAsync(PermissionResolveDto resolve, CancellationToken ct) {
         Interlocked.Increment(ref PermissionResolveCalls);
-        PermissionResolvePayloads.Add(resolve);
+        Record(_permissionResolvePayloads, resolve);
         if (ct.IsCancellationRequested) return Task.FromCanceled<PermissionAckDto>(ct);
-        if (_permissionResolves.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted permission resolve call");
-        var tcs = _permissionResolves.Dequeue();
-        ct.Register(() => tcs.TrySetCanceled(ct));
-        return tcs.Task;
+        return Gated(Take(_permissionResolves, "permission resolve"), ct);
     }
 
     public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) {
-        SendTextCalls++;
-        SendTextPayloads.Add((agentId, text));
+        Interlocked.Increment(ref SendTextCalls);
+        Record(_sendTextPayloads, (agentId, text));
         if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
-        var tcs = _sendTexts.Count > 0 ? _sendTexts.Dequeue() : throw new InvalidOperationException("arm SendText first");
-        return tcs.Task.WaitAsync(ct);
+        return Take(_sendTexts, "SendText").Task.WaitAsync(ct);
     }
 
     public Task<SendTextResult> SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
-        SendTextWithAttachmentsCalls++;
-        SendTextWithAttachmentsPayloads.Add((agentId, text, attachmentIds));
+        Interlocked.Increment(ref SendTextWithAttachmentsCalls);
+        Record(_sendTextWithAttachmentsPayloads, (agentId, text, attachmentIds));
         if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
-        var tcs = _sendTexts.Count > 0 ? _sendTexts.Dequeue() : throw new InvalidOperationException("arm SendText first");
-        return tcs.Task.WaitAsync(ct);
+        return Take(_sendTexts, "SendText").Task.WaitAsync(ct);
     }
 
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
         Interlocked.Increment(ref PutSettingsCalls);
-        PutSettingsPayloads.Add(put);
+        Record(_putSettingsPayloads, put);
         SettingsPutStarted?.Invoke();
         if (ct.IsCancellationRequested) return Task.FromCanceled<DaemonSettingsAckDto>(ct);
-        if (_settingsPuts.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted PutDaemonSettings call");
-        var tcs = _settingsPuts.Dequeue();
+        return Gated(Take(_settingsPuts, "PutDaemonSettings"), ct);
+    }
+
+    TaskCompletionSource<T> Arm<T>(Queue<TaskCompletionSource<T>> queue) {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_lock) queue.Enqueue(tcs);
+        return tcs;
+    }
+
+    TaskCompletionSource<T> Take<T>(Queue<TaskCompletionSource<T>> queue, string what) {
+        lock (_lock) {
+            return queue.TryDequeue(out var tcs)
+                ? tcs
+                : throw new InvalidOperationException($"ScriptedLocalControlOps: unscripted {what} call");
+        }
+    }
+
+    static Task<T> Gated<T>(TaskCompletionSource<T> tcs, CancellationToken ct) {
         ct.Register(() => tcs.TrySetCanceled(ct));
         return tcs.Task;
+    }
+
+    void Record<T>(List<T> list, T item) {
+        lock (_lock) list.Add(item);
+    }
+
+    T[] Snapshot<T>(List<T> list) {
+        lock (_lock) return [.. list];
     }
 }

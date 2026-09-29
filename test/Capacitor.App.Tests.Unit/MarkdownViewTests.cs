@@ -1,5 +1,4 @@
 using System.Reactive.Subjects;
-using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
@@ -9,26 +8,15 @@ using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Capacitor.App.Views;
-using MarkView.Avalonia.Rendering.Inlines;
+using MarkView.Avalonia;
 using ReactiveUI.Reactive;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
+using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
 
 namespace Capacitor.App.Tests.Unit;
 
 public class MarkdownViewTests {
-    static (Window Window, Control Root, List<string> Opened) Show(string markdown) {
-        var opened = new List<string>();
-        ICommand open = ReactiveCommand.Create<string>(opened.Add);
-        var view = new MarkdownView { Text = markdown, OpenLink = open, Width = 400 };
-        var window = new Window { Content = view, Width = 500, Height = 400 };
-        window.Show();
-        Dispatcher.UIThread.RunJobs();
-        window.UpdateLayout();
-        return (window, view, opened);
-    }
-
     static (Window Window, Control Root, List<string> Opened, List<string> Ran) ShowRunnable(string markdown) {
         var opened = new List<string>();
         var ran = new List<string>();
@@ -44,8 +32,6 @@ public class MarkdownViewTests {
         window.UpdateLayout();
         return (window, view, opened, ran);
     }
-
-    static IEnumerable<T> All<T>(Visual root) where T : Visual => root.GetVisualDescendants().OfType<T>();
 
     static List<Panel> Hosts(Visual root) => All<Panel>(root).Where(p => p.Classes.Contains("markdown-code-host")).ToList();
 
@@ -76,21 +62,6 @@ public class MarkdownViewTests {
         window.MouseUp(point, MouseButton.Left);
         Dispatcher.UIThread.RunJobs();
     }
-
-    static IEnumerable<TextBlock> Paragraphs(Visual root) => All<TextBlock>(root).Where(t => t.Classes.Contains("markdown-paragraph"));
-
-    /// A text block built from inlines leaves Text null and carries its characters on the
-    /// inline collection, so a "what does this block read as" assertion has to consult both.
-    static string Reads(TextBlock block) => block.Text ?? block.Inlines?.Text ?? "";
-
-    static IEnumerable<T> Spans<T>(InlineCollection inlines) where T : Inline {
-        foreach (var inline in inlines) {
-            if (inline is T t) yield return t;
-            if (inline is Span span) foreach (var nested in Spans<T>(span.Inlines)) yield return nested;
-        }
-    }
-
-    static IEnumerable<MarkdownHyperlink> Links(Visual root) => Paragraphs(root).SelectMany(p => Spans<MarkdownHyperlink>(p.Inlines!));
 
     /// Pins the block map: emphasis and code spans as inlines, fenced code, bullets, a quote and
     /// a rule, each carrying the style class the app's theme keys on.
@@ -126,14 +97,11 @@ public class MarkdownViewTests {
                 var link = Links(root).Single();
                 await Assert.That(link.NavigateUri?.ToString()).IsEqualTo("https://example.com/docs");
                 await Assert.That(All<Button>(root)).IsEmpty();
+                await Assert.That(ReferenceEquals(link.Foreground, window.FindResource("KcapInfoBrush"))).IsTrue()
+                    .Because("links are info blue; green is a status colour");
 
                 var paragraph = Paragraphs(root).Single();
-                var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
-                var point = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Y + paragraph.Padding.Top + glyph.Height / 2), window)!.Value;
-                window.MouseMove(point);
-                window.MouseDown(point, MouseButton.Left);
-                window.MouseUp(point, MouseButton.Left);
-                Dispatcher.UIThread.RunJobs();
+                ClickAt(window, paragraph, "See ".Length);
                 await Assert.That(opened).IsEquivalentTo(new[] { "https://example.com/docs" });
             } finally { window.Close(); }
         });
@@ -490,6 +458,63 @@ public class MarkdownViewTests {
             try {
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the cost of the binding order every chat row lands in: the command arriving after the
+    /// text adds the run offer to the strip already on screen, not a second build of the document.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_command_set_after_the_text_does_not_render_the_document_again() {
+        await RunOnUiAsync(async () => {
+            var view = new MarkdownView { Text = "```bash\n! kcap agent ls\n```\n\nSome prose.", Width = 400 };
+            var window = new Window { Content = view, Width = 500, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            try {
+                var viewer = Viewer(view);
+                var renders = 0;
+                using var _ = MarkdownViewer.MarkdownProperty.Changed.Subscribe(e => {
+                    if (ReferenceEquals(e.Sender, viewer) && e.NewValue.GetValueOrDefault() is not null) renders++;
+                });
+                var prose = Paragraphs(view).Single();
+
+                view.RunCode = ReactiveCommand.Create<string>(_ => { });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+
+                await Assert.That(renders).IsEqualTo(0);
+                await Assert.That(Paragraphs(view).Single()).IsSameReferenceAs(prose);
+                await Assert.That(Actions(Hosts(view)[0], "markdown-code-run").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the reverse move: a command withdrawn from the view takes the run offer with it, and
+    /// the document on screen is still the one that was built.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_command_withdrawn_takes_the_offer_without_rendering_again() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```bash\n! kcap agent ls\n```\n\nSome prose.");
+            try {
+                var viewer = Viewer(root);
+                var renders = 0;
+                using var _ = MarkdownViewer.MarkdownProperty.Changed.Subscribe(e => {
+                    if (ReferenceEquals(e.Sender, viewer) && e.NewValue.GetValueOrDefault() is not null) renders++;
+                });
+                var prose = Paragraphs(root).Single();
+
+                ((MarkdownView)root).RunCode = null;
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+
+                await Assert.That(renders).IsEqualTo(0);
+                await Assert.That(Paragraphs(root).Single()).IsSameReferenceAs(prose);
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
             } finally { window.Close(); }
         });
     }

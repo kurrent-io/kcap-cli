@@ -8,9 +8,12 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <c>last_processed_seq</c> field (the daemon's sequenced-lane watermark at rejection time) re-arms
 /// <see cref="McpFlowsServer.SettlementElapsedDeadline"/>'s 3-minute budget when it is the FIRST seq
 /// observed or STRICTLY increases over the previous 409, up to the
-/// <see cref="McpFlowsServer.SettlementAbsoluteDeadline"/> 8-minute hard cap. Every test here pins
-/// the exact elapsed time the retry gave up at — "it eventually gave up" alone would pass under
-/// several different (wrong) deadline compositions.
+/// <see cref="McpFlowsServer.SettlementAbsoluteDeadline"/> hard cap. Every test here pins the exact
+/// elapsed time the retry gave up at — "it eventually gave up" alone would pass under several
+/// different (wrong) deadline compositions.
+///
+/// <para>The cap sits 30 s above the window, so every scripted instant falls inside those 30 s: a
+/// re-arm scripted any later is clipped by the cap and proves nothing about the window.</para>
 ///
 /// <para>Requests never take real time on the wire — a <see cref="SeqScriptedHandler"/> advances
 /// the shared <see cref="VirtualFlowRetryClock"/> to an exact target elapsed time before returning
@@ -77,9 +80,9 @@ public class SettlementProgressWindowTests {
     }
 
     /// <summary>The FIRST observation of a seq is itself progress evidence and re-arms the window
-    /// from the moment it arrived. The first 409 here comes back at 2m30s carrying a seq: the caller
+    /// from the moment it arrived. The first 409 here comes back at 15s carrying a seq: the caller
     /// has just been told the daemon lane's position, so it gets a full 3m from THAT instant
-    /// (exhausting at 5m30s) rather than the 30s left of the flat window it was born with.
+    /// (exhausting at 3m15s) rather than what was left of the flat window it was born with.
     ///
     /// <para>Same test pins the other half of the guarantee: every later attempt repeats that seq
     /// unchanged, so a lane frozen from its first observation onward still exhausts exactly one
@@ -88,34 +91,35 @@ public class SettlementProgressWindowTests {
     [Test]
     public async Task First_seq_observed_late_re_arms_the_window_from_its_arrival() {
         var clock   = Clock();
-        var handler = new SeqScriptedHandler(clock, (TimeSpan.FromMinutes(2.5), 42L));
+        var handler = new SeqScriptedHandler(clock, (TimeSpan.FromSeconds(15), 42L));
 
         var exhausted = await RunToExhaustion(clock, handler);
 
-        var firstObservedAt = TimeSpan.FromMinutes(2.5);
+        var firstObservedAt = TimeSpan.FromSeconds(15);
         var expected        = firstObservedAt + McpFlowsServer.SettlementElapsedDeadline;
 
         await Assert.That(exhausted.Elapsed).IsEqualTo(expected);
         await Assert.That(clock.Elapsed).IsEqualTo(expected);
 
-        // Not the un-re-armed answer, and nowhere near the absolute cap.
+        // Not the un-re-armed answer, and short of the absolute cap.
         await Assert.That(exhausted.Elapsed).IsNotEqualTo(McpFlowsServer.SettlementElapsedDeadline);
         await Assert.That(exhausted.Elapsed).IsLessThan(McpFlowsServer.SettlementAbsoluteDeadline);
     }
 
     /// <summary>The absolute cap still clips a late first observation followed by continuous
-    /// progress: the last advance at 7m30s would re-arm the rolling window to 10m30s, but the run
-    /// stops at the 8m cap measured from the first attempt.</summary>
+    /// progress: the last advance at 3m15s would re-arm the rolling window to 6m15s, but the run
+    /// stops at the cap measured from the first attempt.</summary>
     [Test]
-    public async Task Late_first_seq_with_continuous_progress_is_still_clipped_by_the_8m_cap() {
+    public async Task Late_first_seq_with_continuous_progress_is_still_clipped_by_the_absolute_cap() {
         var clock = Clock();
 
-        // First evidence at 2m30s, then a strict increase every 60s — each gap well inside the 3m
-        // window, so only the cap can stop it. Nothing is scripted at or past 8m, so the test never
-        // depends on how a virtual timeout races a handler's own clock advance mid-request.
+        // First evidence at 15s, then a strict increase every 30s — each gap well inside the 3m
+        // window, so only the cap can stop it. Nothing is scripted at or past the cap, so the test
+        // never depends on how a virtual timeout races a handler's own clock advance mid-request.
         var script = new (TimeSpan, long?)[] {
-            (TimeSpan.FromMinutes(2.5), 1L), (TimeSpan.FromMinutes(3.5), 2L), (TimeSpan.FromMinutes(4.5), 3L),
-            (TimeSpan.FromMinutes(5.5), 4L), (TimeSpan.FromMinutes(6.5), 5L), (TimeSpan.FromMinutes(7.5), 6L)
+            (TimeSpan.FromSeconds(15), 1L),  (TimeSpan.FromSeconds(45), 2L),  (TimeSpan.FromSeconds(75), 3L),
+            (TimeSpan.FromSeconds(105), 4L), (TimeSpan.FromSeconds(135), 5L), (TimeSpan.FromSeconds(165), 6L),
+            (TimeSpan.FromSeconds(195), 7L)
         };
         var handler = new SeqScriptedHandler(clock, script);
 
@@ -125,44 +129,43 @@ public class SettlementProgressWindowTests {
         await Assert.That(clock.Elapsed).IsEqualTo(McpFlowsServer.SettlementAbsoluteDeadline);
     }
 
-    /// <summary>The headline rolling-window scenario: the seq advances at 1m and again at 2m30s,
-    /// then freezes. The window resets on EACH advance, so exhaustion lands 3m after the LAST
-    /// advance (≈5m30s) — not 3m from the start, and nowhere near the 8m absolute cap.</summary>
+    /// <summary>The headline rolling-window scenario: the seq advances at 10s and again at 25s, then
+    /// freezes. The window resets on EACH advance, so exhaustion lands 3m after the LAST advance
+    /// (3m25s) — not 3m from the start, and short of the absolute cap.</summary>
     [Test]
     public async Task Progress_then_stall_exhausts_3m_after_the_last_advance() {
         var clock = Clock();
         var handler = new SeqScriptedHandler(
             clock,
             (TimeSpan.Zero, 10L),                    // baseline
-            (TimeSpan.FromMinutes(1), 20L),           // advance #1 -> resets deadline to 1m + 3m = 4m
-            (TimeSpan.FromMinutes(2.5), 30L),         // advance #2 -> resets deadline to 2m30s + 3m = 5m30s
-            (TimeSpan.FromMinutes(2.5), 30L));        // frozen thereafter (same seq every later attempt)
+            (TimeSpan.FromSeconds(10), 20L),          // advance #1 -> resets deadline to 10s + 3m
+            (TimeSpan.FromSeconds(25), 30L),          // advance #2 -> resets deadline to 25s + 3m
+            (TimeSpan.FromSeconds(25), 30L));         // frozen thereafter (same seq every later attempt)
 
         var exhausted = await RunToExhaustion(clock, handler);
 
-        var expected = TimeSpan.FromMinutes(2.5) + McpFlowsServer.SettlementElapsedDeadline;
+        var expected = TimeSpan.FromSeconds(25) + McpFlowsServer.SettlementElapsedDeadline;
         await Assert.That(exhausted.Elapsed).IsEqualTo(expected);
         await Assert.That(clock.Elapsed).IsEqualTo(expected);
 
-        // Sanity: neither the naive flat-3m answer nor the 8m absolute cap.
+        // Sanity: neither the naive flat-3m answer nor the absolute cap.
         await Assert.That(exhausted.Elapsed).IsNotEqualTo(McpFlowsServer.SettlementElapsedDeadline);
         await Assert.That(exhausted.Elapsed).IsLessThan(McpFlowsServer.SettlementAbsoluteDeadline);
     }
 
     /// <summary>Continuous progress keeps re-arming the rolling window forever, so only the
-    /// ABSOLUTE cap — 8 minutes from the first attempt — can ever stop it.</summary>
+    /// ABSOLUTE cap, measured from the first attempt, can ever stop it.</summary>
     [Test]
-    public async Task Continuous_progress_stops_at_the_8m_absolute_cap() {
+    public async Task Continuous_progress_stops_at_the_absolute_cap() {
         var clock = Clock();
 
-        // A strictly increasing seq every 60s, comfortably inside the 3m rolling window each time
-        // so the window itself never lapses on its own. By the last entry (6m, resetting the window
-        // to 6m + 3m = 9m) the rolling window has already been pushed past the 8m absolute cap, so
-        // the effective deadline latches to the cap from then on — deliberately never scripting a
-        // send AT OR PAST 8m itself, so the test doesn't depend on how a virtual timeout races a
-        // handler's own clock advance mid-request.
+        // A strictly increasing seq every 30s, comfortably inside the 3m rolling window each time
+        // so the window itself never lapses on its own. The second entry already pushes the rolling
+        // window past the absolute cap, so the effective deadline latches to the cap from then on —
+        // deliberately never scripting a send AT OR PAST the cap itself, so the test doesn't depend
+        // on how a virtual timeout races a handler's own clock advance mid-request.
         var script = Enumerable.Range(0, 7)
-            .Select(i => (TimeSpan.FromMinutes(i), (long?)(i + 1)))
+            .Select(i => (TimeSpan.FromSeconds(30 * i), (long?)(i + 1)))
             .ToArray();
         var handler = new SeqScriptedHandler(clock, script);
 
@@ -173,42 +176,42 @@ public class SettlementProgressWindowTests {
     }
 
     /// <summary>A restart/regression — the watermark drops below where it was, e.g. a daemon
-    /// reconnect resetting its sequenced lane — must never count as progress. Real progress at 1m
-    /// arms the window to 4m; the regression at 2m does NOT push it further out, so exhaustion still
-    /// lands at 4m, not 5m (2m + 3m) or anything later.</summary>
+    /// reconnect resetting its sequenced lane — must never count as progress. Real progress at 10s
+    /// arms the window to 3m10s; the regression at 20s does NOT push it further out, so exhaustion
+    /// still lands at 3m10s, not 3m20s or anything later.</summary>
     [Test]
     public async Task Seq_regression_counts_as_no_progress_and_does_not_extend() {
         var clock = Clock();
         var handler = new SeqScriptedHandler(
             clock,
             (TimeSpan.Zero, 100L),                 // baseline
-            (TimeSpan.FromMinutes(1), 150L),        // real advance -> deadline = 1m + 3m = 4m
-            (TimeSpan.FromMinutes(2), 5L),          // regression (5 < 150) -> no reset
-            (TimeSpan.FromMinutes(2), 5L));         // held at the regressed value thereafter
+            (TimeSpan.FromSeconds(10), 150L),       // real advance -> deadline = 10s + 3m
+            (TimeSpan.FromSeconds(20), 5L),         // regression (5 < 150) -> no reset
+            (TimeSpan.FromSeconds(20), 5L));        // held at the regressed value thereafter
 
         var exhausted = await RunToExhaustion(clock, handler);
 
-        var expected = TimeSpan.FromMinutes(1) + McpFlowsServer.SettlementElapsedDeadline;
+        var expected = TimeSpan.FromSeconds(10) + McpFlowsServer.SettlementElapsedDeadline;
         await Assert.That(exhausted.Elapsed).IsEqualTo(expected);
-        await Assert.That(exhausted.Elapsed).IsNotEqualTo(TimeSpan.FromMinutes(2) + McpFlowsServer.SettlementElapsedDeadline);
+        await Assert.That(exhausted.Elapsed).IsNotEqualTo(TimeSpan.FromSeconds(20) + McpFlowsServer.SettlementElapsedDeadline);
     }
 
     /// <summary>An EQUAL seq across attempts must not reset the window either — proving the gate is
-    /// a strict `>`, not `>=`. A real advance at 1m arms the window to 4m; every attempt after that
-    /// repeats the exact same seq, so exhaustion still lands at 4m.</summary>
+    /// a strict `>`, not `>=`. A real advance at 10s arms the window to 3m10s; every attempt after
+    /// that repeats the exact same seq, so exhaustion still lands at 3m10s, not 3m20s.</summary>
     [Test]
     public async Task Equal_seq_counts_as_no_progress_proving_strict_increase() {
         var clock = Clock();
         var handler = new SeqScriptedHandler(
             clock,
             (TimeSpan.Zero, 7L),                  // baseline
-            (TimeSpan.FromMinutes(1), 9L),         // real advance -> deadline = 1m + 3m = 4m
-            (TimeSpan.FromMinutes(1.5), 9L),       // equal -> no reset
-            (TimeSpan.FromMinutes(1.5), 9L));      // held equal thereafter
+            (TimeSpan.FromSeconds(10), 9L),        // real advance -> deadline = 10s + 3m
+            (TimeSpan.FromSeconds(20), 9L),        // equal -> no reset
+            (TimeSpan.FromSeconds(20), 9L));       // held equal thereafter
 
         var exhausted = await RunToExhaustion(clock, handler);
 
-        var expected = TimeSpan.FromMinutes(1) + McpFlowsServer.SettlementElapsedDeadline;
+        var expected = TimeSpan.FromSeconds(10) + McpFlowsServer.SettlementElapsedDeadline;
         await Assert.That(exhausted.Elapsed).IsEqualTo(expected);
     }
 

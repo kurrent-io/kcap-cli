@@ -4,23 +4,21 @@ namespace Capacitor.Cli.Core.Tests.Unit.Mcp;
 
 public class KcapMcpServersTests {
     [Test]
-    public async Task All_contains_the_six_canonical_servers() {
+    public async Task All_contains_the_nine_canonical_servers() {
         var names = KcapMcpServers.All.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-analytics" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
     }
 
     [Test]
     public async Task ForCodex_is_the_full_set_including_workitems() {
-        // kcap-workitems is now registered on every harness, so the Codex subset is All.
         var names = KcapMcpServers.ForCodex.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-analytics" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
     }
 
     [Test]
     public async Task ForCursor_is_the_full_set_including_workitems() {
-        // every non-Claude JSON harness now receives kcap-workitems too.
         var names = KcapMcpServers.ForCursor.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-analytics" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
     }
 
     [Test]
@@ -53,13 +51,28 @@ public class KcapMcpServersTests {
     [Test]
     public async Task Review_is_the_only_non_repo_scoped_server() {
         var repoScoped = KcapMcpServers.All.Where(s => s.NeedsProjectCwd).Select(s => s.Name).ToArray();
-        await Assert.That(repoScoped).IsEquivalentTo(new[] { "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-analytics" });
+        await Assert.That(repoScoped).IsEquivalentTo(new[] { "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
     }
 
     [Test]
-    public async Task Analytics_is_read_only() {
-        // ReadOnly drives Codex per-server trust (auto-approval) — analytics tools are pure reads.
-        var analytics = KcapMcpServers.All.Single(s => s.Name == "kcap-analytics");
-        await Assert.That(analytics.ReadOnly).IsTrue();
+    public async Task Knowledge_keeps_per_call_approval() {
+        var knowledge = KcapMcpServers.All.Single(s => s.Name == "kcap-knowledge");
+        await Assert.That(knowledge.AutoApprove).IsFalse();
+        await Assert.That(knowledge.Args).IsEquivalentTo(new[] { "mcp", "knowledge" });
+    }
+
+    [Test]
+    public async Task Auto_approve_covers_reads_and_own_record_writers_only() {
+        var approved = KcapMcpServers.All.Where(s => s.AutoApprove).Select(s => s.Name).ToArray();
+        await Assert.That(approved).IsEquivalentTo(new[] {
+            "kcap-review", "kcap-sessions", "kcap-analytics", "kcap-workitems", "kcap-plans"
+        });
+    }
+
+    [Test]
+    public async Task Flows_is_the_only_server_whose_tool_calls_block_for_minutes() {
+        var timed = KcapMcpServers.All.Where(s => s.ToolTimeout is not null).ToArray();
+        await Assert.That(timed.Select(s => s.Name).ToArray()).IsEquivalentTo(new[] { "kcap-flows" });
+        await Assert.That(timed[0].ToolTimeout).IsEqualTo(TimeSpan.FromMinutes(10));
     }
 }

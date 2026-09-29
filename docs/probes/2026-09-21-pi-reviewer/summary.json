@@ -1,0 +1,2550 @@
+{
+  "pi_version": "0.85.1",
+  "platform": "darwin",
+  "arms": [
+    {
+      "arm": "discovery-default",
+      "argv": [
+        "--mode",
+        "rpc"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 381,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-discovery-default-work--/2026-09-21T16-06-16-173Z_01a0c4b7-d16d-74ba-b7b9-51a7aedd8158.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "agentcanary_tool",
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "agentcanary-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "no-extensions",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 248,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-no-extensions-work--/2026-09-21T16-06-16-588Z_01a0c4b7-d30b-7444-93d0-66eb04837d64.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "no-extensions-plus-e",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 280,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-no-extensions-plus-e-work--/2026-09-21T16-06-16-880Z_01a0c4b7-d42f-77ff-a196-08755ed30f77.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "submit_review_result",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "project-default",
+      "argv": [
+        "--mode",
+        "rpc"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 240,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-project-default-work--/2026-09-21T16-06-17-197Z_01a0c4b7-d56d-75b2-b948-1c31a7196f0c.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "project-approve",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--approve"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 398,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-project-approve-work--/2026-09-21T16-06-17-509Z_01a0c4b7-d6a4-72a6-93e2-e02203982f65.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "projcanary_tool",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "projcanary-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "project-approve-no-extensions",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--approve",
+        "--no-extensions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 242,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-project-approve-no-extensions-work--/2026-09-21T16-06-17-923Z_01a0c4b7-d842-76be-af45-f912017f5af6.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "reviewer-argv-unclamped",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 241,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-reviewer-argv-unclamped-work--/2026-09-21T16-06-18-200Z_01a0c4b7-d958-760d-841f-f5b928e5ca67.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 6,
+      "request_models": [
+        "m1",
+        "m1",
+        "m1",
+        "m1",
+        "m1",
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "submit_review_result",
+        "write"
+      ],
+      "tool_results_seen": [
+        {
+          "tool_call_id": "c1",
+          "content": "(no output)"
+        },
+        {
+          "tool_call_id": "c2",
+          "content": "Successfully wrote to WRITE_RAN"
+        },
+        {
+          "tool_call_id": "c3",
+          "content": "Successfully replaced 1 block(s) in inside.txt."
+        },
+        {
+          "tool_call_id": "c4",
+          "content": "OUTSIDE-SECRET-7731\n"
+        },
+        {
+          "tool_call_id": "c5",
+          "content": "recorded"
+        }
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-called",
+        "result-loaded"
+      ],
+      "result_calls": [
+        {
+          "toolCallId": "c5",
+          "params": {
+            "round_token": "tok-1",
+            "kind": "clean"
+          },
+          "flowAgentId": "probe-agent-42"
+        }
+      ],
+      "files_in_work": [
+        "BASH_RAN",
+        "WRITE_RAN",
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "tool_execution_end",
+        "tool_execution_start",
+        "tool_execution_update",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": [
+        {
+          "type": "tool_execution_start",
+          "tool": "bash",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "bash",
+          "isError": false
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "write",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "write",
+          "isError": false
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "edit",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "edit",
+          "isError": false
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "read",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "read",
+          "isError": false
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "submit_review_result",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "submit_review_result",
+          "isError": false
+        }
+      ]
+    },
+    {
+      "arm": "reviewer-argv-clamped",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "read,submit_review_result"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 270,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-reviewer-argv-clamped-work--/2026-09-21T16-06-18-613Z_01a0c4b7-daf5-7443-aea6-507137dec852.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 6,
+      "request_models": [
+        "m1",
+        "m1",
+        "m1",
+        "m1",
+        "m1",
+        "m1"
+      ],
+      "tools_offered": [
+        "read",
+        "submit_review_result"
+      ],
+      "tool_results_seen": [
+        {
+          "tool_call_id": "c1",
+          "content": "Tool bash not found"
+        },
+        {
+          "tool_call_id": "c2",
+          "content": "Tool write not found"
+        },
+        {
+          "tool_call_id": "c3",
+          "content": "Tool edit not found"
+        },
+        {
+          "tool_call_id": "c4",
+          "content": "OUTSIDE-SECRET-7731\n"
+        },
+        {
+          "tool_call_id": "c5",
+          "content": "recorded"
+        }
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-called",
+        "result-loaded"
+      ],
+      "result_calls": [
+        {
+          "toolCallId": "c5",
+          "params": {
+            "round_token": "tok-1",
+            "kind": "clean"
+          },
+          "flowAgentId": "probe-agent-42"
+        }
+      ],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "tool_execution_end",
+        "tool_execution_start",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": [
+        {
+          "type": "tool_execution_start",
+          "tool": "bash",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "bash",
+          "isError": true
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "write",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "write",
+          "isError": true
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "edit",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "edit",
+          "isError": true
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "read",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "read",
+          "isError": false
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "submit_review_result",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "submit_review_result",
+          "isError": false
+        }
+      ]
+    },
+    {
+      "arm": "clamp-omits-result-tool",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "read"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 275,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-clamp-omits-result-tool-work--/2026-09-21T16-06-19-025Z_01a0c4b7-dc90-703a-8075-372955b7d8a9.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "read"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "settings-package-default",
+      "argv": [
+        "--mode",
+        "rpc"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 347,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-settings-package-default-work--/2026-09-21T16-06-19-339Z_01a0c4b7-ddca-7045-ace5-5008b285e6c7.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "pkgcanary_tool",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "pkgcanary-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "settings-package-no-extensions",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 255,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-settings-package-no-extensions-work--/2026-09-21T16-06-19-725Z_01a0c4b7-df4c-723b-8fec-66ef52df7b4f.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "session-default",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 253,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-session-default-work--/2026-09-21T16-06-20-019Z_01a0c4b7-e072-729e-8cd5-651690c32d09.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "session-no-session",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions",
+        "--no-session"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 263,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": null
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "session-dir",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions",
+        "--session-dir",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/session-dir/sessions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 303,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/sessions/2026-09-21T16-06-20-683Z_01a0c4b7-e30b-77f0-a19c-e91882a1c50f.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "read-directory",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "read,submit_review_result"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 290,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-read-directory-work--/2026-09-21T16-06-21-044Z_01a0c4b7-e473-7049-915b-b3e8fa602129.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 2,
+      "request_models": [
+        "m1",
+        "m1"
+      ],
+      "tools_offered": [
+        "read",
+        "submit_review_result"
+      ],
+      "tool_results_seen": [
+        {
+          "tool_call_id": "d1",
+          "content": "EISDIR: illegal operation on a directory, read"
+        }
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "tool_execution_end",
+        "tool_execution_start",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": [
+        {
+          "type": "tool_execution_start",
+          "tool": "read",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "read",
+          "isError": true
+        }
+      ]
+    },
+    {
+      "arm": "prompt-inheritance",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "read,submit_review_result"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 342,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-prompt-inheritance-work--/2026-09-21T16-06-21-420Z_01a0c4b7-e5eb-7222-8306-ec4e2c7986f1.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "read",
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "prompt_tokens_inherited": [
+        "TOKEN-GLOBAL-CONTEXT",
+        "TOKEN-GLOBAL-SKILL",
+        "TOKEN-PROJECT-AGENTS"
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "prompt-inheritance-suppressed",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "read,submit_review_result",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 271,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-prompt-inheritance-suppressed-work--/2026-09-21T16-06-21-783Z_01a0c4b7-e757-7298-aeb1-35ff17b9c92e.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "read",
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "prompt_tokens_inherited": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "no-builtins-clamped",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--no-builtin-tools",
+        "--tools",
+        "submit_review_result"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 286,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-no-builtins-clamped-work--/2026-09-21T16-06-22-109Z_01a0c4b7-e89c-740a-b476-af2bf23a4ff3.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 3,
+      "request_models": [
+        "m1",
+        "m1",
+        "m1"
+      ],
+      "tools_offered": [
+        "submit_review_result"
+      ],
+      "tool_results_seen": [
+        {
+          "tool_call_id": "n1",
+          "content": "Tool read not found"
+        },
+        {
+          "tool_call_id": "n2",
+          "content": "recorded"
+        }
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "turn_start",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-called",
+        "result-loaded"
+      ],
+      "result_calls": [
+        {
+          "toolCallId": "n2",
+          "params": {
+            "round_token": "tok-2",
+            "kind": "clean"
+          },
+          "flowAgentId": "probe-agent-42"
+        }
+      ],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "tool_execution_end",
+        "tool_execution_start",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": [
+        {
+          "type": "tool_execution_start",
+          "tool": "read",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "read",
+          "isError": true
+        },
+        {
+          "type": "tool_execution_start",
+          "tool": "submit_review_result",
+          "isError": null
+        },
+        {
+          "type": "tool_execution_end",
+          "tool": "submit_review_result",
+          "isError": false
+        }
+      ]
+    },
+    {
+      "arm": "inactive-builtins",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "read,grep,find,ls,submit_review_result"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 263,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-inactive-builtins-work--/2026-09-21T16-06-22-440Z_01a0c4b7-e9e8-7666-a727-0218006a2b61.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "find",
+        "grep",
+        "ls",
+        "read",
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "no-builtin-tools-is-inert",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--no-builtin-tools",
+        "--tools",
+        "read,submit_review_result"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 300,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-no-builtin-tools-is-inert-work--/2026-09-21T16-06-22-770Z_01a0c4b7-eb32-740b-9cb9-2d9adc62ad54.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "read",
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "system-files-default",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "submit_review_result",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--offline",
+        "--session-dir",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/system-files-default/sessions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 295,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/sessions/2026-09-21T16-06-23-095Z_01a0c4b7-ec76-713b-bcd7-32b58125f6cd.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "system_tokens_seen": [
+        "TOKEN-GLOBAL-APPEND",
+        "TOKEN-GLOBAL-SYSTEM"
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "system-files-append-empty",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "submit_review_result",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--offline",
+        "--session-dir",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/system-files-append-empty/sessions",
+        "--append-system-prompt",
+        ""
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 289,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/sessions/2026-09-21T16-06-23-461Z_01a0c4b7-ede4-73a2-80ee-518064ba80d5.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "system_tokens_seen": [
+        "TOKEN-GLOBAL-SYSTEM"
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "system-files-explicit",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "submit_review_result",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--offline",
+        "--session-dir",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/system-files-explicit/sessions",
+        "--system-prompt",
+        "PROBE-SYSTEM",
+        "--append-system-prompt",
+        "PROBE-APPEND"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 279,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/sessions/2026-09-21T16-06-23-792Z_01a0c4b7-ef2f-738e-b2f7-dfad9dbd0607.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "system_tokens_seen": [
+        "PROBE-APPEND",
+        "PROBE-SYSTEM"
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "startup-package-install",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts"
+      ],
+      "notes": [
+        "get_state failed: null"
+      ],
+      "ready": false,
+      "state_latency_ms": 508,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": false,
+        "file": null
+      },
+      "requests": 0,
+      "request_models": [],
+      "tools_offered": null,
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [],
+      "marks": [
+        "npm-invoked"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "npm_invoked": [
+        "root -g",
+        "install kcap-probe-nonexistent-package --prefix /var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/startup-package-install/agent/npm --legacy-peer-deps"
+      ],
+      "exit_code": 1,
+      "frame_types": [],
+      "ui_requests": [],
+      "tool_events": [],
+      "stderr_tail": "ror: /var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/startup-package-install/fake-npm.sh install kcap-probe-nonexistent-package --prefix /var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/startup-package-install/agent/npm --legacy-peer-deps failed with code 1\n    at ChildProcess.<anonymous> (file:///opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/chunks/chunk-JVUZSMYM.js:1247:12886)\n    at ChildProcess.emit (node:events:507:28)\n    at ChildProcess._handle.onexit (node:internal/child_process:294:12)\n\nNode.js v23.11.0"
+    },
+    {
+      "arm": "startup-package-install-offline",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--offline"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 396,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-startup-package-install-offline-work--/2026-09-21T16-06-24-655Z_01a0c4b7-f28e-77fc-a3fd-bff03bf83ff6.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "submit_review_result",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "npm-invoked",
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "npm_invoked": [
+        "root -g"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "hostile-project-settings",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "submit_review_result",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--offline",
+        "--session-dir",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/hostile-project-settings/sessions",
+        "--system-prompt",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/hostile-project-settings/system-prompt.md",
+        "--append-system-prompt",
+        ""
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 269,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/sessions/2026-09-21T16-06-25-061Z_01a0c4b7-f425-77f9-a409-cab537d99697.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": true,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "project_dot_pi": [
+        ".pi/prompts",
+        ".pi/prompts/planted.md",
+        ".pi/settings.json"
+      ],
+      "hostile_session_dir_created": false,
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": [],
+      "stderr_tail": "Migrated Project commands/ \u2192 prompts/"
+    },
+    {
+      "arm": "hostile-project-settings-no-session-dir",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "submit_review_result",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--offline",
+        "--system-prompt",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/hostile-project-settings-no-session-dir/system-prompt.md",
+        "--append-system-prompt",
+        ""
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 290,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/evil-sessions/2026-09-21T16-06-25-396Z_01a0c4b7-f573-75ef-b336-9d7a2c7ad03b.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": true,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "project_dot_pi": [
+        ".pi/prompts",
+        ".pi/prompts/planted.md",
+        ".pi/settings.json"
+      ],
+      "hostile_session_dir_created": true,
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": [],
+      "stderr_tail": "Migrated Project commands/ \u2192 prompts/"
+    },
+    {
+      "arm": "factory-awaited",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/ready.ts",
+        "--tools",
+        "submit_review_result,read_file"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 2768,
+      "ready_report_at_state": {
+        "active": [
+          "read_file",
+          "submit_review_result"
+        ],
+        "all": [
+          "read_file",
+          "submit_review_result"
+        ]
+      },
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-factory-awaited-work--/2026-09-21T16-06-25-702Z_01a0c4b7-f6a5-7309-a0c3-dd061058bb1d.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "read_file",
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "factory-done",
+        "ready.json"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "factory-throws",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/ready.ts",
+        "--tools",
+        "submit_review_result,read_file"
+      ],
+      "notes": [
+        "get_state failed: null"
+      ],
+      "ready": false,
+      "state_latency_ms": 325,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": false,
+        "file": null
+      },
+      "requests": 0,
+      "request_models": [],
+      "tools_offered": null,
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 1,
+      "frame_types": [],
+      "ui_requests": [],
+      "tool_events": [],
+      "stderr_tail": "Error: Failed to load extension \"/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/ready.ts\": Failed to load extension: probe-factory-refused\nHint: Start without extensions using \"pi -ne\"."
+    },
+    {
+      "arm": "allowlist-typo",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/ready.ts",
+        "--tools",
+        "submit_review_resullt,read_file"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 261,
+      "ready_report_at_state": {
+        "active": [
+          "read_file"
+        ],
+        "all": [
+          "read_file"
+        ]
+      },
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-allowlist-typo-work--/2026-09-21T16-06-28-852Z_01a0c4b8-02f4-7391-8048-ab99e6254b4a.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "read_file"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "factory-done",
+        "ready.json"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "inventory-control",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--approve"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 426,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-inventory-control-work--/2026-09-21T16-06-29-197Z_01a0c4b8-044c-767f-ba05-f09ea279b0e1.jsonl"
+      },
+      "commands_listed": [
+        "inv-op-template",
+        "inv-repo-template",
+        "llama",
+        "skill:inv-op-skill-agentdir",
+        "skill:inv-op-skill-declared",
+        "skill:inv-op-skill-home-agents",
+        "skill:inv-repo-skill-agents",
+        "skill:inv-repo-skill-ancestor",
+        "skill:inv-repo-skill-pi"
+      ],
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "opdeclared_tool",
+        "opext_tool",
+        "oppkg_tool",
+        "read",
+        "repoext_tool",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "inventory_tokens_in_first_request": [
+        "INV-OP-AGENTS",
+        "INV-OP-SKILL-AGENTDIR",
+        "INV-OP-SKILL-DECLARED",
+        "INV-OP-SKILL-HOME-AGENTS",
+        "INV-REPO-AGENTS",
+        "INV-REPO-ANCESTOR-CLAUDE",
+        "INV-REPO-APPEND-SYSTEM",
+        "INV-REPO-SKILL-AGENTS",
+        "INV-REPO-SKILL-ANCESTOR",
+        "INV-REPO-SKILL-PI",
+        "INV-REPO-SYSTEM"
+      ],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "opdeclared-loaded",
+        "opext-loaded",
+        "oppkg-loaded",
+        "repoext-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "AGENTS.md",
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "inventory-suppressed",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-approve",
+        "--no-extensions",
+        "-e",
+        "/Users/tony/dev/kcap-cli-worktrees/ai-894-pi-reviewer-probes/docs/probes/2026-09-21-pi-reviewer/ext/result.ts",
+        "--tools",
+        "submit_review_result",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--offline",
+        "--session-dir",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/inventory-suppressed/sessions",
+        "--system-prompt",
+        "/var/folders/d_/28hknwjx0vj_97mffp9h6mcc0000gn/T/pi-reviewer-probe-f62evm78/inventory-suppressed/system-prompt.md",
+        "--append-system-prompt",
+        ""
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 275,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/sessions/2026-09-21T16-06-29-642Z_01a0c4b8-060a-711d-8b6b-56bc551f89f2.jsonl"
+      },
+      "commands_listed": [
+        "llama"
+      ],
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m1"
+      ],
+      "tools_offered": [
+        "submit_review_result"
+      ],
+      "tool_results_seen": [],
+      "inventory_tokens_in_first_request": [],
+      "launch_system_prompt_used": true,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [
+        "result-loaded"
+      ],
+      "result_calls": [],
+      "files_in_work": [
+        "AGENTS.md",
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "queued-prompt",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 246,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-queued-prompt-work--/2026-09-21T16-06-29-948Z_01a0c4b8-073b-7477-98ee-b68bc618db3e.jsonl"
+      },
+      "lifecycle_sequence": [
+        "response[q1:ok]",
+        "agent_start",
+        "turn_start",
+        "user_message_end",
+        "response[q2:ok]",
+        "turn_end",
+        "turn_start",
+        "user_message_end",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "requests": 2,
+      "request_models": [
+        "m1",
+        "m1"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "queue_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "unknown-flag",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions",
+        "--not-a-real-flag"
+      ],
+      "notes": [
+        "get_state failed: null"
+      ],
+      "ready": false,
+      "state_latency_ms": 254,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": false,
+        "file": null
+      },
+      "requests": 0,
+      "request_models": [],
+      "tools_offered": null,
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 1,
+      "frame_types": [],
+      "ui_requests": [],
+      "tool_events": [],
+      "stderr_tail": "Error: Unknown option: --not-a-real-flag"
+    },
+    {
+      "arm": "model-rpc",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 294,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-model-rpc-work--/2026-09-21T16-06-51-058Z_01a0c4b8-59b1-7060-9b0d-8091d9e1182f.jsonl"
+      },
+      "available_models": [
+        "probe/m1",
+        "probe/m2"
+      ],
+      "turn_before": "agent_settled",
+      "set_model_bad-string": {
+        "success": false,
+        "error": "Model not found: undefined/undefined"
+      },
+      "set_model_bad-combined": {
+        "success": false,
+        "error": "Model not found: undefined/undefined"
+      },
+      "set_model_good": {
+        "success": true,
+        "error": null
+      },
+      "turn_after": "agent_settled",
+      "state_model_after": "probe/m2",
+      "set_model_unknown": {
+        "success": false,
+        "error": "Model not found: probe/nope"
+      },
+      "requests": 2,
+      "request_models": [
+        "m1",
+        "m2"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    },
+    {
+      "arm": "model-argv",
+      "argv": [
+        "--mode",
+        "rpc",
+        "--no-extensions",
+        "--model",
+        "probe/m2"
+      ],
+      "notes": [],
+      "ready": true,
+      "state_latency_ms": 257,
+      "ready_report_at_state": null,
+      "session": {
+        "has_id": true,
+        "file": "<arm>/agent/sessions/--private-var-folders-d_-28hknwjx0vj_97mffp9h6mcc0000gn-T-pi-reviewer-probe-f62evm78-model-argv-work--/2026-09-21T16-06-51-384Z_01a0c4b8-5af7-7126-8ee2-ed55f72afc23.jsonl"
+      },
+      "turn": "agent_settled",
+      "requests": 1,
+      "request_models": [
+        "m2"
+      ],
+      "tools_offered": [
+        "bash",
+        "edit",
+        "read",
+        "write"
+      ],
+      "tool_results_seen": [],
+      "launch_system_prompt_used": false,
+      "lifecycle": [
+        "agent_start",
+        "turn_start",
+        "user_echo",
+        "turn_end",
+        "agent_end",
+        "agent_settled"
+      ],
+      "marks": [],
+      "result_calls": [],
+      "files_in_work": [
+        "inside.txt"
+      ],
+      "exit_code": 0,
+      "frame_types": [
+        "agent_end",
+        "agent_settled",
+        "agent_start",
+        "message_end",
+        "message_start",
+        "message_update",
+        "response",
+        "turn_end",
+        "turn_start"
+      ],
+      "ui_requests": [],
+      "tool_events": []
+    }
+  ]
+}

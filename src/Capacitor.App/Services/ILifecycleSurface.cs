@@ -1,6 +1,6 @@
 namespace Capacitor.App.Services;
 
-/// Everything the controller shows a human (spec §4/§6). The Avalonia implementation
+/// Everything the controller shows a human. The Avalonia implementation
 /// renders dialogs/status lines; tests fake it.
 public interface ILifecycleSurface {
     /// Honest one-liners — the message lane (e.g. degraded-but-owned, coded-failure surfaces).
@@ -11,7 +11,7 @@ public interface ILifecycleSurface {
     /// Like ConfirmAsync, but null distinguishes "ct won before the dialog factory ran" from a genuinely shown-and-declined dialog (false).
     Task<bool?> TryConfirmAsync(LifecyclePrompt prompt, CancellationToken ct);
 
-    /// Repair-affordance surfaces (spec §4.4) — never a silent mutation.
+    /// Repair-affordance surfaces — never a silent mutation.
     void Attention(string message);
 }
 
@@ -27,4 +27,5 @@ public sealed record LifecyclePrompt(
     public const string KindUpdateReady   = "update-ready";
     public const string KindUpdateInfo    = "update-info";
     public const string KindRename        = "rename";
+    public const string KindRemoveProfile = "remove-profile";
 }

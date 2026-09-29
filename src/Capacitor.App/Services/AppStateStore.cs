@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Capacitor.App.Services;
 
-/// App-owned UX state only — nothing lifecycle-safety-bearing lives here (spec §3.5). Persisted
+/// App-owned UX state only — nothing lifecycle-safety-bearing lives here. Persisted
 /// under the app's ConfigRoot as `app-state.json`; the CLI's own fixed-namespace
 /// marker is the source of truth for anything safety-bearing.
 public sealed record AppState(
@@ -14,7 +14,12 @@ public sealed record AppState(
     // target (HomeViewModel.ScratchRepoPath) — a stored preference only, since the daemon does
     // not accept a repo-less launch. Absent key = never chosen here; the caller picks its own
     // default rather than inheriting another repository's choice.
-    IReadOnlyDictionary<string, string>? HarnessByRepo = null);
+    IReadOnlyDictionary<string, string>? HarnessByRepo = null,
+    double? WindowWidth = null,
+    double? WindowHeight = null,
+    int? WindowX = null,
+    int? WindowY = null,
+    bool WindowMaximized = false);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();

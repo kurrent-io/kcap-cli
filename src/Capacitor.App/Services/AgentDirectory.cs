@@ -217,9 +217,8 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             foreach (var id in _placeholders.Keys.Where(published.Contains).ToList()) _placeholders.Remove(id);
             var now = _time.GetUtcNow().UtcDateTime;
             foreach (var id in _placeholders.Where(kv => kv.Value.CreatedAt + PlaceholderTtl <= now).Select(kv => kv.Key).ToList()) _placeholders.Remove(id);
-            // Infinite when nothing is pending: a negative due time would fire at once and re-arm forever.
-            var remaining = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : _placeholders.Values.Min(r => r.CreatedAt) + PlaceholderTtl - now;
-            var nextExpiry = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : remaining < TimeSpan.Zero ? TimeSpan.Zero : remaining;
+            // Infinite when nothing is pending; otherwise positive, since every expired entry was just removed.
+            var nextExpiry = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : _placeholders.Values.Min(r => r.CreatedAt) + PlaceholderTtl - now;
             _placeholderExpiry.Change(nextExpiry, Timeout.InfiniteTimeSpan);
             var pendingRows = _pendingLaunches
                 .Where(p => AgentIds.Normalize(p.Id) is { } id && !published.Contains(id))
@@ -229,8 +228,9 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             next.AddRange(pendingRows);
             next.AddRange(_placeholders.Values.Where(r => !starting.Contains(r.Id)));
 
+            var nextKeys = next.Select(r => r.Key).ToHashSet(StringComparer.Ordinal);
             _rows.Edit(cache => {
-                foreach (var key in cache.Keys.Where(k => !next.Any(r => r.Key == k)).ToList())
+                foreach (var key in cache.Keys.Where(k => !nextKeys.Contains(k)).ToList())
                     cache.RemoveKey(key);
                 foreach (var row in next)
                     if (cache.Lookup(row.Key) is not { HasValue: true, Value: var existing } || existing != row)

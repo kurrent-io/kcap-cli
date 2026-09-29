@@ -40,27 +40,38 @@ public interface IAuthProgress {
 /// whole block. It has to live here rather than in a decorator: most of this copy is composed in these
 /// methods, so nothing wrapping <see cref="IAuthProgress"/> can reach it.
 /// </param>
-public sealed class ConsoleAuthProgress(string indent = "") : IAuthProgress {
+/// <param name="output">
+/// Where the narration goes. Stdout by default, because it is what a person is reading. A command
+/// whose stdout carries a machine-readable document passes <see cref="Console.Error"/> instead: the
+/// user still needs to see the URL and the code they have to approve, and the document still has to
+/// be the only thing on stdout.
+/// </param>
+public sealed class ConsoleAuthProgress(string indent = "", TextWriter? output = null) : IAuthProgress {
     public static readonly ConsoleAuthProgress Instance = new();
 
-    public void Notice(string message) => Console.Out.WriteLine(Shifted(message));
+    /// <summary>The same narration, off stdout, for a caller whose stdout is a document.</summary>
+    public static ConsoleAuthProgress OnStderr(string indent = "") => new(indent, Console.Error);
+
+    TextWriter Out => output ?? Console.Out;
+
+    public void Notice(string message) => Out.WriteLine(Shifted(message));
 
     public void Error(string message) => Console.Error.WriteLine(Shifted(message));
 
     public void BrowserOpening(string url) {
-        Console.Out.WriteLine(Shifted("Opening browser for authentication..."));
-        Console.Out.WriteLine(Shifted($"  If the browser doesn't open, visit: {url}"));
+        Out.WriteLine(Shifted("Opening browser for authentication..."));
+        Out.WriteLine(Shifted($"  If the browser doesn't open, visit: {url}"));
     }
 
     public void DeviceCode(string code, string verificationUri, string? provider, bool prefilled) {
-        Console.Out.WriteLine(Shifted(prefilled ? $"  2. Check the code shown is {code}" : $"  2. Enter the code: {code}"));
-        Console.Out.WriteLine(Shifted(provider is null ? "  3. Approve access when asked." : $"  3. Approve access when {provider} asks."));
-        Console.Out.WriteLine();
-        Console.Write(Shifted("Waiting for you to authorize..."));
+        Out.WriteLine(Shifted(prefilled ? $"  2. Check the code shown is {code}" : $"  2. Enter the code: {code}"));
+        Out.WriteLine(Shifted(provider is null ? "  3. Approve access when asked." : $"  3. Approve access when {provider} asks."));
+        Out.WriteLine();
+        Out.Write(Shifted("Waiting for you to authorize..."));
     }
 
     /// <summary>Unshifted: the dots continue the "Waiting…" line rather than starting one.</summary>
-    public void PollTick() => Console.Write(".");
+    public void PollTick() => Out.Write(".");
 
     /// <summary>A blank separator stays blank — an indented one is trailing whitespace.</summary>
     string Shifted(string line) => indent.Length == 0 || line.Length == 0 ? line : indent + line;

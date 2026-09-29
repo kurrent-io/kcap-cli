@@ -2,4 +2,4 @@ using Avalonia.Controls;
 
 namespace Capacitor.App.Views;
 
-internal sealed record ReportItems(Window Window, NativeMenuItem Bug, NativeMenuItem Feedback);
+internal sealed record ReportItems(NativeMenuItem Bug, NativeMenuItem Feedback);

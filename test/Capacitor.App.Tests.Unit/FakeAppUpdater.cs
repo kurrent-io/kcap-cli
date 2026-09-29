@@ -24,7 +24,7 @@ sealed class FakeAppUpdater : IAppUpdater {
         return Task.FromResult(NextCheck);
     }
 
-    public async Task DownloadAsync(UpdateCandidate candidate, IProgress<int>? progress, CancellationToken ct) {
+    public async Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct) {
         DownloadCalls++;
         if (HoldDownload is { } hold) await hold.Task.WaitAsync(ct);
         PendingRestart = candidate;

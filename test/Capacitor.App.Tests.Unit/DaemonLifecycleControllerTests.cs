@@ -5,15 +5,14 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Startup phase, reconciliation, and the §4.2 startup matrix (spec). Every
+/// Startup phase, reconciliation, and the startup matrix. Every
 /// clock-dependent wait goes through FakeTimeProvider (never Task.Delay-based ordering);
 /// settling between an event push and its effect is driven by WaitUntilAsync polling on the
 /// fakes' call counters (PauseControllerTests/ConsentServiceTests idiom).
 ///
-/// Task 10: every mutating branch now routes through a fake lane (FakeMutationLane)
-/// instead of calling IKcapCli's mutation methods directly — FakeKcapCli's
-/// StartVerified/InstallVerified/DetachedStart call counts are kept as a belt-and-braces
-/// regression guard (they must stay 0 everywhere) alongside the new Lane.Requests assertions.
+/// Every mutating branch routes through a fake lane (FakeMutationLane), never IKcapCli's
+/// mutation methods: FakeKcapCli's StartVerified/InstallVerified/DetachedStart call counts must
+/// stay 0 everywhere, alongside the Lane.Requests assertions.
 public class DaemonLifecycleControllerTests {
     static readonly TimeSpan TxnActiveRequeryDelay = DaemonLifecycleController.TxnActiveRequeryDelay;
 
@@ -55,7 +54,7 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Cli.StatusCallCount).IsEqualTo(phase == "before-start" ? 0 : 1);
     }
 
-    // ---- startup matrix rows (§4.2) ----
+    // ---- startup matrix ----
 
     [Test]
     public async Task Row1_job_running_is_no_mutation() {
@@ -220,7 +219,7 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Lane.Requests).IsEmpty();
     }
 
-    // ---- Task 15 decision-2 carve-out: autoActionsPermanentlyClosed ----
+    // ---- carve-out: autoActionsPermanentlyClosed ----
 
     [Test]
     public async Task AutoActionsClosed_terminal_unreachable_admits_no_startup_matrix_but_still_closes_the_phase() {
@@ -265,7 +264,7 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.DetachedStart);
     }
 
-    // ---- txn_active defers the startup matrix (spec §6: wait and re-query, never mutate into a held flock) ----
+    // ---- txn_active defers the startup matrix (wait and re-query, never mutate into a held flock) ----
 
     [Test]
     public async Task TxnActive_defers_the_matrix_until_the_one_requery_clears_it() {
@@ -327,8 +326,8 @@ public class DaemonLifecycleControllerTests {
         await WaitUntilAsync(() => h.Cli.StatusCallCount == 2, what: "the forced re-evaluation against fresh state");
 
         // The re-evaluation must reconcile in ATTACHED mode (we're now actually Connected) — the
-        // ownership-mismatch check only fires while attached, so this proves the race no longer
-        // strands the run's only reconciliation pass in permanently-unattached mode.
+        // ownership-mismatch check only fires while attached, so this proves the race does not
+        // strand the run's only reconciliation pass in permanently-unattached mode.
         await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the attached-mode ownership-mismatch attention");
         await Assert.That(h.Surface.AttentionMessages[0]).Contains("100");
         await Assert.That(h.Surface.AttentionMessages[0]).Contains("200");
@@ -459,7 +458,7 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Cli.StatusCallCount).IsEqualTo(2);
     }
 
-    // ---- Task 10: routing through the lane ----
+    // ---- routing through the lane ----
 
     [Test]
     public async Task Auto_start_routes_through_the_lane_with_the_pinned_identity() {
@@ -508,14 +507,13 @@ public class DaemonLifecycleControllerTests {
         await Task.Delay(50); // give a wrongly-firing Attention/Status every chance to appear
         await Assert.That(h.Surface.AttentionMessages).IsEmpty();
         await Assert.That(h.Surface.StatusMessages).IsEmpty();
-        // Blocker 1: the reattach kick is unconditional after any lane mutation call — a mutation
+        // The reattach kick is unconditional after any lane mutation call: a mutation
         // attempt may have restarted the daemon even though this outcome isn't itself a success.
         await Assert.That(h.Client.RestartCount).IsEqualTo(1);
     }
 
-    // An UnconfirmedNoAttach outcome (the lane's TimedOut classification, spec §3.6) supersedes
-    // the controller's former confirm-window/timeout handling entirely — no local surface call at
-    // all, channel-only, same as every other non-success outcome.
+    // An UnconfirmedNoAttach outcome (the lane's TimedOut classification) makes no local surface
+    // call at all: channel-only, same as every other non-success outcome.
     [Test]
     public async Task UnconfirmedNoAttach_outcome_produces_no_controller_surface_call_but_still_kicks_reattach() {
         await using var h = new Harness();
@@ -530,12 +528,12 @@ public class DaemonLifecycleControllerTests {
         await Task.Delay(50);
         await Assert.That(h.Surface.StatusMessages).IsEmpty();
         await Assert.That(h.Surface.AttentionMessages).IsEmpty();
-        // Blocker 1: any lane mutation attempt may have restarted the daemon, so the kick is
+        // Any lane mutation attempt may have restarted the daemon, so the kick is
         // unconditional — not gated on this outcome being a success.
         await Assert.That(h.Client.RestartCount).IsEqualTo(1);
     }
 
-    // Round-1 review C-2: a Refused outcome that reached the LANE (as opposed to the guard
+    // A Refused outcome that reached the LANE (as opposed to the guard
     // refusing before ever touching it — see No_canonical_server_refuses_without_ever_calling_the_lane
     // above) was already enqueued onto the outcome channel by the lane's own Deliver — the
     // controller must make NO surface call of its own, or the composition-root consumer's
@@ -595,8 +593,7 @@ public class DaemonLifecycleControllerTests {
 
     // ---- coded failure ----
 
-    // Round-1 review C-2: a Failed outcome from the lane is presented ONLY by the composition-root
-    // consumer now (see AppMutationLaneWiringTests.PresentOutcomeAsync's Attention/Reinstall/
+    // A Failed outcome from the lane is presented ONLY by the composition-root consumer (see AppMutationLaneWiringTests.PresentOutcomeAsync's Attention/Reinstall/
     // Takeover coverage for the actual message content) — the controller itself makes no surface
     // call, but the once-per-run arm still holds (no retry on a second daemon_unreachable).
     [Test]
@@ -613,7 +610,7 @@ public class DaemonLifecycleControllerTests {
         await Task.Delay(50); // give a wrongly-firing Status/Attention every chance to appear
         await Assert.That(h.Surface.StatusMessages).IsEmpty();
         await Assert.That(h.Surface.AttentionMessages).IsEmpty();
-        // Blocker 1: a Failed outcome may still mean the daemon got restarted mid-mutation — the
+        // A Failed outcome may still mean the daemon got restarted mid-mutation — the
         // kick is unconditional, not gated on Succeeded/SucceededAfterTimeout.
         await Assert.That(h.Client.RestartCount).IsEqualTo(1);
 
@@ -667,7 +664,7 @@ public class DaemonLifecycleControllerTests {
         await h.Controller.DisposeAsync(); // must not throw ObjectDisposedException
     }
 
-    // ---- §4.4 Start action (light coverage — Task 21 wires the trigger) ----
+    // ---- Start action ----
 
     [Test]
     public async Task StartAction_job_running_kicks_reattach_without_mutation() {
@@ -693,8 +690,7 @@ public class DaemonLifecycleControllerTests {
 
         await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
         await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.DetachedStart);
-        // Task 10: DetachedStart from Start now shares the SAME success handling as every other
-        // verb (a strict improvement — it used to be a bare, result-discarding CLI call).
+        // DetachedStart from Start shares the SAME success handling as every other verb.
         await Assert.That(h.Client.RestartCount).IsEqualTo(1);
         await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
         await Assert.That(h.Surface.StatusMessages[0]).Contains("Waiting to connect");
@@ -947,10 +943,9 @@ public class DaemonLifecycleControllerTests {
 
 /// Scripted IKcapCli — every member is a settable behavior func plus a call counter, so tests
 /// can drive both immediate results and TaskCompletionSource-controlled hangs (the once-per-run
-/// arm test) without touching a real process. Task 10: StartVerified/InstallVerified/
-/// DetachedStart are no longer called by the controller AT ALL (routed through the lane instead)
-/// — their counters stay wired up purely as a regression tripwire (every controller test asserts
-/// they remain 0).
+/// arm test) without touching a real process. The controller never calls StartVerified/
+/// InstallVerified/DetachedStart (those go through the lane); their counters are a tripwire every
+/// controller test asserts stays 0.
 sealed class FakeKcapCli : IKcapCli {
     public string? CliPath { get; set; } = "/opt/kcap/bin/kcap";
 

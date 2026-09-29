@@ -321,7 +321,7 @@ public class McpFlowsServerSettlementRetryTests {
 
     /// <summary>The budget counts REQUEST DURATION, not just the sum of the backoff delays — each
     /// attempt may itself hold on a server-side admission wait. Simulated 60s-holding busy responses
-    /// therefore exhaust in a handful of attempts, well below the 10-minute MCP tool timeout.</summary>
+    /// therefore exhaust in a handful of attempts, below the shortest harness tool timeout.</summary>
     [Test]
     public async Task Elapsed_deadline_counts_request_duration_not_just_delay_sum() {
         var clock   = Clock();
@@ -339,7 +339,7 @@ public class McpFlowsServerSettlementRetryTests {
         await Assert.That(exhausted!.LastCode).IsEqualTo("flow_settlement_busy");
         // ~3 x 60s of held requests plus backoff — a delay-only budget would have allowed dozens.
         await Assert.That(handler.Requests).IsLessThanOrEqualTo(4);
-        await Assert.That(clock.Elapsed).IsLessThanOrEqualTo(TimeSpan.FromMinutes(10));   // under MCP_TOOL_TIMEOUT
+        await Assert.That(clock.Elapsed).IsLessThan(McpFlowsServer.ShortestHarnessToolTimeout);
         await Assert.That(clock.Elapsed).IsGreaterThanOrEqualTo(McpFlowsServer.SettlementElapsedDeadline);
     }
 
@@ -559,13 +559,13 @@ public class McpFlowsServerSettlementRetryTests {
     }
 
     /// <summary>The poll lane shares the POST lane's backoff SCHEDULE but keeps its own budget: it
-    /// retries a settlement-busy GET on the exact same jittered ladder, bounded by the 8-minute
-    /// PollCap rather than by an attempt count, and never overshoots that cap.</summary>
+    /// retries a settlement-busy GET on the exact same jittered ladder, bounded by PollCap rather
+    /// than by an attempt count, and never overshoots that cap.</summary>
     [Test]
     public async Task Poll_lane_settlement_retries_follow_the_shared_schedule_and_stop_at_poll_cap() {
         const string flowRunId = "flow-poll-schedule";
         const int    seed      = 7;
-        var          pollCap   = TimeSpan.FromMinutes(8);
+        var          pollCap   = TimeSpan.FromSeconds(210);
 
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())

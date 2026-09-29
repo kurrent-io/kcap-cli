@@ -60,7 +60,7 @@ internal sealed class DaemonStatusIpc(
         }
     }
 
-    string Snapshot() {
+    internal string Snapshot() {
         var agents = orchestrator.SnapshotAgentsForStatus();
         // Same predicate as the orchestrator's ActiveCount, applied to the SAME materialized
         // array — the count and the array can never disagree within one payload.
@@ -69,7 +69,7 @@ internal sealed class DaemonStatusIpc(
             new DaemonInfoDto(
                 config.Name, DaemonRunner.ResolveDaemonVersion(), config.ServerUrl,
                 ConnectionText(connection.HubState), config.MaxConcurrentAgents, active,
-                Environment.ProcessId, config.InstanceId, config.SupportedVendors),
+                Environment.ProcessId, config.InstanceId, config.SupportedVendors, config.VendorModels),
             agents,
             orchestrator.SnapshotPendingForStatus());
         return JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);

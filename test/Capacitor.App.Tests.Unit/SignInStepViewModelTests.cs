@@ -116,7 +116,6 @@ public class SignInStepViewModelTests {
         var (satisfied, status, isError, detail, showPrimary) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Connect.Choice = ConnectChoice.Discover;
-            h.Connect.DiscoveryProvider = provider;
             h.Operation = (_, _) => Task.FromResult<AuthResult>(Committed(provider));
 
             await h.Vm.OnEnterAsync(CancellationToken.None);
@@ -128,8 +127,37 @@ public class SignInStepViewModelTests {
         await Assert.That(satisfied).IsTrue();
         await Assert.That(status).IsEqualTo("Signed in as sam");
         await Assert.That(isError).IsFalse();
-        await Assert.That(detail).IsEqualTo("You're signed in. Refreshing…");
+        await Assert.That(detail).IsNull(); // what happens next is the host's to say
         await Assert.That(showPrimary).IsFalse();
+    }
+
+    /// Completed is the host's cue to move on, so it must not fire for an attempt that left the
+    /// user with something to do on this page.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_a_committed_sign_in_announces_completion() {
+        var (committed, cancelled, failed) = await AvaloniaSession.DispatchAsync(async () => {
+            async Task<int> CompletionsFor(AuthResult result) {
+                using var h = new Harness();
+                h.Connect.Choice = ConnectChoice.Create;
+                h.Operation = (_, _) => Task.FromResult(result);
+                var raised = 0;
+                h.Vm.Completed += () => raised++;
+
+                await h.SignIn();
+
+                return raised;
+            }
+
+            return (
+                await CompletionsFor(Committed()),
+                await CompletionsFor(new AuthResult.Cancelled()),
+                await CompletionsFor(new AuthResult.Failed("nope")));
+        });
+
+        await Assert.That(committed).IsEqualTo(1);
+        await Assert.That(cancelled).IsEqualTo(0);
+        await Assert.That(failed).IsEqualTo(0);
     }
 
     [Test]
@@ -172,6 +200,26 @@ public class SignInStepViewModelTests {
         await Assert.That(satisfied).IsTrue();
         await Assert.That(status).IsEqualTo("Signed in as sam");
         await Assert.That(runs).IsEqualTo(1); // entering the step starts nothing
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_commit_whose_credential_was_not_saved_does_not_satisfy_the_step() {
+        var (satisfied, isError, status) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Connect.Prefill("https://acme.example");
+            h.Operation = (_, _) => Task.FromResult<AuthResult>(
+                new AuthResult.Committed("acme", "https://acme.example:443", AuthProvider.GitHubApp, "sam", [], CredentialSaved: false));
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            await h.SignIn();
+
+            return (h.Vm.Satisfied, h.Vm.StatusIsError, h.Vm.Status);
+        });
+
+        await Assert.That(satisfied).IsFalse();
+        await Assert.That(isError).IsTrue();
+        await Assert.That(status).IsEqualTo("Signed in, but the credential could not be saved.");
     }
 
     // ── cancellation and failure ─────────────────────────────────────────────
@@ -521,7 +569,6 @@ public class SignInStepViewModelTests {
         var (retargets, choice, prefilled, status, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Connect.Choice = ConnectChoice.Discover;
-            h.Connect.DiscoveryProvider = AuthProvider.WorkOS;
             h.Operation = async (_, ct) => {
                 var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
 
@@ -719,6 +766,29 @@ public class SignInStepViewModelTests {
         await Assert.That(updates).IsEqualTo(1);
     }
 
+    /// Moving on with the notice up would strand it on a page nobody is looking at.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_quarantine_notice_holds_completion_until_it_is_acknowledged() {
+        var (whileShown, afterAck) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Connect.Choice = ConnectChoice.Create;
+            await File.WriteAllTextAsync(h.ClaimsPath, "{ this is not json");
+            var raised = 0;
+            h.Vm.Completed += () => raised++;
+
+            await h.SignIn();
+            var held = raised;
+
+            await h.Vm.AcknowledgeQuarantineCommand.Execute().ToTask();
+
+            return (held, raised);
+        });
+
+        await Assert.That(whileShown).IsEqualTo(0);
+        await Assert.That(afterAck).IsEqualTo(1);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_already_acknowledged_quarantine_is_never_surfaced_again() {
@@ -771,7 +841,7 @@ public class SignInStepViewModelTests {
         await Assert.That(connectBox).IsNotNull();
         await Assert.That(connectBox!.Classes.Contains("kcapField")).IsTrue();
         await Assert.That(signInButton).IsNotNull();
-        await Assert.That(signInStatus).IsEqualTo("Find your workspaces with GitHub");
+        await Assert.That(signInStatus).IsEqualTo("Find your workspaces with single sign-on");
         await Assert.That(ctaGap).IsEqualTo(14);
     }
 

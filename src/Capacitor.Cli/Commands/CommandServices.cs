@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
@@ -34,6 +35,7 @@ public static class CommandServices {
         services.AddSingleton(clock.Time);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
         services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
+        services.AddSingleton<IHandoffAgentLauncher, HandoffAgentLauncher>();
         services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
         services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
 
@@ -46,6 +48,7 @@ public static class CommandServices {
         services.AddSingleton(_ => HostedAgent.FromEnvironment());
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
+        services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
@@ -88,6 +91,7 @@ public static class CommandServices {
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
         services.AddTransient<CurateCommand>();
+        services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();
         services.AddTransient<EvalCommand>();
@@ -96,6 +100,7 @@ public static class CommandServices {
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
+        services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
         services.AddTransient<PluginCommand>();
@@ -111,6 +116,7 @@ public static class CommandServices {
         services.AddSingleton<ChosenServerHttp>();
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
+        services.AddSingleton<IBackgroundImportSpawner, BackgroundImportSpawner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
@@ -120,6 +126,8 @@ public static class CommandServices {
         services.AddTransient<McpWorkItemsServer>();
         services.AddTransient<McpPlansServer>();
         services.AddTransient<McpAnalyticsServer>();
+        services.AddTransient<McpArtefactsServer>();
+        services.AddTransient<McpKnowledgeServer>();
         services.AddTransient<McpReviewServer>();
         services.AddTransient<McpJudgeServer>();
         services.AddTransient<UninstallCommand>();

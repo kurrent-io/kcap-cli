@@ -31,10 +31,9 @@ internal static class ClaudeHostedPolicySeam {
         // One evaluation per raised prompt, so there is nothing to correlate a decision against and
         // nothing ambiguous about which call it answers.
         ClaudeHostedPolicyResult Result(PolicyOutcome outcome, string requested, string effective) =>
-            new(outcome, new PolicyDecisionEventV1(
-                sessionId, agentId, "claude", PolicySeams.HostedClaudePermission, snapshot.Id,
-                PolicyEngine.Version, "full", requested, effective, PolicyWire.ToWire(action),
-                PolicyWire.ToWire(evaluation.MatchedRules), snapshot.Degraded, null, null, false,
-                time.GetUtcNow().ToString("O")));
+            new(outcome, PolicyWire.Decision(
+                sessionId: sessionId, agentId: agentId, vendor: "claude", seam: PolicySeams.HostedClaudePermission,
+                snapshot: snapshot, mode: EvaluationMode.Full, requestedOutcome: requested, effectiveOutcome: effective,
+                action: PolicyWire.ToWire(action), matchedRules: PolicyWire.ToWire(evaluation.MatchedRules), time: time));
     }
 }

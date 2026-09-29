@@ -9,6 +9,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Commands;
@@ -167,11 +168,11 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
         try {
             return toolName switch {
-                "declare_plan_document" => await DeclareAsync(id, client, baseUrl, arguments, cwd, repoRoot),
-                "set_plan_tasks"        => await SetTasksAsync(id, client, baseUrl, arguments),
-                "update_plan_task"      => await UpdateTaskAsync(id, client, baseUrl, arguments),
-                "get_plan"              => await GetPlanAsync(id, client, baseUrl, arguments),
-                _                       => throw new ArgumentException($"Unknown tool: {toolName}")
+                PlanToolNames.DeclareDocument => await DeclareAsync(id, client, baseUrl, arguments, cwd, repoRoot),
+                PlanToolNames.SetTasks        => await SetTasksAsync(id, client, baseUrl, arguments),
+                PlanToolNames.UpdateTask      => await UpdateTaskAsync(id, client, baseUrl, arguments),
+                PlanToolNames.GetPlan         => await GetPlanAsync(id, client, baseUrl, arguments),
+                _                             => throw new ArgumentException($"Unknown tool: {toolName}")
             };
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
@@ -548,19 +549,21 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
     }
 
     internal static McpTool[] BuildToolsList() => [
-        new("declare_plan_document",
+        new(PlanToolNames.DeclareDocument,
             "Declare the plan, spec or design document this session works from. Call it when you write such a "
-          + "document or are handed one. The file is read locally: its SHA-256 and, up to 256 KB, its content are "
-          + "recorded, and the path is keyed against the git repository root. Returns plan_id, document_key and "
-          + "whether the plan was created; declaring the same document again attaches this session to the same plan.",
+          + "document or are handed one. The file is read locally; its SHA-256 and, up to 256 KB, its content go "
+          + "to the Capacitor server this session is recorded to — the one `kcap login` signed in to, which "
+          + "already holds the session's transcript — keyed by path against the git repository root. Nothing is "
+          + "published anywhere else. Returns plan_id, document_key and whether the plan was created; declaring "
+          + "the same document again attaches this session to the same plan.",
             new("object", new() {
                 ["kind"]         = new("string", "One of 'plan', 'spec' or 'design'."),
                 ["path"]         = new("string", "Path to the document, absolute or relative to the project directory."),
                 ["argues_from"]  = new("string", "Path of the document this one argues from — the spec a plan implements, or the design a spec refines — so both land on one plan."),
                 ["work_item_id"] = new("string", "Work item the plan belongs to, when known."),
                 ["session_id"]   = new("string", "Session to attach. Defaults to the session this server runs in when omitted.")
-            }, ["kind", "path"])),
-        new("set_plan_tasks",
+            }, ["kind", "path"]), McpToolAnnotations.Upsert),
+        new(PlanToolNames.SetTasks,
             "Declare the plan's task list as a full ordered snapshot, replacing the declared list. Call it when a "
           + "plan has discrete steps, and again — with the whole list — when the steps change. An entry carrying a "
           + "task_id the plan already knows keeps it; the rest are minted. Without plan_id the session's current "
@@ -570,8 +573,8 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
                     new("object", "A task: {title, task_id?, status?: pending|in_progress|completed|skipped, note?}.")),
                 ["plan_id"]    = new("string", "Plan to write to. Defaults to the session's current plan."),
                 ["session_id"] = new("string", "Session making the declaration. Defaults to the session this server runs in when omitted.")
-            }, ["tasks"])),
-        new("update_plan_task",
+            }, ["tasks"]), McpToolAnnotations.Replace),
+        new(PlanToolNames.UpdateTask,
             "Record one task's status transition — call it every time a task starts, finishes or is skipped. Name "
           + "the task by task_id (from set_plan_tasks or get_plan) or by its 1-based ordinal. Without plan_id the "
           + "session's current plan is used. The result names the plan it acted on.",
@@ -582,14 +585,14 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 ["note"]       = new("string", "Optional note on the transition — why a task was skipped, what blocked it."),
                 ["plan_id"]    = new("string", "Plan the task belongs to. Defaults to the session's current plan."),
                 ["session_id"] = new("string", "Session recording the change. Defaults to the session this server runs in when omitted.")
-            }, ["status"])),
-        new("get_plan",
+            }, ["status"]), McpToolAnnotations.Upsert),
+        new(PlanToolNames.GetPlan,
             "Read a plan back: its documents, tasks with status and source, and progress. Call it to recover the "
           + "task list after context compaction instead of re-reading a ledger file. Without plan_id the session's "
           + "current plan is returned; a session with no plan gets an empty result, not an error.",
             new("object", new() {
                 ["plan_id"]    = new("string", "Plan to read. Defaults to the session's current plan."),
                 ["session_id"] = new("string", "Session whose current plan to read. Defaults to the session this server runs in when omitted.")
-            }, []))
+            }, []), McpToolAnnotations.Read)
     ];
 }

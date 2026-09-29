@@ -9,7 +9,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.App.Tests.Unit;
 
 /// <summary>
-/// The wizard's single-flight sign-in driver and the decision-7 claim-arming hook it hands the
+/// The wizard's single-flight sign-in driver and the consent-flip claim-arming hook it hands the
 /// façade. Every claims assertion drives the REAL <see cref="ConsentFlipClaims"/> on a temp path —
 /// a recording double would prove nothing about durability or about the false-return path that
 /// must block a commit.
@@ -56,8 +56,6 @@ public class WizardAuthServiceTests {
 
     [Test]
     public async Task No_attempt_has_run_yet_so_current_is_null_and_the_service_is_quiesced() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var service = new WizardAuthService((_, _) => Task.FromResult<AuthResult>(Committed(Acme)));
 
         await Assert.That(service.Current).IsNull();
@@ -66,8 +64,6 @@ public class WizardAuthServiceTests {
 
     [Test]
     public async Task Begin_runs_the_operation_with_the_intent_and_publishes_it_as_current() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         ConnectIntent? seen = null;
         var service = new WizardAuthService((intent, _) => {
             seen = intent;
@@ -84,8 +80,6 @@ public class WizardAuthServiceTests {
 
     [Test]
     public async Task Begin_while_an_attempt_is_live_throws() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var gate = new TaskCompletionSource<AuthResult>();
         var service = new WizardAuthService((_, _) => gate.Task);
 
@@ -99,8 +93,6 @@ public class WizardAuthServiceTests {
 
     [Test]
     public async Task Begin_is_admitted_again_once_the_previous_result_completed() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var gate = new TaskCompletionSource<AuthResult>();
         var starts = 0;
         var service = new WizardAuthService((_, _) => {
@@ -112,7 +104,7 @@ public class WizardAuthServiceTests {
         gate.SetResult(new AuthResult.Failed("nope"));
         await first.Result.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var second = service.Begin(new ConnectIntent.Discover(AuthProvider.WorkOS));
+        var second = service.Begin(new ConnectIntent.Discover());
 
         await Assert.That(await second.Result.WaitAsync(TimeSpan.FromSeconds(5))).IsTypeOf<AuthResult.Committed>();
         await Assert.That(service.Current).IsSameReferenceAs(second);
@@ -132,16 +124,6 @@ public class WizardAuthServiceTests {
             new ConsentFlipClaim(Acme.Profile, Acme.CanonicalServer),
             new ConsentFlipClaim(Work.Profile, Work.CanonicalServer)
         ]);
-    }
-
-    [Test]
-    public async Task The_arming_hook_binds_to_the_claims_store_it_was_built_over() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
-
-        await WizardAuthService.ArmingHook(claims)([Acme], CancellationToken.None);
-
-        await Assert.That(claims.Pending()).IsEquivalentTo([new ConsentFlipClaim(Acme.Profile, Acme.CanonicalServer)]);
     }
 
     // A cancelled token must not turn arming into a half-written claim: the hook never hands the
@@ -224,8 +206,6 @@ public class WizardAuthServiceTests {
 
     [Test]
     public async Task Cancel_before_the_boundary_yields_cancelled_and_quiesces() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var started = new TaskCompletionSource();
         var service = new WizardAuthService(async (_, ct) => {
             started.SetResult();
@@ -245,8 +225,6 @@ public class WizardAuthServiceTests {
     // Committed; the service just delivers that answer to the close path.
     [Test]
     public async Task Cancel_after_the_boundary_still_yields_committed() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var started      = new TaskCompletionSource();
         var cancelSeen   = new TaskCompletionSource();
         var service = new WizardAuthService(async (_, ct) => {
@@ -265,8 +243,6 @@ public class WizardAuthServiceTests {
 
     [Test]
     public async Task QuiescedAsync_waits_for_a_live_attempt_to_settle() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var gate = new TaskCompletionSource<AuthResult>();
         var service = new WizardAuthService((_, _) => gate.Task);
 
@@ -283,8 +259,6 @@ public class WizardAuthServiceTests {
     // rather than as a faulted task nobody is positioned to catch.
     [Test]
     public async Task An_operation_that_throws_is_reported_as_failed() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var service = new WizardAuthService((_, _) => throw new InvalidOperationException("boom"));
 
         var result = await service.Begin(new ConnectIntent.Create()).Result.WaitAsync(TimeSpan.FromSeconds(5));
@@ -295,8 +269,6 @@ public class WizardAuthServiceTests {
 
     [Test]
     public async Task Cancelling_a_settled_attempt_is_a_no_op() {
-        using var config = new TempConfigRoot();
-        var (claims, _) = TempClaims(config);
         var service = new WizardAuthService((_, _) => Task.FromResult<AuthResult>(Committed(Acme)));
 
         var attempt = service.Begin(new ConnectIntent.Create());

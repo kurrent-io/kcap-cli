@@ -16,7 +16,7 @@ public partial class ConsentPromptWindow : ReactiveWindow<ConsentPromptViewModel
     IDisposable? _notifierSubscription;
     IAppNotifier? _notifier;
 
-    /// Assigned by App's window factory (spec §6): prompt warnings must surface on THIS window —
+    /// Assigned by App's window factory: prompt warnings must surface on THIS window —
     /// the main window may be closed. Same shape as MainWindow.Notifier, with one difference that
     /// matters here: a prompt window is transient (a fresh instance per raise), so the
     /// app-lifetime notifier subscription is dropped on close instead of living forever.
@@ -42,7 +42,7 @@ public partial class ConsentPromptWindow : ReactiveWindow<ConsentPromptViewModel
         Closed += (_, _) => _notifierSubscription?.Dispose();
 
         // The queue emptying is the ONE close this window performs on its own; a user close is an
-        // explicit defer and leaves the queue untouched (spec §6).
+        // explicit defer and leaves the queue untouched.
         this.WhenActivated(disposables => {
             ViewModel?.CloseRequested.Subscribe(_ => Close()).DisposeWith(disposables);
         });

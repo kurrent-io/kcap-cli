@@ -379,32 +379,6 @@ public class CursorHookCommandTests {
     }
 
     [Test]
-    public async Task hard_cap_returns_zero_when_inner_ignores_cancellation() {
-        // Simulates an uncancellable hang inside TokenStore.RefreshAsync's
-        // HttpClient.PostAsync — no CT plumbed through, default 100s timeout.
-        // The Task.WhenAny ceiling in CursorHookCommand.Handle must beat that.
-        var inner = Task.Run(async () => {
-                await Task.Delay(TimeSpan.FromSeconds(10));
-
-                return 42;
-            }
-        );
-        var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50), TimeProvider.System);
-        sw.Stop();
-
-        await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
-    }
-
-    [Test]
-    public async Task hard_cap_returns_inner_result_when_inner_finishes_first() {
-        var inner = Task.FromResult(7);
-        var exit  = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromSeconds(2), TimeProvider.System);
-        await Assert.That(exit).IsEqualTo(7);
-    }
-
-    [Test]
     public async Task fresh_canonical_event_is_spooled_when_drain_consumes_budget() {
         // Drain blocks past the budget by parking the POST handler. The
         // dispatcher must spool the fresh sessionEnd that hasn't been
@@ -524,7 +498,6 @@ public class CursorHookCommandTests {
     [Test, NotInParallel]
     public async Task HardCap_before_resolve_emits_nothing() {
         using var capture = ConsoleOutput.StartCapture();
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         using var fx = new Fixture(Config.Root);
         // Never resolves within the cap regardless of cancellation — proves the single
         // deadline race genuinely abandons the inner work rather than relying on it
@@ -540,10 +513,8 @@ public class CursorHookCommandTests {
         clock.Advance(CursorHookCommand.Ceiling);
 
         var exit = await call;
-        sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(2));
     }
 
     // On the deadline branch, HandleCore must deterministically Cancel() its own `cts` rather
@@ -577,37 +548,37 @@ public class CursorHookCommandTests {
     public async Task HardCap_after_resolve_sessionStart_emits_empty_once() {
         using var capture = ConsoleOutput.StartCapture();
         using var fx = new Fixture(Config.Root);
-        // sessionStart resolves instantly (fast JSON parse) but the live POST hangs well
-        // past the 50ms dispatcher deadline.
-        fx.HoldOnPost = TimeSpan.FromMilliseconds(300);
+        // The live POST never returns on its own. The cap is this clock, so advancing it is what
+        // abandons the post — a real delay here races the pool and the assertion together.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fx.ReleasePost = release;
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
+        var clock = new FakeTimeProvider();
+        var call = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
             _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
             () => fx.Spool);
-        sw.Stop();
 
+        clock.Advance(CursorHookCommand.Ceiling);
+
+        var exit = await call;
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("{}\n");
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
 
-        // Let the orphaned inner work actually finish in the background, then re-assert
-        // stdout is unchanged — the abandoned inner must never get a second/late write.
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        // The abandoned post still finishes once released, and must not write a second time.
+        release.TrySetResult();
+        await fx.PostReturned.Task;
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("{}\n");
     }
 
     // The single cap must also cover client/auth setup. A client factory that never completes
-    // simulates a TokenStore hang; the deadline must still fire, return 0, and never let the
-    // abandoned auth attempt produce a late write once it "completes" in the background.
+    // simulates a TokenStore hang; the deadline must still fire and return without writing.
     [Test, NotInParallel]
-    public async Task HardCap_during_client_setup_emits_nothing_and_no_late_write() {
+    public async Task HardCap_during_client_setup_emits_nothing() {
         using var capture = ConsoleOutput.StartCapture();
         using var fx = new Fixture(Config.Root);
         var neverAuths = new TaskCompletionSource<AuthAttempt>();
 
-        var sw    = System.Diagnostics.Stopwatch.StartNew();
         var clock = new FakeTimeProvider();
         var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .HandleWithDeps(
@@ -619,15 +590,8 @@ public class CursorHookCommandTests {
         clock.Advance(CursorHookCommand.Ceiling);
 
         var exit = await call;
-        sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
-
-        // Even if the abandoned auth call eventually resolves in the background, HandleCore
-        // is never invoked for this attempt — there must be no late write.
-        await Task.Delay(TimeSpan.FromMilliseconds(200));
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
     }
 
@@ -968,7 +932,10 @@ public class CursorHookCommandTests {
         public List<string> RouteOrder { get; } = [];
         public HookSpool    Spool      { get; }
         public ConfigRoot   Config     { get; }
-        public TimeSpan     HoldOnPost { get; set; } = TimeSpan.Zero;
+        /// When set, the hook POST waits on this and signals <see cref="PostReturned"/> once released.
+        public TaskCompletionSource? ReleasePost { get; set; }
+
+        public TaskCompletionSource PostReturned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>How much of the hook's budget a POST consumes. The deterministic stand-in for
         /// slow recording work: advancing the fake clock is what makes BudgetExpired flip, where a
@@ -1038,8 +1005,9 @@ public class CursorHookCommandTests {
 
                     if (SpendOnPost > TimeSpan.Zero) Clock.Advance(SpendOnPost);
 
-                    if (HoldOnPost > TimeSpan.Zero) {
-                        await Task.Delay(HoldOnPost);
+                    if (ReleasePost is { } release) {
+                        await release.Task;
+                        PostReturned.TrySetResult();
                     }
 
                     return new HttpResponseMessage(postStatus);

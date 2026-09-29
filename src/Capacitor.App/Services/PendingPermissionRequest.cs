@@ -12,6 +12,7 @@ namespace Capacitor.App.Services;
 public sealed class PendingPermissionRequest {
     string? _serverRequestId;
     string _agentId;
+    bool _subscriptionLost;
 
     internal PendingPermissionRequest(PermissionPendingDto dto) {
         Lane = PermissionLane.Local;
@@ -20,6 +21,8 @@ public sealed class PendingPermissionRequest {
         SessionId = dto.SessionId;
         _agentId = dto.AgentId;
         Vendor = dto.Vendor;
+        CanAllowOnce = dto.SupportsAllowOnce ?? dto.Vendor is "claude" or "codex";
+        CanAllowAlways = dto.SupportsAllowAlways ?? dto.Vendor == "claude";
         ToolName = dto.ToolName;
         ToolInputJson = dto.ToolInput?.GetRawText();
         ToolInputOmitted = dto.ToolInputOmitted;
@@ -38,6 +41,8 @@ public sealed class PendingPermissionRequest {
         SessionId = sessionId;
         _agentId = "";
         Vendor = vendor;
+        CanAllowOnce = vendor is "claude" or "codex";
+        CanAllowAlways = vendor == "claude";
         ToolName = toolName;
         ToolInputJson = toolInputJson;
         RequestedAt = requestedAt;
@@ -85,6 +90,9 @@ public sealed class PendingPermissionRequest {
     public string SessionId { get; }
     public string AgentId { get => Volatile.Read(ref _agentId); internal set => Volatile.Write(ref _agentId, value); }
     public string Vendor { get; }
+    public bool CanAllowOnce { get; }
+    public bool CanAllowAlways { get; }
+    internal bool SubscriptionLost { get => Volatile.Read(ref _subscriptionLost); set => Volatile.Write(ref _subscriptionLost, value); }
     public string ToolName { get; }
     public string? ToolInputJson { get; }
     public bool ToolInputOmitted { get; }
@@ -106,6 +114,29 @@ public sealed class PendingPermissionRequest {
         if (!IsQuestion || !other.IsQuestion) return false;
         if (!string.Equals(SessionId, other.SessionId, StringComparison.Ordinal)) return false;
         return QuestionFingerprints().ToHashSet(StringComparer.Ordinal).Overlaps(other.QuestionFingerprints());
+    }
+
+    internal bool OverlapsQuestion(IReadOnlySet<string> texts) {
+        if (!IsQuestion || texts.Count == 0) return false;
+        foreach (var fingerprint in QuestionFingerprints())
+            if (texts.Contains(fingerprint)) return true;
+        return false;
+    }
+
+    /// Every question in an AskUserQuestion payload, plus the header joins a card fingerprints.
+    internal static HashSet<string>? QuestionTexts(string? toolInputJson) {
+        if (ClaudeElicitation.TryParse(toolInputJson) is not { } parsed) return null;
+        var texts = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var q in parsed.Questions) {
+            var question = q.Question.Trim();
+            if (question.Length == 0) continue;
+            texts.Add(question);
+            if (q.Header is { Length: > 0 } header) {
+                texts.Add($"{header}\n{question}");
+                texts.Add($"{header}\n\n{question}");
+            }
+        }
+        return texts.Count == 0 ? null : texts;
     }
 
     IEnumerable<string> QuestionFingerprints() {

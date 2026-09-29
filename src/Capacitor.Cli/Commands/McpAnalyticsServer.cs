@@ -389,7 +389,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
             "The governed analytics schema: the v_an_* views and columns you may query, a terminology glossary, " +
             "SQL rules, and worked examples. Always call this once before writing SQL for query_analytics. " +
             "Covers sessions, tool/skill/token usage, cost, code changes, commits, PRs, evals, and work items.",
-            new("object", new(), [])),
+            new("object", new(), []), McpToolAnnotations.Read),
         new("query_analytics",
             "Run one governed read-only Postgres SELECT over the analytics views (see get_analytics_schema). " +
             "Answers questions about coding-agent sessions, usage, cost, and delivery telemetry. A rejected " +
@@ -398,6 +398,6 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["sql"]      = new("string", "A single Postgres SELECT over the governed v_an_* views."),
                 ["scope"]    = new("string", "'repo' (default) = only the current repository, derived from the working directory; 'global' = all repositories in the org."),
                 ["max_rows"] = new("number", "Row cap for this query (default 300; clamped to the server's maximum).")
-            }, ["sql"]))
+            }, ["sql"]), McpToolAnnotations.Read)
     ];
 }

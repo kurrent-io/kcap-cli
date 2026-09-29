@@ -55,7 +55,7 @@ public class ChatAttachmentsTests {
 
         public Harness(IChatTranscriptProjection? projection) =>
             Chat = new ChatTabViewModel(
-                "a1", Daemon, Input, Uploader, projection, new RecordingOpener(), Time, new FakePermissionService());
+                "a1", Daemon, Input, Uploader, projection, new RecordingOpener(), Time, new FakePermissionService(), new SessionSubagents(Time));
 
         public async Task PushAsync(AgentStatusDto dto) {
             Daemon.Agents.AddOrUpdate(dto);
@@ -302,6 +302,32 @@ public class ChatAttachmentsTests {
             await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message unconfirmed");
 
             File.AppendAllText(path, SpacedTrailerTurn + "\n");
+            await h.TickAsync();
+
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(0);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A bang command's receipt stores the command without the space after the bang, and the
+    /// attachment trailer is inside that command, so the queued text is not a prefix of the echo.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_spaced_bang_command_with_attachments_is_cleared_by_its_receipt() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            var path = Tmp.CreateFile("bang.jsonl", []);
+            await h.PushAsync(Dto(path));
+
+            var send = h.Begin("! kubectl get pods", "a.png");
+            h.Release(new UploadOutcome(UploadKind.Uploaded, ["A"], null));
+            await WaitUntilAsync(() => h.Input.Sends.Count == 1, what: "the send that follows the upload");
+            h.Input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+            await send;
+            await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
+
+            File.AppendAllText(path, """{"type":"user","message":{"content":"<bash-input>kubectl get pods\n\n[Attached files: .attached/x/a.png]</bash-input>"}}""" + "\n");
             await h.TickAsync();
 
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();

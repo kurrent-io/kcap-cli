@@ -81,11 +81,13 @@ jobs:
         # A keyed [NotInParallel] test still runs concurrently with every disjoint-key class, so
         # anything touching process-global state must hold the SAME key as every other toucher. A
         # width this narrow surfaces a missing key less readily than a dev machine does, where the
-        # default is four times the core count.
+        # default is four times the core count. --hangdump fires after 10m with no test-host
+        # activity and writes a mini dump; a full dump of the host is larger than this artifact is for.
         run: >
           dotnet test --solution Capacitor.slnx --no-build
           --max-parallel-test-modules ${{ matrix.modules }}
           -- --maximum-parallel-tests ${{ matrix.tests }}
+          --hangdump --hangdump-timeout 10m --hangdump-type Mini
 
       # Kept on success too: the console prints nothing between banner and summary, so these are the
       # only per-test timing record. File kinds and not the directory — upload-artifact roots the
@@ -104,6 +106,8 @@ jobs:
             TestResults/*.html
             TestResults/*.trx
             TestResults/*.tunit-report.json
+            TestResults/*.dmp
+            TestResults/*hang*
           retention-days: 3
           if-no-files-found: ignore
 

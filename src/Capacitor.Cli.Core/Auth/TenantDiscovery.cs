@@ -39,16 +39,26 @@ public interface ITenantPicker {
 }
 
 public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
+    /// <summary>
+    /// The error in words. A rejected token is the provider's rejection, so the lane names itself:
+    /// telling a WorkOS user that GitHub turned them away sends them to the wrong sign-in.
+    /// </summary>
+    internal static string Describe(DiscoveryError error, string provider) {
+        var who = provider == AuthProvider.WorkOS ? "WorkOS" : "GitHub";
+
+        return error switch {
+            DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
+            DiscoveryError.TokenRejected    => $"{who} rejected the authentication token. Please sign in again.",
+            DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
+            _                               => "Tenant discovery failed."
+        };
+    }
+
     public async Task<DiscoveryOutcome> RunAsync(string proxyUrl, string githubAccessToken, CancellationToken ct = default) {
         var result = await proxy.DiscoverTenantsAsync(proxyUrl, githubAccessToken, ct);
 
         if (result.Error != DiscoveryError.None) {
-            return new([], null, result.Error switch {
-                DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
-                DiscoveryError.TokenRejected    => "GitHub rejected the authentication token. Please sign in again.",
-                DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
-                _                               => "Tenant discovery failed."
-            });
+            return new([], null, Describe(result.Error, AuthProvider.GitHubApp));
         }
 
         if (result.Tenants.Length == 0) {

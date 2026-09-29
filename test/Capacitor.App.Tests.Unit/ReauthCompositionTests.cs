@@ -37,12 +37,42 @@ public class ReauthCompositionTests {
                 _ => (intent, _) => {
                     seen = intent;
                     return Task.FromResult<AuthResult>(Committed());
-                });
+                },
+                refreshAppState: true);
 
             await graph.SignIn.SignInCommand.Execute().ToTask();
 
             await Assert.That(seen).IsEqualTo(new ConnectIntent.Paste(ServerUrl));
             await Assert.That(graph.SignIn.Satisfied).IsTrue();
+            // The dialog's own promise: it refreshes the app and closes, which the wizard does not.
+            await Assert.That(graph.SignIn.StatusDetail).IsEqualTo("You're signed in. Refreshing…");
+        });
+    }
+
+    /// A dialog for a profile the app does not run on closes without a refresh, so its success
+    /// line must not promise one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_sign_in_that_does_not_refresh_the_app_promises_no_refresh() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var config = new TempConfigRoot();
+
+            var graph = ReauthComposition.Build(
+                config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
+                new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
+                "default", ServerUrl,
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                new ConsentFlipClaims(config.Root),
+                new AppStateStore(config.PathTo("app-state.json")),
+                new RecordingOpener(),
+                TimeProvider.System,
+                _ => (_, _) => Task.FromResult<AuthResult>(Committed()),
+                refreshAppState: false);
+
+            await graph.SignIn.SignInCommand.Execute().ToTask();
+
+            await Assert.That(graph.SignIn.Satisfied).IsTrue();
+            await Assert.That(graph.SignIn.StatusDetail).IsNull();
         });
     }
 
@@ -66,7 +96,8 @@ public class ReauthCompositionTests {
                     started.TrySetResult();
                     await Task.Delay(Timeout.Infinite, ct);
                     return Committed();
-                });
+                },
+                refreshAppState: true);
 
             var run = graph.SignIn.SignInCommand.Execute().ToTask();
             await started.Task;
@@ -76,6 +107,38 @@ public class ReauthCompositionTests {
 
             await Assert.That(graph.SignIn.Satisfied).IsFalse();
             await graph.Auth.QuiescedAsync(); // completes only once no attempt is live
+        });
+    }
+
+    /// The precondition is an optional null-defaulted parameter at every hop between here and
+    /// LoginAsync, so a dropped one refuses nothing and no other test notices.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_commit_precondition_reaches_the_facade_spec() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var config = new TempConfigRoot();
+            CommitPrecondition? captured = null;
+
+            var graph = ReauthComposition.Build(
+                config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
+                new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
+                "default", ServerUrl,
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                new ConsentFlipClaims(config.Root),
+                new AppStateStore(config.PathTo("app-state.json")),
+                new RecordingOpener(),
+                TimeProvider.System,
+                spec => {
+                    captured = spec.Precondition;
+                    return (_, _) => Task.FromResult<AuthResult>(new AuthResult.Cancelled());
+                },
+                refreshAppState: true,
+                new CommitPrecondition.ExpectServer(ServerUrl));
+
+            await graph.SignIn.SignInCommand.Execute().ToTask();
+
+            await Assert.That(captured).IsTypeOf<CommitPrecondition.ExpectServer>();
+            await Assert.That(((CommitPrecondition.ExpectServer)captured!).Url).IsEqualTo(ServerUrl);
         });
     }
 
@@ -95,7 +158,8 @@ public class ReauthCompositionTests {
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
                 TimeProvider.System,
-                _ => (_, _) => Task.FromResult<AuthResult>(Committed()));
+                _ => (_, _) => Task.FromResult<AuthResult>(Committed()),
+                refreshAppState: true);
 
             var window = new SignInWindow { DataContext = graph.SignIn };
             window.Show();

@@ -53,6 +53,7 @@ internal sealed class TerminalChatInput : ChatInput {
     public override bool CanInterrupt => !_disposed && _terminal.CanInterrupt;
     public override Task InterruptAsync(CancellationToken ct) =>
         CanInterrupt ? _terminal.SendEscapeAsync(ct) : Task.CompletedTask;
+    public override Task<bool> SendKeyAsync(byte key, CancellationToken ct) => _terminal.SendRawAsync(key, ct);
     public override string Hint => _sending ? "Sending…" : _notice ?? HintFor(_terminal.SendAvailability, _terminal.State);
 
     public override bool CanAttach =>
@@ -75,8 +76,6 @@ internal sealed class TerminalChatInput : ChatInput {
         SendTextResult result;
         try {
             result = await _ops.SendTextWithAttachmentsAsync(_agentId, text, attachmentIds, ct);
-        } catch (OperationCanceledException) {
-            return Settle(ChatSendOutcome.Unconfirmed, LocalFrameChatInput.Unconfirmed);
         } catch (Exception) {
             return Settle(ChatSendOutcome.Unconfirmed, LocalFrameChatInput.Unconfirmed);
         }

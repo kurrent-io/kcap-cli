@@ -25,5 +25,6 @@ public class SchemaExtensionsTests {
     public async Task Event_type_names_are_the_persisted_names() {
         await Assert.That(CanonicalEventTypes.Of(new AssistantToolCallsGenerated())).IsEqualTo("AssistantToolCallsGenerated");
         await Assert.That(CanonicalEventTypes.Of(new ToolResultReceived())).IsEqualTo("ToolResultReceived");
+        await Assert.That(CanonicalEventTypes.Of(new SubagentCompleted())).IsEqualTo("SubagentCompleted");
     }
 }

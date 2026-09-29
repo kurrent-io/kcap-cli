@@ -41,9 +41,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _isEmpty;
     public bool IsEmpty => _isEmpty.Value;
 
-    readonly ObservableAsPropertyHelper<string> _hostedText;
-    public string HostedText => _hostedText.Value;
-
     readonly ObservableCollectionExtended<RailRepoViewModel> _reposSource = new();
     public ReadOnlyObservableCollection<RailRepoViewModel> Repos { get; }
 
@@ -64,7 +61,8 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             Action<string> openLocalSession, Action<string> openRemoteSession, TimeProvider time,
             Func<string, string>? resolveRepoRoot = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
         _directory = directory;
         var resolveRoot = resolveRepoRoot ?? GitRepository.ResolveMainRepoRoot;
         // Not disposed with the rest: same as RailCollapseState's Changes subject, a bare
@@ -73,7 +71,9 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         // PermissionService.AgentsWithPending emits from background continuations; marshal once
         // here so every nested OAPH downstream (RailSessionViewModel, RailWorktreeViewModel) sees
         // it on the UI thread without adding its own ObserveOn.
-        var pending = (agentsWithPending ?? Observable.Return((IReadOnlySet<string>)new HashSet<string>()))
+        var pending = (agentsWithPending ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        var answering = (agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         // Marshaled once here, like `pending` above, so every nested OAPH downstream sees it on
         // the UI thread without its own ObserveOn.
@@ -87,18 +87,13 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.IsEmpty, initialValue: directory.Rows.Count == 0)
             .DisposeWith(_disposables);
-        _hostedText = directory.Rows.CountChanged
-            .Select(c => $"{c} hosted")
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .ToProperty(this, x => x.HostedText, initialValue: $"{directory.Rows.Count} hosted")
-            .DisposeWith(_disposables);
 
         Repos = new ReadOnlyObservableCollection<RailRepoViewModel>(_reposSource);
         directory.Rows.Connect()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones))
+                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones, answering))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()
