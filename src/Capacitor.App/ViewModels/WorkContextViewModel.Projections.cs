@@ -66,7 +66,7 @@ public sealed partial class WorkContextViewModel {
     public WorkContextLinkViewModel? SeparateIssue => SeparateIssues.FirstOrDefault();
     public bool HasSeparateIssue => SeparateIssue is not null;
     public bool HasMultipleIssues => SeparateIssues.Skip(1).Any();
-    /// Issue titles wrap taller than person rows, so the cap is tighter than Who's on it.
+    /// Issue titles wrap over several lines, so two already make a tall section.
     internal const int VisibleIssuesCap = 2;
     public bool IssuesOverflows => SeparateIssues.Skip(VisibleIssuesCap).Any();
     public IEnumerable<WorkContextLinkViewModel> VisibleSeparateIssues =>
@@ -149,23 +149,11 @@ public sealed partial class WorkContextViewModel {
         && !ShowsPullRequestCard;
     public const string PullRequestEmptyNote = "No pull request linked";
     public bool ShowsPullRequestSection => ShowsPullRequestCard || ShowsLegacyLinkCards || ShowsPullRequestEmpty;
-    /// Names stay visible; beyond this the header chevron reveals the rest of the list.
-    internal const int VisiblePeopleCap = 4;
-    public bool PeopleOverflows => _contributors.Count > VisiblePeopleCap;
-    public IEnumerable<WorkContextPersonViewModel> VisibleContributors =>
-        PeopleExpanded || !PeopleOverflows ? _contributors : _contributors.Take(VisiblePeopleCap);
-    public string WhoCountText {
-        get {
-            var sessions = _sessionCount switch {
-                0     => "",
-                1     => "1 session",
-                var n => $"{n} sessions",
-            };
-            if (_contributors.Count == 0 || !PeopleOverflows) return sessions;
-            var people = _contributors.Count == 1 ? "1 person" : $"{_contributors.Count} people";
-            return sessions.Length == 0 ? people : $"{people} · {sessions}";
-        }
-    }
+    public string WhoCountText => _sessionCount switch {
+        0     => "",
+        1     => "1 session",
+        var n => $"{n} sessions",
+    };
 
     string _requester = "You";
     public string Requester {
@@ -184,13 +172,7 @@ public sealed partial class WorkContextViewModel {
     bool _partsExpanded = true;
     public bool PartsExpanded { get => _partsExpanded; private set => this.RaiseAndSetIfChanged(ref _partsExpanded, value); }
     bool _peopleExpanded;
-    public bool PeopleExpanded {
-        get => _peopleExpanded;
-        private set {
-            this.RaiseAndSetIfChanged(ref _peopleExpanded, value);
-            this.RaisePropertyChanged(nameof(VisibleContributors));
-        }
-    }
+    public bool PeopleExpanded { get => _peopleExpanded; private set => this.RaiseAndSetIfChanged(ref _peopleExpanded, value); }
     bool _issuesExpanded;
     public bool IssuesExpanded {
         get => _issuesExpanded;
@@ -212,7 +194,7 @@ public sealed partial class WorkContextViewModel {
 
     void InitializeProjections() {
         TogglePartsCommand   = Toggle(() => PartsExpanded = !PartsExpanded);
-        TogglePeopleCommand  = Toggle(() => { if (PeopleOverflows) PeopleExpanded = !PeopleExpanded; });
+        TogglePeopleCommand  = Toggle(() => PeopleExpanded = !PeopleExpanded);
         ToggleIssuesCommand  = Toggle(() => {
             if (IssuesOverflows) IssuesExpanded = !IssuesExpanded;
             else if (!HasMultipleIssues && SeparateIssue is { CanOpen: true } issue)
@@ -281,9 +263,6 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(HasBlockers));
         this.RaisePropertyChanged(nameof(HasTopologyNotes));
         this.RaisePropertyChanged(nameof(HasContributors));
-        this.RaisePropertyChanged(nameof(PeopleOverflows));
-        this.RaisePropertyChanged(nameof(VisibleContributors));
-        this.RaisePropertyChanged(nameof(WhoCountText));
     }
 
     void RaiseRelated() {

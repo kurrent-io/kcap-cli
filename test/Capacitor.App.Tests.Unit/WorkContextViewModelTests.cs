@@ -1130,12 +1130,11 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// With every contributor visible the header names sessions only; past the cap it adds a people
-    /// count. Without listed contributors the requester row stands in and the session count alone
-    /// is shown.
+    /// The header counts sessions, never people. Without listed contributors the requester row
+    /// stands in.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_who_count_names_people_before_sessions_and_the_requester_row_is_the_fallback() {
+    public async Task The_who_count_is_the_session_count_and_the_requester_row_is_the_fallback() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var now = h.Time.GetUtcNow();
@@ -1155,10 +1154,6 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Contributors.Select(c => c.Initial)).IsEquivalentTo(new[] { "A", "G", "👩" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.LastActivityText)).IsEquivalentTo(new[] { "2h ago", "3d ago", "" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.WhoCountText).IsEqualTo("4 sessions");
-            await Assert.That(h.Vm.PeopleOverflows).IsFalse();
-            await Assert.That(h.Vm.VisibleContributors.Count()).IsEqualTo(3);
-            await h.Vm.TogglePeopleCommand.Execute();
-            await Assert.That(h.Vm.PeopleExpanded).IsFalse();
 
             await h.TickAsync();
             await Assert.That(h.Vm.WhoCountText).IsEqualTo("2 sessions");
@@ -1605,21 +1600,24 @@ public class WorkContextViewModelTests {
             .NameDisplay).IsEqualTo("nortonandr…b-handle");
     }
 
+    /// One person folds and opens like a crowd does, and the header counts sessions either way.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Who_lists_names_and_the_chevron_only_reveals_people_past_the_cap() {
+    [Arguments(1)]
+    [Arguments(5)]
+    public async Task Who_starts_folded_and_its_toggle_opens_and_folds_it(int headCount) {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            var people = Enumerable.Range(1, 5).Select(i => Person($"u{i}", $"P{i}")).ToList();
+            var people = Enumerable.Range(1, headCount).Select(i => Person($"u{i}", $"P{i}")).ToList();
             h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with { Contributors = people, SessionCount = 5 }));
             await h.PushAsync(Dto());
 
-            await Assert.That(h.Vm.PeopleOverflows).IsTrue();
-            await Assert.That(h.Vm.WhoCountText).IsEqualTo("5 people · 5 sessions");
-            await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(h.Vm.PeopleExpanded).IsFalse();
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("5 sessions");
             await h.Vm.TogglePeopleCommand.Execute();
             await Assert.That(h.Vm.PeopleExpanded).IsTrue();
-            await Assert.That(h.Vm.VisibleContributors.Select(c => c.Name)).IsEquivalentTo(new[] { "P1", "P2", "P3", "P4", "P5" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await h.Vm.TogglePeopleCommand.Execute();
+            await Assert.That(h.Vm.PeopleExpanded).IsFalse();
 
             await h.Vm.TeardownAsync();
         });

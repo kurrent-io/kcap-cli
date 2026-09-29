@@ -469,16 +469,15 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Who's on it: names stay visible; the chevron only appears when the list is longer than the cap. -->
+                <!-- Who's on it: folded to one initial per person, the header opens the names. -->
                 <StackPanel x:Name="WhoSection" Margin="0,18,0,0" IsVisible="{Binding HasAgent}">
-                    <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader"
-                            Classes.expandable="{Binding PeopleOverflows}">
+                    <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="WHO'S ON IT" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="WhoCountText" Text="{Binding WhoCountText}" Classes="sectionMeta"
                                            IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Panel Classes="chevronBox" Width="12" Height="12" IsVisible="{Binding PeopleOverflows}">
+                                <Panel Classes="chevronBox" Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
                                 </Panel>
@@ -487,41 +486,59 @@
                     </Button>
                     <Border Classes="sectionBody">
                         <Panel>
-                            <ItemsControl x:Name="ContributorList" ItemsSource="{Binding VisibleContributors}" IsVisible="{Binding HasContributors}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="8" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
-                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-                                            <Border Classes="avatar" VerticalAlignment="Center">
+                            <Panel IsVisible="{Binding HasContributors}">
+                                <ItemsControl x:Name="ContributorStack" ItemsSource="{Binding Contributors}" IsVisible="{Binding !PeopleExpanded}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel ItemSpacing="6" LineSpacing="6" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
+                                            <Border Classes="avatar" ToolTip.Tip="{Binding Name}">
                                                 <Panel>
                                                     <TextBlock Text="{Binding Initial}" />
                                                 </Panel>
                                             </Border>
-                                            <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
-                                                    HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
-                                                <StackPanel>
-                                                    <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
-                                                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
-                                                               IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                                </StackPanel>
-                                            </Button>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <ItemsControl x:Name="ContributorList" ItemsSource="{Binding Contributors}" IsVisible="{Binding PeopleExpanded}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="8" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
+                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                                <Border Classes="avatar" VerticalAlignment="Center">
+                                                    <Panel>
+                                                        <TextBlock Text="{Binding Initial}" />
+                                                    </Panel>
+                                                </Border>
+                                                <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
+                                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
+                                                                   Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
+                                                                   IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Panel>
                             <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" IsVisible="{Binding !HasContributors}">
-                                <Border Classes="avatar" VerticalAlignment="Center">
+                                <Border Classes="avatar" VerticalAlignment="Center" ToolTip.Tip="{Binding Requester}">
                                     <Panel>
                                         <TextBlock Text="{Binding RequesterInitial}" />
                                     </Panel>
                                 </Border>
-                                <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
-                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}">
+                                <Button x:Name="RequesterName" Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
+                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}" IsVisible="{Binding PeopleExpanded}">
                                     <StackPanel>
                                         <TextBlock Text="{Binding RequesterDisplay}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
