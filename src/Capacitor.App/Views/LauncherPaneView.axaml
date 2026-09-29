@@ -93,7 +93,7 @@
                                                     <Binding Path="Harnesses" />
                                                     <Binding Path="SelectedVendor" />
                                                     <Binding Path="SelectedModel" />
-                                                    <Binding Path="ModelCatalog" />
+                                                    <Binding Path="EffectiveModelCatalog" />
                                                 </MultiBinding>
                                             </TextBlock.Text>
                                         </TextBlock>

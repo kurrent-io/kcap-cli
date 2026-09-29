@@ -25,10 +25,12 @@ public sealed record RepositoryOption(string RepoPath, string Vendor, bool Selec
 /// someone else is never surfaced as an option. RepoPaths/SupportedVendors come from DaemonInfo
 /// verbatim for a remote machine; the local entry's come from the existing repo flow. Version is
 /// the remote daemon's own advertised build, which is what the attachment gate reads; null for the
-/// local entry, whose capability comes from the attach handshake instead.
+/// local entry, whose capability comes from the attach handshake instead. VendorModels is the
+/// machine's own model catalog per vendor; null when its daemon advertises none.
 public sealed record MachineOption(
     string DaemonName, bool IsLocal, bool Connected, string? Platform,
-    string[] RepoPaths, string[]? SupportedVendors, bool Selected, string? Version = null);
+    string[] RepoPaths, string[]? SupportedVendors, bool Selected, string? Version = null,
+    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? VendorModels = null);
 
 /// Whether a launch can reach a daemon right now, merged from the local attach state and the
 /// daemon's own upstream connection word — the same two inputs the footer's status line reads.
@@ -117,16 +119,27 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         set => this.RaiseAndSetIfChanged(ref _selectedModel, value);
     }
 
-    /// The server's model catalog snapshot (empty until fetched); the agent chip resolves a
-    /// selected model's label against it.
-    public IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> ModelCatalog => _modelCatalog;
+    /// The selected machine's own model catalog merged over the server's (see MergeCatalogs); the
+    /// agent chip resolves a selected model's label against it.
+    public IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> EffectiveModelCatalog => _effectiveModelCatalog.Value;
 
-    /// The model choices to offer for a vendor: the server catalog when it has any, else the
-    /// curated fallback. So a launch is never blocked by an empty or unreachable catalog.
+    /// The model choices to offer for a vendor: the effective catalog's entry, else the curated
+    /// fallback. So a launch is never blocked by an empty or unreachable server catalog.
     public IReadOnlyList<ModelChoice> ModelChoicesFor(string vendor) =>
-        _modelCatalog.TryGetValue(vendor, out var models) && models.Count > 0
-            ? models
-            : HostedHarnessCatalog.ModelChoicesFor(vendor);
+        EffectiveModelCatalog.TryGetValue(vendor, out var models) ? models : HostedHarnessCatalog.ModelChoicesFor(vendor);
+
+    /// Per vendor: the machine's list whenever it has the key, even empty, since the machine is
+    /// the one that launches; else a non-empty server list; else no key.
+    internal static IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> MergeCatalogs(
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? machine,
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> server) {
+        var merged = new Dictionary<string, IReadOnlyList<ModelChoice>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (vendor, models) in server)
+            if (models.Count > 0) merged[vendor] = models;
+        if (machine is not null)
+            foreach (var (vendor, models) in machine) merged[vendor] = models;
+        return merged;
+    }
 
     string? _selectedEffort;
     /// null = vendor default. Survives vendor changes — the effort vocabulary is shared enough
@@ -357,9 +370,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     IReadOnlyList<string>? _currentCapabilities;
     IReadOnlyList<DaemonInfo> _currentDaemons = [];
 
-    /// The server's per-vendor model catalog (empty until the first fetch lands). The launcher's
-    /// model picker prefers it and falls back to HostedHarnessCatalog's curated list per vendor.
-    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> _modelCatalog = ServerVendorModelCatalog.Empty;
+    readonly ObservableAsPropertyHelper<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>> _effectiveModelCatalog;
+    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? _currentLocalCatalog;
 
     /// knownRepos is RepoPathStore.GetSortedPathsAsync in production — the same persisted list
     /// DaemonConnect.RepoPaths feeds the server's launch dialog. Required (no defaulted overload)
@@ -440,11 +452,21 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.Harnesses, HostedHarnessCatalog.Build(null))
             .DisposeWith(_disposables);
 
-        // The server model catalog arrives asynchronously; a change re-renders the agent chip and
-        // the next flyout open reads the new list (RebuildRows runs per open).
-        (modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty))
+        // The machine catalog follows the selection: the local snapshot's, or the selected remote
+        // daemon's in the latest registry emission, resolved by name AND owner. A remote machine the
+        // registry no longer resolves is unknown (null), never its last list. Any change re-renders
+        // the agent chip, and the next flyout open reads the new rows (RebuildRows runs per open).
+        var localCatalog = daemon.Snapshots
+            .Select(s => VendorModelMaps.FromStatus(s.Daemon.VendorModels))
+            .StartWith((IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>?) null);
+        localCatalog.Subscribe(c => _currentLocalCatalog = c).DisposeWith(_disposables);
+        var machineCatalog = localCatalog.CombineLatest(
+            _daemons.StartWith((IReadOnlyList<DaemonInfo>) []), _machineSelectionChanges,
+            (local, list, sel) => sel.Remote ? FindMachine(list, sel.Name, _lastViewerId)?.VendorModels : local);
+        _effectiveModelCatalog = machineCatalog
+            .CombineLatest(modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty), MergeCatalogs)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(catalog => { _modelCatalog = catalog; this.RaisePropertyChanged(nameof(ModelCatalog)); })
+            .ToProperty(this, x => x.EffectiveModelCatalog, ServerVendorModelCatalog.Empty)
             .DisposeWith(_disposables);
 
         // A throw from viewerId (e.g. a claims-file read fault) is a missed visibility recompute,
@@ -912,14 +934,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var (_, localPaths) = await GatherLocalRepoDataAsync();
         var options = new List<MachineOption> {
             new(_daemon.DaemonName, IsLocal: true, _currentAvailability == LaunchAvailability.Ready,
-                Platform: null, localPaths.ToArray(), SupportedVendors: null, Selected: !RemoteMachineSelected),
+                Platform: null, localPaths.ToArray(), SupportedVendors: null, Selected: !RemoteMachineSelected,
+                VendorModels: _currentLocalCatalog),
         };
 
         foreach (var d in await OwnRemoteDaemonsAsync())
             options.Add(new MachineOption(
                 d.Name, IsLocal: false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors,
                 Selected: RemoteMachineSelected && string.Equals(d.Name, SelectedMachine, StringComparison.Ordinal),
-                Version: d.Version));
+                Version: d.Version, VendorModels: VendorModelMaps.FromRegistry(d.VendorModels)));
 
         return options;
     }
@@ -954,7 +977,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (match is null) return; // not one of the viewer's own daemons — never guess ownership
 
         var machine = new MachineOption(match.Name, false, match.Connected, match.Platform,
-            match.RepoPaths ?? [], match.SupportedVendors, true, match.Version);
+            match.RepoPaths ?? [], match.SupportedVendors, true, match.Version, VendorModelMaps.FromRegistry(match.VendorModels));
 
         SetMachineSelection(daemonName, remote: true);
         _selectedRemoteMachine = machine;
@@ -1010,7 +1033,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (viewerId is null) return null;
         foreach (var d in daemons)
             if (string.Equals(d.Name, name, StringComparison.Ordinal) && d.OwnerUserId == viewerId)
-                return new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true, d.Version);
+                return new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true, d.Version,
+                    VendorModelMaps.FromRegistry(d.VendorModels));
         return null;
     }
 

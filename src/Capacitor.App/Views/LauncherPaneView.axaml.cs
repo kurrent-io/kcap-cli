@@ -521,7 +521,7 @@ public sealed class VendorGlyphConverter : IValueConverter {
 }
 
 /// AgentChip's label: "Claude · Fable 5" — vendor label plus the model's label, resolved first
-/// against the server catalog (4th binding), then the curated fallback (raw slug when neither
+/// against the effective model catalog (4th binding), then the curated fallback (raw slug when neither
 /// carries it, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions.
 public sealed class AgentChipTextConverter : IMultiValueConverter {
     public static readonly AgentChipTextConverter Instance = new();
