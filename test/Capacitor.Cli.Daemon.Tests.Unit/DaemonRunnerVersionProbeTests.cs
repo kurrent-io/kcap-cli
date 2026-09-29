@@ -100,13 +100,13 @@ public class DaemonRunnerVersionProbeTests {
         // Prints the version, then leaves a child holding the inherited stdout open after the CLI
         // itself exits — the shape that made ProbeCliVersionOnce block on a drain that never saw EOF.
         // The stub records the descendant's pid so the test can reap it: once reparented it is no
-        // longer anyone's child, and left alone it outlives the test host into teardown. The marker
+        // longer the test's child to wait on, and left alone it outlives the test host into teardown. The marker
         // in its command line is what proves a pid is still that descendant when the test reaps it.
         // (`; :` keeps the shell from exec-ing sleep, which would drop the marker.)
         var pidFile = tmp.PathTo("faketool.pid");
         var marker  = $"kcap-probe-descendant-{Guid.NewGuid():N}";
         var cli = tmp.CreateExecutable(
-            "faketool", $"#!/bin/sh\necho 'faketool 9.9.9'\nsh -c 'sleep 20; :' {marker} &\necho $! > '{pidFile}'\nexit 0\n");
+            "faketool", $"#!/bin/sh\necho 'faketool 9.9.9'\nsh -c 'sleep 20; :' {marker} &\necho $! > {ShellQuote(pidFile)}\nexit 0\n");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         string? version = null;
@@ -158,6 +158,8 @@ public class DaemonRunnerVersionProbeTests {
         Capacitor.Cli.Daemon.Services.ProcessTree.Kill(pid, identity);
         await Capacitor.Tests.Helpers.PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
     }
+
+    static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     static async Task<string> CommandLineAsync(int pid) {
         using var ps = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ps", ["-o", "args=", "-p", pid.ToString(System.Globalization.CultureInfo.InvariantCulture)]) {

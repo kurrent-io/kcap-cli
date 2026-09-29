@@ -79,9 +79,14 @@ internal static partial class ProcessTree {
         var seen = new HashSet<int>();
 
         for (var rescan = 0; rescan <= MaxRescans; rescan++) {
-            var fresh = false;
+            var fresh    = false;
+            var children = Children(pid).ToList();
 
-            foreach (var child in Children(pid)) {
+            // Act on the listed children only if the root is still the same incarnation after listing
+            // them: a pid reused in between would otherwise hand the replacement's children to this kill.
+            if (!ProcessIdentity.Matches(pid, identity)) return;
+
+            foreach (var child in children) {
                 if (!seen.Add(child)) continue; // handled on an earlier pass; a zombie stays listed until its parent dies
 
                 fresh = true;
