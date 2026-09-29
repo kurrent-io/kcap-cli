@@ -82,9 +82,10 @@ internal static partial class ProcessTree {
             var fresh    = false;
             var children = Children(pid).ToList();
 
-            // Act on the listed children only if the root is still the same incarnation after listing
-            // them: a pid reused in between would otherwise hand the replacement's children to this kill.
-            if (!ProcessIdentity.Matches(pid, identity)) return;
+            // A root proven to be a different incarnation after listing means the pid was reused, so the
+            // listed children may be the replacement's and are left alone. A root that merely exited
+            // (identity unreadable) still owned them when they were listed, so they are killed.
+            if (ProcessIdentity.MatchesTri(pid, identity) == false) return;
 
             foreach (var child in children) {
                 if (!seen.Add(child)) continue; // handled on an earlier pass; a zombie stays listed until its parent dies
