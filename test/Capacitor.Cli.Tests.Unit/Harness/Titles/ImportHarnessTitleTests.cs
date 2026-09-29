@@ -135,4 +135,21 @@ public class ImportHarnessTitleTests {
         await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/harness-title")).IsEqualTo(1);
         await Assert.That(progress.Reported.OfType<ImportTitleNotRecorded>()).IsEmpty();
     }
+
+    [Test]
+    public async Task A_transient_status_is_retried_rather_than_ending_the_attempt() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).InScenario("blip").WillSetStateTo("ok")
+              .RespondWith(Response.Create().WithStatusCode(503));
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).InScenario("blip").WhenStateIs("ok")
+              .RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+        await WarmUpAsync(server, client);
+        var progress = new CollectingProgress();
+
+        await ImportHarnessTitle.PostAsync(client, TimeProvider.System, server.Url!, "s", new("T", HarnessTitleKind.Auto, null), progress, default);
+
+        await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/harness-title")).IsEqualTo(2);
+        await Assert.That(progress.Reported.OfType<ImportTitleNotRecorded>()).IsEmpty();
+    }
 }

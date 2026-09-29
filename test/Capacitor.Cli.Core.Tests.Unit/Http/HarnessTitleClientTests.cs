@@ -7,6 +7,16 @@ using WireMock.Server;
 namespace Capacitor.Cli.Core.Tests.Unit.Http;
 
 public class HarnessTitleClientTests {
+    /// <summary>Real timers, but a monotonic clock that can be jumped forward — so the time a request took can be
+    /// made to look long without waiting for it.</summary>
+    sealed class JumpableClock : TimeProvider {
+        long _offsetTicks;
+
+        public void Jump(TimeSpan by) => Interlocked.Add(ref _offsetTicks, (long)(by.TotalSeconds * TimestampFrequency));
+
+        public override long GetTimestamp() => System.GetTimestamp() + Interlocked.Read(ref _offsetTicks);
+    }
+
     [Test]
     public async Task Posts_snake_case_body_with_kind_and_utc_changed_at() {
         using var server = WireMockServer.Start();
@@ -210,5 +220,42 @@ public class HarnessTitleClientTests {
 
         await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Failed);
         await Assert.That(TimeProvider.System.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>The fallback gets what is left of the one budget, and an omitted budget is no exception: with 31s
+    /// already spent against the 30s default, the set-title request is not sent at all.</summary>
+    [Test]
+    public async Task An_omitted_budget_is_shared_with_the_fallback_not_restarted() {
+        using var server = WireMockServer.Start();
+        var clock = new JumpableClock();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithCallback(_ => {
+                clock.Jump(TimeSpan.FromSeconds(31));
+                return new WireMock.ResponseMessage { StatusCode = 404 };
+            }));
+        server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+
+        var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, clock, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default);
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Failed);
+        await Assert.That(server.LogEntries.Any(e => e.RequestMessage.Path == "/hooks/set-title")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_transient_status_is_retried_when_the_caller_asks() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).InScenario("blip").WillSetStateTo("ok")
+            .RespondWith(Response.Create().WithStatusCode(503));
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).InScenario("blip").WhenStateIs("ok")
+            .RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+
+        var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default, retryStatuses: true);
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Posted);
+        await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/harness-title")).IsEqualTo(2);
     }
 }

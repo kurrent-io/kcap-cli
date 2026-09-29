@@ -14,17 +14,21 @@ public static class HarnessTitleClient {
     const int HarnessTitleMax = 4096;
     const int SetTitleMax     = 120;
 
-    /// <param name="timeout">The whole call's budget; the retry helper's default when null.</param>
+    static readonly TimeSpan DefaultBudget = TimeSpan.FromSeconds(30);
+
+    /// <param name="timeout">The whole call's budget; 30 seconds when null.</param>
+    /// <param name="retryStatuses">Retry a 408, 429 or server fault within the budget. For a caller with no later
+    /// attempt of its own.</param>
     public static async Task<HarnessTitleOutcome> PostAsync(
             HttpClient client, TimeProvider time, string baseUrl, string sessionId, HarnessTitlePost post, CancellationToken ct,
-            TimeSpan? timeout = null
+            TimeSpan? timeout = null, bool retryStatuses = false
         ) {
         var hook = new HarnessTitleHook(sessionId, Clamp(post.Title, HarnessTitleMax), post.Kind == HarnessTitleKind.Rename ? "rename" : "auto",
             post.ChangedAt?.ToUniversalTime());
 
         try {
             using var content = new StringContent(JsonSerializer.Serialize(hook, CapacitorJsonContext.Default.HarnessTitleHook), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/harness-title", content, time, timeout, ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/harness-title", content, time, timeout ?? DefaultBudget, ct, retryStatuses);
 
             if (resp.IsSuccessStatusCode) return HarnessTitleOutcome.Posted;
 
@@ -41,24 +45,26 @@ public static class HarnessTitleClient {
         }
     }
 
-    /// <param name="timeout">Shared by the harness-title attempt and the set-title fallback.</param>
+    /// <param name="timeout">Shared by the harness-title attempt and the set-title fallback; 30 seconds when null.</param>
+    /// <param name="retryStatuses">As for <see cref="PostAsync"/>, on both requests.</param>
     public static async Task<HarnessTitleOutcome> PostOrFallBackAsync(
             HttpClient client, TimeProvider time, string baseUrl, string sessionId, HarnessTitlePost post, CancellationToken ct,
-            TimeSpan? timeout = null
+            TimeSpan? timeout = null, bool retryStatuses = false
         ) {
+        var budget  = timeout ?? DefaultBudget;
         var started = time.GetTimestamp();
-        var outcome = await PostAsync(client, time, baseUrl, sessionId, post, ct, timeout);
+        var outcome = await PostAsync(client, time, baseUrl, sessionId, post, ct, budget, retryStatuses);
 
         if (outcome != HarnessTitleOutcome.RouteMissing) return outcome;
 
-        var remaining = timeout - time.GetElapsedTime(started);
+        var remaining = budget - time.GetElapsedTime(started);
         if (remaining <= TimeSpan.Zero) return HarnessTitleOutcome.Failed;
 
         var payload = new JsonObject { ["session_id"] = sessionId, ["title"] = Clamp(post.Title, SetTitleMax) };
 
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, remaining, ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, remaining, ct, retryStatuses);
 
             if (resp.IsSuccessStatusCode) return HarnessTitleOutcome.Posted;
 

@@ -4,7 +4,8 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Harness.Titles;
 
 /// <summary>Posts an import-discovered harness title, riding out the window where the server has
-/// accepted a session but not yet projected it (a coded <see cref="HarnessTitleOutcome.SessionNotFound"/>).
+/// accepted a session but not yet projected it (a coded <see cref="HarnessTitleOutcome.SessionNotFound"/>)
+/// and any transient status within each request's budget.
 /// Shared by every routed import source that reads a title from the harness's own store.</summary>
 internal static class ImportHarnessTitle {
     // Sums to ~60s, the projection lag this rides out.
@@ -38,7 +39,8 @@ internal static class ImportHarnessTitle {
             CancellationToken           ct
         ) {
         for (var attempt = 0; ; attempt++) {
-            var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, httpTime, baseUrl, sessionId, post, ct);
+            // Import has no later tick, so a transient status is ridden out here too.
+            var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, httpTime, baseUrl, sessionId, post, ct, retryStatuses: true);
 
             if (outcome != HarnessTitleOutcome.SessionNotFound) {
                 if (outcome is HarnessTitleOutcome.Refused or HarnessTitleOutcome.Failed)
