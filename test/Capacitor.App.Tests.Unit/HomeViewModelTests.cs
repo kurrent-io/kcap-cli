@@ -208,6 +208,75 @@ public class HomeViewModelTests {
         });
     }
 
+    [Test]
+    public async Task ShouldClearSelection_only_when_previously_listed_and_now_absent_under_a_present_key() {
+        var listedA  = Server(("pi", ["a", "b"]));
+        var withoutA = Server(("pi", ["b"]));
+        var noKey    = Server();
+
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "a", listedA, withoutA)).IsTrue();
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "A", listedA, withoutA)).IsTrue();
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "custom", noKey, withoutA)).IsFalse();
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "custom", withoutA, withoutA)).IsFalse();
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "a", noKey, listedA)).IsFalse();
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "a", listedA, noKey)).IsFalse();
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "a", listedA, listedA)).IsFalse();
+        await Assert.That(HomeViewModel.ShouldClearSelection("pi", "", listedA, withoutA)).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Switching_to_a_machine_whose_pi_list_lacks_the_pick_resets_the_model_and_a_custom_id_survives() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(vendorModels: new(StringComparer.Ordinal) {
+                ["pi"] = [new("a", "A")] }));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([Box("u1", "b")]);
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+            await vm.ChooseHarnessAsync("pi");
+            vm.SelectedModel = "a";
+
+            await vm.SelectMachineAsync("box", isLocal: false);
+            await Assert.That(vm.SelectedVendor).IsEqualTo("pi");
+            await Assert.That(vm.SelectedModel).IsEqualTo("");
+
+            vm.SelectedModel = "typed/custom";
+            remote.DaemonsSubject.OnNext([Box("u1", "c")]);
+            await Assert.That(vm.SelectedModel).IsEqualTo("typed/custom");
+
+            remote.DaemonsSubject.OnNext([Box("u1", "c", "typed/custom")]);
+            await Assert.That(vm.SelectedModel).IsEqualTo("typed/custom");
+            remote.DaemonsSubject.OnNext([Box("u1", "c")]);
+            await Assert.That(vm.SelectedModel).IsEqualTo("");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_live_refresh_that_drops_the_pick_resets_it_and_a_pick_made_before_any_catalog_survives() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                Known(), TimeProvider.System);
+            await vm.ChooseHarnessAsync("pi");
+            vm.SelectedModel = "a";
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(vendorModels: new(StringComparer.Ordinal) {
+                ["pi"] = [new("b", "B")] }));
+            await Assert.That(vm.SelectedModel).IsEqualTo("a");
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(vendorModels: new(StringComparer.Ordinal) {
+                ["pi"] = [new("a", "A"), new("b", "B")] }));
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(vendorModels: new(StringComparer.Ordinal) {
+                ["pi"] = [new("b", "B")] }));
+            await Assert.That(vm.SelectedModel).IsEqualTo("");
+        });
+    }
+
     /// Repo keys compare the way the filesystem does — so the SAME repository reached under
     /// different casing restores its harness on Windows/macOS, and stays distinct on Linux where
     /// two such paths really are two repositories. Asserting the platform's own answer rather than

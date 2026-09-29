@@ -18,6 +18,12 @@ namespace Capacitor.App.Views;
 public partial class LauncherPaneView : UserControl {
     AttachmentDropPaste? _attachments;
 
+    /// A picker search term matches a model by its label or its launch id, so a Pi row is found by
+    /// model name, provider, or `provider/` prefix alike.
+    internal static bool RowMatches(ModelChoice model, string term) =>
+        model.Label.Contains(term, StringComparison.OrdinalIgnoreCase)
+     || model.Slug.Contains(term, StringComparison.OrdinalIgnoreCase);
+
     public LauncherPaneView() {
         InitializeComponent();
         // Tunnel, not bubble: the TextBox marks Enter handled on the bubble route, so bare-Enter
@@ -425,15 +431,14 @@ public partial class LauncherPaneView : UserControl {
             return row;
         }
 
-        void AddVendorRows(HarnessOption option, Func<string, bool> matches, bool includeDefault) {
+        void AddVendorRows(HarnessOption option, Func<ModelChoice, bool> matches, bool includeDefault) {
             var vendor = option.Vendor;
             var isCurrentVendor = string.Equals(vm.SelectedVendor, vendor, StringComparison.OrdinalIgnoreCase);
             if (includeDefault)
                 rows.Children.Add(Row(
                     vendor, option.Label, $"Default — {option.Label} chooses", option.Available,
                     isCurrentVendor && vm.SelectedModel.Length == 0, () => Pick(vendor, "")));
-            foreach (var model in vm.ModelChoicesFor(vendor)
-                         .Where(m => matches(m.Label) || matches(m.Slug)))
+            foreach (var model in vm.ModelChoicesFor(vendor).Where(matches))
                 rows.Children.Add(Row(
                     vendor, option.Label, model.Label, option.Available,
                     isCurrentVendor && string.Equals(vm.SelectedModel, model.Slug, StringComparison.OrdinalIgnoreCase),
@@ -456,7 +461,7 @@ public partial class LauncherPaneView : UserControl {
                 var vendorMatches = Matches(option.Label) || Matches(option.Vendor);
                 AddVendorRows(
                     option,
-                    vendorMatches ? _ => true : Matches,
+                    vendorMatches ? _ => true : m => RowMatches(m, term),
                     includeDefault: vendorMatches || Matches("default"));
             }
 

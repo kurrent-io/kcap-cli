@@ -130,6 +130,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Per vendor: the machine's list whenever it has the key, even empty, since the machine is
     /// the one that launches; else a non-empty server list; else no key.
+    internal static bool ShouldClearSelection(string vendor, string model,
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> previous,
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> next) {
+        if (string.IsNullOrWhiteSpace(model)) return false;
+        if (!previous.TryGetValue(vendor, out var was) || !Lists(was, model)) return false;
+        return next.TryGetValue(vendor, out var now) && !Lists(now, model);
+
+        static bool Lists(IReadOnlyList<ModelChoice> models, string model) =>
+            models.Any(m => string.Equals(m.Slug, model, StringComparison.OrdinalIgnoreCase));
+    }
+
     internal static IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> MergeCatalogs(
             IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? machine,
             IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> server) {
@@ -467,6 +478,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .CombineLatest(modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty), MergeCatalogs)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.EffectiveModelCatalog, ServerVendorModelCatalog.Empty)
+            .DisposeWith(_disposables);
+
+        // A model the previous catalog listed and the next one withdraws resets to the default. A
+        // model the previous catalog never listed (a typed custom id, or a pick made before any
+        // catalog arrived) survives, or the custom row would be unusable.
+        this.WhenAnyValue(x => x.EffectiveModelCatalog)
+            .Scan((Prev: ServerVendorModelCatalog.Empty, Next: ServerVendorModelCatalog.Empty), (acc, next) => (acc.Next, next))
+            .Subscribe(pair => {
+                if (ShouldClearSelection(SelectedVendor, SelectedModel, pair.Prev, pair.Next)) SelectedModel = "";
+            })
             .DisposeWith(_disposables);
 
         // A throw from viewerId (e.g. a claims-file read fault) is a missed visibility recompute,
