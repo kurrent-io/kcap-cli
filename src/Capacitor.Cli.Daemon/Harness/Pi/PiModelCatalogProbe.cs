@@ -19,13 +19,22 @@ internal static partial class PiModelCatalogProbe {
     internal static string DirectoryFor(string stateDir) => Path.Combine(stateDir, "pi-probe");
 
     /// Emptied before every run: Pi reads a `.pi/` in its cwd as project config and renames its
-    /// commands directory at startup.
+    /// commands directory at startup. Links are removed, never followed, so emptying cannot reach
+    /// outside the state directory.
     internal static void PrepareDirectory(string dir) {
-        if (Directory.Exists(dir))
-            foreach (var entry in Directory.EnumerateFileSystemEntries(dir)) {
-                if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true);
-                else File.Delete(entry);
+        var root = new DirectoryInfo(dir);
+        if (root.LinkTarget is not null) {
+            if (root.Exists) root.Delete();
+            else File.Delete(dir);
+        } else if (root.Exists) {
+            foreach (var entry in root.EnumerateFileSystemInfos()) {
+                if (entry is DirectoryInfo { LinkTarget: null } sub) sub.Delete(recursive: true);
+                else if (entry is DirectoryInfo link) link.Delete();
+                else entry.Delete();
             }
+        } else if (File.Exists(dir)) {
+            File.Delete(dir);
+        }
         Directory.CreateDirectory(dir);
     }
 

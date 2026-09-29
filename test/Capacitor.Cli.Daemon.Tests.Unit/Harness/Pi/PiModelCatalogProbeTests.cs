@@ -99,6 +99,30 @@ public class PiModelCatalogProbeTests {
     }
 
     [Test]
+    public async Task Emptying_the_probe_directory_never_follows_a_link() {
+        Skip.When(OperatingSystem.IsWindows(), "Creating a symlink needs a privilege Windows runners lack.");
+        var outside = Path.Combine(Tmp.Path, "outside");
+        Directory.CreateDirectory(Path.Combine(outside, "nested"));
+        File.WriteAllText(Path.Combine(outside, "keep"), "x");
+        File.WriteAllText(Path.Combine(outside, "nested", "keep"), "x");
+
+        var dir = PiModelCatalogProbe.DirectoryFor(Path.Combine(Tmp.Path, "state"));
+        Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
+        Directory.CreateSymbolicLink(dir, outside);
+        PiModelCatalogProbe.PrepareDirectory(dir);
+
+        await Assert.That(new DirectoryInfo(dir).LinkTarget).IsNull();
+        await Assert.That(Directory.EnumerateFileSystemEntries(dir)).IsEmpty();
+        await Assert.That(File.Exists(Path.Combine(outside, "keep"))).IsTrue();
+
+        Directory.CreateSymbolicLink(Path.Combine(dir, "inner"), outside);
+        PiModelCatalogProbe.PrepareDirectory(dir);
+
+        await Assert.That(Directory.EnumerateFileSystemEntries(dir)).IsEmpty();
+        await Assert.That(File.Exists(Path.Combine(outside, "nested", "keep"))).IsTrue();
+    }
+
+    [Test]
     public async Task Factory_probes_nothing_when_pi_is_not_installed() {
         var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System,
             processSource: (_, _) => throw new InvalidOperationException("must not spawn"),
