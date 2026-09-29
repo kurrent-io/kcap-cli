@@ -28,4 +28,12 @@ public class ClaudeTitleLineTests {
     [Arguments("""{"type":"summary","summary":"x","sessionId":"5cdc4fcc-ff9e-4fdc-8d93-cf47ff5a140a"}""", true)]
     public async Task Counts_only_a_title_line_of_the_watched_session(string line, bool expected) =>
         await Assert.That(ClaudeTitleLine.CarriesTitle(line, "5cdc4fccff9e4fdc8d93cf47ff5a140a", out _)).IsEqualTo(expected);
+
+    /// <summary>The server's extractor matches the summary type by its compact form, as Claude Code writes it, and skips
+    /// any other spelling; a line the server skips is not recorded, so it must not stop LLM titling either.</summary>
+    [Test]
+    public async Task A_summary_the_server_extractor_skips_does_not_count() {
+        await Assert.That(ClaudeTitleLine.CarriesTitle("""{"type": "summary", "summary": "Title"}""", "s", out _)).IsFalse();
+        await Assert.That(ClaudeTitleLine.CarriesTitle("""{"type":"summary","summary":"Title"}""", "s", out _)).IsTrue();
+    }
 }

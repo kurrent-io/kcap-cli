@@ -3,9 +3,11 @@ using System.Text.Json;
 namespace Capacitor.Models.Transcripts.Harness.Claude;
 
 /// <summary>Whether a transcript line is one of Claude Code's own title records the server records: a non-blank
-/// <c>ai-title</c>, which every server records; or a <c>custom-title</c> or the legacy
-/// <c>{"type":"summary","summary":…}</c> earlier versions wrote, which only a server with harness titles records (the
-/// summary ranking below an <c>ai-title</c>). Those two count only once that server is confirmed.</summary>
+/// <c>ai-title</c>, which every server records; or a <c>custom-title</c> or a <c>{"type":"summary","summary":…}</c>
+/// line, which only a server with harness titles records (the summary ranking below the others). Stored transcripts
+/// can still carry the summary shape as their only title, so it must keep being recognized. Those two count only once
+/// that server is confirmed. The prefilter is the server extractor's own, byte for byte: a line it skips is not
+/// recorded, so it must not count here either.</summary>
 public static class ClaudeTitleLine {
     /// <param name="sessionId">The session the line is recorded for. A title line copied in from another session names
     /// that session and does not count; a legacy summary names none and counts unless it names another.</param>
