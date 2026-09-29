@@ -289,12 +289,17 @@ public class WatchHarnessTitleTests {
     }
 
     /// <summary>A read still stuck from an earlier poll is waited on, not joined by another: the store readers are not
-    /// safe to run concurrently, and a stuck store would otherwise pile up a blocked worker per poll.</summary>
+    /// safe to run concurrently, and a stuck store would otherwise pile up a blocked worker per poll. Signals, not
+    /// timing, order the steps.</summary>
     [Test]
     public async Task A_stuck_read_is_not_joined_by_another_until_it_finishes() {
         using var release = new ManualResetEventSlim();
-        var reads = 0;
-        var store = new FixedStore(() => { if (Interlocked.Increment(ref reads) == 1) release.Wait(); return Named; });
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads   = 0;
+        var store   = new FixedStore(() => {
+            if (Interlocked.Increment(ref reads) == 1) { started.TrySetResult(); release.Wait(); }
+            return Named;
+        });
         var state = StateFor(store);
         var posts = 0;
 
@@ -302,23 +307,60 @@ public class WatchHarnessTitleTests {
             (_, _, _) => { posts++; return Task.FromResult(HarnessTitleOutcome.Posted); },
             TimeSpan.FromSeconds(1), TimeProvider.System, () => { }, _ => { }, default);
 
+        Task<StoreTitle?> stuck;
         try {
-            var started = TimeProvider.System.GetTimestamp();
             await Poll();
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            stuck = state.HarnessTitleReadInFlight!;
             await Poll();
 
-            await Assert.That(TimeProvider.System.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(10));
+            await Assert.That(stuck.IsCompleted).IsFalse();
+            await Assert.That(ReferenceEquals(state.HarnessTitleReadInFlight, stuck)).IsTrue();
             await Assert.That(reads).IsEqualTo(1);
             await Assert.That(posts).IsEqualTo(0);
         } finally {
             release.Set();
         }
 
-        await Poll(); // takes up the finished read
-        await Assert.That(reads).IsEqualTo(1);
+        await stuck.WaitAsync(TimeSpan.FromSeconds(30));
+        await Poll(); // takes up the finished read, then reads afresh
         await Assert.That(posts).IsEqualTo(1);
+        await Assert.That(reads).IsEqualTo(2);
+        await Assert.That(state.HarnessTitleReadInFlight is null).IsTrue();
 
         await Poll();
+        await Assert.That(reads).IsEqualTo(3);
+    }
+
+    /// <summary>A read that timed out, then finished with A after the harness had moved on to B: the next poll (at
+    /// shutdown, the last one) must not settle for the stale A, but read the store again and send B.</summary>
+    [Test]
+    public async Task A_finished_stale_read_is_followed_by_a_fresh_one() {
+        using var release = new ManualResetEventSlim();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var current = Named;
+        var reads   = 0;
+        var store   = new FixedStore(() => {
+            if (Interlocked.Increment(ref reads) == 1) { started.TrySetResult(); release.Wait(); return Named; }
+            return current;
+        });
+        var state = StateFor(store);
+        var sent  = new List<string>();
+
+        Task Poll() => WatchCommand.PostHarnessTitleAsync(store, state,
+            (p, _, _) => { sent.Add(p.Title); return Task.FromResult(HarnessTitleOutcome.Posted); },
+            TimeSpan.FromSeconds(1), TimeProvider.System, () => { }, _ => { }, default);
+
+        await Poll();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var stuck = state.HarnessTitleReadInFlight!;
+        release.Set();
+        await stuck.WaitAsync(TimeSpan.FromSeconds(30));
+        current = Named with { Title = "B" };
+
+        await Poll();
+
         await Assert.That(reads).IsEqualTo(2);
+        await Assert.That(sent.Last()).IsEqualTo("B");
     }
 }

@@ -3529,6 +3529,28 @@ partial class WatchCommand(
             Action<string>                                                            log,
             CancellationToken                                                         ct
         ) {
+        var started = time.GetTimestamp();
+        var tookUp  = state.HarnessTitleReadInFlight is not null;
+
+        await PollHarnessTitleStoreAsync(store, state, post, budget, time, beat, log, ct);
+
+        // A read taken up from an earlier poll may predate a later change (the final poll before exit is the last
+        // chance to see one), so once it has been dealt with the store is read afresh while time remains.
+        if (!tookUp || state.HarnessTitleReadInFlight is not null) return;
+
+        await PollHarnessTitleStoreAsync(store, state, post, budget - time.GetElapsedTime(started), time, beat, log, ct);
+    }
+
+    static async Task PollHarnessTitleStoreAsync(
+            IHarnessTitleStore                                                        store,
+            WatchState                                                                state,
+            Func<HarnessTitlePost, TimeSpan, CancellationToken, Task<HarnessTitleOutcome>> post,
+            TimeSpan                                                                  budget,
+            TimeProvider                                                              time,
+            Action                                                                    beat,
+            Action<string>                                                            log,
+            CancellationToken                                                         ct
+        ) {
         if (budget <= TimeSpan.Zero) return;
 
         // The read can be a synchronous SQLite query on a database the agent holds, so it runs off the loop and
