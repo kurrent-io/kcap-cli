@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Shapes;
@@ -190,21 +191,132 @@ public class WorkContextViewSmokeTests {
         });
     }
 
+    static Border[] Avatars(Control within) =>
+        within.GetVisualDescendants().OfType<Border>().Where(b => b.Classes.Contains("avatar")).ToArray();
+
+    static int VisibleChevrons(Control within) =>
+        within.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Count(p => p.Classes.Contains("chevron") && p.IsEffectivelyVisible);
+
+    static AutomationPeer Peer(Control control) => ControlAutomationPeer.CreatePeerForElement(control);
+
+    static bool IsAnnounced(Control control) => Peer(control).IsContentElement() || Peer(control).IsControlElement();
+
+    /// The letter inside stays out of the accessibility tree, or a screen reader reads each person twice.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_who_row_shows_sessions_when_every_contributor_is_listed() {
+    public async Task A_folded_initial_is_announced_as_its_person() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
-            await host.ShowAsync(KeyOnlyRead());
+            await host.ShowAsync(CrowdedWhoRead());
+
+            var chips = Avatars(host.Find<ItemsControl>("ContributorStack"));
+            await Assert.That(chips.Select(c => Peer(c).GetName()))
+                .IsEquivalentTo(new[] { "Ada", "Bob", "Cyd", "Dee", "Eve" }, CollectionOrdering.Matching);
+            await Assert.That(chips.All(IsAnnounced)).IsTrue();
+            await Assert.That(chips.Select(c => c.GetVisualDescendants().OfType<TextBlock>().Single()).Any(IsAnnounced)).IsFalse();
+        });
+    }
+
+    /// Opened, the requester's name button speaks for the row, so the initial beside it goes quiet.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_requester_initial_is_announced_only_while_folded() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var read = KeyOnlyRead();
+            await host.ShowAsync(read with { Item = read.Item! with { Contributors = [] } });
+
+            var avatar = Avatars(host.Find<Grid>("RequesterRow")).Single();
+            await Assert.That(Peer(avatar).GetName()).IsEqualTo(host.Vm.Requester);
+            await Assert.That(IsAnnounced(avatar)).IsTrue();
+            await Assert.That(IsAnnounced(avatar.GetVisualDescendants().OfType<TextBlock>().Single())).IsFalse();
+
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(IsAnnounced(avatar)).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_folds_to_initials_and_its_header_opens_the_names() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(CrowdedWhoRead());
 
             var count = host.Find<TextBlock>("WhoCountText");
             await Assert.That(count.Text).IsEqualTo("2 sessions");
             await Assert.That(count.IsEffectivelyVisible).IsTrue();
 
+            var header = host.Find<Button>("WhoToggle");
+            var stack = host.Find<ItemsControl>("ContributorStack");
             var list = host.Find<ItemsControl>("ContributorList");
+            await Assert.That(header.Command).IsSameReferenceAs(host.Vm.TogglePeopleCommand);
+            await Assert.That(VisibleChevrons(header)).IsEqualTo(1);
+            await Assert.That(stack.IsEffectivelyVisible).IsTrue();
+            await Assert.That(list.IsEffectivelyVisible).IsFalse();
+
+            var chips = Avatars(stack);
+            await Assert.That(chips.Select(c => c.GetVisualDescendants().OfType<TextBlock>().Single().Text ?? ""))
+                .IsEquivalentTo(new[] { "A", "B", "C", "D", "E" }, CollectionOrdering.Matching);
+            await Assert.That(chips.Select(c => ToolTip.GetTip(c) as string ?? ""))
+                .IsEquivalentTo(new[] { "Ada", "Bob", "Cyd", "Dee", "Eve" }, CollectionOrdering.Matching);
+
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(VisibleChevrons(header)).IsEqualTo(1);
+            await Assert.That(stack.IsEffectivelyVisible).IsFalse();
             await Assert.That(list.IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Vm.PeopleExpanded).IsFalse();
-            var name = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "Ada");
+            var shown = list.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+            await Assert.That(new[] { "Ada", "Bob", "Cyd", "Dee", "Eve" }.Except(shown)).IsEmpty();
+        });
+    }
+
+    /// The pane is a fixed width, so a crowd has to take a second line rather than run off its edge.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_crowd_wraps_its_initials_inside_the_pane() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var read = KeyOnlyRead();
+            var crowd = Enumerable.Range(1, 14).Select(i => new WorkItemContributorDto { UserId = $"u{i}", DisplayName = $"P{i}" }).ToList();
+            await host.ShowAsync(read with { Item = read.Item! with { Contributors = crowd } });
+
+            var pane = host.Find<ScrollViewer>("PaneScroll");
+            var chips = Avatars(host.Find<ItemsControl>("ContributorStack"));
+            await Assert.That(chips.Length).IsEqualTo(14);
+
+            var corners = chips.Select(c => c.TranslatePoint(new Point(c.Bounds.Width, 0), pane)!.Value).ToArray();
+            await Assert.That(corners.Max(p => p.X)).IsLessThanOrEqualTo(pane.Bounds.Width);
+            await Assert.That(corners.Select(p => p.Y).Distinct().Count()).IsGreaterThan(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_requester_fallback_folds_to_its_initial() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var read = KeyOnlyRead();
+            await host.ShowAsync(read with { Item = read.Item! with { Contributors = [] } });
+
+            var row = host.Find<Grid>("RequesterRow");
+            var name = host.Find<Button>("RequesterName");
+            await Assert.That(row.IsEffectivelyVisible).IsTrue();
+            await Assert.That(name.IsEffectivelyVisible).IsFalse();
+
+            var avatar = Avatars(row).Single();
+            await Assert.That(avatar.GetVisualDescendants().OfType<TextBlock>().Single().Text).IsEqualTo(host.Vm.RequesterInitial);
+            await Assert.That(ToolTip.GetTip(avatar) as string).IsEqualTo(host.Vm.Requester);
+
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
             await Assert.That(name.IsEffectivelyVisible).IsTrue();
         });
     }
@@ -220,8 +332,7 @@ public class WorkContextViewSmokeTests {
             await host.ShowAsync(KeyOnlyRead());
             host.Window.UpdateLayout();
 
-            var avatar = host.Find<ItemsControl>("ContributorList")
-                .GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("avatar"));
+            var avatar = Avatars(host.Find<ItemsControl>("ContributorStack")).First();
             var letter = avatar.GetVisualDescendants().OfType<TextBlock>().Single();
             var raised = host.Window.FindResource("KcapSurfaceRaisedBrush");
             var muted = host.Window.FindResource("KcapMutedBrush");
@@ -306,17 +417,19 @@ public class WorkContextViewSmokeTests {
         return read with { Item = item };
     }
 
-    static ContentPresenter WhoPresenter(Button button) =>
+    static ContentPresenter HeaderPresenter(Button button) =>
         button.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
 
+    /// The empty pull-request header opens nothing, so it must not read as a control.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Who_header_has_no_hover_fill_when_the_list_does_not_overflow() {
+    public async Task A_header_that_opens_nothing_has_no_hover_fill() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
 
-            var button = host.Find<Button>("WhoToggle");
+            var button = host.Find<Button>("PullRequestToggle");
+            await Assert.That(button.IsEffectivelyVisible).IsTrue();
             await Assert.That(button.Classes.Contains("expandable")).IsFalse();
 
             var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
@@ -324,39 +437,38 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(button.Classes.Contains(":pointerover")).IsTrue()
                 .Because("the hover must register for the assertion to mean anything");
-            await Assert.That(Alpha(WhoPresenter(button).Background)).IsEqualTo((byte)0);
+            await Assert.That(Alpha(HeaderPresenter(button).Background)).IsEqualTo((byte)0);
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Who_header_does_not_dim_on_press_when_the_list_does_not_overflow() {
+    public async Task A_header_that_opens_nothing_does_not_dim_on_press() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
 
-            var button = host.Find<Button>("WhoToggle");
+            var button = host.Find<Button>("PullRequestToggle");
             var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
             host.Window.MouseMove(centre);
             host.Window.MouseDown(centre, MouseButton.Left);
             Dispatcher.UIThread.RunJobs();
             await Assert.That(button.Classes.Contains(":pressed")).IsTrue()
                 .Because("the press must register for the assertion to mean anything");
-            await Assert.That(WhoPresenter(button).Opacity).IsEqualTo(1);
-            await Assert.That(Alpha(WhoPresenter(button).Background)).IsEqualTo((byte)0);
+            await Assert.That(HeaderPresenter(button).Opacity).IsEqualTo(1);
+            await Assert.That(Alpha(HeaderPresenter(button).Background)).IsEqualTo((byte)0);
             host.Window.MouseUp(centre, MouseButton.Left);
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Who_header_paints_hover_when_the_list_overflows() {
+    public async Task Who_header_paints_hover_for_a_single_person() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
-            await host.ShowAsync(CrowdedWhoRead());
+            await host.ShowAsync(KeyOnlyRead());
 
             var button = host.Find<Button>("WhoToggle");
-            await Assert.That(host.Vm.PeopleOverflows).IsTrue();
             await Assert.That(button.Classes.Contains("expandable")).IsTrue();
 
             var centre = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
@@ -364,7 +476,7 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(button.Classes.Contains(":pointerover")).IsTrue()
                 .Because("the hover must register for the assertion to mean anything");
-            await Assert.That(ReferenceEquals(WhoPresenter(button).Background, host.Window.FindResource("KcapSurfaceRaisedBrush"))).IsTrue();
+            await Assert.That(ReferenceEquals(HeaderPresenter(button).Background, host.Window.FindResource("KcapSurfaceRaisedBrush"))).IsTrue();
         });
     }
 
