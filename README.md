@@ -325,7 +325,7 @@ At a glance — each links to its section below:
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
 | [`kcap recap`](#session-recap) | AI summary + per-turn outline of a session |
-| [`kcap sessions`](#listing-sessions-on-a-repository) | List a repo's sessions you can see, running first |
+| [`kcap sessions`](#listing-sessions-on-a-repository) | List the sessions you can see, on one repo or all, optionally within a period |
 | [`kcap validate-plan`](#plan-validation) | Check that every planned item was completed |
 | [`kcap hide`](#hide-session) | Mark a session owner-only |
 | [`kcap disable`](#disable-recording) | Stop recording and delete server-side data |
@@ -465,10 +465,16 @@ kcap sessions --all --mine          # your own, running and ended
 kcap sessions --repo acme/widgets   # another repository, by owner/name or 16-hex hash
 kcap sessions --ended --limit 50   # the last 50 ended sessions
 kcap sessions --touching src/Foo    # sessions with an Edit/Write attempt on a matching path
+kcap sessions --since 14d --mine    # what you worked on here in the last 14 days
+kcap sessions --repo all --since 2026-09-27 --until 2026-09-28   # everyone, every repo, one day
 kcap sessions --json                # the raw server response
 ```
 
-Answers "which session is doing this, and is it still running?" for a checkout. Rows are visibility-filtered, so a teammate's private session simply does not appear. Each row shows status (`active`, `stale` after an hour of silence, or `ended`), your access level on it, owner, vendor, branch, last activity and title; below full access the branch is blank and `--touching` cannot match the row. Path evidence comes from Edit/Write tool inputs at invocation time, so edits applied through a shell script leave nothing to match. Drill in with `kcap recap --full <session-id>` (full access only).
+Answers "which session is doing this, and is it still running?" for a checkout, and "what did I, or the team, work on in this period?" with `--since` and `--until`. Rows are visibility-filtered, so a teammate's private session simply does not appear. Each row shows status (`active`, `stale` after an hour of silence, or `ended`), your access level on it, owner, vendor, branch, last activity and title; below full access the branch is blank and `--touching` cannot match the row. Path evidence comes from Edit/Write tool inputs at invocation time, so edits applied through a shell script leave nothing to match. Drill in with `kcap recap --full <session-id>` (full access only).
+
+`--since` and `--until` each take an instant ending in `Z` or an offset (`2026-09-27T09:00:00Z`), a date (`2026-09-27`, the start of that day in this machine's time zone) or a duration back from now (`36h`, `14d`, `2w`). With either one the listing covers running and ended sessions alike, newest start first, and shows a `STARTED` column. A session is in the period when its span from start to end touches it; it is not checked event by event, so a session that ran across the period lists even if it was idle inside it. `--repo all` lists every repository, adds a `REPO` column, and needs no checkout.
+
+When a period holds more rows than one page, the output ends with a `More:` line: the command for the next page. `--cursor` carries the filters of the page it came from, so it combines only with `--repo`, `--limit` and `--json`. Against a server that predates the time filter the command says so and lists nothing, rather than print an unfiltered list.
 
 ### Plan validation
 
@@ -568,7 +574,7 @@ Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude C
 It provides eight tools:
 
 - **`search_sessions`** — keyword search over past sessions (and subagent transcripts). `query` takes one to three keywords or identifiers (a ticket id, a file name, a symbol), not a sentence: the literal lanes need every term inside one event or turn summary, so a sentence gets only embedding neighbours. Each hit carries `hit_kind` — `transcript` and `title` are literal matches, `turn_prose` and `semantic` may be nearest-neighbour hits that never contain the query. Searches the current repo first and automatically widens to every visible repo when results come back thin (the response then carries `widened_to_all_repos: true`, and each hit includes its own repo). Pass `repo: "all"` to search across every repo you can see up front, or `repo: "owner/name"` for a different one — an explicit `repo` (including `"all"`) never auto-widens. Filter by `author` / `author_github_id`. Returns ranked hits with `session_id`, snippet, and (for transcript hits) `hit_event_index` + `agent_id` for drilling in.
-- **`list_repo_sessions`** — the sessions on a repository you are allowed to see, running first, ordered by last activity, with `access_level`, `stale`, branch, cwd, last prompt and Edit/Write attempt paths (blank below full access). `repo` defaults to the current repo and accepts `owner/name` or a 16-hex hash; `state` is `active` (default, so finished sessions are hidden unless you pass `ended` or `all`); `owner` is `me` or a canonical id; `touching_path` matches attempt paths on full-access rows only. There is no time filter — an undeclared argument such as a date range is ignored, not rejected.
+- **`list_repo_sessions`** — the sessions you are allowed to see on a repository, or on every repository with `repo: "all"`, with `access_level`, `stale`, `repo`, branch, cwd, last prompt and Edit/Write attempt paths (blank below full access). Without a period: running first, ordered by last activity, and `state` defaults to `active`, so finished sessions are hidden unless you pass `ended` or `all`. With `since` and/or `until`: the sessions worked on in that period, newest start first, `state` defaulting to `all`; each bound takes an instant ending in `Z` or an offset, a date, or a duration back from now (`36h`, `14d`, `2w`). While the response carries `next_cursor`, call again with `cursor` and the same `repo`. `owner` is `me` or a canonical id; `touching_path` matches attempt paths on full-access rows only. An undeclared argument is ignored, not rejected.
 - **`list_repo_plans`** — the declared plans on a repository that you can see, unfinished ones by default, with progress, the next open task and the sessions attached to each. Use this to find work a session left behind.
 - **`get_declared_plans`** — a plan's documents and full task list, by `plan_id` or for every plan a `session_id` touched.
 - **`get_session_summary`** — concise `summary_text` + `plan` for a session, plus `declared_plans`: a progress pointer for each plan the session declared. Use this to orient before reading the transcript.
@@ -576,7 +582,7 @@ It provides eight tools:
 - **`get_turn`** — the full event transcript for one turn (user prompt, tool calls + results, assistant text) by `session_id` + `turn_index`. A turn is one user message and the assistant's full response up to the next user message.
 - **`list_turns`** — every turn of a session with its prose summary, prompt, tools, files and token counts; works on running sessions at `activity` access and above.
 
-The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash, auto-widening to all repos only when that pinned search comes back thin. **If the current repo can't be resolved** (run outside a git checkout, or a missing/unparseable `origin` remote), `search_sessions` returns an error asking you to pass `repo: "owner/name"` or `repo: "all"` — it will not silently search across all repos. `list_repo_sessions` and `list_repo_plans` are repo-scoped the same way and fail closed the same way, but neither accepts `repo: "all"`: unresolved, they return an error asking for `repo: "owner/name"` rather than falling back to every repo.
+The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash, auto-widening to all repos only when that pinned search comes back thin. **If the current repo can't be resolved** (run outside a git checkout, or a missing/unparseable `origin` remote), `search_sessions` returns an error asking you to pass `repo: "owner/name"` or `repo: "all"` — it will not silently search across all repos. `list_repo_sessions` and `list_repo_plans` fail closed the same way: unresolved, they return an error asking for `repo: "owner/name"` rather than falling back to every repo. `list_repo_sessions` lists every repository only when asked with `repo: "all"`; `list_repo_plans` does not accept it.
 
 ### Flows MCP server (for agents)
 

@@ -68,4 +68,49 @@ public class RepoSessionsModelsTests {
         await Assert.That(second.WriteAttemptPaths).IsEmpty();
         await Assert.That(second.WriteAttemptCount).IsEqualTo(0);
     }
+
+    const string Windowed = """
+        {"items":[{"session_id":"abc","slug":null,"title":"Fix it","owner":null,"vendor":"claude","status":"ended","access_level":"full","stale":false,
+        "started_at":"2026-09-20T09:00:00+00:00","ended_at":"2026-09-20T11:00:00+00:00","last_activity_at":"2026-09-20T11:00:00+00:00",
+        "primary_repo_hash":"da9c523c68aee2f1","is_primary":true,"branch":"main","cwd":"/work","last_prompt":null,"write_attempt_paths":[],"write_attempt_count":0,
+        "repo":{"hash":"da9c523c68aee2f1","owner":"acme","name":"widgets"}},
+        {"session_id":"def","slug":null,"title":null,"owner":null,"vendor":null,"status":"ended","access_level":"full","stale":false,
+        "started_at":"2026-09-19T09:00:00+00:00","ended_at":"2026-09-19T10:00:00+00:00","last_activity_at":"2026-09-19T10:00:00+00:00",
+        "primary_repo_hash":"0badf00d12345678","is_primary":true,"branch":null,"cwd":null,"last_prompt":null,"write_attempt_paths":[],"write_attempt_count":0,
+        "repo":{"hash":"0badf00d12345678","owner":null,"name":null}},
+        {"session_id":"ghi","slug":null,"title":null,"owner":null,"vendor":null,"status":"ended","access_level":"full","stale":false,
+        "started_at":"2026-09-18T09:00:00+00:00","ended_at":"2026-09-18T10:00:00+00:00","last_activity_at":"2026-09-18T10:00:00+00:00",
+        "primary_repo_hash":null,"is_primary":false,"branch":null,"cwd":null,"last_prompt":null,"write_attempt_paths":[],"write_attempt_count":0,
+        "repo":null}],
+        "total":3,"limit":20,"offset":0,"since":"2026-09-14T00:00:00+00:00","until":null,"next_cursor":"eyJ2IjoxfQ"}
+        """;
+
+    [Test]
+    public async Task Reads_the_window_echo_the_cursor_and_the_repository() {
+        var page = JsonSerializer.Deserialize(Windowed, CapacitorJsonContext.Default.RepoSessionsResponse)!;
+
+        await Assert.That(page.Since).IsEqualTo(new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero));
+        await Assert.That(page.Until).IsNull();
+        await Assert.That(page.NextCursor).IsEqualTo("eyJ2IjoxfQ");
+
+        await Assert.That(page.Items[0].Repo!.Hash).IsEqualTo("da9c523c68aee2f1");
+        await Assert.That(page.Items[0].Repo!.Owner).IsEqualTo("acme");
+        await Assert.That(page.Items[0].Repo!.Name).IsEqualTo("widgets");
+        await Assert.That(page.Items[1].Repo!.Hash).IsEqualTo("0badf00d12345678");
+        await Assert.That(page.Items[1].Repo!.Owner).IsNull();
+        await Assert.That(page.Items[1].Repo!.Name).IsNull();
+        await Assert.That(page.Items[2].Repo).IsNull();
+    }
+
+    /// <summary>A server that predates the window sends none of the four fields. They must read as
+    /// absent, since that absence is how the command tells such a server from a current one.</summary>
+    [Test]
+    public async Task A_body_without_the_new_fields_reads_them_as_absent() {
+        var page = JsonSerializer.Deserialize(Body, CapacitorJsonContext.Default.RepoSessionsResponse)!;
+
+        await Assert.That(page.Since).IsNull();
+        await Assert.That(page.Until).IsNull();
+        await Assert.That(page.NextCursor).IsNull();
+        await Assert.That(page.Items[0].Repo).IsNull();
+    }
 }
