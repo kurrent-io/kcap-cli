@@ -239,8 +239,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             // rather than reaching the agent verbatim.
             if (IsNextWorkTargetTool(toolName)) return RenderNextWorkTargetResult(id, toolName, httpResponse.StatusCode, body);
             if (toolName == "list_loose_ends") return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
-            if (toolName is "close_loose_end" or "reopen_loose_end" && IsLedgerUnavailable(httpResponse.StatusCode, body))
-                return BuildToolResult(id, NextWorkUnavailableMessage);
+            if (toolName is "close_loose_end" or "reopen_loose_end") return RenderLooseEndChangeResult(id, toolName, httpResponse.StatusCode, body);
 
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
@@ -460,6 +459,41 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         return RenderLooseEndList(body) is { } text
             ? BuildToolResult(id, text)
             : BuildToolResult(id, "Error: the server returned an unreadable response.", isError: true);
+    }
+
+    /// <summary>The success body is fixed prose around the id; an error keeps only a well-formed code,
+    /// as for the list.</summary>
+    internal static string RenderLooseEndChangeResult(JsonNode id, string toolName, HttpStatusCode status, string body) {
+        if (IsLedgerUnavailable(status, body))
+            return BuildToolResult(id, NextWorkUnavailableMessage);
+
+        if ((int)status is < 200 or > 299)
+            return BuildToolResult(id,
+                NextWorkTargetErrorCode(body) is { } code && NextWorkEmitter.IsCode(code) ? $"Error: HTTP {(int)status} — {code}" : $"Error: HTTP {(int)status}",
+                isError: true);
+
+        return RenderLooseEndChange(toolName, body) is { } text
+            ? BuildToolResult(id, text)
+            : BuildToolResult(id, "Error: the server returned an unreadable response.", isError: true);
+    }
+
+    /// <summary>Null when the body carries no loose_end_id.</summary>
+    internal static string? RenderLooseEndChange(string toolName, string body) {
+        try {
+            using var doc  = JsonDocument.Parse(body);
+            var       root = doc.RootElement;
+
+            if (!root.IsObject) return null;
+
+            var looseEndId = NextWorkUntrustedText.Render(root.Str("loose_end_id"), LooseEndIdCap);
+            if (looseEndId.Length == 0) return null;
+
+            return toolName == "close_loose_end" ? $"Closed loose end {looseEndId}." : $"Reopened loose end {looseEndId}.";
+        } catch (JsonException) {
+            return null;
+        } catch (InvalidOperationException) {
+            return null;
+        }
     }
 
     /// <summary>Loose-end text is session-authored, so it sits inside the same data block as the feed.

@@ -705,7 +705,7 @@ public class McpWorkItemsServerTests {
             """{"loose_end_id":"le1"}""",
         });
         await Assert.That(response).DoesNotContain("\"isError\":true");
-        await Assert.That(response).Contains("closed");
+        await Assert.That(response).Contains("Closed loose end le1.");
     }
 
     [Test, NotInParallel]
