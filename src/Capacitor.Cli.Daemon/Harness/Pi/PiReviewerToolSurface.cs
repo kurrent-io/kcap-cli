@@ -13,12 +13,12 @@ internal static class PiReviewerToolSurface {
     internal static readonly ImmutableArray<string> FileTools =
         ["read_file", "list_directory", "search_files", "git_log", "git_show", "git_diff"];
 
-    /// <summary>Pi activates a built-in exactly when the allowlist names it, and an extension tool
-    /// replaces a built-in of the same name — so no entry may be, or collide with, one of these.</summary>
     /// <summary>The one tool the borrowed-snapshot review-context server serves.</summary>
     internal const string ReviewContextServer = "kcap-review-context";
     internal const string ReviewContextTool   = "get_branch_authored_mcp_configs";
 
+    /// <summary>Pi activates a built-in exactly when the allowlist names it, and an extension tool
+    /// replaces a built-in of the same name — so no entry may be, or collide with, one of these.</summary>
     internal static readonly ImmutableArray<string> PiBuiltInNames =
         ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 
