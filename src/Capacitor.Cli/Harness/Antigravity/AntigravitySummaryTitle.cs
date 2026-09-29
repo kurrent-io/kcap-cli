@@ -6,24 +6,20 @@ using Microsoft.Data.Sqlite;
 
 namespace Capacitor.Cli.Harness.Antigravity;
 
-/// <summary>Antigravity's single <c>conversation_summaries.db</c> (under the CLI's
-/// <c>antigravity-cli</c> config root, keyed by <c>conversation_id</c> — confirmed against the installed
-/// schema) carries one auto-generated <c>title</c> row per conversation; there is no separate rename
-/// signal, so a title here always reads as <see cref="HarnessTitleKind.Auto"/>.
+/// <summary>The product root's single <c>conversation_summaries.db</c> (beside <c>brain/</c> and
+/// <c>conversations/</c>, keyed by the dashed <c>conversation_id</c>) carries one auto-generated <c>title</c> per
+/// conversation. Antigravity records no rename signal, so a title here always reads as
+/// <see cref="HarnessTitleKind.Auto"/>. The per-conversation <c>conversations/&lt;id&gt;.db</c> has no summary table.
 ///
-/// <para>Lives in the CLI project (not Core) so the Microsoft.Data.Sqlite native bundle never reaches
-/// the AOT-published daemon — same rationale as <see cref="OpenCode.OpenCodeDb"/>. Opened read-only,
-/// every step best-effort: a missing db / table / row is skipped, never thrown.</para></summary>
+/// <para>Lives in the CLI project, not Core, so the SQLite native bundle never reaches the AOT-published daemon.
+/// Opened read-only and unpooled, so no handle outlives a read and blocks Antigravity replacing its own file.</para></summary>
 public sealed class AntigravitySummaryTitle(string dbPath, string dashedConversationId) : IHarnessTitleStore {
     static AntigravitySummaryTitle() => SqliteNativeResolver.Register();
 
-    /// <summary>The conversation id is the db's own file name — <see cref="AntigravityPaths.ConversationDb"/>
-    /// names it that way, so no separate parse of the transcript path is needed.</summary>
-    public static AntigravitySummaryTitle? ForTranscript(string transcriptPath) {
-        var dbPath = AntigravityPaths.ConversationDbFromTranscript(transcriptPath);
-
-        return dbPath is null ? null : new AntigravitySummaryTitle(dbPath, Path.GetFileNameWithoutExtension(dbPath));
-    }
+    public static AntigravitySummaryTitle? ForTranscript(string transcriptPath) =>
+        AntigravityPaths.SummaryDbFromTranscript(transcriptPath) is (var dbPath, var conversationId)
+            ? new AntigravitySummaryTitle(dbPath, conversationId)
+            : null;
 
     public bool RecordsChangeTime => false;
 
@@ -35,6 +31,7 @@ public sealed class AntigravitySummaryTitle(string dbPath, string dashedConversa
                 DataSource = dbPath,
                 Mode       = SqliteOpenMode.ReadOnly,
                 Cache      = SqliteCacheMode.Private,
+                Pooling    = false,
             }.ToString());
             conn.Open();
 

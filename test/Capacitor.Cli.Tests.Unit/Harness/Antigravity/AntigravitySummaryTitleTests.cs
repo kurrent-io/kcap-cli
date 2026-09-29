@@ -7,24 +7,25 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Antigravity;
 public class AntigravitySummaryTitleTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
-    const string ConversationId = "46744763-380c-4d48-b6c9-d89e6feefeb1";
+    internal const string ConversationId = "46744763-380c-4d48-b6c9-d89e6feefeb1";
 
-    string BuildDb(string? title) {
-        var path = Tmp.PathTo("conversation_summaries.db");
+    string BuildDb(string? title) => BuildSummaryDb(Tmp.PathTo("conversation_summaries.db"), title);
 
-        using var conn = new SqliteConnection($"Data Source={path}");
-        conn.Open();
+    internal static string BuildSummaryDb(string path, string? title) {
+        using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString())) {
+            conn.Open();
 
-        using (var create = conn.CreateCommand()) {
-            create.CommandText = "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '')";
-            create.ExecuteNonQuery();
+            using (var create = conn.CreateCommand()) {
+                create.CommandText = "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '')";
+                create.ExecuteNonQuery();
+            }
+
+            using var insert = conn.CreateCommand();
+            insert.CommandText = "INSERT INTO conversation_summaries(conversation_id, title) VALUES ($id, $title)";
+            insert.Parameters.AddWithValue("$id", ConversationId);
+            insert.Parameters.AddWithValue("$title", (object?)title ?? "");
+            insert.ExecuteNonQuery();
         }
-
-        using var insert = conn.CreateCommand();
-        insert.CommandText = "INSERT INTO conversation_summaries(conversation_id, title) VALUES ($id, $title)";
-        insert.Parameters.AddWithValue("$id", ConversationId);
-        insert.Parameters.AddWithValue("$title", (object?)title ?? "");
-        insert.ExecuteNonQuery();
 
         return path;
     }
@@ -57,28 +58,39 @@ public class AntigravitySummaryTitleTests {
         await Assert.That(new AntigravitySummaryTitle(Tmp.PathTo("absent.db"), ConversationId).RecordsChangeTime).IsFalse();
     }
 
+    /// <summary>Pins the real layout: the title lives in the root's single <c>conversation_summaries.db</c>, and the
+    /// per-conversation <c>conversations/&lt;id&gt;.db</c> beside it has no summary table — a reader opening that one
+    /// reads null, so this fails for it.</summary>
     [Test]
-    public async Task ForTranscript_derives_the_sibling_db_and_conversation_id() {
-        var dbPath = Tmp.PathTo("conversations", $"{ConversationId}.db");
-        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+    public async Task ForTranscript_reads_the_roots_summary_db_not_the_conversation_db() {
+        string root = Tmp.CreateDir("antigravity-cli");
+        BuildSummaryDb(Path.Combine(root, "conversation_summaries.db"), "From the summary db");
 
-        using (var conn = new SqliteConnection($"Data Source={dbPath}")) {
+        string conversations  = Tmp.CreateDir("antigravity-cli", "conversations");
+        var    conversationDb = Path.Combine(conversations, $"{ConversationId}.db");
+        using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = conversationDb, Pooling = false }.ToString())) {
             conn.Open();
             using var create = conn.CreateCommand();
-            create.CommandText = "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '')";
+            create.CommandText = "CREATE TABLE steps (id INTEGER PRIMARY KEY)";
             create.ExecuteNonQuery();
-            using var insert = conn.CreateCommand();
-            insert.CommandText = "INSERT INTO conversation_summaries(conversation_id, title) VALUES ($id, $title)";
-            insert.Parameters.AddWithValue("$id", ConversationId);
-            insert.Parameters.AddWithValue("$title", "From transcript path");
-            insert.ExecuteNonQuery();
         }
 
-        var transcriptPath = Tmp.PathTo("brain", ConversationId, ".system_generated", "logs", "transcript_full.jsonl");
+        var transcriptPath = Path.Combine(root, "brain", ConversationId, ".system_generated", "logs", "transcript_full.jsonl");
 
         var title = AntigravitySummaryTitle.ForTranscript(transcriptPath)!.Read();
 
-        await Assert.That(title!.Title).IsEqualTo("From transcript path");
+        await Assert.That(title!.Title).IsEqualTo("From the summary db");
+    }
+
+    [Test]
+    public async Task Read_releases_the_db_file() {
+        var path = BuildDb("Released");
+
+        await Assert.That(new AntigravitySummaryTitle(path, ConversationId).Read()!.Title).IsEqualTo("Released");
+
+        File.Move(path, Tmp.PathTo("moved.db"));
+
+        await Assert.That(File.Exists(path)).IsFalse();
     }
 
     [Test]
