@@ -101,4 +101,113 @@ public class HarnessTitleClientTests {
 
         await Assert.That(notOwner).IsEqualTo(HarnessTitleOutcome.Refused);
     }
+
+    [Test]
+    [Arguments(401)]
+    [Arguments(408)]
+    [Arguments(429)]
+    [Arguments(503)]
+    public async Task Transient_statuses_are_failed_not_refused(int status) {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(status));
+        using var client = new HttpClient();
+
+        var outcome = await HarnessTitleClient.PostAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default);
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Failed);
+    }
+
+    [Test]
+    public async Task Status_422_is_refused() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(422));
+        using var client = new HttpClient();
+
+        var outcome = await HarnessTitleClient.PostAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default);
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Refused);
+    }
+
+    [Test]
+    public async Task Fallback_server_fault_is_failed() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(500));
+        using var client = new HttpClient();
+
+        var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default);
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Failed);
+    }
+
+    [Test]
+    public async Task Fallback_403_is_refused() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(403));
+        using var client = new HttpClient();
+
+        var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default);
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Refused);
+    }
+
+    [Test]
+    public async Task Fallback_clamps_title_to_120() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+
+        await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost(new string('k', 500), HarnessTitleKind.Auto, null), default);
+
+        var body = JsonNode.Parse(server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/set-title").RequestMessage.Body!)!;
+        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo(new string('k', 120));
+    }
+
+    [Test]
+    public async Task Harness_title_body_is_clamped_to_200() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+
+        await HarnessTitleClient.PostAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost(new string('k', 500), HarnessTitleKind.Rename, null), default);
+
+        var body = JsonNode.Parse(server.LogEntries.Single().RequestMessage.Body!)!;
+        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo(new string('k', 200));
+    }
+
+    [Test]
+    [Arguments("[]")]
+    [Arguments("\"x\"")]
+    [Arguments("not json")]
+    public async Task A_404_body_that_is_not_an_error_object_is_route_missing(string body) {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(404).WithBody(body));
+        using var client = new HttpClient();
+
+        var outcome = await HarnessTitleClient.PostAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default);
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.RouteMissing);
+    }
+
+    [Test]
+    public async Task A_server_slower_than_the_budget_returns_within_it() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromSeconds(20)));
+        using var client = new HttpClient();
+
+        var started = TimeProvider.System.GetTimestamp();
+        var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, server.Url!, "abc",
+            new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default, TimeSpan.FromSeconds(1));
+
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Failed);
+        await Assert.That(TimeProvider.System.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(10));
+    }
 }
