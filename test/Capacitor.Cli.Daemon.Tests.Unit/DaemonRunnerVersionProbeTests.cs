@@ -100,22 +100,21 @@ public class DaemonRunnerVersionProbeTests {
         // Prints the version, then leaves a child holding the inherited stdout open after the CLI
         // itself exits — the shape that made ProbeCliVersionOnce block on a drain that never saw EOF.
         // The stub records the descendant's pid so the test can reap it: once reparented it is no
-        // longer anyone's child, and left alone it outlives the test host into teardown. The sidecar
-        // path comes from the fixture so the shell writer and the reaper cannot drift apart.
+        // longer anyone's child, and left alone it outlives the test host into teardown. The marker
+        // in its command line is what proves a pid is still that descendant when the test reaps it.
+        // (`; :` keeps the shell from exec-ing sleep, which would drop the marker.)
         var pidFile = tmp.PathTo("faketool.pid");
+        var marker  = $"kcap-probe-descendant-{Guid.NewGuid():N}";
         var cli = tmp.CreateExecutable(
-            "faketool",
-            $"#!/bin/sh\necho 'faketool 9.9.9'\nsleep {(int)DescendantLifetime.TotalSeconds} &\necho $! > '{pidFile}'\nexit 0\n");
+            "faketool", $"#!/bin/sh\necho 'faketool 9.9.9'\nsh -c 'sleep 20; :' {marker} &\necho $! > '{pidFile}'\nexit 0\n");
 
-        var sinceLaunch = System.Diagnostics.Stopwatch.StartNew();
-        var descendant  = CaptureDescendantAsync(pidFile, sinceLaunch);
-        var sw          = System.Diagnostics.Stopwatch.StartNew();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         string? version = null;
         try {
             version = await Task.Run(() => DaemonRunner.ProbeCliVersionForLaunch(cli));
             sw.Stop();
 
-            // Bounded: a return well under the descendant's lifetime proves the drain was not
+            // Bounded: a return well under the descendant's 20s lifetime proves the drain was not
             // blocked to an EOF that never comes.
             await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(12));
             // Recovered: the version printed ahead of the block survives, so registration advertises
@@ -124,47 +123,48 @@ public class DaemonRunnerVersionProbeTests {
         } finally {
             // In a finally so a failing probe or assertion still reaps — otherwise the same leaked
             // descendant turns a useful assertion failure into an exit-139 teardown failure.
-            await ReapAsync(await descendant);
+            await ReapDescendantAsync(pidFile, marker);
         }
     }
 
-    static readonly TimeSpan DescendantLifetime = TimeSpan.FromSeconds(20);
-
-    /// <summary>Captures the descendant's identity while it is provably the stub's own. It starts after
-    /// <paramref name="sinceLaunch"/> began and lives <see cref="DescendantLifetime"/>, so an identity
-    /// read inside that window cannot belong to a recycled pid; one read later might, and is discarded
-    /// rather than risk signalling another process.</summary>
-    static async Task<(int Pid, string Identity)?> CaptureDescendantAsync(string pidFile, System.Diagnostics.Stopwatch sinceLaunch) {
-        var ownedUntil = DescendantLifetime - TimeSpan.FromSeconds(2);
-
-        while (true) {
-            if (sinceLaunch.Elapsed >= ownedUntil) return null;
-            if (File.Exists(pidFile) && int.TryParse((await File.ReadAllTextAsync(pidFile)).Trim(), out var pid)) {
-                // Capture throws both when the pid is gone AND when a live process's identity is
-                // unreadable, so a bare catch is not proof of absence.
-                string identity;
-                try { identity = Capacitor.Tests.Helpers.PidIdentity.Capture(pid); }
-                catch {
-                    try {
-                        using var process = System.Diagnostics.Process.GetProcessById(pid);
-                        if (process.HasExited) return null;
-                    } catch (ArgumentException) { return null; } // genuinely gone
-                    throw; // present but identity unreadable — do not assume it is gone
-                }
-
-                return sinceLaunch.Elapsed < ownedUntil ? (pid, identity) : null;
-            }
-
+    /// <summary>Kills the reparented descendant so it cannot linger past this test into the host's
+    /// teardown. A pid is killed only when its captured incarnation still carries this test's marker:
+    /// a descendant that already exited may have had its pid reused, and that process is left alone.</summary>
+    static async Task ReapDescendantAsync(string pidFile, string marker) {
+        int pid = 0;
+        for (var i = 0; i < 50; i++) {
+            if (File.Exists(pidFile) && int.TryParse((await File.ReadAllTextAsync(pidFile)).Trim(), out pid)) break;
             await Task.Delay(20);
         }
+        if (pid <= 0) return;
+
+        // Capture throws both when the pid is gone AND when a live process's identity is unreadable,
+        // so a bare catch is not proof of absence.
+        string identity;
+        try { identity = Capacitor.Tests.Helpers.PidIdentity.Capture(pid); }
+        catch {
+            try {
+                using var process = System.Diagnostics.Process.GetProcessById(pid);
+                if (process.HasExited) return;
+            } catch (ArgumentException) { return; } // genuinely gone
+            throw; // present but identity unreadable — do not assume it is gone
+        }
+
+        // The marker is read after the capture and the identity checked again after the read, so the
+        // command line that carried the marker belongs to the captured incarnation.
+        if (!(await CommandLineAsync(pid)).Contains(marker, StringComparison.Ordinal)) return;
+        if (Capacitor.Tests.Helpers.PidIdentity.IsGone(pid, identity)) return;
+
+        Capacitor.Cli.Daemon.Services.ProcessTree.Kill(pid, identity);
+        await Capacitor.Tests.Helpers.PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
     }
 
-    /// <summary>Kills the reparented descendant against its captured incarnation, so it cannot linger
-    /// past this test into the host's teardown and a pid recycled since is never signalled.</summary>
-    static async Task ReapAsync((int Pid, string Identity)? descendant) {
-        if (descendant is not { } d) return;
-
-        Capacitor.Cli.Daemon.Services.ProcessTree.Kill(d.Pid, d.Identity);
-        await Capacitor.Tests.Helpers.PidIdentity.WaitUntilGoneAsync(d.Pid, d.Identity, TimeSpan.FromSeconds(5));
+    static async Task<string> CommandLineAsync(int pid) {
+        using var ps = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ps", ["-o", "args=", "-p", pid.ToString(System.Globalization.CultureInfo.InvariantCulture)]) {
+            RedirectStandardOutput = true, UseShellExecute = false,
+        })!;
+        var output = await ps.StandardOutput.ReadToEndAsync();
+        await ps.WaitForExitAsync();
+        return output;
     }
 }
