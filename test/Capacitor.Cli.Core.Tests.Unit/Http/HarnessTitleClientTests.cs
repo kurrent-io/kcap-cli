@@ -69,7 +69,7 @@ public class HarnessTitleClientTests {
         var outcome = await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, server.Url!, "abc",
             new HarnessTitlePost("Name", HarnessTitleKind.Auto, null), default);
 
-        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Posted);
+        await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.PostedToLegacyRoute);
         var setTitleRequest = server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/set-title");
         var body            = JsonNode.Parse(setTitleRequest.RequestMessage.Body!)!;
         await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo("abc");
@@ -257,5 +257,33 @@ public class HarnessTitleClientTests {
 
         await Assert.That(outcome).IsEqualTo(HarnessTitleOutcome.Posted);
         await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/harness-title")).IsEqualTo(2);
+    }
+
+    [Test]
+    [Arguments(400, """{"error":"unsafe_session_id"}""", true)]
+    [Arguments(400, "", true)]
+    [Arguments(404, "", false)]
+    [Arguments(404, """{"error":"session_not_found"}""", true)]
+    [Arguments(401, "", null)]
+    [Arguments(503, "", null)]
+    public async Task The_probe_tells_a_server_with_harness_titles_from_one_without(int status, string body, bool? expected) {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(status).WithBody(body));
+        using var client = new HttpClient();
+
+        var supported = await HarnessTitleClient.ServerRecordsHarnessTitlesAsync(client, TimeProvider.System, server.Url!, TimeSpan.FromSeconds(10), default);
+
+        await Assert.That(supported).IsEqualTo(expected);
+        var sent = JsonNode.Parse(server.LogEntries.Single().RequestMessage.Body!)!;
+        await Assert.That(sent["session_id"]!.GetValue<string>()).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task The_probe_answers_unknown_when_the_server_is_unreachable() {
+        using var client = new HttpClient();
+
+        var supported = await HarnessTitleClient.ServerRecordsHarnessTitlesAsync(client, TimeProvider.System, "http://127.0.0.1:1", TimeSpan.FromSeconds(1), default);
+
+        await Assert.That(supported).IsNull();
     }
 }

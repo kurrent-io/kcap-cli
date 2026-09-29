@@ -817,8 +817,15 @@ partial class WatchCommand(
                     state.LastSecondaryProbe = time.GetUtcNow();
                 }
 
-                // Read once before the first drain, so a store title latches HarnessTitleSeen before that
-                // drain can trigger LLM titling.
+                // Before the first drain, so a transcript title line can be judged by the time LLM titling is due.
+                if (agentId is null && TranscriptTitleLines.MayNeedHarnessTitles(vendor) && state.ServerRecordsHarnessTitles is null
+                 && time.GetUtcNow() - state.LastHarnessTitleProbe >= HarnessTitleRetryGap) {
+                    state.LastHarnessTitleProbe      = time.GetUtcNow();
+                    state.ServerRecordsHarnessTitles = await ProbeHarnessTitlesAsync(cts.Token, TouchHeartbeat);
+                }
+
+                // Read once before the first drain, so a store title the server records latches HarnessTitleSeen
+                // before that drain can trigger LLM titling.
                 if (titleStore is not null && state.LastHarnessTitleRead == default) {
                     state.LastHarnessTitleRead = time.GetUtcNow();
                     await PostHarnessTitleAsync(titleStore, sessionId, state, cts.Token, TouchHeartbeat);
@@ -2226,9 +2233,7 @@ partial class WatchCommand(
                         }
                     }
 
-                    if (!state.HarnessTitleSeen && TranscriptTitleLines.CarriesHarnessTitle(vendor, line)) {
-                        state.HarnessTitleSeen = true;
-                    }
+                    if (!state.HarnessTitleSeen) ObserveTitleLine(state, vendor, line);
                 }
             }
 
@@ -3491,14 +3496,23 @@ partial class WatchCommand(
     // A value the server has not settled is re-sent no sooner than this, however often the transcript drains.
     internal static readonly TimeSpan HarnessTitleRetryGap = TimeSpan.FromSeconds(30);
 
-    /// <summary>A harness-native title, from the store or the transcript, suppresses LLM titling for good.</summary>
+    /// <summary>A harness-native title the server is known to record suppresses LLM titling for good. A transcript
+    /// title only a server with harness titles records defers it while that is unknown.</summary>
     internal static bool ShouldGenerateLlmTitle(WatchState state, string? agentId) =>
         state is { TitleGenerated: false, TitleInFlight: false, TitleAttempts: < 5, ThresholdReached: true, HarnessTitleSeen: false, FirstUserText: not null, EventCount: >= 5 }
-     && agentId is null;
+     && agentId is null
+     && !(state.InlineHarnessTitleSeen && state.ServerRecordsHarnessTitles != false);
+
+    internal static void ObserveTitleLine(WatchState state, string vendor, string line) {
+        switch (TranscriptTitleLines.Classify(vendor, line)) {
+            case TranscriptTitleLineKind.RecordedByEveryServer:     state.HarnessTitleSeen       = true; break;
+            case TranscriptTitleLineKind.RecordedWithHarnessTitles: state.InlineHarnessTitleSeen = true; break;
+        }
+    }
 
     /// <summary>
-    /// Reads the store and sends what the tracker says is owed. Any title read latches
-    /// <see cref="WatchState.HarnessTitleSeen"/>, whether or not it is ever recorded. A post the server answered —
+    /// Reads the store and sends what the tracker says is owed. Only a post the server took through
+    /// <c>/hooks/harness-title</c> latches <see cref="WatchState.HarnessTitleSeen"/>. A post the server answered —
     /// recorded or refused on its merits — settles the value; anything else is re-sent after
     /// <see cref="HarnessTitleRetryGap"/>. The post runs inline in the watch loop, so it is bounded by
     /// <paramref name="budget"/> and <paramref name="beat"/> is called before it.
@@ -3523,8 +3537,6 @@ partial class WatchCommand(
             return;
         }
 
-        if (read is not null) state.HarnessTitleSeen = true;
-
         var now = time.GetUtcNow();
         if (state.TitleTracker!.Observe(read, now) is not { } owed) return;
 
@@ -3546,7 +3558,9 @@ partial class WatchCommand(
             return;
         }
 
-        if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.Refused) state.TitleTracker.Settled(owed);
+        if (outcome is HarnessTitleOutcome.Posted) state.HarnessTitleSeen = true;
+        if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.PostedToLegacyRoute or HarnessTitleOutcome.Refused)
+            state.TitleTracker.Settled(owed);
         else if (outcome is HarnessTitleOutcome.Failed) state.TitleTracker.OutcomeUnknown();
         if (outcome is not HarnessTitleOutcome.Posted) log($"Harness title not recorded: {outcome}");
     }
@@ -3567,6 +3581,26 @@ partial class WatchCommand(
                 return await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, owed, token, remaining);
             },
             budget ?? SecondaryProbeBudget, time, beat, message => Log(time, message), ct);
+
+    async Task<bool?> ProbeHarnessTitlesAsync(CancellationToken ct, Action beat) {
+        beat();
+        try {
+            var       started  = time.GetTimestamp();
+            using var deadline = new CancellationTokenSource(SecondaryProbeBudget, time);
+            using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+            using var client   = await http.ForBackgroundAsync(linked.Token);
+
+            var remaining = SecondaryProbeBudget - time.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero) return null;
+
+            return await HarnessTitleClient.ServerRecordsHarnessTitlesAsync(client, time, Url, remaining, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            Log(time, $"Harness title probe failed: {ex.Message}");
+            return null;
+        }
+    }
 
     async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
         try {

@@ -453,11 +453,13 @@ public class TitleResolveLoopTests {
     }
 
     [Test]
-    public async Task A_refused_push_is_not_retried_for_the_same_value() {
+    [Arguments(HarnessTitleOutcome.Refused)]             // e.g. blank title, unsafe id, not the owner
+    [Arguments(HarnessTitleOutcome.PostedToLegacyRoute)] // an older server has no better route to try
+    public async Task A_refused_push_is_not_retried_for_the_same_value(HarnessTitleOutcome answer) {
         var h = new Harness();
         h.Agents.Add(Agent());
         h.Native = _ => "Native title";
-        h.Server.PushResult = HarnessTitleOutcome.Refused; // e.g. blank title, unsafe id, not the owner
+        h.Server.PushResult = answer;
         var loop = h.Build();
 
         await loop.TickAsync(CancellationToken.None);

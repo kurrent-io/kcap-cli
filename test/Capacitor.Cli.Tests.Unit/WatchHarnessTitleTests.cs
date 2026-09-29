@@ -147,24 +147,70 @@ public class WatchHarnessTitleTests {
         return state;
     }
 
-    /// <summary>A store title suppresses LLM titling even when its post never lands; the store without a title is the
-    /// positive control that the same state would otherwise trigger generation.</summary>
+    /// <summary>Only a store title the server took through <c>/hooks/harness-title</c> suppresses LLM titling. An older
+    /// server takes it through set-title, which fills only an untitled session, so that session still needs a
+    /// generated title; the same state with the new route is the positive control.</summary>
     [Test]
-    public async Task A_store_title_suppresses_llm_titling_even_when_its_post_fails() {
+    public async Task A_store_title_suppresses_llm_titling_only_when_the_harness_route_took_it() {
+        using var newServer = WireMockServer.Start();
+        newServer.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        using var oldServer = WireMockServer.Start();
+        oldServer.Given(Request.Create().WithPath("/hooks/set-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+
+        var store    = new FixedStore(() => Named);
+        var recorded = ReadyForLlmTitle(StateFor(store));
+        await Poll(store, recorded, newServer, TimeProvider.System);
+        var legacy = ReadyForLlmTitle(StateFor(store));
+        await Poll(store, legacy, oldServer, TimeProvider.System);
+
+        await Assert.That(oldServer.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/set-title")).IsEqualTo(1);
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(recorded, agentId: null)).IsFalse();
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(legacy, agentId: null)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_store_title_whose_post_fails_does_not_suppress_llm_titling() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(503));
+        var store = new FixedStore(() => Named);
+        var state = ReadyForLlmTitle(StateFor(store));
 
-        var titled   = new FixedStore(() => Named);
-        var withName = ReadyForLlmTitle(StateFor(titled));
-        await Poll(titled, withName, server, TimeProvider.System);
+        await Poll(store, state, server, TimeProvider.System);
 
-        var untitled = new FixedStore(() => null);
-        var without  = ReadyForLlmTitle(StateFor(untitled));
-        await Poll(untitled, without, server, TimeProvider.System);
-
-        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(withName, agentId: null)).IsFalse();
-        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(without, agentId: null)).IsTrue();
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(state, agentId: null)).IsTrue();
     }
+
+    const string CustomTitle = """{"type":"custom-title","customTitle":"Mine","sessionId":"s"}""";
+    const string AiTitle     = """{"type":"ai-title","aiTitle":"Claude's","sessionId":"s"}""";
+
+    static WatchState AfterLine(string vendor, string line, bool? serverRecordsHarnessTitles) {
+        var state = ReadyForLlmTitle(new WatchState { ServerRecordsHarnessTitles = serverRecordsHarnessTitles });
+        WatchCommand.ObserveTitleLine(state, vendor, line);
+        return state;
+    }
+
+    /// <summary>An older server records none of these lines, so generation must still run there.</summary>
+    [Test]
+    [Arguments("claude", CustomTitle)]
+    [Arguments("pi", """{"type":"session_info","name":"x"}""")]
+    [Arguments("gemini", """{"$set":{"summary":"x"}}""")]
+    [Arguments("opencode", """{"type":"session_title","title":"x"}""")]
+    public async Task A_title_line_only_a_newer_server_records_suppresses_llm_titling_only_there(string vendor, string line) {
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(AfterLine(vendor, line, serverRecordsHarnessTitles: false), agentId: null)).IsTrue();
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(AfterLine(vendor, line, serverRecordsHarnessTitles: true), agentId: null)).IsFalse();
+    }
+
+    /// <summary>Until the probe answers, generation waits rather than spend a call the harness title may outrank.</summary>
+    [Test]
+    public async Task A_title_line_defers_llm_titling_while_the_server_is_unknown() =>
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(AfterLine("claude", CustomTitle, serverRecordsHarnessTitles: null), agentId: null)).IsFalse();
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [Arguments(null)]
+    public async Task A_claude_ai_title_suppresses_llm_titling_on_every_server(bool? serverRecordsHarnessTitles) =>
+        await Assert.That(WatchCommand.ShouldGenerateLlmTitle(AfterLine("claude", AiTitle, serverRecordsHarnessTitles), agentId: null)).IsFalse();
 
     /// <summary>The shutdown read gets whatever is left of the kill grace; with none left it reads and sends nothing
     /// rather than run past the kill.</summary>

@@ -160,13 +160,19 @@ class WatchState {
     public int                EventCount         { get; set; }
 
     // Non-null only for a top-level session watcher whose vendor keeps a title store the watcher polls.
-    // HarnessTitleSeen latches from that store or from a title line in the transcript, and stops LLM
-    // titling for good: a harness-native title always wins on the server.
     public HarnessTitleTracker? TitleTracker                { get; set; }
     public DateTimeOffset       LastHarnessTitleRead        { get; set; }
     public HarnessTitlePost?    LastHarnessTitleAttempted   { get; set; }
     public DateTimeOffset       LastHarnessTitlePostAttempt { get; set; }
+
+    // LLM titling stops for good once a harness title is known to be recorded, since it always wins on the server:
+    // one the server took through /hooks/harness-title, or a transcript line every server records. A line only a
+    // server with harness titles records (InlineHarnessTitleSeen) stops it once that server is known to have them;
+    // an older server records neither it nor a store title sent through set-title, so it must still get a generated one.
     public bool                 HarnessTitleSeen            { get; set; }
+    public bool                 InlineHarnessTitleSeen      { get; set; }
+    public bool?                ServerRecordsHarnessTitles  { get; set; }
+    public DateTimeOffset       LastHarnessTitleProbe       { get; set; }
 
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)

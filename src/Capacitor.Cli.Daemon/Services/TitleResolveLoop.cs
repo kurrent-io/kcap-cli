@@ -197,7 +197,8 @@ internal sealed class TitleResolveLoop {
             // A refusal (blank title, unsafe id, not the owner) is a verdict on this exact
             // value, not a transient hiccup — retrying it every tick forever would spend a
             // request for nothing. Failed/SessionNotFound stay retryable.
-            if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.Refused) state.PushedNative = native;
+            if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.PostedToLegacyRoute or HarnessTitleOutcome.Refused)
+                state.PushedNative = native;
         }
 
         // A locally generated title only converges to the server while it verifiably has no

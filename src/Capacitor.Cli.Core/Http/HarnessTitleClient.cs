@@ -66,13 +66,34 @@ public static class HarnessTitleClient {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
             using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, remaining, ct, retryStatuses);
 
-            if (resp.IsSuccessStatusCode) return HarnessTitleOutcome.Posted;
+            if (resp.IsSuccessStatusCode) return HarnessTitleOutcome.PostedToLegacyRoute;
 
             return resp.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Forbidden ? HarnessTitleOutcome.Refused : HarnessTitleOutcome.Failed;
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception) {
             return HarnessTitleOutcome.Failed;
+        }
+    }
+
+    /// <summary>Whether the server has <c>/hooks/harness-title</c>, asked with an empty session id that no server
+    /// accepts: a server with the route refuses it (400), one without answers a bare 404. Null when the answer says
+    /// neither — a transport fault, an auth lapse, a server fault — so the caller asks again later.</summary>
+    public static async Task<bool?> ServerRecordsHarnessTitlesAsync(
+            HttpClient client, TimeProvider time, string baseUrl, TimeSpan timeout, CancellationToken ct
+        ) {
+        try {
+            using var content = new StringContent("""{"session_id":"","title":""}""", Encoding.UTF8, "application/json");
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/harness-title", content, time, timeout, ct);
+
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+                return ErrorCode(await resp.Content.ReadAsStringAsync(ct)) == "session_not_found";
+
+            return resp.IsSuccessStatusCode || IsRefusal(resp.StatusCode) ? true : null;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception) {
+            return null;
         }
     }
 

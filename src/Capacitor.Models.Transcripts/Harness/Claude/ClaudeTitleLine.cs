@@ -6,18 +6,24 @@ namespace Capacitor.Models.Transcripts.Harness.Claude;
 /// <c>ai-title</c> or <c>custom-title</c>. The legacy <c>summary</c> shape is not one — the server does not record it,
 /// so it must not stand in for a title the server will have.</summary>
 public static class ClaudeTitleLine {
-    public static bool CarriesTitle(string line) {
+    /// <param name="isRename">A <c>custom-title</c>; otherwise an <c>ai-title</c>, which every server records.</param>
+    public static bool CarriesTitle(string line, out bool isRename) {
+        isRename = false;
         if (!line.Contains("\"ai-title\"") && !line.Contains("\"custom-title\"")) return false;
 
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
 
-            return root.Str("type") switch {
-                "ai-title"     => !string.IsNullOrWhiteSpace(root.Str("aiTitle")),
-                "custom-title" => !string.IsNullOrWhiteSpace(root.Str("customTitle")),
-                _              => false,
-            };
+            switch (root.Str("type")) {
+                case "ai-title":
+                    return !string.IsNullOrWhiteSpace(root.Str("aiTitle"));
+                case "custom-title":
+                    isRename = true;
+                    return !string.IsNullOrWhiteSpace(root.Str("customTitle"));
+                default:
+                    return false;
+            }
         } catch (JsonException) {
             return false;
         }
