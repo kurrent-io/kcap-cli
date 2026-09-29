@@ -295,4 +295,18 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("res?.stdout");
         await Assert.That(content).Contains("rememberMemory(sid, (await runKcap(args)).trim())");
     }
+
+    /// <summary>
+    /// The plugin's own rename must not re-trigger itself: OpenCode's placeholder title
+    /// (<c>New session - &lt;ISO date&gt;</c>) is filtered so the server's title extractor never
+    /// sees it, matching the server-side placeholder regex byte for byte.
+    /// </summary>
+    [Test]
+    public async Task Plugin_writes_a_session_title_line_on_session_updated() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content).Contains("type === \"session.updated\"");
+        await Assert.That(content).Contains("type: \"session_title\"");
+        await Assert.That(content).Contains("/^New session - \\d{4}-/");
+    }
 }

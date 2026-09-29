@@ -88,6 +88,7 @@ public static class OpenCodeExtensionInstaller {
           // indefinitely. Found by review tracing the `!started.has(sid)` guard.
           const MEMORY_COLD_START_ATTEMPTS = 3
           const coldStarts = new Map<string, number>()
+          const lastTitle = new Map<string, string>()   // dedupes session.updated noise per session
 
           function rememberMemory(sid: string, fragment: string) {
             if (!fragment) return
@@ -447,6 +448,17 @@ public static class OpenCodeExtensionInstaller {
             event: async ({ event }: any) => {
               try {
                 const type = event?.type
+                if (type === "session.updated") {
+                  const info = event?.properties?.info
+                  const id = info?.id
+                  const title = info?.title
+                  if (!id || children.has(id) || typeof title !== "string" || /^New session - \d{4}-/.test(title)) return
+                  if (lastTitle.get(id) === title) return
+                  lastTitle.set(id, title)
+                  mkdirSync(dir, { recursive: true })
+                  appendFileSync(file(id), JSON.stringify({ type: "session_title", title, time: info?.time?.updated ?? Date.now() }) + "\n")
+                  return
+                }
                 const sid = event?.properties?.sessionID
                 if (!sid) return
                 if (children.has(sid)) return  // known subagent — its parent streams it
@@ -455,6 +467,7 @@ public static class OpenCodeExtensionInstaller {
                   // map to evict it. The bound is the guarantee; this is the tidy path.
                   memory.delete(sid)
                   coldStarts.delete(sid)
+                  lastTitle.delete(sid)
                   return
                 }
                 if (type === "session.created") {
