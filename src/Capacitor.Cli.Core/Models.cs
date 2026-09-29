@@ -322,31 +322,35 @@ record RepoSessionOwnerDto(
     );
 
 record RepoSessionDto(
-        string               SessionId,
-        string?              Slug,
-        string?              Title,
-        RepoSessionOwnerDto? Owner,
-        string?              Vendor,
-        string               Status,
-        string               AccessLevel,
-        bool                 Stale,
-        DateTimeOffset       StartedAt,
-        DateTimeOffset?      EndedAt,
-        DateTimeOffset       LastActivityAt,
-        string?              PrimaryRepoHash,
-        bool                 IsPrimary,
-        string?              Branch,
-        string?              Cwd,
-        string?              LastPrompt,
-        string[]             WriteAttemptPaths,
-        int                  WriteAttemptCount
+        string                    SessionId,
+        string?                   Slug,
+        string?                   Title,
+        RepoSessionOwnerDto?      Owner,
+        string?                   Vendor,
+        string                    Status,
+        string                    AccessLevel,
+        bool                      Stale,
+        DateTimeOffset            StartedAt,
+        DateTimeOffset?           EndedAt,
+        DateTimeOffset            LastActivityAt,
+        string?                   PrimaryRepoHash,
+        bool                      IsPrimary,
+        string?                   Branch,
+        string?                   Cwd,
+        string?                   LastPrompt,
+        string[]                  WriteAttemptPaths,
+        int                       WriteAttemptCount,
+        RepoSessionRepositoryDto? Repo = null
     );
 
 record RepoSessionsResponse(
         List<RepoSessionDto> Items,
         int                  Total,
         int                  Limit,
-        int                  Offset
+        int                  Offset,
+        DateTimeOffset?      Since      = null,
+        DateTimeOffset?      Until      = null,
+        string?              NextCursor = null
     );
 
 // ── Eval command types — see DEV-1433 ─────────────────────────────────────
