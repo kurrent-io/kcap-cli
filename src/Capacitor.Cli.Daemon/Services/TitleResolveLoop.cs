@@ -218,8 +218,10 @@ internal sealed class TitleResolveLoop {
     }
 
     /// <summary>One server read plus the bookkeeping it settles: what counts as independent
-    /// authority, the retained-across-outages <see cref="AgentTitleState.ServerTitle"/>, and
-    /// whether the last confirmed push is still what the server holds.</summary>
+    /// authority, and the retained-across-outages <see cref="AgentTitleState.ServerTitle"/>. A
+    /// confirmed push is not re-armed by a read that no longer shows it: the server has no path
+    /// that deletes a title, so a missing one is projection lag, and a native value re-sent over a
+    /// later Regenerate would fight it.</summary>
     async Task<(bool Ok, string? Real)> ReadServerAsync(TitleAgentView agent, AgentTitleState state, CancellationToken ct) {
         if (agent.SessionId is not { } sessionId) return (true, null); // an unrecorded agent has no server to ask
 
