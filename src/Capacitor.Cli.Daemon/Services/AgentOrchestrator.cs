@@ -5315,6 +5315,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             new TitleServerPort(_http, _config.ServerUrl),
             NativeTitleFor,
             GenerateTitleForAsync,
+            _server.UpdateTitleAsync,
             _time,
             _logger);
 
@@ -5340,8 +5341,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             a.IsPrivate ? null : a.SessionId ?? (a.Runtime as IAcpTranscriptSource)?.AcpSessionId,
             a.TranscriptPath, a.CreatedAt))];
 
-    static string? NativeTitleFor(TitleAgentView agent) =>
-        agent is { Vendor: "claude", TranscriptPath: { } path } ? ClaudeNativeTitle.TryExtract(path) : null;
+    static HarnessTitlePost? NativeTitleFor(TitleAgentView agent) =>
+        agent is { Vendor: "claude", TranscriptPath: { } path } && ClaudeNativeTitle.TryExtractWithKind(path) is { } title
+            ? new HarnessTitlePost(title.Title, title.IsRename ? HarnessTitleKind.Rename : HarnessTitleKind.Auto, title.IsRename ? title.ChangedAt : null)
+            : null;
 
     async Task<string?> GenerateTitleForAsync(TitleAgentView agent, CancellationToken ct) {
         var result = await TitleGeneration.GenerateAsync(

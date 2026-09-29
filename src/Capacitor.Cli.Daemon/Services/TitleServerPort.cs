@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.WorkItems;
@@ -8,11 +6,11 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// HTTP adapter behind <see cref="ITitleServerPort"/>: reads a session's title from the
-/// summary route and pushes a locally resolved one through the same <c>/hooks/set-title</c>
-/// path the import sources use. <see cref="GetTitleAsync"/> throws when the server cannot be
-/// asked (auth lapse, transport failure, non-404 error) — the resolve loop must distinguish
-/// "the server has no title" from "the server couldn't answer", or an outage would trigger a
-/// paid generation for a session the watcher already titled.
+/// summary route and pushes a harness-native one through <c>/hooks/harness-title</c> (falling
+/// back to <c>/hooks/set-title</c> against an older server). <see cref="GetTitleAsync"/> throws
+/// when the server cannot be asked (auth lapse, transport failure, non-404 error) — the resolve
+/// loop must distinguish "the server has no title" from "the server couldn't answer", or an
+/// outage would trigger a paid generation for a session the watcher already titled.
 /// </summary>
 internal sealed class TitleServerPort(ICapacitorHttpClient http, string baseUrl) : ITitleServerPort {
     readonly string _baseUrl = baseUrl.TrimEnd('/');
@@ -43,7 +41,7 @@ internal sealed class TitleServerPort(ICapacitorHttpClient http, string baseUrl)
         }
     }
 
-    public async Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct) {
+    public async Task<bool> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) {
         // The server files sessions under the canonical key (a GUID as its 32-hex form, an opaque
         // vendor id unchanged) — the raw id must not ride the payload or it would update a
         // different key than the one the summary read used.
@@ -54,15 +52,8 @@ internal sealed class TitleServerPort(ICapacitorHttpClient http, string baseUrl)
         using (client) {
             if (status is AuthStatus.Expired or AuthStatus.NotAuthenticated or AuthStatus.WrongServer) return false;
 
-            var payload = new JsonObject {
-                ["session_id"] = canonical,
-                ["title"]      = title,
-            };
-
-            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostAsync(new Uri($"{_baseUrl}/hooks/set-title"), content, ct);
-
-            return resp.IsSuccessStatusCode;
+            return await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, _baseUrl, canonical, post, ct)
+                == HarnessTitleOutcome.Posted;
         }
     }
 }

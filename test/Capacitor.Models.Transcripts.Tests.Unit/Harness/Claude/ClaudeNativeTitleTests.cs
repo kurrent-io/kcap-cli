@@ -82,4 +82,37 @@ public class ClaudeNativeTitleTests {
 
         await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Live title");
     }
+
+    [Test]
+    public async Task Custom_title_beats_ai_title_and_is_timed_by_its_first_occurrence() {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            """{"type":"ai-title","aiTitle":"Auto","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:05:00Z"}""",
+            """{"type":"custom-title","customTitle":"Mine","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T11:00:00Z"}""",
+            """{"type":"custom-title","customTitle":"Mine","sessionId":"s"}""",
+            """{"type":"ai-title","aiTitle":"Auto 2","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("Mine", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:05:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    [Test]
+    public async Task Legacy_summary_only_yields_an_auto_title() {
+        var path = Transcript("""{"type":"summary","summary":"Legacy title","leafUuid":"u1"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("Legacy title", IsRename: false, null));
+    }
+
+    [Test]
+    public async Task A_custom_title_preceding_any_timestamped_line_has_no_changed_at() {
+        var path = Transcript(
+            """{"type":"custom-title","customTitle":"Mine","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:05:00Z"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("Mine", IsRename: true, null));
+    }
 }

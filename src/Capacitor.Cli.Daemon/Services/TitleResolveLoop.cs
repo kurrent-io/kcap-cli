@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -6,23 +7,29 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed record TitleAgentView(
     string Id, string Vendor, string? Prompt, string? SessionId, string? TranscriptPath, DateTime CreatedAt);
 
-/// <summary>The server's title surface for one session: read the current title, push a locally
-/// resolved one via the set-title path.</summary>
+/// <summary>The server's title surface for one session: read the current title, push a
+/// harness-native one (with its kind and change time) via the harness-title path.</summary>
 internal interface ITitleServerPort {
     Task<string?> GetTitleAsync(string sessionId, CancellationToken ct);
-    Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct);
+    Task<bool> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct);
 }
 
 /// <summary>
 /// Resolves a display title per hosted agent, one ladder per tick: the vendor's native
 /// transcript title first, the server's real title as the authority once one exists, and a
-/// single local generation as the late fallback. A locally resolved title is pushed through
-/// set-title when the session is recorded, so web and desktop converge on the same string.
+/// single local generation as the late fallback.
+///
+/// <para>The native lane's (title, kind, changed-at) is pushed to the server whenever it
+/// changes — a rename or a revised auto title — regardless of what the server currently holds:
+/// the harness's own store is authoritative for what the harness itself calls the session,
+/// independent of any title the server or another viewer has set. A locally generated title,
+/// by contrast, only converges to the server while the server verifiably has no title of its
+/// own and no native title exists — generation is a fallback, not an authority.</para>
 ///
 /// <para>A server title that merely echoes the launch prompt is the watcher's initial
 /// truncated-prompt title, not a real one: adopting it would overwrite a better native title
-/// with the string the seed already shows, and treating it as real would block both the push
-/// and the generation fallback.</para>
+/// with the string the seed already shows, and treating it as real would block both the
+/// generated push and the generation fallback.</para>
 ///
 /// <para>The ladder never downgrades: a lane that stops producing (a transient read failure,
 /// a server hiccup) keeps the last applied title rather than blanking it.</para>
@@ -35,18 +42,21 @@ internal sealed class TitleResolveLoop {
 
     sealed class AgentTitleState {
         public string? Applied;
-        /// Latest non-null native title. Cached so a transient extraction gap (an unreadable
-        /// file moment) cannot demote the ladder to the generated fallback.
-        public string? Native;
+        /// Latest non-null native title, with its kind and change time. Cached so a transient
+        /// extraction gap (an unreadable file moment) cannot demote the ladder to the generated
+        /// fallback.
+        public HarnessTitlePost? Native;
         public string? Generated;
-        /// Last title the server was OBSERVED holding after our push — suppresses re-pushes
-        /// only while a successful read keeps confirming it; a read observing anything else
-        /// (silence included) proves the confirmation stale and re-arms the push.
-        public string? PushedTitle;
-        /// Every title a push was ATTEMPTED with, confirmed or not. An attempt whose response
-        /// was lost may still have committed and surface on a later read — even after newer
-        /// attempts — so each must keep counting as "ours" when the server echoes it, or the
-        /// loop would adopt its own stale title as independent authority.
+        /// The exact native post last successfully pushed — a later native read equal to this
+        /// is not re-pushed.
+        public HarnessTitlePost? PushedNative;
+        /// The exact generated title last successfully pushed.
+        public string? PushedGenerated;
+        /// Every title a push was ATTEMPTED with, native or generated, confirmed or not. An
+        /// attempt whose response was lost may still have committed and surface on a later
+        /// read — even after newer attempts — so each must keep counting as "ours" when the
+        /// server echoes it, or the loop would adopt its own stale title as independent
+        /// authority.
         public readonly BoundedAttemptSet PushAttempts = new();
         /// The authoritative server title as of the last SUCCESSFUL read. Held across failed
         /// reads so an outage tick cannot demote the applied title down the ladder; cleared
@@ -79,8 +89,9 @@ internal sealed class TitleResolveLoop {
     readonly Func<IReadOnlyList<TitleAgentView>> _agents;
     readonly Action<string, string> _apply;
     readonly ITitleServerPort _server;
-    readonly Func<TitleAgentView, string?> _nativeLane;
+    readonly Func<TitleAgentView, HarnessTitlePost?> _nativeLane;
     readonly Func<TitleAgentView, CancellationToken, Task<string?>> _generateLane;
+    readonly Func<string, string, CancellationToken, Task<bool>> _postGenerated;
     readonly TimeProvider _time;
     readonly ILogger _logger;
     readonly Dictionary<string, AgentTitleState> _states = [];
@@ -89,17 +100,19 @@ internal sealed class TitleResolveLoop {
             Func<IReadOnlyList<TitleAgentView>> agents,
             Action<string, string> apply,
             ITitleServerPort server,
-            Func<TitleAgentView, string?> nativeLane,
+            Func<TitleAgentView, HarnessTitlePost?> nativeLane,
             Func<TitleAgentView, CancellationToken, Task<string?>> generateLane,
+            Func<string, string, CancellationToken, Task<bool>> postGenerated,
             TimeProvider time,
             ILogger logger) {
-        _agents       = agents;
-        _apply        = apply;
-        _server       = server;
-        _nativeLane   = nativeLane;
-        _generateLane = generateLane;
-        _time         = time;
-        _logger       = logger;
+        _agents        = agents;
+        _apply         = apply;
+        _server        = server;
+        _nativeLane    = nativeLane;
+        _generateLane  = generateLane;
+        _postGenerated = postGenerated;
+        _time          = time;
+        _logger        = logger;
     }
 
     public async Task TickAsync(CancellationToken ct) {
@@ -125,7 +138,7 @@ internal sealed class TitleResolveLoop {
 
     async Task ResolveOneAsync(TitleAgentView agent, AgentTitleState state, CancellationToken ct) {
         try {
-            if (Normalize(_nativeLane(agent)) is { } extracted) state.Native = extracted;
+            if (NormalizePost(_nativeLane(agent)) is { } extracted) state.Native = extracted;
         } catch (Exception ex) {
             _logger.LogDebug(ex, "Native title extraction failed for agent {AgentId}", agent.Id);
         }
@@ -153,29 +166,42 @@ internal sealed class TitleResolveLoop {
 
         // On a failed read the last successfully-read authority stands in, so an outage tick
         // cannot demote the applied title down the ladder.
-        var best = (serverReadOk ? serverReal : state.ServerTitle) ?? native ?? state.Generated;
+        var best = (serverReadOk ? serverReal : state.ServerTitle) ?? native?.Title ?? state.Generated;
 
         if (best is not null && best != state.Applied) {
             _apply(agent.Id, best);
             state.Applied = best;
         }
 
-        // Converge: a locally resolved title reaches the server while it verifiably has no real
-        // one. A failed read blocks the push too — an authoritative title whose presence merely
-        // couldn't be checked must not be overwritten.
-        var local = native ?? state.Generated;
-        if (serverReadOk && serverReal is null && local is not null && local != state.PushedTitle
-         && agent.SessionId is { } sid) {
-            state.PushAttempts.Add(local);
+        // The harness's own title is pushed whenever it changes, independent of the server's
+        // current title — it is authoritative for what the harness itself calls the session.
+        if (native is not null && !native.Equals(state.PushedNative) && agent.SessionId is { } sid) {
+            state.PushAttempts.Add(native.Title);
 
             var pushed = false;
             try {
-                pushed = await _server.PushTitleAsync(sid, local, ct);
+                pushed = await _server.PushTitleAsync(sid, native, ct);
             } catch (Exception ex) {
-                _logger.LogDebug(ex, "Title push failed for session {SessionId}", sid);
+                _logger.LogDebug(ex, "Native title push failed for session {SessionId}", sid);
             }
 
-            if (pushed) state.PushedTitle = local;
+            if (pushed) state.PushedNative = native;
+        }
+
+        // A locally generated title only converges to the server while it verifiably has no
+        // real title and no native title exists — generation is a fallback, not an authority.
+        if (serverReadOk && serverReal is null && native is null && state.Generated is { } generated
+         && generated != state.PushedGenerated && agent.SessionId is { } genSid) {
+            state.PushAttempts.Add(generated);
+
+            var posted = false;
+            try {
+                posted = await _postGenerated(genSid, generated, ct);
+            } catch (Exception ex) {
+                _logger.LogDebug(ex, "Generated title push failed for session {SessionId}", genSid);
+            }
+
+            if (posted) state.PushedGenerated = generated;
         }
     }
 
@@ -200,11 +226,6 @@ internal sealed class TitleResolveLoop {
 
             state.ServerTitle = serverReal;
 
-            // Suppression holds only while the server is observed still holding the pushed
-            // title; anything else — silence included — proves the confirmation stale, and
-            // the local title must be able to converge again.
-            if (state.PushedTitle is not null && serverTitle != state.PushedTitle) state.PushedTitle = null;
-
             return (true, serverReal);
         } catch (Exception ex) {
             _logger.LogDebug(ex, "Server title read failed for session {SessionId}", sessionId);
@@ -218,6 +239,9 @@ internal sealed class TitleResolveLoop {
         var trimmed = title.Trim();
         return trimmed.Length > 120 ? trimmed[..120] : trimmed;
     }
+
+    static HarnessTitlePost? NormalizePost(HarnessTitlePost? post) =>
+        post is null ? null : Normalize(post.Title) is { } title ? post with { Title = title } : null;
 
     /// <summary>
     /// The watcher's initial title and the daemon's seed take exactly two forms: the launch

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -6,28 +7,29 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 /// <summary>
 /// Pins the title resolution ladder: native transcript title first, the server's real title
-/// as the authority once it exists, local generation only as the late fallback — and every
-/// locally resolved title converges to the server via set-title so web and desktop show the
-/// same string. A server title that merely echoes the launch prompt (the watcher's initial
-/// truncated-prompt title) counts as "no real title yet".
+/// as the authority once it exists, local generation only as the late fallback. The native
+/// title is pushed to the server whenever it changes, independent of the server's own title;
+/// a locally generated title converges only while the server verifiably has no title and no
+/// native title exists. A server title that merely echoes the launch prompt (the watcher's
+/// initial truncated-prompt title) counts as "no real title yet".
 /// </summary>
 public class TitleResolveLoopTests {
     static readonly DateTime T0 = new(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
 
-    /// By default behaves like the real server: a successfully pushed title is what the next
-    /// GET returns. Assign <see cref="Get"/> to script the read side explicitly.
+    /// By default behaves like the real server: a successfully pushed native title is what the
+    /// next GET returns. Assign <see cref="Get"/> to script the read side explicitly.
     sealed class FakeServerPort : ITitleServerPort {
         public Func<string, string?>? Get { get; set; }
         public string? Committed { get; private set; }
-        public List<(string SessionId, string Title)> Pushed { get; } = [];
+        public List<(string SessionId, HarnessTitlePost Post)> Pushed { get; } = [];
         public bool PushResult { get; set; } = true;
 
         public Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) =>
             Task.FromResult(Get is not null ? Get(sessionId) : Committed);
 
-        public Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct) {
-            Pushed.Add((sessionId, title));
-            if (PushResult) Committed = title;
+        public Task<bool> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) {
+            Pushed.Add((sessionId, post));
+            if (PushResult) Committed = post.Title;
             return Task.FromResult(PushResult);
         }
     }
@@ -37,17 +39,25 @@ public class TitleResolveLoopTests {
         public List<(string AgentId, string Title)> Applied { get; } = [];
         public FakeServerPort Server { get; } = new();
         public Func<TitleAgentView, string?> Native { get; set; } = _ => null;
+        public HarnessTitleKind NativeKind { get; set; } = HarnessTitleKind.Rename;
+        public DateTimeOffset? NativeChangedAt { get; set; }
         public Func<TitleAgentView, CancellationToken, Task<string?>> Generate { get; set; } =
             (_, _) => Task.FromResult<string?>(null);
         public int GenerateCalls;
+        public List<(string SessionId, string Title)> GeneratedPosts { get; } = [];
+        public bool PostGeneratedResult { get; set; } = true;
         public FakeTimeProvider Time { get; } = new(T0);
 
         public TitleResolveLoop Build() => new(
             () => Agents,
             (id, title) => Applied.Add((id, title)),
             Server,
-            a => Native(a),
+            a => Native(a) is { } title ? new HarnessTitlePost(title, NativeKind, NativeChangedAt) : null,
             (a, ct) => { Interlocked.Increment(ref GenerateCalls); return Generate(a, ct); },
+            (sessionId, title, ct) => {
+                GeneratedPosts.Add((sessionId, title));
+                return Task.FromResult(PostGeneratedResult);
+            },
             Time,
             NullLogger.Instance);
     }
@@ -58,17 +68,24 @@ public class TitleResolveLoopTests {
         new(id, vendor, prompt, sessionId, transcript, createdAt ?? T0);
 
     [Test]
-    public async Task Native_title_is_applied_and_pushed_once() {
+    public async Task A_new_native_rename_is_pushed_even_when_the_server_has_a_title() {
         var h = new Harness();
         h.Agents.Add(Agent());
-        h.Native = _ => "Native title";
+        var changedAt = new DateTimeOffset(2026, 9, 1, 9, 0, 0, TimeSpan.Zero);
+        h.Server.Get = _ => "R";
+        h.Native = _ => "B";
+        h.NativeChangedAt = changedAt;
         var loop = h.Build();
 
         await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.First().Title).IsEqualTo("R");
+        await Assert.That(h.Server.Pushed).IsEquivalentTo([("sid-1", new HarnessTitlePost("B", HarnessTitleKind.Rename, changedAt))]);
+
+        h.Server.Get = _ => "B"; // the server now shows the pushed rename
         await loop.TickAsync(CancellationToken.None);
 
-        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Native title")]);
-        await Assert.That(h.Server.Pushed).IsEquivalentTo([("sid-1", "Native title")]);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("B");
     }
 
     [Test]
@@ -87,17 +104,19 @@ public class TitleResolveLoopTests {
     }
 
     [Test]
-    public async Task The_servers_real_title_wins_over_native() {
+    public async Task An_unchanged_native_value_is_never_pushed_twice() {
         var h = new Harness();
         h.Agents.Add(Agent());
-        h.Native = _ => "Native title";
-        h.Server.Get = _ => "Server generated title";
+        h.Native = _ => "A";
         var loop = h.Build();
 
-        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None); // pushes "A" once
+        h.Server.Get = _ => "R";
 
-        await Assert.That(h.Applied.Last().Title).IsEqualTo("Server generated title");
-        await Assert.That(h.Server.Pushed).IsEmpty();
+        for (var i = 0; i < 10; i++) await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Server.Pushed.Count).IsEqualTo(1);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("R");
     }
 
     [Test]
@@ -111,7 +130,7 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Applied).IsEquivalentTo([("a1", "Native title")]);
-        await Assert.That(h.Server.Pushed).IsEquivalentTo([("sid-1", "Native title")]);
+        await Assert.That(h.Server.Pushed).IsEquivalentTo([("sid-1", new HarnessTitlePost("Native title", HarnessTitleKind.Rename, null))]);
     }
 
     [Test]
@@ -144,7 +163,8 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Applied).IsEquivalentTo([("a1", "Generated title")]);
-        await Assert.That(h.Server.Pushed).IsEquivalentTo([("sid-1", "Generated title")]);
+        await Assert.That(h.GeneratedPosts).IsEquivalentTo([("sid-1", "Generated title")]);
+        await Assert.That(h.Server.Pushed).IsEmpty();
     }
 
     [Test]
@@ -190,7 +210,7 @@ public class TitleResolveLoopTests {
     }
 
     [Test]
-    public async Task A_failed_server_read_blocks_the_push_too() {
+    public async Task A_failed_server_read_still_pushes_a_native_title() {
         var h = new Harness();
         h.Agents.Add(Agent());
         h.Native = _ => "Native title";
@@ -199,10 +219,10 @@ public class TitleResolveLoopTests {
 
         await loop.TickAsync(CancellationToken.None);
 
-        // The native title still shows locally, but nothing may overwrite a server title
-        // whose presence could not be checked.
+        // The native push is unconditional on the harness's own title changing — a failed
+        // read of the server's title does not gate it, unlike the generated fallback's push.
         await Assert.That(h.Applied).IsEquivalentTo([("a1", "Native title")]);
-        await Assert.That(h.Server.Pushed).IsEmpty();
+        await Assert.That(h.Server.Pushed).IsEquivalentTo([("sid-1", new HarnessTitlePost("Native title", HarnessTitleKind.Rename, null))]);
     }
 
     [Test]
@@ -219,24 +239,27 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["First cut", "Second cut"]);
-        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["First cut", "Second cut"]);
+        await Assert.That(h.Server.Pushed.Select(p => p.Post.Title)).IsEquivalentTo(["First cut", "Second cut"]);
     }
 
     [Test]
-    public async Task An_independent_server_title_still_wins_over_a_native_revision() {
+    public async Task Display_prefers_the_server_title_then_native_then_generated() {
         var h = new Harness();
         h.Agents.Add(Agent());
-        var native = "First cut";
-        h.Native = _ => native;
+        h.Generate = (_, _) => Task.FromResult<string?>("Generated title");
+        h.Time.Advance(TimeSpan.FromMinutes(6));
         var loop = h.Build();
 
         await loop.TickAsync(CancellationToken.None);
-        h.Server.Get = _ => "Watcher generated title"; // someone else's title, not our push
-        native = "Second cut";
-        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("Generated title");
 
-        await Assert.That(h.Applied.Last().Title).IsEqualTo("Watcher generated title");
-        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["First cut"]);
+        h.Native = _ => "Native title";
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("Native title");
+
+        h.Server.Get = _ => "Server title"; // an independent title, not our own push
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("Server title");
     }
 
     [Test]
@@ -300,25 +323,26 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["First cut", "Second cut"]);
-        await Assert.That(h.Server.Pushed.Last().Title).IsEqualTo("Second cut");
+        await Assert.That(h.Server.Pushed.Last().Post.Title).IsEqualTo("Second cut");
     }
 
     [Test]
-    public async Task A_confirmed_silent_server_gets_the_local_title_re_pushed() {
+    public async Task A_native_push_survives_an_independent_title_landing_and_leaving() {
         var h = new Harness();
         h.Agents.Add(Agent());
         h.Native = _ => "Native title";
         var loop = h.Build();
 
-        await loop.TickAsync(CancellationToken.None); // pushes and confirms Native title
+        await loop.TickAsync(CancellationToken.None); // pushes Native title once
         h.Server.Get = _ => "Watcher generated title";
-        await loop.TickAsync(CancellationToken.None); // independent authority adopted
+        await loop.TickAsync(CancellationToken.None); // independent authority adopted for display
         h.Server.Get = _ => null; // the server's title is later confirmed gone
         await loop.TickAsync(CancellationToken.None);
 
-        // The stale push confirmation must not suppress reconvergence.
+        // The unchanged native value is never re-pushed, regardless of what the server showed
+        // in between.
         await Assert.That(h.Applied.Last().Title).IsEqualTo("Native title");
-        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Native title", "Native title"]);
+        await Assert.That(h.Server.Pushed.Select(p => p.Post.Title)).IsEquivalentTo(["Native title"]);
     }
 
     [Test]
@@ -383,7 +407,8 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Generated title", "Native title"]);
-        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Generated title", "Native title"]);
+        await Assert.That(h.GeneratedPosts.Select(p => p.Title)).IsEquivalentTo(["Generated title"]);
+        await Assert.That(h.Server.Pushed.Select(p => p.Post.Title)).IsEquivalentTo(["Native title"]);
     }
 
     [Test]
@@ -401,6 +426,7 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Applied).IsEquivalentTo([("a1", "Watcher generated title")]);
+        await Assert.That(h.GeneratedPosts).IsEmpty();
         await Assert.That(h.Server.Pushed).IsEmpty();
     }
 
