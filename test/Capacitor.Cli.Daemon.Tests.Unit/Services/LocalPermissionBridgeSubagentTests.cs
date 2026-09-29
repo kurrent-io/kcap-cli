@@ -15,12 +15,13 @@ public class LocalPermissionBridgeSubagentTests {
 
     sealed class Harness : IAsyncDisposable {
         public LocalPermissionBridge Bridge { get; }
-        public FakeTimeProvider Time { get; } = new();
         public HttpClient Client { get; } = new() { Timeout = TimeSpan.FromSeconds(30) };
         public List<(string AgentId, string SubagentId, bool Live, long SentAt)> Seen { get; } = [];
 
         public Harness(string? attributeTo = "agent-1") {
-            Bridge = new LocalPermissionBridge(new FakeServerConnection(respond: null), NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, time: Time) {
+            // The real clock: the bridge also times its bind retries and shutdown waits on it, and a
+            // fake one that never advances turns either into a hang.
+            Bridge = new LocalPermissionBridge(new FakeServerConnection(respond: null), NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System) {
                 AttributeHandler = attributeTo is null ? _ => null : _ => new AttributedAgent(attributeTo),
                 SubagentHandler  = (id, subagent, live, sentAt) => Seen.Add((id, subagent, live, sentAt)),
             };
@@ -33,11 +34,7 @@ public class LocalPermissionBridgeSubagentTests {
             return Client.PostAsync($"{baseUrl}/{vendor}/subagent", JsonContent.Create(body));
         }
 
-        public async ValueTask DisposeAsync() {
-            await WaitUntilIdleAsync(Bridge);
-            await Bridge.DisposeAsync();
-            Client.Dispose();
-        }
+        public async ValueTask DisposeAsync() { await Bridge.DisposeAsync(); Client.Dispose(); }
     }
 
     // StopAsync's drain polls the bridge's own clock, which a FakeTimeProvider never advances on
@@ -78,14 +75,19 @@ public class LocalPermissionBridgeSubagentTests {
     public async Task A_report_without_a_usable_stamp_is_stamped_on_arrival() {
         await using var h = new Harness();
         await h.StartAsync();
-        var arrival = h.Time.GetUtcNow().ToUnixTimeMilliseconds();
+        var before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         var missing = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", subagent_id = "sub-1", live = true });
         var text    = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", subagent_id = "sub-2", live = true, sent_at = "soon" });
+        var after   = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await Assert.That(missing.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
         await Assert.That(text.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
-        await Assert.That(h.Seen.Select(s => s.SentAt)).IsEquivalentTo(new[] { arrival, arrival });
+        var stamps = h.Seen.Select(s => s.SentAt).ToArray();
+        await Assert.That(stamps.Length).IsEqualTo(2);
+        await Assert.That(stamps[0]).IsGreaterThanOrEqualTo(before);
+        await Assert.That(stamps[1]).IsGreaterThanOrEqualTo(stamps[0]);
+        await Assert.That(stamps[1]).IsLessThanOrEqualTo(after);
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeSubagentTests))]
