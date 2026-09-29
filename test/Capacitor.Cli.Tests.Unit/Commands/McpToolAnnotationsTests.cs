@@ -15,6 +15,7 @@ public class McpToolAnnotationsTests {
         ("kcap-workitems",      McpWorkItemsServer.BuildToolsList()),
         ("kcap-plans",          McpPlansServer.BuildToolsList()),
         ("kcap-artefacts",      McpArtefactsServer.BuildToolsList()),
+        ("kcap-knowledge",      McpKnowledgeServer.BuildToolsList()),
         ("kcap-flows",          McpFlowsServer.BuildToolsList()),
         ("kcap-flow-result",    McpFlowResultServer.BuildToolsList()),
         ("kcap-judge",          McpJudgeServer.BuildToolsList()),
@@ -47,6 +48,7 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-plans", "get_plan").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-memory", "search_memories").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-flows", "list_reviewer_vendors").Annotations.ReadOnlyHint).IsTrue();
+        await Assert.That(Tool("kcap-flows", "list_flow_definitions").Annotations.ReadOnlyHint).IsTrue();
 
         var declare = Tool("kcap-plans", "declare_plan_document").Annotations;
         await Assert.That(declare.ReadOnlyHint).IsFalse();
@@ -64,11 +66,25 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-memory", "rescope_memory").Annotations.DestructiveHint).IsTrue();
         // The server keys a declaration on its normalized text, so re-declaring lands on the same end.
         await Assert.That(Tool("kcap-workitems", "declare_loose_end").Annotations.IdempotentHint).IsTrue();
+        await Assert.That(Tool("kcap-workitems", "list_loose_ends").Annotations).IsEqualTo(McpToolAnnotations.Read);
+        await Assert.That(Tool("kcap-workitems", "close_loose_end").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
+        await Assert.That(Tool("kcap-workitems", "reopen_loose_end").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
         // A status read acknowledges the pending messages it rendered, so it is not a pure read.
         await Assert.That(Tool("kcap-flows", "get_flow_status").Annotations.ReadOnlyHint).IsFalse();
         await Assert.That(Tool("kcap-flows", "get_review_flow_status").Annotations.ReadOnlyHint).IsFalse();
         // A hosted agent acts on its own once launched.
         await Assert.That(Tool("kcap-flows", "start_review_flow").Annotations.OpenWorldHint).IsTrue();
+    }
+
+    [Test]
+    public async Task Knowledge_reads_are_read_only_and_its_writes_overwrite() {
+        foreach (var read in new[] { "list_skills", "get_skill", "list_facts", "search_facts" })
+            await Assert.That(Tool("kcap-knowledge", read).Annotations).IsEqualTo(McpToolAnnotations.Read).Because(read);
+
+        // Each write replaces standing state (a draft, a lifecycle status, a pin, a curation), and an
+        // operation_id retry replays rather than repeats.
+        foreach (var write in new[] { "edit_skill_body", "transition_skill", "adjust_skill_members", "curate_fact_cluster" })
+            await Assert.That(Tool("kcap-knowledge", write).Annotations).IsEqualTo(McpToolAnnotations.Destructive).Because(write);
     }
 
     [Test]

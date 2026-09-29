@@ -62,6 +62,57 @@ public class PiRoundCeilingTests {
     }
 
     [Test]
+    public async Task Activity_keeps_a_working_round_alive_past_the_limit() {
+        var r = new Rig();
+        r.Ceiling.PromptWriting("1"); r.Ceiling.Response("1", true); r.Ceiling.AgentStarted(); r.Ceiling.UserEcho();
+
+        for (var i = 0; i < 5; i++) {
+            r.Time.Advance(TimeSpan.FromSeconds(500));
+            r.Ceiling.Activity();
+        }
+
+        await Assert.That(r.Expired).IsEqualTo(0);
+        await Assert.That(r.Ceiling.IsArmed).IsTrue();
+    }
+
+    [Test]
+    public async Task A_round_silent_for_the_limit_after_activity_expires() {
+        var r = new Rig();
+        r.Ceiling.PromptWriting("1"); r.Ceiling.Response("1", true); r.Ceiling.AgentStarted(); r.Ceiling.UserEcho();
+
+        r.Time.Advance(TimeSpan.FromSeconds(500));
+        r.Ceiling.Activity();
+        r.Time.Advance(Limit - TimeSpan.FromSeconds(1));
+        await Assert.That(r.Expired).IsEqualTo(0);
+
+        r.Time.Advance(TimeSpan.FromSeconds(2));
+        await Assert.That(r.Expired).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_late_accepted_response_restarts_the_deadline() {
+        var r = new Rig();
+        r.Ceiling.PromptWriting("1");
+        r.Time.Advance(Limit - TimeSpan.FromSeconds(1));
+        r.Ceiling.Response("1", accepted: true);
+
+        r.Time.Advance(Limit - TimeSpan.FromSeconds(1));
+        await Assert.That(r.Expired).IsEqualTo(0);
+
+        r.Time.Advance(TimeSpan.FromSeconds(2));
+        await Assert.That(r.Expired).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Activity_with_no_work_outstanding_does_not_arm() {
+        var r = new Rig();
+        r.Ceiling.Activity();
+
+        await Assert.That(r.Ceiling.IsArmed).IsFalse();
+        await Assert.That(r.Ceiling.InvariantHolds).IsTrue();
+    }
+
+    [Test]
     public async Task A_settle_handled_after_a_new_prompts_write_rearms_instead_of_disarming() {
         var r = new Rig();
         r.Ceiling.PromptWriting("1"); r.Ceiling.Response("1", true); r.Ceiling.AgentStarted(); r.Ceiling.UserEcho();

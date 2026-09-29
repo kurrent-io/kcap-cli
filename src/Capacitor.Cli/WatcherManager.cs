@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Capture;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
@@ -275,6 +276,10 @@ public sealed partial class WatcherManager(
             bool    skipTitle         = false,
             string  vendor            = "claude"
         ) {
+        if (agentId is null && AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
+         && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session);
+
         if (IsWatcherAlive(key)) {
             return; // fast path: no lock needed to observe an already-healthy watcher.
         }
@@ -453,42 +458,44 @@ public sealed partial class WatcherManager(
                 }
 
                 if (!string.IsNullOrWhiteSpace(line)) {
-                    // Redact like WatchCommand.DrainNewLines — the live watcher
-                    // path already redacts, and this inline-drain can carry real
-                    // assistant/tool content (e.g. the Copilot final turn the
-                    // finalize drain delivers).
-                    newLines.Add(SecretRedactor.RedactLine(line));
+                    var captured = TranscriptCapture.Encode(line);
+                    if (captured.Loss is { } loss)
+                        await Console.Error.WriteLineAsync($"Inline capture loss at line {lineIndex}: {CaptureLossMarker.ReasonName(loss)}");
+                    newLines.Add(captured.Line);
                     newLineNumbers.Add(lineIndex);
                 }
 
                 lineIndex++;
             }
 
-            if (newLines.Count == 0) {
-                await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: no new lines to send");
+            var commits = (await GitHook.ObservationAsync(config, sessionId, agentId, cwd: null, time)).Collect();
+
+            if (newLines.Count == 0 && commits.Pending is not { Length: > 0 }) {
+                await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: nothing new to send");
 
                 return;
             }
 
             var batch = new TranscriptBatch {
-                SessionId   = sessionId,
-                AgentId     = agentId,
-                Lines       = [..newLines],
-                LineNumbers = [..newLineNumbers],
-                Vendor      = vendor == "claude" ? null : vendor
+                SessionId       = sessionId,
+                AgentId         = agentId,
+                Lines           = [..newLines],
+                LineNumbers     = [..newLineNumbers],
+                Vendor          = vendor == "claude" ? null : vendor,
+                ObservedCommits = commits.Pending,
             };
 
-            var       batchJson = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);
-            using var content   = new StringContent(batchJson, Encoding.UTF8, "application/json");
-
             try {
-                var resp = await httpClient.PostWithRetryAsync($"{Url}/hooks/transcript", content, time);
-
-                if (resp.IsSuccessStatusCode) {
-                    await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: sent {newLines.Count} line(s)");
-                } else {
-                    await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: server returned HTTP {(int)resp.StatusCode}");
-                    PrintRecoveryHint(sessionId);
+                foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
+                    var batchJson = JsonSerializer.Serialize(chunk, CapacitorJsonContext.Default.TranscriptBatch);
+                    using var content = new StringContent(batchJson, Encoding.UTF8, "application/json");
+                    using var resp = await httpClient.PostWithRetryAsync($"{Url}/hooks/transcript", content, time);
+                    if (!resp.IsSuccessStatusCode) {
+                        await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: server returned HTTP {(int)resp.StatusCode}");
+                        PrintRecoveryHint(sessionId);
+                        return;
+                    }
+                    await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: sent {chunk.Lines.Length} line(s)");
                 }
             } catch (HttpRequestException ex) {
                 await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: server unreachable after retries — {ex.Message}");

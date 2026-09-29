@@ -932,12 +932,8 @@ public class UpdateClaudePendingToolCallsTests {
     }
 }
 
-// Codex counterpart of ClaudeToolTrackingSourceTests: both trackers must read the drain's RAW
-// lines, because RedactLine's oversize placeholder carries no call_id and no recognised type (#528).
+// Loss markers carry no correlation IDs, so local trackers must use raw source lines.
 public class CodexToolTrackingSourceTests {
-    // The tracker reads RAW lines, which are unbounded — so unlike when it read the 64 KiB-bounded
-    // redacted list, it must not run for vendors whose transcripts it can never match. Both roles
-    // for codex: a collab child needs it too, for ShouldPostSubagentStop.
     [Test]
     [Arguments("codex",  true)]
     [Arguments("claude", false)]
@@ -951,7 +947,7 @@ public class CodexToolTrackingSourceTests {
 
     static string OversizedFunctionCallOutput() =>
         "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_big\",\"output\":\""
-      + new string('x', SecretRedactor.MaxRedactableLineChars + 1024)
+      + new string('x', SecretRedactor.MaxRecordBytes + 1024)
       + "\"}}";
 
     // A stranded call_id pins toolInFlight true, and for Codex the idle timeout is the only
@@ -993,19 +989,13 @@ public class ClaudeToolTrackingSourceTests {
     const string ToolUse =
         """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_big","name":"Bash","input":{"command":"build"}}]}}""";
 
-    // Sized off the real threshold so a legitimate change to it can't quietly turn these into
-    // tests of the small-line path. The everyday size of a big file read or a build log.
     static string OversizedToolResult() =>
         "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"toolu_big\",\"type\":\"tool_result\",\"content\":\""
-      + new string('x', SecretRedactor.MaxRedactableLineChars + 1024)
+      + new string('x', SecretRedactor.MaxRecordBytes + 1024)
       + "\"}]}}";
 
     /// <summary>
-    /// Why the tracker is fed the drain's RAW lines and not the redacted ones it sends: RedactLine
-    /// swaps any line over 64 KiB for a placeholder carrying no tool ids at all. Feed it the
-    /// redacted list and an oversized tool_result never clears its id, toolInFlight stays true
-    /// forever, and the idle ceiling never fires — the leak this whole feature exists to fix,
-    /// silently reinstated on exactly the busiest sessions.
+    /// A dropped result must still clear local pending-tool state so the idle ceiling can fire.
     /// </summary>
     [Test]
     public async Task RedactedLines_StrandThePendingId_ButRawLinesClearIt() {

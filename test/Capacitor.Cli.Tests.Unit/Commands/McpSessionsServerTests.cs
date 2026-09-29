@@ -497,6 +497,38 @@ public class McpSessionsServerTests {
     }
 
     [Test]
+    public async Task MergeWidenedBody_lexical_match_in_widened_scope_clears_no_lexical_match() {
+        var merged = McpSessionsServer.MergeWidenedBody(
+            firstBody: """{"no_lexical_match":true,"hits":[{"session_id":"s1","lanes":["semantic"]}]}""",
+            widenedBody: """{"no_lexical_match":false,"hits":[{"session_id":"s2","lanes":["transcript"]}]}""",
+            limit: 10);
+
+        var root = JsonNode.Parse(merged)!.AsObject();
+
+        await Assert.That(root["no_lexical_match"]!.GetValue<bool>()).IsFalse();
+        await Assert.That(root["widened_to_all_repos"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    [Arguments("true", "true", "true")]
+    [Arguments("false", "true", "false")]
+    [Arguments("null", "true", "true")]
+    [Arguments("true", "null", "true")]
+    [Arguments("null", "null", "null")]
+    [Arguments(null, null, null)]
+    public async Task MergeWidenedBody_combines_no_lexical_match_across_scopes(string? first, string? widened, string? expected) {
+        static string WithFlag(string? flag, string sid) =>
+            flag is null
+                ? Body(sid)
+                : $$"""{"no_lexical_match":{{flag}},"hits":[{"session_id":"{{sid}}"}]}""";
+
+        var merged = McpSessionsServer.MergeWidenedBody(WithFlag(first, "s1"), WithFlag(widened, "s2"), limit: 10);
+        var flag   = JsonNode.Parse(merged)!.AsObject()["no_lexical_match"];
+
+        await Assert.That(flag?.ToJsonString() ?? "null").IsEqualTo(expected ?? "null");
+    }
+
+    [Test]
     public async Task MergeWidenedBody_malformed_widened_body_returns_first_unchanged() {
         var first  = Body("s1");
         var merged = McpSessionsServer.MergeWidenedBody(first, "not json", limit: 10);

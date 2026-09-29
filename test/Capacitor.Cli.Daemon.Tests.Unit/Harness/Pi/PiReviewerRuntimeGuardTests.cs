@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Pi;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Time.Testing;
@@ -96,6 +97,32 @@ public class PiReviewerRuntimeGuardTests {
 
         await Assert.That((await VerdictAsync(runtime)).Reason).IsEqualTo("pi_reviewer_turn_timeout");
         await runtime.DisposeAsync();
+    }
+
+    [Test]
+    public async Task A_reviewer_still_producing_output_outlives_the_limit() {
+        var time = new FakeTimeProvider();
+        var (runtime, process) = NewRuntime(reviewerGuards: Guards, time: time);
+        await runtime.WaitForSessionReadyAsync(CancellationToken.None);
+        await runtime.SendUserInputAsync("review this");
+        process.Push(AgentStart);
+
+        for (var i = 0; i < 3; i++) {
+            time.Advance(Guards.RoundLimit - TimeSpan.FromSeconds(100));
+            process.Push(AssistantText($"still reading {i}"));
+            await NextAssistantTextAsync(runtime);
+        }
+
+        await Assert.That(runtime.ReadVerdict()).IsNull();
+
+        time.Advance(Guards.RoundLimit + TimeSpan.FromSeconds(1));
+        await Assert.That((await VerdictAsync(runtime)).Reason).IsEqualTo("pi_reviewer_turn_timeout");
+        await runtime.DisposeAsync();
+    }
+
+    static async Task NextAssistantTextAsync(PiRpcHostedAgentRuntime runtime) {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while ((await runtime.Envelopes.ReadAsync(cts.Token)).Kind != AcpEventKind.AssistantText) { }
     }
 
     [Test]

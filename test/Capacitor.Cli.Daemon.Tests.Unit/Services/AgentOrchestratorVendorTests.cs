@@ -1061,12 +1061,14 @@ public class AgentOrchestratorVendorTests {
         var sendEntered   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sendUnblocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var unblockedAtUnregister = false;
+        // Handed over through a task: the capture records the call before it invokes this, so a
+        // poll on the call count can read a plain flag before the callback has written it.
+        var unblockedAtUnregister = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var server = new CaptureServerConnection {
             SendEntered         = sendEntered,
             SendUnblocked       = sendUnblocked,
-            OnAgentUnregistered = () => unblockedAtUnregister = sendUnblocked.Task.IsCompleted
+            OnAgentUnregistered = () => unblockedAtUnregister.TrySetResult(sendUnblocked.Task.IsCompleted)
         };
         var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
         var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
@@ -1100,9 +1102,8 @@ public class AgentOrchestratorVendorTests {
         // cancelled, and only then does the agent finalize and unregister.
         await orch.HandleStopAgentForTest("agent-bp");
 
-        await sendUnblocked.Task.WaitAsync(WaitHarness.Bounded);
-        await WaitHarness.PollUntilAsync(() => server.AgentUnregisteredCalls.Count == 1);
-        await Assert.That(unblockedAtUnregister).IsTrue();
+        await Assert.That(await unblockedAtUnregister.Task.WaitAsync(WaitHarness.Bounded)).IsTrue();
+        await Assert.That(server.AgentUnregisteredCalls.Count).IsEqualTo(1);
     }
 
     [Test]

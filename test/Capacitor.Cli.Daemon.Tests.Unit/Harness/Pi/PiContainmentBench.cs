@@ -39,6 +39,14 @@ internal sealed class PiContainmentBench : IAsyncDisposable {
 
     PiContainmentBench(TempDir root) => _root = root;
 
+    public string WriteWorktreeFile(string relativePath, string content) =>
+        _root.CreateFile(Path.Join("work", relativePath), content);
+
+    public string CreateOutsideExecutable(string name, string content) =>
+        _root.CreateExecutable(Path.Join("outside", name), content);
+
+    public string OutsidePath(string name) => _root.PathTo("outside", name);
+
     public static PiContainmentBench Create(bool plantCanaries, bool resultServerServesSubmit = true) {
         var bench = new PiContainmentBench(new TempDir("pi-cert"));
         bench.Setup(plantCanaries, resultServerServesSubmit);

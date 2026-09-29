@@ -147,6 +147,12 @@ Options:
                       install never fails. Harmless to call by hand.
 
 Notes:
+  Installing an agent (not --skills) also adds a git 2.54+ config hook named kcap
+  to ~/.gitconfig, which files each commit under the session of the agent above
+  it; --if-installed only refreshes one already there.
+  Off: git config --global hook.kcap.enabled false.
+  `kcap plugin remove` leaves it for the other agents; `kcap uninstall` removes it.
+
   A FIRST install of --kiro names any Kiro session already running: it loaded no
   integration, so it is not captured live — though the transcript is on disk, and
   `kcap import --kiro` backfills it once it ends. kcap does not offer to restart

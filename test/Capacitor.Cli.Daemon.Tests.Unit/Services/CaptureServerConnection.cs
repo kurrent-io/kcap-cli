@@ -49,9 +49,11 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <c>ReRegisterAsync</c> lands here). No-op'd: there is no hub to register with.</summary>
     public int RegisterDaemonCalls => Volatile.Read(ref _registerDaemonCalls);
 
+    public Exception? RegisterDaemonThrow { get; init; }
+
     internal override Task RegisterDaemonAsync() {
         Interlocked.Increment(ref _registerDaemonCalls);
-        return Task.CompletedTask;
+        return RegisterDaemonThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 
     public override async Task LaunchFailedAsync(string agentId, string reason) {
@@ -315,6 +317,8 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// launch-catch + read-loop cleanup.</summary>
     public List<string> AgentUnregisteredCalls { get; } = [];
 
+    public Dictionary<string, string?> AgentUnregisteredStopReasons { get; } = [];
+
     /// <summary>Every dropped-input report, in call order — the only place a drop reason becomes
     /// observable to anyone but this daemon's own log.</summary>
     public List<(Guid DispatchId, string AgentId, string Reason)> InputRejections { get; } = [];
@@ -325,8 +329,11 @@ sealed class CaptureServerConnection() : ServerConnection(
         return Task.CompletedTask;
     }
 
-    public override Task AgentUnregisteredAsync(string agentId) {
-        lock (AgentUnregisteredCalls) AgentUnregisteredCalls.Add(agentId);
+    public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) {
+        lock (AgentUnregisteredCalls) {
+            AgentUnregisteredCalls.Add(agentId);
+            AgentUnregisteredStopReasons[agentId] = stopReason;
+        }
         OnAgentUnregistered?.Invoke();
 
         return Task.CompletedTask;

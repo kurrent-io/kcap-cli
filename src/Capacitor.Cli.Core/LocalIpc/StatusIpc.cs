@@ -27,7 +27,9 @@ public sealed record DaemonInfoDto(
     // Vendor tokens this daemon can host, from the runtime factories' own availability probe —
     // the same set advertised to the server on DaemonConnect. Trailing/additive: null from a
     // daemon that predates it, which a client must read as UNKNOWN, never as "hosts nothing".
-    string[]? SupportedVendors = null);
+    string[]? SupportedVendors = null,
+    // Same null / missing-key / empty-array meaning as DaemonConnect.VendorModels.
+    Dictionary<string, VendorModelOption[]>? VendorModels = null);
 
 /// <summary>
 /// <see cref="Status"/> is the daemon's internal status string VERBATIM (PascalCase, open

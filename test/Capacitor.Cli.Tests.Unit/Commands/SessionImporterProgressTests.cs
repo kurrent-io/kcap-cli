@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Capture;
 using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -196,7 +197,7 @@ public class SessionImporterProgressTests : IDisposable {
     }
 
     [Test]
-    public async Task SendTranscriptBatches_skips_a_line_over_the_budget_and_reports_it() {
+    public async Task SendTranscriptBatches_marks_capture_loss_and_preserves_source_numbers() {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
 
@@ -213,20 +214,20 @@ public class SessionImporterProgressTests : IDisposable {
             agentId: null, startLine: 0, progress: progress
         , time: TimeProvider.System);
 
-        await Assert.That(totalSent).IsEqualTo(2);
+        await Assert.That(totalSent).IsEqualTo(3);
 
-        var skipped = events.OfType<LineSkipped>().Single();
-        await Assert.That(skipped.SessionId).IsEqualTo("s1");
-        await Assert.That(skipped.AgentId).IsNull();
-        await Assert.That(skipped.LineNumber).IsEqualTo(1);
-        await Assert.That(skipped.Bytes).IsGreaterThan(TranscriptBatchBuffer.MaxBytes);
-        await Assert.That(skipped.Message).Contains("line 1 skipped");
+        var loss = events.OfType<CaptureLineLost>().Single();
+        await Assert.That(loss.SessionId).IsEqualTo("s1");
+        await Assert.That(loss.AgentId).IsNull();
+        await Assert.That(loss.LineNumber).IsEqualTo(1);
+        await Assert.That(loss.Reason).IsEqualTo(RedactionLossReason.InputLimit);
+        await Assert.That(loss.Message).Contains("could not be captured");
 
         var body = _server.LogEntries.Single().RequestMessage.Body;
-        await Assert.That(body).Contains("\"line_numbers\":[0,2]");
+        await Assert.That(body).Contains("\"line_numbers\":[0,1,2]");
 
         // The progress denominator counts what will actually be posted.
-        await Assert.That(SessionImporter.CountSendableLines(path)).IsEqualTo(2);
+        await Assert.That(SessionImporter.CountSendableLines(path)).IsEqualTo(3);
     }
 
     [Test]

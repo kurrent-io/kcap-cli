@@ -73,6 +73,10 @@ internal interface IPiRpcProcess : IAsyncDisposable {
     /// <summary>Wait up to <paramref name="timeout"/> for the process to exit (returns silently on timeout).</summary>
     Task WaitForExitAsync(TimeSpan? timeout = null);
 
+    /// <summary>Closes the child's stdin, which Pi treats as the end of its session. Bounded by
+    /// <paramref name="timeout"/> when a write already holds stdin, and a no-op once closed.</summary>
+    Task CloseInputAsync(TimeSpan timeout);
+
     /// <summary>Terminate the process — an immediate kill of the whole process tree, matching
     /// <c>AgyTurnProcess</c> (not a graceful signal first) — within <paramref name="timeout"/>. Must
     /// be safe to call even after <see cref="IAsyncDisposable.DisposeAsync"/> has already run — see
@@ -252,6 +256,28 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
             }
         } catch {
             // Already exited or disposed — nothing left to wait for.
+        }
+    }
+
+    public async Task CloseInputAsync(TimeSpan timeout) {
+        if (IsDisposed) return;
+
+        bool acquired;
+
+        try {
+            acquired = await _stdinGate.WaitAsync(timeout).ConfigureAwait(false);
+        } catch {
+            return;
+        }
+
+        if (!acquired) return;
+
+        try {
+            if (!IsDisposed) _process.StandardInput.Close();
+        } catch {
+            // The child already exited, or its stdin is already gone.
+        } finally {
+            _stdinGate.Release();
         }
     }
 

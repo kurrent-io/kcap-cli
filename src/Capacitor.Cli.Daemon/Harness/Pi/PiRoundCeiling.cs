@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Daemon.Harness.Pi;
 
 /// <summary>
-/// The deadline on a Pi reviewer's rounds. A prompt is written on a caller's thread while the read pump
+/// The inactivity deadline on a Pi reviewer's rounds. A prompt is written on a caller's thread while the read pump
 /// handles frames on another, so the state lives under one lock and never consults a caller's view of
 /// "busy", which can be stale in either direction.
 ///
@@ -45,7 +45,8 @@ internal sealed class PiRoundCeiling(TimeSpan limit, TimeProvider time, Action o
         lock (_lock) {
             if (!_inFlight.Remove(id)) return;
             if (accepted) _owed++;
-            Reconcile();
+            if (WorkOutstanding) Arm();
+            else Disarm();
         }
     }
 
@@ -75,6 +76,14 @@ internal sealed class PiRoundCeiling(TimeSpan limit, TimeProvider time, Action o
             _running = false;
             if (WorkOutstanding) Arm();
             else Disarm();
+        }
+    }
+
+    /// <summary>Any frame from Pi while work is outstanding restarts the deadline, so the ceiling
+    /// measures silence: a reviewer still producing output is never reaped for taking long.</summary>
+    internal void Activity() {
+        lock (_lock) {
+            if (_timer is not null) Arm();
         }
     }
 

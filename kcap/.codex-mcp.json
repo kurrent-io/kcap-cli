@@ -32,6 +32,10 @@
     "kcap-artefacts": {
       "command": "kcap",
       "args": ["mcp", "artefacts"]
+    },
+    "kcap-knowledge": {
+      "command": "kcap",
+      "args": ["mcp", "knowledge"]
     }
   }
 }

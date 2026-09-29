@@ -156,8 +156,7 @@ sealed class PiHookCommand(
         var scopeRoot = ScopeRootFrom(enriched, cwd);
 
         // Start the memory fetch so it OVERLAPS the lifecycle POST; gated on the extension DECLARING
-        // it captures stdout (--memory-contract >= 1), else an older kcap.ts would spend the
-        // once-only lease on output it discards.
+        // it captures stdout (--memory-contract >= 1), since an older kcap.ts discards the output.
         var memoryTask = MemoryContractOf(args) >= 1
             ? StartMemoryIndexTask(file, scopeRoot,
                 activeProfile?.DisableMemoryIndex is true,
@@ -173,8 +172,8 @@ sealed class PiHookCommand(
             spool, sessionId, route: "session-start/pi");
 
         // BEFORE the watcher gate and before any early return: a withheld watcher must not suppress
-        // an injection whose once-per-session lease is already spent. pi.exec hands the extension
-        // stdout regardless of exit code, so no commit gate is needed (unlike Copilot).
+        // the injection. pi.exec hands the extension stdout regardless of exit code, so no commit
+        // gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
             WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
@@ -294,16 +293,17 @@ sealed class PiHookCommand(
             : SessionStartMemoryOutputAdapters.Render(HarnessId.Pi, fragment, workItemsNudge);
 
     /// <summary>
-    /// The lifecycle this harness reports. SessionId is the session FILE PATH — the identity
-    /// normalizer hashes it (PiSessionPathCanonicalizer), so resume (same file) is lease-deduped and
-    /// fork (new file) is freshly eligible. IsTopLevel/ClassificationAuthoritative are true because
-    /// kcap.ts only ever fires for the pi process's OWN session. CallbackMayRepeat because restarts
-    /// and resumes re-fire session_start for the same file.
+    /// The lifecycle this harness reports. SessionId is the session FILE PATH, hashed by
+    /// PiSessionPathCanonicalizer. IsTopLevel/ClassificationAuthoritative are true because kcap.ts only
+    /// ever fires for the pi process's OWN session. CallbackMayRepeat because restarts, resumes and
+    /// session switches re-fire session_start for the same file; HostKeepsContext is false because
+    /// kcap.ts holds the fragment only in memory and drops it at session_shutdown, so each of those
+    /// starts needs the fragment again.
     /// </summary>
     internal static SessionMemoryLifecycle LifecycleFor(string file, string? reason) =>
         new(HarnessId.Pi, file, LifecycleInstanceId: null,
             IsTopLevel: true, ClassificationAuthoritative: true,
-            MapReason(reason), CallbackMayRepeat: true);
+            MapReason(reason), CallbackMayRepeat: true, HostKeepsContext: false);
 
     // Pi reasons pinned upstream: startup|reload|new|resume|fork. Unrecognized degrades to
     // RepeatedTurnCallback — never Unknown, which the policy treats as retry-later.

@@ -26,7 +26,13 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     ulong   _activitySeq = 1;
     bool    _turnInFlight;
     bool    _awaitingInput;
+    // Set when the wait came from silence rather than a turn end, so the next output can clear
+    // it. A hook verdict clears the bit and then owns the flag.
+    bool    _silenceWait;
     ulong   _waitGeneration;
+    // When the flag last became false. Silence is measured from here as well as from the last
+    // output: a key that clears the wait must not be undone by the idle time already elapsed.
+    long    _notAwaitingSince = time.GetTimestamp();
     string? _launchStage;
 
     /// <summary>Starts at 1 on spawn — a freshly-launched agent is never "already idle"; the
@@ -126,10 +132,65 @@ internal sealed class AgentActivityClock(TimeProvider time) {
         return elapsed <= TimeSpan.Zero ? 0UL : (ulong) elapsed.TotalMilliseconds;
     }
 
+    /// <summary>A PTY vendor rewrites its status line about once a second for the whole turn, so
+    /// several seconds with no output is the turn having ended.</summary>
+    internal static readonly TimeSpan QuietTurn = TimeSpan.FromSeconds(8);
+
     /// <summary>Records one unit of activity: bumps <see cref="ActivitySeq"/> and resets the idle
-    /// window to zero from this instant. Called from all six sources (see the class doc).</summary>
+    /// window to zero from this instant. Called from all six sources (see the class doc). Output
+    /// after a silence wait means the turn is running again.</summary>
     public void Advance() {
-        lock (_gate) AdvanceLocked();
+        bool cleared;
+        lock (_gate) {
+            cleared = ClearSilenceLocked();
+            AdvanceLocked();
+        }
+        if (cleared) OnAwaitingInputChanged?.Invoke(false);
+    }
+
+    /// <summary>How long until <see cref="TryMarkQuiet"/> could succeed, or null when this clock
+    /// is not a silence candidate (already waiting, a turn gate held, or a live subagent).</summary>
+    public TimeSpan? QuietDue(TimeSpan quiet) {
+        lock (_gate) return DueLocked(quiet);
+    }
+
+    /// <summary>The turn ended without a stop notice sticking: no output and no live subagent for
+    /// <paramref name="quiet"/>. A later <see cref="Advance"/> clears it; a hook verdict replaces it.</summary>
+    public bool TryMarkQuiet(TimeSpan quiet) {
+        lock (_gate) {
+            if (DueLocked(quiet) is not { } due || due > TimeSpan.Zero) return false;
+            _silenceWait   = true;
+            _awaitingInput = true;
+            _waitGeneration++;
+            return true;
+        }
+    }
+
+    // Caller must hold _gate. Null when silence must not be applied.
+    TimeSpan? DueLocked(TimeSpan quiet) {
+        if (_awaitingInput || _turnInFlight || _silenceWait) return null;
+        if (CountLiveLocked() > 0) return null;
+        var idleLeft = quiet - TimeSpan.FromMilliseconds((long)Elapsed(_lastAdvanceTimestamp));
+        var sinceLeft = quiet - TimeSpan.FromMilliseconds((long)Elapsed(_notAwaitingSince));
+        var due = idleLeft > sinceLeft ? idleLeft : sinceLeft;
+        return due <= TimeSpan.Zero ? TimeSpan.Zero : due;
+    }
+
+    // Caller must hold _gate.
+    int CountLiveLocked() {
+        if (!_subagentsReported) return 0;
+        var live = 0;
+        foreach (var record in _subagents.Values) if (record.Live) live++;
+        return live;
+    }
+
+    // Caller must hold _gate. True when a silence wait was cleared so the caller can notify.
+    bool ClearSilenceLocked() {
+        if (!_silenceWait) return false;
+        _silenceWait       = false;
+        _awaitingInput     = false;
+        _notAwaitingSince  = time.GetTimestamp();
+        return true;
     }
 
     /// <summary>Fired on the turn's FALLING edge only (in-flight true → false) — the moment the
@@ -147,8 +208,10 @@ internal sealed class AgentActivityClock(TimeProvider time) {
             // Only a genuine falling edge means a turn finished; a gate cleared without ever being
             // held (a runtime going terminal) says nothing about waiting.
             var awaiting = value ? false : ended || _awaitingInput;
+            _silenceWait = false;
             awaitingChanged = awaiting != _awaitingInput;
             if (ended) _waitGeneration++;
+            if (!awaiting) _notAwaitingSince = time.GetTimestamp();
             _awaitingInput = awaiting;
             AdvanceLocked();
         }
@@ -163,8 +226,11 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public void SetAwaitingInput(bool value) {
         bool changed;
         lock (_gate) {
+            // A hook verdict replaces a silence wait, so later output cannot clear a real stop.
+            _silenceWait = false;
             changed = _awaitingInput != value;
             if (value) _waitGeneration++;
+            else _notAwaitingSince = time.GetTimestamp();
             _awaitingInput = value;
         }
         if (changed) OnAwaitingInputChanged?.Invoke(value);
@@ -175,7 +241,9 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public void ClearAwaitingInputSince(ulong sampledGeneration) {
         lock (_gate) {
             if (!_awaitingInput || _waitGeneration != sampledGeneration) return;
-            _awaitingInput = false;
+            _silenceWait      = false;
+            _awaitingInput    = false;
+            _notAwaitingSince = time.GetTimestamp();
         }
         OnAwaitingInputChanged?.Invoke(false);
     }

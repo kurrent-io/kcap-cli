@@ -189,8 +189,7 @@ public class ProcessRunnerTests {
                 new RunOptions(CancelMode: CancelMode.KillTree, TimeoutKill: TimeoutKillScope.ProcessOnly),
                 cts.Token);
 
-            await WaitUntilAsync(() => File.Exists(startedMarker), TimeSpan.FromSeconds(5), "the grandchild to start and record its PID");
-            grandchildPid = int.Parse((await File.ReadAllTextAsync(startedMarker)).Trim(), CultureInfo.InvariantCulture);
+            await WaitUntilAsync(() => TryReadPid(startedMarker, out grandchildPid), TimeSpan.FromSeconds(5), "the grandchild to start and record its PID");
             cts.Cancel();
 
             await Assert.ThrowsAsync<OperationCanceledException>(() => runTask);
@@ -200,6 +199,18 @@ public class ProcessRunnerTests {
                 try { Process.GetProcessById(grandchildPid).Kill(); }
                 catch (ArgumentException) { /* already gone */ }
             }
+        }
+    }
+
+    // The shell creates the marker before echo finishes writing the pid.
+    static bool TryReadPid(string path, out int pid) {
+        pid = 0;
+        try {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs);
+            return int.TryParse(reader.ReadToEnd().Trim(), CultureInfo.InvariantCulture, out pid) && pid > 0;
+        } catch (IOException) {
+            return false;
         }
     }
 

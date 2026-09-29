@@ -59,8 +59,14 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     readonly List<(string Method, JsonElement? Params)>          _sentServerRequests = new();
     readonly object                                              _sentServerRequestsLock = new();
-    JsonElement?                                                 _lastServerRequestResponse;
-    JsonElement?                                                 _lastServerRequestError;
+    // One reference, written once the clone is complete. JsonElement is a multi-word struct;
+    // a test sampling the fields mid-assignment reads a torn value and throws.
+    volatile ServerRequestReply?                                 _serverRequestReply;
+
+    sealed class ServerRequestReply {
+        public JsonElement? Result;
+        public JsonElement? Error;
+    }
 
     /// <summary>
     /// Every server→client request (e.g. <c>session/request_permission</c>) this fake has SENT to
@@ -73,10 +79,10 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     }
 
     /// <summary>The connection's JSON-RPC <c>result</c> for the most recent server→client request this fake sent, or null if not yet answered.</summary>
-    public JsonElement? LastServerRequestResponse => _lastServerRequestResponse;
+    public JsonElement? LastServerRequestResponse => _serverRequestReply?.Result;
 
     /// <summary>The connection's JSON-RPC <c>error</c> for the most recent server→client request this fake sent, or null if not answered with an error.</summary>
-    public JsonElement? LastServerRequestError => _lastServerRequestError;
+    public JsonElement? LastServerRequestError => _serverRequestReply?.Error;
 
     /// <summary>
     /// Qodo daemon-review Q3: the FIRST exception thrown by a fire-and-forget
@@ -436,8 +442,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                     // the completion source publishes continuations asynchronously, so assigning
                     // there leaves a test asserting on these fields waiting on two thread-pool hops
                     // it has no way to await, with only a wall clock to say when to give up.
-                    _lastServerRequestResponse = result;
-                    _lastServerRequestError    = error;
+                    _serverRequestReply = new ServerRequestReply { Result = result, Error = error };
 
                     pending.TrySetResult((result, error));
                 }

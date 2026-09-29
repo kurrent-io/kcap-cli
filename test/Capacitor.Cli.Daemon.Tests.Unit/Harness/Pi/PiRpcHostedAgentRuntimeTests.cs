@@ -43,7 +43,7 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(rt.AcpSessionId).IsEqualTo(SessionId);
+        await Assert.That(rt.AcpSessionId).IsEqualTo(PiSessionId);
         await Assert.That(rt.ResolvedModel).IsEqualTo(StateModelId);
         await Assert.That(rt.Cwd).IsEqualTo("/w");
 
@@ -63,7 +63,7 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(rt.AcpSessionId).IsEqualTo(SessionId);
+        await Assert.That(rt.AcpSessionId).IsEqualTo(PiSessionId);
         await Assert.That(rt.ResolvedModel).IsNull();
     }
 
@@ -452,6 +452,40 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await Assert.That(proc.Writes.Any(w => w.Contains("\"type\":\"abort\"", StringComparison.Ordinal))).IsTrue();
         await Assert.That(proc.TerminateCalls).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task RequestGracefulStopAsync_lets_a_child_that_exits_on_closed_stdin_exit_cleanly() {
+        var (rt, proc) = NewRuntime(stopGrace: TimeSpan.FromMilliseconds(50));
+        await using var _ = rt;
+        proc.ExitsOnInputClose = true;
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await rt.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        await Assert.That(proc.InputCloseCalls).IsEqualTo(1);
+        await Assert.That(proc.TerminateCalls).IsEqualTo(0);
+        await Assert.That(rt.ExitCode).IsEqualTo(0);
+    }
+
+    /// <summary>A stop is followed by a terminate that cancels the read pump, so the stop must not
+    /// return before the pump has read what Pi wrote on its way out.</summary>
+    [Test]
+    public async Task RequestGracefulStopAsync_returns_after_reading_what_pi_wrote_before_exiting() {
+        var (rt, proc) = NewRuntime(stopGrace: TimeSpan.FromSeconds(5));
+        await using var _ = rt;
+        proc.ExitsOnInputClose  = true;
+        proc.LinesOnInputClose = [PiRpcRuntimeFakes.AssistantText("final words")];
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        while (rt.Envelopes.TryRead(out var _)) { }
+
+        await rt.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        var read = new List<AcpEventEnvelope>();
+        while (rt.Envelopes.TryRead(out var env)) read.Add(env);
+
+        await Assert.That(read.Any(e => e is { Kind: AcpEventKind.AssistantText, Text: "final words" })).IsTrue();
     }
 
     // ---- Terminal ----

@@ -243,7 +243,12 @@ public class AcpHostedAgentRuntimePermissionTests {
             process,
             NullLogger.Instance, TimeProvider.System,
             // Never resolves on its own — only cancellation (from DisposeAsync below) ends this.
-            requestInteraction: (req, ct) => Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => default(AcpInteractionDecision), TaskScheduler.Default));
+            // Cancellation must fault this task. ContinueWith would complete it successfully with a
+            // default decision, so dispose would not be what resolves the request.
+            requestInteraction: async (_, ct) => {
+                await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+                return new AcpInteractionDecision("cancel", null, null, null, null, null);
+            });
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);

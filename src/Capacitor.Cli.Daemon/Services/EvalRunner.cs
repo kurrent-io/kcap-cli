@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval;
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Eval.Evidence;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Hosting;
@@ -9,16 +10,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
-/// <summary>
-/// Per-phase handlers for the DEV-1463 PR 2 eval dispatch protocol.
-/// Replaces the pre-PR-2 single-shot <c>RunEvalCommand</c> handler.
-/// Holds no state between calls except via <see cref="EvalContextCache"/>.
-///
-/// <para>Each handler translates a SignalR client-result invocation into
-/// a call to <see cref="EvalService"/> and packages the outcome as a
-/// typed result DTO. The server's orchestrator (see
-/// <c>EvalRunOrchestrator</c>) threads the phases together.</para>
-/// </summary>
+/// <summary>Per-phase handlers for the server-dispatched eval protocol: each translates a SignalR client-result invocation into
+/// a call to <see cref="EvalService"/> and packages the outcome. Holds no state between calls except via
+/// <see cref="EvalContextCache"/>, which disposes each prepared run when it leaves.</summary>
 internal sealed class EvalRunner {
     readonly TimeProvider         _time;
     readonly ServerConnection     _connection;
@@ -30,6 +24,11 @@ internal sealed class EvalRunner {
     readonly ProfileContext       _profiles;
     readonly ICapacitorHttpClient _http;
 
+    // Each evidence phase bounds itself one RPC margin inside the server's route-keyed deadline; settable so tests can shorten it.
+    internal TimeSpan QuestionPhaseBudget { get; init; } = EvidencePhaseTimeouts.DaemonQuestion;
+    internal TimeSpan FinalizePhaseBudget { get; init; } = EvidencePhaseTimeouts.DaemonFinalize;
+    internal string?  TempRoot            { get; init; }
+
     public EvalRunner(
             ServerConnection         connection,
             EvalContextCache         cache,
@@ -40,7 +39,7 @@ internal sealed class EvalRunner {
             ILogger<EvalRunner>      logger,
             TimeProvider             time
         ) {
-        _time       = time;
+        _time          = time;
         _connection    = connection;
         _cache         = cache;
         _harnesses     = harnesses;
@@ -56,22 +55,33 @@ internal sealed class EvalRunner {
         _connection.CancelEvalHandler      = HandleCancelAsync;
         _connection.RunQuestionV2Handler   = HandleRunQuestionV2Async;
         _connection.FinalizeEvalV2Handler  = HandleFinalizeV2Async;
+
+        EvidenceRunContext.SweepStale(Path.GetTempPath(), time, msg => logger.LogInformation("{Message}", msg));
     }
 
     async Task<PrepareResult> HandlePrepareAsync(PrepareEvalCommand cmd) {
-        // SignalR 10.0.5's On<T1, TResult> overloads don't surface a
-        // per-call CancellationToken, so cancellation here is bounded
-        // only by the daemon's shutdown token. Server-side phase timeouts
-        // take effect via InvokeAsync<T>'s own timeout unwinding (the
-        // daemon's response is simply discarded if the server moved on).
-        using var httpClient = await _http.ForBackgroundAsync(_shutdownToken);
-        var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, cmd.SessionId, _logger);
+        // SignalR's On<T1, TResult> gives no per-call token: only shutdown cancels here, and a response the server has
+        // already timed out is discarded on its side.
+        var httpClient = await _http.ForBackgroundAsync(_shutdownToken);
+        var observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, cmd.SessionId, _logger);
+        var handedOver = false;
 
         try {
-            // Phase 3 — fetch the catalog (rendered prompts + raw text +
-            // versions) so PrepareAsync reconciles the run question list from it.
             var catalog = await EvalCatalogClient.FetchAsync(_baseUrl, httpClient, observer, _time, _shutdownToken);
             if (catalog is null) return new(false, "catalog load failed", null, 0, 0, 0, 0, 0);
+
+            if (catalog.EvidenceRetrieval is not null && !cmd.Chain) {
+                var setup = await EvalService.PrepareEvidenceAsync(_baseUrl, httpClient, _profiles.Resolution.Profile, _harnesses, cmd.SessionId, cmd.Questions,
+                    catalog, cmd.Model, observer, _time, _shutdownToken, cmd.EvalRunId, TempRoot);
+                if (setup is null) return new(false, "evidence scope preparation failed", null, 0, 0, 0, 0, 0);
+
+                // The setup's scope, read and citation clients send through this client, so it lives as long as the entry.
+                _cache.Put(cmd.EvalRunId, setup, httpClient);
+                handedOver = true;
+                var state = setup.Scope.State!;
+                return new(true, null, state.RootSessionId, setup.Trace.Fits ? setup.Trace.Cites.Count : 0, setup.Trace.Fits ? setup.Trace.Chars : 0, 0, 0, 0,
+                    EvidenceScopeVersion: state.ScopeVersion, Route: setup.Route.ToWire(), SourceCount: state.Sources.Count, ExpiresAt: state.ServerExpiresAt);
+            }
 
             var ctx = await EvalService.PrepareAsync(
                 _baseUrl,
@@ -102,12 +112,15 @@ internal sealed class EvalRunner {
                 ctx.TraceJson.Length,
                 ctx.ContextResult.Compaction.ToolResultsTotal,
                 ctx.ContextResult.Compaction.ToolResultsTruncated,
-                ctx.ContextResult.Compaction.BytesSaved
+                ctx.ContextResult.Compaction.BytesSaved,
+                Route: EvidenceRouteExtensions.LegacyWire
             );
         } catch (Exception ex) {
             _logger.LogError(ex, "PrepareEval failed for {RunId}", cmd.EvalRunId);
 
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null, 0, 0, 0, 0, 0);
+        } finally {
+            if (!handedOver) httpClient.Dispose();
         }
     }
 
@@ -120,10 +133,8 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, ctx.SessionId, _logger);
 
         try {
-            // Phase 3 — the SignalR-supplied cmd.Question carries raw text
-            // and a null prompt version; the RECONCILED question from the cached
-            // context (matched by id) carries the catalog's rendered Prompt, RawText,
-            // and PromptVersion. Judge the reconciled item, not the wire DTO.
+            // The wire question carries raw text and no prompt version; judge the cached, reconciled
+            // question, which carries the catalog's rendered prompt and its version.
             var reconciled = ctx.Questions.FirstOrDefault(q => q.Id == cmd.Question.Id);
             if (reconciled is null)
                 return new(false, null, $"question '{cmd.Question.Id}' not in reconciled catalog", 0, 0);
@@ -174,6 +185,10 @@ internal sealed class EvalRunner {
     }
 
     async Task<QuestionResultV2> HandleRunQuestionV2Async(RunQuestionCommand cmd) {
+        if (_cache.LeaseEvidence(cmd.EvalRunId) is { } evidence) {
+            using (evidence) return await RunEvidenceQuestionAsync(evidence, cmd);
+        }
+
         var ctx = _cache.Get(cmd.EvalRunId);
 
         if (ctx is null)
@@ -182,10 +197,7 @@ internal sealed class EvalRunner {
                 "context not cached (prepare missing or expired)", 0, 0);
 
         using var httpClient = await _http.ForBackgroundAsync(_shutdownToken);
-        // Silent: on protocol 2 the server's orchestrator is the sole author of per-question
-        // progress (it dispatches RunQuestionV2 itself and publishes the result), so relaying
-        // per-question events here as well would let a daemon-side timeout overwrite a
-        // server-side one already recorded as failed.
+        // Silent: the server's orchestrator is the sole author of per-question progress on this protocol.
         var observer = new DaemonEvalObserver(_connection, cmd.EvalRunId, ctx.SessionId, _logger, silentPerQuestion: true);
 
         try {
@@ -198,7 +210,8 @@ internal sealed class EvalRunner {
             var result = await EvalService.RunQuestionAsync(
                 ctx, httpClient, _baseUrl, reconciled, ctx.Model, cmd.Index, cmd.Total, observer, _time, _shutdownToken);
 
-            return new QuestionResultV2(result.Assessment, result.Failure, result.Failure is null ? null : "judge did not produce a verdict", 0, 0);
+            return new QuestionResultV2(result.Assessment, result.Failure, result.Failure is null ? null : "judge did not produce a verdict",
+                result.Usage?.InputTokens ?? 0, result.Usage?.OutputTokens ?? 0);
         } catch (Exception ex) {
             _logger.LogError(ex, "RunQuestionV2 failed for {RunId}/{QuestionId}", cmd.EvalRunId, cmd.Question.Id);
 
@@ -208,7 +221,44 @@ internal sealed class EvalRunner {
         }
     }
 
+    async Task<QuestionResultV2> RunEvidenceQuestionAsync(EvidenceRunLease lease, RunQuestionCommand cmd) {
+        var setup      = lease.Setup;
+        var reconciled = setup.Questions.FirstOrDefault(q => q.Id == cmd.Question.Id);
+        if (reconciled is null) return QuestionFailure(cmd, EvalFailureCodes.ChatError, $"question '{cmd.Question.Id}' not in reconciled catalog");
+
+        var       observer = new DaemonEvalObserver(_connection, cmd.EvalRunId, setup.SessionId, _logger, silentPerQuestion: true);
+        using var budget   = new CancellationTokenSource(QuestionPhaseBudget, _time);
+        using var phase    = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token, lease.Cancelled);
+
+        try {
+            var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _baseUrl, reconciled, setup.Model, cmd.Index, cmd.Total, observer, _time, phase.Token);
+            if (outcome.ScopeMoved) {
+                _cache.Remove(cmd.EvalRunId, setup);
+                // The server reads a run failure as run-fatal only in exactly this shape, with both branches null.
+                return new QuestionResultV2(null, null, EvalService.EvidenceScopeMovedReason, 0, 0, RunFailure: "scope_moved");
+            }
+            return new QuestionResultV2(outcome.Assessment, outcome.Failure, outcome.Failure is null ? null : "judge did not produce a verdict",
+                outcome.Usage?.InputTokens ?? 0, outcome.Usage?.OutputTokens ?? 0);
+        } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return QuestionFailure(cmd, EvalFailureCodes.JudgeTimeout, "the question phase exceeded its budget");
+        } catch (OperationCanceledException) when (lease.Cancelled.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return QuestionFailure(cmd, EvalFailureCodes.ChatError, CancelledReason);
+        } catch (Exception ex) {
+            _logger.LogError(ex, "RunQuestionV2 failed for {RunId}/{QuestionId}", cmd.EvalRunId, cmd.Question.Id);
+            return QuestionFailure(cmd, EvalFailureCodes.ChatError, $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    const string CancelledReason = "the eval run was cancelled or replaced";
+
+    static QuestionResultV2 QuestionFailure(RunQuestionCommand cmd, string code, string error) =>
+        new(null, new EvalQuestionFailure { Category = cmd.Question.Category, QuestionId = cmd.Question.Id, Code = code }, error, 0, 0);
+
     async Task<FinalizeResult> HandleFinalizeV2Async(FinalizeEvalV2Command cmd) {
+        if (_cache.LeaseEvidence(cmd.EvalRunId) is { } evidence) {
+            using (evidence) return await FinalizeEvidenceAsync(evidence, cmd);
+        }
+
         var ctx = _cache.Get(cmd.EvalRunId);
 
         if (ctx is null) return new(false, "context not cached", null);
@@ -226,7 +276,29 @@ internal sealed class EvalRunner {
 
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null);
         } finally {
-            _cache.Remove(cmd.EvalRunId);
+            _cache.Remove(cmd.EvalRunId, ctx);
+        }
+    }
+
+    async Task<FinalizeResult> FinalizeEvidenceAsync(EvidenceRunLease lease, FinalizeEvalV2Command cmd) {
+        var       setup      = lease.Setup;
+        using var httpClient = await _http.ForBackgroundAsync(_shutdownToken);
+        var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, setup.SessionId, _logger);
+        using var budget     = new CancellationTokenSource(FinalizePhaseBudget, _time);
+        using var phase      = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token, lease.Cancelled);
+
+        try {
+            var aggregate = await EvalService.FinalizeEvidenceAsync(setup, httpClient, _baseUrl, cmd.Assessments, cmd.Failures, cmd.Model, observer, _time, phase.Token);
+            return new(aggregate is not null, aggregate is null ? "finalize failed" : null, null);
+        } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return new(false, "the finalize phase exceeded its budget", null);
+        } catch (OperationCanceledException) when (lease.Cancelled.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return new(false, CancelledReason, null);
+        } catch (Exception ex) {
+            _logger.LogError(ex, "FinalizeEvalV2 failed for {RunId}", cmd.EvalRunId);
+            return new(false, $"{ex.GetType().Name}: {ex.Message}", null);
+        } finally {
+            _cache.Remove(cmd.EvalRunId, setup);
         }
     }
 
@@ -239,13 +311,8 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, ctx.SessionId, _logger);
 
         try {
-            // FinalizeAsync signature was updated in Task 6.5 — the taxonomy is
-            // carried on ctx.Questions, not passed separately.
-            // Phase 3: FinalizeAsync now returns SessionEvalCompletedPayloadV3;
-            // FinalizeResult.Aggregate is the V1 wire DTO held by the server
-            // orchestrator, which only inspects Success on this result so we
-            // pass null for Aggregate. The V3 payload is already persisted to
-            // /api/sessions/{id}/evals/v3 inside FinalizeAsync.
+            // FinalizeAsync persists the payload itself; the orchestrator reads only Success, so
+            // FinalizeResult.Aggregate stays null.
             var aggregate = await EvalService.FinalizeAsync(
                 ctx,
                 httpClient,
@@ -264,7 +331,7 @@ internal sealed class EvalRunner {
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null);
         } finally {
             // Always evict — a finalize throw must not leak the cached context.
-            _cache.Remove(cmd.EvalRunId);
+            _cache.Remove(cmd.EvalRunId, ctx);
         }
     }
 

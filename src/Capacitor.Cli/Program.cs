@@ -1,6 +1,7 @@
 using System.Reflection;
 using Capacitor.Cli;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Capture;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -107,6 +108,9 @@ var isHook = command == "hook";
 var config  = ConfigRoot.FromEnvironment();
 var home    = UserHome.FromEnvironment();
 var workdir = WorkingDirectory.FromProcess();
+
+// git runs this after every commit on the machine, so it resolves no server, profile or update.
+if (command == "git-hook") return await GitHook.RunAsync(GitHookInvocation.Current(args[1..], workdir), config, time);
 
 // Claude kills a SessionEnd hook after 1.5 s (ClaudeSessionEndHandoff), so the hand-off sits
 // ahead of ResolveServerUrl's git probes and the global spool drain, each of which can spend it.
@@ -442,7 +446,7 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts|knowledge …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
@@ -453,6 +457,7 @@ switch (command) {
             Console.Error.WriteLine("  kcap mcp plans");
             Console.Error.WriteLine("  kcap mcp analytics");
             Console.Error.WriteLine("  kcap mcp artefacts");
+            Console.Error.WriteLine("  kcap mcp knowledge");
 
             return 1;
         }
@@ -473,14 +478,15 @@ switch (command) {
             }
             case "judge": {
                 var session = GetArg(args, "--session");
+                var run     = GetArg(args, "--run");
 
                 if (string.IsNullOrWhiteSpace(session)) {
-                    Console.Error.WriteLine("Usage: kcap mcp judge --session <sessionId>");
+                    Console.Error.WriteLine("Usage: kcap mcp judge --session <sessionId> [--run <path>]");
 
                     return 1;
                 }
 
-                return await Run<McpJudgeServer>().RunAsync(session);
+                return await Run<McpJudgeServer>().RunAsync(session, string.IsNullOrWhiteSpace(run) ? null : run);
             }
             case "sessions":
                 return await Run<McpSessionsServer>().RunAsync();
@@ -498,6 +504,8 @@ switch (command) {
                 return await Run<McpAnalyticsServer>().RunAsync();
             case "artefacts":
                 return await Run<McpArtefactsServer>().RunAsync();
+            case "knowledge":
+                return await Run<McpKnowledgeServer>().RunAsync();
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 
@@ -627,6 +635,15 @@ switch (command) {
         return 0;
     }
     case "import": {
+        var repairCapture = args.Contains("--repair-capture");
+        if (repairCapture && CaptureRepairArgs.Validate(args) is { } repairError) {
+            Console.Error.WriteLine(repairError);
+            return 1;
+        }
+        if (!repairCapture && args.Contains("--dry-run")) {
+            Console.Error.WriteLine("--dry-run requires --repair-capture and an explicit --session ID.");
+            return 1;
+        }
         // Vendor selection first — quick exit on parse errors so we don't do other work.
         var vsel = VendorSelection.Parse(args);
         if (vsel.HasError) {
@@ -683,6 +700,9 @@ switch (command) {
         var sources = SetupCommand.BuildImportSources(
             config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(), time,
             explicitVendorSelection ? vsel.Vendors : null);
+
+        if (repairCapture)
+            return await Run<CaptureRepairCommand>().HandleAsync(filterSession!, args.Contains("--dry-run"), sources);
 
         // --- Scope resolution ---
         var profileConfig = profiles.Snapshot;

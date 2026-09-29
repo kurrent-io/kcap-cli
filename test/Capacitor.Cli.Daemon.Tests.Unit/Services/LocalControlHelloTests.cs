@@ -118,9 +118,19 @@ public class LocalControlHelloTests {
     }
 
     static async Task<NetworkStream> ConnectAsync(string sockPath, CancellationToken ct) {
-        var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), ct);
-        return new NetworkStream(sock, ownsSocket: true);
+        // Bind publishes the socket file before Listen. A connect in that gap is refused.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (true) {
+            var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            try {
+                await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), ct);
+                return new NetworkStream(sock, ownsSocket: true);
+            } catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused) {
+                sock.Dispose();
+                if (DateTime.UtcNow >= deadline) throw;
+                await Task.Delay(20, ct);
+            }
+        }
     }
 
     [Test]

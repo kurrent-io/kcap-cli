@@ -1,8 +1,8 @@
+using System.Collections.Frozen;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
-using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
 using ReactiveUI.Reactive;
@@ -10,7 +10,7 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// One session row of the rail. Recreated per row revision (DynamicData Transform), so every
-/// static field is computed once from the ctor row; IsSelected and NeedsYou stay live because
+/// static field is computed once from the ctor row. IsSelected and Status stay live because
 /// selection and pending-set membership each change without a row revision. Age is a
 /// point-in-time snapshot.
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
@@ -21,18 +21,16 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Vendor { get; }
     public bool HasVendor { get; }
     public string? Model { get; }
+    /// Curated display name when the slug is known; the slug otherwise.
+    public string? ModelLabel { get; }
     public bool HasModel { get; }
     public string Meta { get; }
-    public IBrush StatusDot { get; }
-    public string Tooltip { get; }
+    public string Tooltip => Status.Tip;
     /// The daemon name badge for a remote row; null for a local one.
     public string? MachineBadge { get; }
     public bool IsRemote { get; }
     /// A launch the daemon has not published yet: Meta carries its stage instead of an age.
     public bool IsStarting { get; }
-    /// The status dot pulses while the launch is starting or while the daemon counts subagents
-    /// running under the session.
-    public bool DotPulses { get; }
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     internal DateTime CreatedAt { get; }
@@ -40,28 +38,20 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _isSelected;
     public bool IsSelected => _isSelected.Value;
 
-    readonly ObservableAsPropertyHelper<bool> _needsYou;
-    public bool NeedsYou => _needsYou.Value;
-
-    readonly ObservableAsPropertyHelper<bool> _showsStatusDot;
-    /// The badge replaces the dot for a row that needs attention, except that ongoing subagent
-    /// work keeps the pulsing dot beside it.
-    public bool ShowsStatusDot => _showsStatusDot.Value;
+    readonly ObservableAsPropertyHelper<AgentStatusPresentation> _status;
+    public AgentStatusPresentation Status => _status.Value;
 
     readonly ObservableAsPropertyHelper<bool> _isStale;
     /// A remote row greys out while the lane is stale; a local row is never stale.
     public bool IsStale => _isStale.Value;
-
-    readonly ObservableAsPropertyHelper<bool> _showsIdleBadge;
-    /// The badge is a clock for a finished turn; a failure or a pending permission takes "!" instead.
-    public bool ShowsIdleBadge => _showsIdleBadge.Value;
 
     readonly CompositeDisposable _disposables = new();
 
     public RailSessionViewModel(
             AgentRow row, IObservable<string?> selectedAgentId,
             IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
-            Action<string> openLocal, Action<string> openRemote, TimeProvider time) {
+            Action<string> openLocal, Action<string> openRemote, TimeProvider time,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
         var kindExtra = row.Kind == "agent" ? null : row.Kind;
@@ -75,18 +65,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         HasVendor = !string.IsNullOrEmpty(row.Vendor);
         Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
         HasModel = Model is not null;
+        ModelLabel = Model is { } model ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, model) : null;
         IsStarting = row.Origin == AgentOrigin.Pending;
         var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
-        DotPulses = IsStarting || subagents is not null;
         Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age, subagents);
-        StatusDot = SessionStatusDots.For(row);
-        Tooltip = IsStarting
-            ? Join(row.Id, "Starting", LaunchStages.Label(row.LaunchStage))
-            : Join(row.Id, row.Status,
-                UsageLimitNoticeDto.IsQuestion(row.UsageLimit) ? row.UsageLimit!.Summary : null,
-                SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
-                subagents is null ? null : $"{subagents} running",
-                row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
         MachineBadge = row.MachineBadge;
         IsRemote = row.Origin == AgentOrigin.Remote;
 
@@ -94,16 +76,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.IsSelected, initialValue: false)
             .DisposeWith(_disposables);
 
-        var byStatus = SessionStatusDots.NeedsAttention(row);
-        _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
-            .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
-            .DisposeWith(_disposables);
-        _showsStatusDot = agentsWithPending.Select(set => !(byStatus || set.Contains(row.Id)) || DotPulses)
-            .ToProperty(this, x => x.ShowsStatusDot, initialValue: !byStatus || DotPulses)
-            .DisposeWith(_disposables);
-        _showsIdleBadge = agentsWithPending.Select(set =>
-                SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed" && !set.Contains(row.Id))
-            .ToProperty(this, x => x.ShowsIdleBadge, initialValue: SessionStatusDots.WaitsOnUser(row) && row.Status != "Failed")
+        var answering = agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
+        _status = agentsWithPending.CombineLatest(answering,
+                (pending, asked) => SessionStatusDots.ForRow(row, pending.Contains(row.Id), asked.Contains(row.Id)))
+            .ToProperty(this, x => x.Status, initialValue: SessionStatusDots.ForRow(row, pending: false))
             .DisposeWith(_disposables);
 
         _isStale = (IsRemote ? remoteStale : Observable.Return(false))

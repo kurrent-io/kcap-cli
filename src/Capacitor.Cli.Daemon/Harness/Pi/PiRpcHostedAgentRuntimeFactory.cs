@@ -3,6 +3,7 @@ using System.Text;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -56,6 +57,8 @@ namespace Capacitor.Cli.Daemon.Harness.Pi;
 /// <param name="posixHost">Test seam ONLY, for the platform half of the reviewer gate. Production
 /// passes null, which reads the ambient OS. Taken as an argument so every arm of the ladder is
 /// reachable from any host — the Windows arm is otherwise unassertable on POSIX.</param>
+/// <param name="paths">Pi's layout as the entry point resolved it, whose auth and models files
+/// fingerprint the model catalog. Null publishes no fingerprint paths.</param>
 internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         DaemonConfig                                                 config,
         ILoggerFactory                                                loggerFactory,
@@ -64,7 +67,8 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         Func<string, bool>?                                           binaryExists = null,
         TimeSpan?                                                     readyDeadline = null,
         Func<string, string?>?                                        resolveVersion = null,
-        bool?                                                         posixHost = null
+        bool?                                                         posixHost = null,
+        PiPaths?                                                      paths = null
     ) : IHostedAgentRuntimeFactory {
     readonly ILogger _logger = loggerFactory.CreateLogger<PiRpcHostedAgentRuntimeFactory>();
 
@@ -95,6 +99,16 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
     /// <summary>Pi's model rides argv (<c>--model</c>), applied on every launch that resolves one —
     /// unlike a vendor whose model-selection hook is unverified.</summary>
     public bool SupportsModelSelection => true;
+
+    public IReadOnlyList<string> CatalogFingerprintPaths =>
+        paths is null ? [] : [paths.AuthJson, paths.ModelsJson];
+
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) =>
+        IsAvailable()
+            ? PiModelCatalogProbe.RunAsync(config.PiPath,
+                PiModelCatalogProbe.DirectoryFor(config.Store.StateDirectory(config.Name)),
+                _processSource, time, _logger, ct)
+            : Task.FromResult<IReadOnlyList<VendorModelOption>?>(null);
 
     /// <summary>The daemon-owned record of the oldest <c>pi</c> build this daemon will run — the same
     /// shared store the other gated reviewers use, keyed by vendor under this daemon's own state root.

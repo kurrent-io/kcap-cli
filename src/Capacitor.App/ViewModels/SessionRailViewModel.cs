@@ -61,7 +61,8 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             Action<string> openLocalSession, Action<string> openRemoteSession, TimeProvider time,
             Func<string, string>? resolveRepoRoot = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
         _directory = directory;
         var resolveRoot = resolveRepoRoot ?? GitRepository.ResolveMainRepoRoot;
         // Not disposed with the rest: same as RailCollapseState's Changes subject, a bare
@@ -71,6 +72,8 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         // here so every nested OAPH downstream (RailSessionViewModel, RailWorktreeViewModel) sees
         // it on the UI thread without adding its own ObserveOn.
         var pending = (agentsWithPending ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        var answering = (agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         // Marshaled once here, like `pending` above, so every nested OAPH downstream sees it on
         // the UI thread without its own ObserveOn.
@@ -90,7 +93,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones))
+                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones, answering))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()

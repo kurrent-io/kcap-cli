@@ -1,4 +1,5 @@
 using System.Text;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Commands;
 
@@ -47,5 +48,29 @@ sealed class TranscriptBatchBuffer {
         _lines.Clear();
         _lineNumbers.Clear();
         _bytes = 0;
+    }
+
+    public static IEnumerable<TranscriptBatch> Split(TranscriptBatch batch) {
+        if (batch.LineNumbers is not { } numbers || numbers.Length != batch.Lines.Length)
+            throw new ArgumentException("Every captured line requires its source line number.", nameof(batch));
+        var start = 0;
+        var bytes = 0;
+        for (var i = 0; i < batch.Lines.Length; i++) {
+            var size = SizeOf(batch.Lines[i]);
+            if (size > MaxBytes) throw new InvalidOperationException("A captured line exceeds the transport budget.");
+            if (i > start && (bytes + size > MaxBytes || i - start >= MaxLines)) {
+                yield return Slice(start, i);
+                start = i;
+                bytes = 0;
+            }
+            bytes += size;
+        }
+        yield return Slice(start, batch.Lines.Length);
+
+        TranscriptBatch Slice(int from, int to) => batch with {
+            Lines = batch.Lines[from..to],
+            LineNumbers = numbers[from..to],
+            Repository = from == 0 ? batch.Repository : null
+        };
     }
 }

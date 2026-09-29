@@ -30,25 +30,31 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     readonly IPlanSource? _source;
     readonly PlanActivity _activity;
     readonly AvaloniaList<PlanTaskRow> _tasks = [];
+    readonly AvaloniaList<PlanTaskRow> _inProgress = [];
     readonly AvaloniaList<PlanDocumentRow> _documents = [];
     readonly List<ReadLease> _outstanding = [];
     readonly ITimer _settle;
+    IReadOnlyList<PlanTaskCount> _counts = [];
     ReadLease? _current;
     bool _tornDown;
 
     public IAvaloniaReadOnlyList<PlanTaskRow> Tasks => _tasks;
+    /// What the collapsed section lists: the rows of Tasks that are in progress, in plan order.
+    public IAvaloniaReadOnlyList<PlanTaskRow> InProgressTasks => _inProgress;
     public IAvaloniaReadOnlyList<PlanDocumentRow> Documents => _documents;
 
-    public bool HasPlan      => HasTasks || HasDocuments;
-    public bool HasTasks     => _tasks.Count > 0;
-    public bool HasDocuments => _documents.Count > 0;
+    public bool HasPlan       => HasTasks || HasDocuments;
+    public bool HasTasks      => _tasks.Count > 0;
+    public bool HasInProgress => _inProgress.Count > 0;
+    public bool HasDocuments  => _documents.Count > 0;
     public int DoneCount => _tasks.Count(task => task.IsSettled);
-    public int OpenCount => _tasks.Count - DoneCount;
-    /// What the expanded header says; folded, the header shows the two counts beside their marks.
+    /// What the expanded header says; collapsed, the header shows Counts.
     public string HeaderText => $"{DoneCount} of {_tasks.Count} done";
-    public string CountsTip => $"{DoneCount} done · {OpenCount} open";
+    /// Pending, in progress, done: one entry per state something is in, so the numbers add up
+    /// to the list. The instance changes only when a number does.
+    public IReadOnlyList<PlanTaskCount> Counts => _counts;
 
-    bool _isExpanded = true;
+    bool _isExpanded;
     public bool IsExpanded { get => _isExpanded; private set => this.RaiseAndSetIfChanged(ref _isExpanded, value); }
     public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
 
@@ -143,11 +149,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         if (plan is null) { Clear(); return; }
 
         var tasks = plan.Tasks.OrderBy(task => task.Ordinal).ToList();
-        var sameRows = tasks.Count == _tasks.Count && tasks.Zip(_tasks).All(pair => RowKey(pair.First) == pair.Second.TaskId);
-        if (!sameRows) {
-            _tasks.Clear();
-            _tasks.AddRange(tasks.Select(task => new PlanTaskRow(RowKey(task))));
-        }
+        StableRows.Sync(_tasks, RowsFor(tasks));
         for (var i = 0; i < tasks.Count; i++) _tasks[i].Present(tasks[i], _activity.SessionOver);
 
         var documents = plan.Documents
@@ -159,6 +161,13 @@ public sealed class PlanSectionViewModel : ReactiveObject {
             _documents.AddRange(documents);
         }
         RaiseShape();
+    }
+
+    /// A task the plan still names keeps its row, whatever was added, dropped or moved around it.
+    List<PlanTaskRow> RowsFor(List<PlanLedgerTaskDto> tasks) {
+        var known = new Dictionary<string, PlanTaskRow>(StringComparer.Ordinal);
+        foreach (var row in _tasks) known.TryAdd(row.TaskId, row);
+        return [.. tasks.Select(task => known.Remove(RowKey(task), out var row) ? row : new PlanTaskRow(RowKey(task)))];
     }
 
     /// A task the server sent without an id is still one row per position.
@@ -179,13 +188,28 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     }
 
     void RaiseShape() {
+        StableRows.Sync(_inProgress, _tasks.Where(task => task.IsInProgress));
+        var counts = CountStates();
+        if (!counts.SequenceEqual(_counts)) {
+            _counts = counts;
+            this.RaisePropertyChanged(nameof(Counts));
+        }
         this.RaisePropertyChanged(nameof(HasPlan));
         this.RaisePropertyChanged(nameof(HasTasks));
+        this.RaisePropertyChanged(nameof(HasInProgress));
         this.RaisePropertyChanged(nameof(HasDocuments));
         this.RaisePropertyChanged(nameof(DoneCount));
-        this.RaisePropertyChanged(nameof(OpenCount));
         this.RaisePropertyChanged(nameof(HeaderText));
-        this.RaisePropertyChanged(nameof(CountsTip));
+    }
+
+    PlanTaskCount[] CountStates() {
+        var done = DoneCount;
+        PlanTaskCount[] states = [
+            new(PlanTaskState.Pending, _tasks.Count - _inProgress.Count - done),
+            new(PlanTaskState.InProgress, _inProgress.Count),
+            new(PlanTaskState.Completed, done),
+        ];
+        return [.. states.Where(state => state.Count > 0)];
     }
 
     public async Task TeardownAsync() {

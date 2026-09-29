@@ -44,7 +44,7 @@ public class PiReviewerContainmentCertTests {
 
         await Assert.That(run.Ready).IsTrue();
         await Assert.That(run.ToolsOffered).IsEquivalentTo(
-            new[] { "read_file", "list_directory", "search_files", "submit_review_result", "send_flow_message" });
+            new[] { "read_file", "list_directory", "search_files", "git_log", "git_show", "git_diff", "submit_review_result", "send_flow_message" });
         await Assert.That(run.FirstRequestText).DoesNotContain("INV-");
         await Assert.That(run.FirstRequestText).Contains("You are a code reviewer running unattended");
     }

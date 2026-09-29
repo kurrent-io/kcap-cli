@@ -446,6 +446,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly ITimer _subagentExpiry;
     bool            _subagentExpiryDisposed;
 
+    // One timer for the silence wait. Same discipline as subagent expiry: the callback and
+    // DisposeAsync share this lock, and a callback that entered after disposal returns first.
+    readonly Lock   _quietTurnLock = new();
+    readonly ITimer _quietTurn;
+    bool            _quietTurnDisposed;
+
     /// <summary>Test seam: runs under <see cref="_subagentExpiryLock"/> after the disposal check and
     /// before the sweep, so a test can move the clock between a call's admission and its visit to
     /// each agent's clock.</summary>
@@ -594,6 +600,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// rejection. See SingleFlightRefresh for why bare fire-and-forget was unsafe here.</summary>
     readonly SingleFlightRefresh _capabilityRefresh = new();
     int                          _republishRequested;
+    int                          _catalogProbeRequested;
 
     // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
     // reports these dims to the server right after the agent registers (and on
@@ -774,6 +781,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _statusNotifier    = statusNotifier ?? new();
         _subagentExpiry    = _time.CreateTimer(
             _ => RescheduleSubagentExpiry(announce: false), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _quietTurn = _time.CreateTimer(
+            _ => RescheduleQuietTurn(), null, AgentActivityClock.QuietTurn, Timeout.InfiniteTimeSpan);
         _policySnapshots   = policySnapshots;
 
         // Phase B (D4): per-daemon PID-record store + this daemon's logical id + boot epoch.
@@ -1091,7 +1100,38 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
 
             _subagentExpiry.Change(next ?? Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            if (announce || retired) _statusNotifier.Pulse();
+            // A live subagent disarms the quiet timer. Marking here, before the pulse, lets the
+            // same snapshot carry the cleared count and the wait it reveals.
+            var markedQuiet = RescheduleQuietTurn(pulse: false);
+            if (announce || retired || markedQuiet) _statusNotifier.Pulse();
+        }
+    }
+
+    /// A running PTY agent with nothing on screen and no live subagent is between turns. The stop
+    /// notice is what flips the flag immediately; this is the backstop when that notice never
+    /// stuck. Output after the mark clears it, so a turn that is only quiet for a moment comes back.
+    /// <paramref name="pulse"/> is false when the caller pulses after this returns, so a subagent
+    /// sweep publishes once.
+    bool RescheduleQuietTurn(bool pulse = true) {
+        lock (_quietTurnLock) {
+            if (_quietTurnDisposed) return false;
+
+            var       marked = false;
+            TimeSpan? next   = null;
+            foreach (var agent in _agents.Values) {
+                if (agent.Status != "Running" || !agent.Runtime.EmitsTerminalOutput) continue;
+                if (agent.ActivityClock.TryMarkQuiet(AgentActivityClock.QuietTurn)) {
+                    marked = true;
+                    continue;
+                }
+                if (agent.ActivityClock.QuietDue(AgentActivityClock.QuietTurn) is { } due &&
+                    (next is null || due < next))
+                    next = due;
+            }
+
+            _quietTurn.Change(next ?? Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            if (pulse && marked) _statusNotifier.Pulse();
+            return marked;
         }
     }
 
@@ -1416,7 +1456,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>
     /// Re-probes the vendors advertised at startup and re-registers when the advertisement changed
     /// — the one path through which a running daemon updates what the server knows about its CLI
-    /// versions. Returns at once; the work is single-flighted off the caller's stack so a burst of
+    /// versions and vendor model catalogs. Returns at once; the work is single-flighted off the caller's stack so a burst of
     /// requests coalesces and the last publication is always the newest probe.
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
@@ -1425,17 +1465,39 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Sticky rather than captured by the delegate: a request folded into a running pass reruns
         // THAT pass's delegate, which would otherwise carry the earlier caller's answer.
         if (republishUnchanged) Interlocked.Exchange(ref _republishRequested, 1);
+        // A republish-only caller has no reason to think a catalog changed, so it spawns no probe.
+        else Interlocked.Exchange(ref _catalogProbeRequested, 1);
 
         _capabilityRefresh.Trigger(
             async () => {
-                var republish = Interlocked.Exchange(ref _republishRequested, 0) == 1;
+                var republish    = Interlocked.Exchange(ref _republishRequested, 0) == 1;
+                var probeCatalog = Interlocked.Exchange(ref _catalogProbeRequested, 0) == 1;
                 var current   = _config.UnattendedVendorCapabilities;
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
                     DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
 
-                if (!republish && current is not null && current.SequenceEqual(fresh)) return;
+                var previousCatalog = _config.VendorModels;
+                var supported       = _config.SupportedVendors ?? [];
+                var catalogVendors  = !probeCatalog ? [] : _runtimeFactories.Values
+                    .Where(f => supported.Contains(f.Vendor, StringComparer.Ordinal))
+                    .Where(f => f.CatalogFingerprintPaths.Count > 0 || (previousCatalog?.ContainsKey(f.Vendor) ?? false))
+                    .Select(f => f.Vendor)
+                    .ToArray();
+                var mergedCatalog = catalogVendors.Length == 0
+                    ? previousCatalog
+                    : VendorModelCatalogs.Merge(previousCatalog,
+                        await VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token));
+                var catalogChanged = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog);
+
+                if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
 
                 _config.UnattendedVendorCapabilities = fresh;
+                // One reference swap: status serializers on other threads may be enumerating the old one.
+                // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
+                if (catalogChanged) {
+                    _config.VendorModels = mergedCatalog;
+                    _statusNotifier.Pulse();
+                }
                 LogReAdvertising(_logger, reason,
                     string.Join(", ", fresh.Select(c => $"{c.Vendor} {c.CliVersion ?? DaemonRunner.UnknownCliVersion}")));
                 await _server.ReRegisterAsync();
@@ -1616,6 +1678,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<bool> TryStopByPidRecordAsync(string agentId) {
         if (FindPidRecord(agentId) is not { } record) return false;
 
+        return await StopByPidRecordAsync(record);
+    }
+
+    async Task<bool> StopByPidRecordAsync(AgentPidRecord record) {
         var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _time, _shutdownCts.Token);
         if (confirmedGone) {
             // Phase B2-b (sequenced-settlement design §4.2.4) Hook C: ledger-append the positive per-id
@@ -1623,8 +1689,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // source record. A crash between the two leaves a committed entry + leftover record; the next
             // boot's OrphanReaper record pass re-derives it and Upsert (idempotent on the source-stable
             // (AgentId, OldEpoch) key) collapses onto the committed entry, then completes the delete.
-            _resolvedLedger?.Upsert(agentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
-            _pidRecords?.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
+            _resolvedLedger?.Upsert(record.AgentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
+            _pidRecords?.Delete(record.AgentId); // delete ONLY on confirmed death (spec §6.4(2))
         }
 
         return confirmedGone;
@@ -1885,7 +1951,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             OnTurnEnded            = () => _ = SendStatusReportNowAsync(),
             // The flag rides the local status payload; the clock already holds the new value when
             // this fires, so the pulse's snapshot reads it (mutation first, pulse second).
-            OnAwaitingInputChanged = _ => _statusNotifier.Pulse(),
+            OnAwaitingInputChanged = _ => {
+                _statusNotifier.Pulse();
+                RescheduleQuietTurn();
+            },
         };
 
     /// <summary>Test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
@@ -3054,6 +3123,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (agent.Status == "Starting") {
                     SetAgentStatus(agent, "Running");
                     if (!agent.IsPrivate) TrySendAgentStatus(agent, "Running", null, out _);
+                    RescheduleQuietTurn();
                 }
 
                 // Consent/trust dialogs are a PRE-SESSION concern: they render once at startup, before
@@ -5360,10 +5430,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // catch covers the residual race where shutdown fires mid-call.
         // PrivateLocal agents were never registered, so never unregister them (deny-all).
         if (!agent.IsPrivate && !_shutdownCts.IsCancellationRequested) {
-            try { await _server.AgentUnregisteredAsync(agentId); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
+            try { await _server.AgentUnregisteredAsync(agentId, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
         }
+    }
+
+    /// <summary>The code of the runtime's own termination verdict — the part before any colon, since
+    /// some verdicts append free text the server must not echo to a driver. Null when nothing reaped it.</summary>
+    internal static string? StopReasonCode(AgentInstance agent) {
+        if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict) return null;
+
+        var colon = verdict.Reason.IndexOf(':');
+        var code  = (colon < 0 ? verdict.Reason : verdict.Reason[..colon]).Trim();
+
+        return code.Length == 0 ? null : code;
     }
 
     /// <summary>How long the whole shutdown report may take, across every agent. A shutdown that waits
@@ -5512,6 +5593,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             } catch (Exception ex) {
                 LogDisposeStepFailed(ex, "subagent-expiry");
+            }
+
+            try {
+                lock (_quietTurnLock) {
+                    _quietTurnDisposed = true;
+                    _quietTurn.Dispose();
+                }
+            } catch (Exception ex) {
+                LogDisposeStepFailed(ex, "quiet-turn");
             }
 
             try {

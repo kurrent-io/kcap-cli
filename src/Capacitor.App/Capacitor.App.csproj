@@ -39,6 +39,9 @@
         <AvaloniaResource Include="Assets\kcap-icon.png" />
     </ItemGroup>
     <ItemGroup>
+        <AdditionalFiles Include="BannedSymbols.App.txt" Visible="false" />
+    </ItemGroup>
+    <ItemGroup>
         <InternalsVisibleTo Include="Capacitor.App.Tests.Unit" />
     </ItemGroup>
     <ItemGroup>

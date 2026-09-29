@@ -6,6 +6,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.PrDetection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
@@ -118,6 +119,10 @@ public class CursorLiveSubagentIntegrationTests {
 
         readonly List<string> _markersToClean = [];
 
+        // Frozen and never advanced, so a loaded runner cannot spend the hook budget and spool
+        // the post this fixture is asserting on.
+        readonly FakeTimeProvider _clock = new();
+
         public Fixture(ConfigRoot config, HttpStatusCode postStatus = HttpStatusCode.OK) {
             PostStatus      = postStatus;
             TranscriptsRoot = _home.CreateDir("agent-transcripts");
@@ -174,7 +179,7 @@ public class CursorLiveSubagentIntegrationTests {
         }
 
         public Task<int> HandleAsync(string sessionId, string eventName, string? transcriptPath, string extraFields = "") =>
-            new CursorHookCommand(Config, Resolutions.At("http://localhost", Config), new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Resolutions.At("http://localhost", Config), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+            new CursorHookCommand(Config, Resolutions.At("http://localhost", Config), new HookClock(_clock), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Resolutions.At("http://localhost", Config), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 Client,
                 stdin: new StringReader(
                     $$"""{"hook_event_name":"{{eventName}}","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath?.Replace(@"\", @"\\")}}"{{extraFields}}}"""

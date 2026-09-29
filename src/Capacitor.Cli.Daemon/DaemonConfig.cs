@@ -141,6 +141,15 @@ public class DaemonConfig {
     /// probed from, taken before that probe; the vendor CLI watcher's starting point.</summary>
     public IReadOnlyDictionary<string, Services.CliBinaryStat?>? UnattendedVendorBaselines { get; set; }
 
+    /// <summary>Per-vendor launchable models probed from the installed CLIs. Replaced by reference on
+    /// every refresh, never mutated: serializers on other threads may be enumerating the current
+    /// instance.</summary>
+    public Dictionary<string, VendorModelOption[]>? VendorModels { get; set; }
+
+    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe; the
+    /// vendor CLI watcher's starting point for them.</summary>
+    public IReadOnlyDictionary<string, Services.CatalogPathStat[]>? VendorCatalogBaselines { get; set; }
+
     /// <summary>
     /// Vendor tokens this daemon accepts a launch-time ACP permission preset for — the installed
     /// hostable vendors (a subset of <see cref="SupportedVendors"/>) that route permissions through
@@ -394,7 +403,7 @@ public class DaemonConfig {
     /// authority. See <c>PiReviewerCapability</c>.</summary>
     public bool PiUnattendedReviewerEnabled { get; set; } = true;
 
-    /// <summary>Ceiling on a Pi reviewer turn. Matches the Antigravity reviewer's turn limit.</summary>
+    /// <summary>How long a Pi reviewer round may go without a frame from Pi before it is reaped.</summary>
     public int PiReviewerTurnTimeoutSeconds { get; set; } = 600;
 
     /// <summary>Path or bare command for Google Gemini CLI's ACP entry point, spawned as

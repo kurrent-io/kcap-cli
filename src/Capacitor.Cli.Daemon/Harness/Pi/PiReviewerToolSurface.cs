@@ -10,7 +10,8 @@ namespace Capacitor.Cli.Daemon.Harness.Pi;
 /// diagnostic, and drops a registered tool the allowlist omits, so two lists would fail silently.
 /// </summary>
 internal static class PiReviewerToolSurface {
-    internal static readonly ImmutableArray<string> FileTools = ["read_file", "list_directory", "search_files"];
+    internal static readonly ImmutableArray<string> FileTools =
+        ["read_file", "list_directory", "search_files", "git_log", "git_show", "git_diff"];
 
     /// <summary>Pi activates a built-in exactly when the allowlist names it, and an extension tool
     /// replaces a built-in of the same name — so no entry may be, or collide with, one of these.</summary>
