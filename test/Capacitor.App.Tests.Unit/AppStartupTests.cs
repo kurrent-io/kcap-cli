@@ -35,13 +35,15 @@ public class AppStartupTests {
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
     }
 
+    AppStateStore AppState() => new(Config.Root.Path("app-state.json"));
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_leaves_the_window_visible() {
         var isVisible = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
-            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
             Dispatcher.UIThread.RunJobs(); // flush the deferred Loaded post (diagnostic parity with the smoke test)
 
             var visible = window.IsVisible;
@@ -55,13 +57,13 @@ public class AppStartupTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_restores_the_remembered_window_placement() {
-        await new AppStateStore(Config.Root.Path("app-state.json"))
-            .UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888, WindowX = 120, WindowY = 80 });
+        var appState = AppState();
+        await appState.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888, WindowX = 120, WindowY = 80 });
 
         var placement = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
-            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, appState, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
             Dispatcher.UIThread.RunJobs();
             var result = (window.Width, window.Height, window.Position.X, window.Position.Y);
             window.Close();
@@ -72,6 +74,32 @@ public class AppStartupTests {
         await Assert.That(placement.Height).IsEqualTo(888);
         await Assert.That(placement.X).IsEqualTo(120);
         await Assert.That(placement.Y).IsEqualTo(80);
+    }
+
+    /// Pins that the window keeps its state in the store it is handed. One it built itself over
+    /// the same file would carry its own lock, so its writes could interleave with the app's and
+    /// drop one. The handed store sits off the config root's own path — otherwise a window that
+    /// built its own would read and write the same file and this test would prove nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_keeps_its_state_in_the_store_it_is_handed() {
+        var handed = new AppStateStore(Config.PathTo("handed", "app-state.json"));
+        await handed.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888 });
+
+        var restoredWidth = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, handed, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            Dispatcher.UIThread.RunJobs();
+            var width = window.Width;
+            window.Close(); // closing saves the placement, position included
+            Dispatcher.UIThread.RunJobs();
+            return width;
+        });
+
+        await Assert.That(restoredWidth).IsEqualTo(1552);
+        await Assert.That((await handed.LoadAsync()).WindowX).IsNotNull();
+        await Assert.That(File.Exists(Config.Root.Path("app-state.json"))).IsFalse();
     }
 
     /// The service composition StartAsync builds once and shares between the window, the tray and
@@ -102,7 +130,7 @@ public class AppStartupTests {
                 localMachineId: null, appServerUrl: null, TimeProvider.System);
 
             var window = AppUnderTest.BuildAndShowMainWindow(
-                service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
+                service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
                 new NeverLaunchClient(), TimeProvider.System, directory: directory, remoteAgents: remoteAgents, lane: lane);
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
@@ -138,7 +166,7 @@ public class AppStartupTests {
             var attach = new FakeTerminalAttachClientFactory();
 
             var window = AppUnderTest.BuildAndShowMainWindow(
-                service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
+                service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
                 new AcceptingLaunchClient(agentId), TimeProvider.System, lane: lane,
                 workspaceFactory: id => new WorkspaceViewModel(
                     id, service, actions, attach.Factory, () => new FakeTerminalSurface(), TimeProvider.System, new RecordingOpener(),
