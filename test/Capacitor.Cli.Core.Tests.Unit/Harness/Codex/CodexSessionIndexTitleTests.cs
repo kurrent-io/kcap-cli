@@ -48,4 +48,41 @@ public class CodexSessionIndexTitleTests {
     public async Task Records_change_time_is_true() {
         await Assert.That(new CodexSessionIndexTitle(Tmp.Path, Id.Replace("-", "")).RecordsChangeTime).IsTrue();
     }
+
+    [Test]
+    public async Task Dashed_session_id_is_accepted() {
+        Tmp.CreateFile("session_index.jsonl", $$"""{"id":"{{Id}}","thread_name":"Dashed","updated_at":"2026-09-29T10:00:00Z"}""" + "\n");
+
+        await Assert.That(new CodexSessionIndexTitle(Tmp.Path, Id).Read()!.Title).IsEqualTo("Dashed");
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("abc")]
+    [Arguments("not-a-guid-but-long-enough-to-slice")]
+    public async Task Short_or_non_guid_id_reads_null_without_throwing(string sessionId) {
+        Tmp.CreateFile("session_index.jsonl", $$"""{"id":"{{Id}}","thread_name":"Any","updated_at":"2026-09-29T10:00:00Z"}""" + "\n");
+
+        await Assert.That(new CodexSessionIndexTitle(Tmp.Path, sessionId).Read()).IsNull();
+    }
+
+    /// <summary>A same-length rewrite with the original write time restored is invisible to the memo, so reading the
+    /// old value back proves the unchanged file was not parsed again; the append then proves a real change is.</summary>
+    [Test]
+    public async Task Unchanged_file_is_not_re_parsed() {
+        var path  = Tmp.CreateFile("session_index.jsonl", $$"""{"id":"{{Id}}","thread_name":"AAAA","updated_at":"2026-09-29T10:00:00Z"}""" + "\n");
+        var store = new CodexSessionIndexTitle(Tmp.Path, Id);
+
+        await Assert.That(store.Read()!.Title).IsEqualTo("AAAA");
+
+        var stamp = File.GetLastWriteTimeUtc(path);
+        File.WriteAllText(path, File.ReadAllText(path).Replace("AAAA", "BBBB"));
+        File.SetLastWriteTimeUtc(path, stamp);
+
+        await Assert.That(store.Read()!.Title).IsEqualTo("AAAA");
+
+        File.AppendAllText(path, $$"""{"id":"{{Id}}","thread_name":"Appended","updated_at":"2026-09-29T11:00:00Z"}""" + "\n");
+
+        await Assert.That(store.Read()!.Title).IsEqualTo("Appended");
+    }
 }

@@ -11,7 +11,7 @@ public class TranscriptTitleLinesTests {
     [Arguments("pi", """{"type":"session_info","name":""}""", false)]
     [Arguments("gemini", """{"$set":{"summary":"x"}}""", true)]
     [Arguments("opencode", """{"type":"session_title","title":"x","time":1}""", true)]
-    [Arguments("opencode", """{"type":"session_title","title":"New session - 2026-09-29T10:00:00Z","time":1}""", false)]
+    [Arguments("opencode", """{"type":"session_title","title":"New session - 2026-09-29T10:00:00.000Z","time":1}""", false)]
     [Arguments("codex", """{"type":"ai-title","aiTitle":"x"}""", false)]
     public async Task Detects_the_vendors_own_title_lines(string vendor, string line, bool expected) =>
         await Assert.That(TranscriptTitleLines.CarriesHarnessTitle(vendor, line)).IsEqualTo(expected);

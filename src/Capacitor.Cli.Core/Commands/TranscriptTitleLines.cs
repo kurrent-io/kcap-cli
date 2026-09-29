@@ -54,6 +54,6 @@ internal static partial class TranscriptTitleLines {
     }
 
     // OpenCode seeds every new session with this placeholder before the real title arrives.
-    [GeneratedRegex(@"^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")]
+    [GeneratedRegex(@"^New session - \d{4}-")]
     private static partial Regex OpenCodePlaceholderTitle();
 }
