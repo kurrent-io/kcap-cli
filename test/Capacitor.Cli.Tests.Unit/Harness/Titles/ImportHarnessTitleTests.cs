@@ -8,25 +8,72 @@ using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Titles;
 
+// Every test here spins a real WireMockServer and polls it on a real-time loop while a
+// FakeTimeProvider drives production backoff delays; three of these running concurrently
+// contend for the same process-wide thread pool and can starve each other's timers.
+[NotInParallel(nameof(ImportHarnessTitleTests))]
 public class ImportHarnessTitleTests {
     sealed class CollectingProgress : IProgress<ImportProgress> {
         public List<ImportProgress> Reported { get; } = [];
         public void Report(ImportProgress value) => Reported.Add(value);
     }
 
-    /// <summary>Drives a <see cref="FakeTimeProvider"/> forward on a real background timer instead of a
-    /// busy-spin loop. A tight <c>while (!task.IsCompleted) { time.Advance(...); await Task.Yield(); }</c>
-    /// can race a real in-flight HTTP call: the per-attempt timeout in
-    /// <c>HttpClientExtensions.SendWithRetryAsync</c> is built from the SAME provider, and a spin loop can
-    /// advance it past that timeout in real microseconds — long before a genuine (if merely slow-to-warm)
-    /// localhost round trip returns. A periodic real timer leaves the thread pool free to actually run that
-    /// I/O between ticks.</summary>
-    static IDisposable PumpFakeClock(FakeTimeProvider time) =>
-        new Timer(_ => time.Advance(TimeSpan.FromSeconds(1)), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(20));
+    // Generous, not tuned to a fast machine: the point of this bound is only to fail loudly instead
+    // of hanging if a request never lands at all, never to race a loaded CI/dev box.
+    static readonly TimeSpan RequestWait = TimeSpan.FromSeconds(60);
 
-    /// <summary>A freshly started WireMock server's very first request can be slow relative to the
-    /// per-attempt timeout the pumped clock above races against; paying that cost outside the timed
-    /// run keeps it off the fake clock.</summary>
+    // One nudge, not the whole backoff in a single jump — see AdvanceUntilRequestAsync.
+    static readonly TimeSpan ClockStep = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>Blocks on REAL wall-clock time (never the <see cref="FakeTimeProvider"/> under test) until
+    /// WireMock has logged <paramref name="expectedCount"/> requests to <paramref name="path"/>, or throws.
+    /// Polling real time rather than advancing the fake clock speculatively is what makes the first wait
+    /// (for the request an attempt already in flight will produce with no clock help at all) deterministic:
+    /// nothing here can cut off a real in-flight request that is merely slow.</summary>
+    static async Task WaitForRequestCountAsync(WireMockServer server, string path, int expectedCount, TimeSpan realTimeout) {
+        var deadline = DateTime.UtcNow + realTimeout;
+
+        while (server.LogEntries.Count(e => e.RequestMessage.Path == path) < expectedCount) {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"Timed out waiting for {expectedCount} request(s) to {path}.");
+
+            await Task.Delay(5);
+        }
+    }
+
+    /// <summary>Advances the fake clock in small nudges, real-sleeping between them, until the next
+    /// attempt's request lands — rather than jumping the FULL backoff in one <c>Advance</c> call.
+    ///
+    /// <para>A single big jump raced <c>ImportHarnessTitle.PostAsync</c>'s own continuation: the request
+    /// landing at the server (observed here) and that code actually reaching its
+    /// <c>Task.Delay(delay, time, ct)</c> call are on different threads, so a big <c>Advance</c> issued the
+    /// instant the request is observed can land BEFORE that delay's timer is constructed. The timer's due
+    /// time is then <c>(already-advanced now) + delay</c> — a full backoff further out than intended — and
+    /// nothing ever advances the clock that far again, hanging for the rest of this method's real-time
+    /// budget. Repeated small nudges close that window: whichever nudge lands after the timer exists is
+    /// enough to cross its due time, however many nudges that takes.</para></summary>
+    static async Task AdvanceUntilRequestAsync(WireMockServer server, string path, FakeTimeProvider time, int expectedCount) {
+        var deadline = DateTime.UtcNow + RequestWait;
+
+        while (server.LogEntries.Count(e => e.RequestMessage.Path == path) < expectedCount) {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"Timed out waiting for {expectedCount} request(s) to {path}.");
+
+            await Task.Delay(5);
+            time.Advance(ClockStep);
+        }
+    }
+
+    /// <summary>Drives the fake clock through exactly <paramref name="totalAttempts"/> attempts, one
+    /// request at a time.</summary>
+    static async Task DriveRetriesAsync(WireMockServer server, string path, FakeTimeProvider time, int totalAttempts) {
+        await WaitForRequestCountAsync(server, path, 1, RequestWait);
+
+        for (var i = 1; i < totalAttempts; i++) await AdvanceUntilRequestAsync(server, path, time, i + 1);
+    }
+
+    /// <summary>A freshly started WireMock server's very first request can be slow; paying that cost
+    /// before the timed run keeps <see cref="WaitForRequestCountAsync"/>'s bound tight.</summary>
     static async Task WarmUpAsync(WireMockServer server, HttpClient client) {
         try { using var _ = await client.GetAsync($"{server.Url}/__warmup"); } catch { /* status irrelevant */ }
     }
@@ -43,7 +90,8 @@ public class ImportHarnessTitleTests {
         await WarmUpAsync(server, client);
 
         var task = ImportHarnessTitle.PostAsync(client, time, server.Url!, "s", new("T", HarnessTitleKind.Auto, null), progress: null, default);
-        using (PumpFakeClock(time)) await task;
+        await DriveRetriesAsync(server, "/hooks/harness-title", time, totalAttempts: 2);
+        await task;
 
         await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/harness-title")).IsEqualTo(2);
     }
@@ -59,7 +107,8 @@ public class ImportHarnessTitleTests {
         var progress = new CollectingProgress();
 
         var task = ImportHarnessTitle.PostAsync(client, time, server.Url!, "s", new("T", HarnessTitleKind.Auto, null), progress, default);
-        using (PumpFakeClock(time)) await task;
+        await DriveRetriesAsync(server, "/hooks/harness-title", time, totalAttempts: 8);
+        await task;
 
         await Assert.That(server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/harness-title")).IsEqualTo(8);
         await Assert.That(progress.Reported.OfType<ImportTitleNotRecorded>().Count()).IsEqualTo(1);
