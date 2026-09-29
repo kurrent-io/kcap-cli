@@ -185,7 +185,7 @@ public class WatchHarnessTitleTests {
 
     static WatchState AfterLine(string vendor, string line, bool? serverRecordsHarnessTitles) {
         var state = ReadyForLlmTitle(new WatchState { ServerRecordsHarnessTitles = serverRecordsHarnessTitles });
-        WatchCommand.ObserveTitleLine(state, vendor, line);
+        WatchCommand.ObserveTitleLine(state, vendor, "s", line);
         return state;
     }
 

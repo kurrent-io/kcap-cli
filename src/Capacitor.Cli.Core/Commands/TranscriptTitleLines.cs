@@ -9,8 +9,10 @@ namespace Capacitor.Cli.Core.Commands;
 /// transcript rather than in a separate store the watcher polls, and which servers record it. Each vendor's reader
 /// recognizes only what the server's own extractors record.</summary>
 internal static class TranscriptTitleLines {
-    public static TranscriptTitleLineKind Classify(string vendor, string line) => vendor switch {
-        "claude" => ClaudeTitleLine.CarriesTitle(line, out var isRename)
+    /// <param name="sessionId">The watched session: a Claude title line copied in from another session (a resume carries
+    /// its history) is not recorded for this one.</param>
+    public static TranscriptTitleLineKind Classify(string vendor, string sessionId, string line) => vendor switch {
+        "claude" => ClaudeTitleLine.CarriesTitle(line, sessionId, out var isRename)
             ? isRename ? TranscriptTitleLineKind.RecordedWithHarnessTitles : TranscriptTitleLineKind.RecordedByEveryServer
             : TranscriptTitleLineKind.None,
         "pi"       => Newer(PiTitleLine.CarriesTitle(line)),

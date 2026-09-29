@@ -2233,7 +2233,7 @@ partial class WatchCommand(
                         }
                     }
 
-                    if (!state.HarnessTitleSeen) ObserveTitleLine(state, vendor, line);
+                    if (!state.HarnessTitleSeen) ObserveTitleLine(state, vendor, sessionId, line);
                 }
             }
 
@@ -3505,8 +3505,8 @@ partial class WatchCommand(
      && agentId is null
      && !(state.InlineHarnessTitleSeen && state.ServerRecordsHarnessTitles == true);
 
-    internal static void ObserveTitleLine(WatchState state, string vendor, string line) {
-        switch (TranscriptTitleLines.Classify(vendor, line)) {
+    internal static void ObserveTitleLine(WatchState state, string vendor, string sessionId, string line) {
+        switch (TranscriptTitleLines.Classify(vendor, sessionId, line)) {
             case TranscriptTitleLineKind.RecordedByEveryServer:     state.HarnessTitleSeen       = true; break;
             case TranscriptTitleLineKind.RecordedWithHarnessTitles: state.InlineHarnessTitleSeen = true; break;
         }
