@@ -988,6 +988,12 @@ partial class WatchCommand(
                 await ScanAntigravitySubagentLinks(sessionId, finalDrained, state.PostedSubagentLinks, CancellationToken.None);
             }
 
+            // A store the transcript does not carry can change after the loop's last read; this is its last chance.
+            if (titleStore is not null) {
+                await PostHarnessTitleAsync(titleStore, sessionId, state, CancellationToken.None, TouchHeartbeat,
+                    FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted));
+            }
+
             // A PR is usually opened in the session's last turn, after the previous 60s probe.
             await LinkSecondaryPullRequestsAsync(state, sessionId,
                 FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted), CancellationToken.None, TouchHeartbeat);
@@ -3507,6 +3513,8 @@ partial class WatchCommand(
             Action<string>                                                            log,
             CancellationToken                                                         ct
         ) {
+        if (budget <= TimeSpan.Zero) return;
+
         StoreTitle? read;
         try {
             read = store.Read();
@@ -3543,7 +3551,8 @@ partial class WatchCommand(
         if (outcome is not HarnessTitleOutcome.Posted) log($"Harness title not recorded: {outcome}");
     }
 
-    Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct, Action beat) =>
+    Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct, Action beat,
+            TimeSpan? budget = null) =>
         PostHarnessTitleAsync(store, state,
             async (owed, budget, token) => {
                 // Client acquisition can refresh a credential over the network, so it spends the same budget.
@@ -3557,7 +3566,7 @@ partial class WatchCommand(
 
                 return await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, owed, token, remaining);
             },
-            SecondaryProbeBudget, time, beat, message => Log(time, message), ct);
+            budget ?? SecondaryProbeBudget, time, beat, message => Log(time, message), ct);
 
     async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
         try {

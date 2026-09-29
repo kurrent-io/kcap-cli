@@ -165,4 +165,19 @@ public class WatchHarnessTitleTests {
         await Assert.That(WatchCommand.ShouldGenerateLlmTitle(withName, agentId: null)).IsFalse();
         await Assert.That(WatchCommand.ShouldGenerateLlmTitle(without, agentId: null)).IsTrue();
     }
+
+    /// <summary>The shutdown read gets whatever is left of the kill grace; with none left it reads and sends nothing
+    /// rather than run past the kill.</summary>
+    [Test]
+    public async Task A_spent_budget_sends_nothing() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        var reads = 0;
+        var store = new FixedStore(() => { reads++; return Named; });
+
+        await Poll(store, StateFor(store), server, TimeProvider.System, TimeSpan.Zero);
+
+        await Assert.That(reads).IsEqualTo(0);
+        await Assert.That(Posts(server)).IsEqualTo(0);
+    }
 }
