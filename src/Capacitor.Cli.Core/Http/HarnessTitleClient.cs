@@ -8,9 +8,10 @@ namespace Capacitor.Cli.Core.Http;
 /// <summary>Posts a title read from a harness's own store. The server answers a session it cannot see yet with a
 /// coded 404; a bare 404 means an older server without the route, which still accepts <c>/hooks/set-title</c>.</summary>
 public static class HarnessTitleClient {
-    // The server clamps a harness title to 200; an older server stores whatever set-title sends, and 120 is the
-    // length every other set-title caller sends.
-    const int HarnessTitleMax = 200;
+    // The server normalises whitespace before clamping to 200, so a harness title is sent whole: cutting it here
+    // would make one rename arrive as a different value from each sender. The larger bound is a safety cap only.
+    // An older server stores whatever set-title sends, and 120 is what every other set-title caller sends.
+    const int HarnessTitleMax = 4096;
     const int SetTitleMax     = 120;
 
     /// <param name="timeout">The whole call's budget; the retry helper's default when null.</param>

@@ -3543,8 +3543,16 @@ partial class WatchCommand(
     Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct, Action beat) =>
         PostHarnessTitleAsync(store, state,
             async (owed, budget, token) => {
-                using var client = await http.ForBackgroundAsync(token);
-                return await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, owed, token, budget);
+                // Client acquisition can refresh a credential over the network, so it spends the same budget.
+                var       started  = time.GetTimestamp();
+                using var deadline = new CancellationTokenSource(budget, time);
+                using var linked   = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+                using var client   = await http.ForBackgroundAsync(linked.Token);
+
+                var remaining = budget - time.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero) return HarnessTitleOutcome.Failed;
+
+                return await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, owed, token, remaining);
             },
             SecondaryProbeBudget, time, beat, message => Log(time, message), ct);
 

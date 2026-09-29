@@ -168,16 +168,17 @@ public class HarnessTitleClientTests {
     }
 
     [Test]
-    public async Task Harness_title_body_is_clamped_to_200() {
+    public async Task Harness_title_body_is_sent_whole_for_the_server_to_normalise_and_clamp() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
+        var title = string.Join("  ", Enumerable.Repeat("word", 100));
 
         await HarnessTitleClient.PostAsync(client, TimeProvider.System, server.Url!, "abc",
-            new HarnessTitlePost(new string('k', 500), HarnessTitleKind.Rename, null), default);
+            new HarnessTitlePost(title, HarnessTitleKind.Rename, null), default);
 
         var body = JsonNode.Parse(server.LogEntries.Single().RequestMessage.Body!)!;
-        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo(new string('k', 200));
+        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo(title);
     }
 
     [Test]
