@@ -112,8 +112,12 @@ internal static partial class PiModelCatalogProbe {
     // a late failure is logged rather than left unobserved.
     static void DisposeWhenStarted(Task<IPiRpcProcess>? spawn, ILogger logger) =>
         spawn?.ContinueWith(async t => {
-            if (t.IsCompletedSuccessfully) await t.Result.DisposeAsync().ConfigureAwait(false);
-            else if (t.Exception is { } ex) LogCouldNotStart(logger, ex.GetBaseException());
+            try {
+                if (t.IsCompletedSuccessfully) await t.Result.DisposeAsync().ConfigureAwait(false);
+                else if (t.Exception is { } ex) LogCouldNotStart(logger, ex.GetBaseException());
+            } catch (Exception ex) {
+                LogFailed(logger, ex, "");
+            }
         }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
 
     static string Stderr(IPiRpcProcess process) =>
