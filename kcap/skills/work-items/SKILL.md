@@ -88,6 +88,10 @@ end twice is a no-op (`created: false`). It refuses text shorter than 12 or long
 500 characters and "none"-style phrases — do not declare that there is nothing left.
 Loose ends are the user's; they are never converted into work items by this tool.
 
+When you finish a listed or declared loose end, close it with `close_loose_end`, naming it by
+the `loose_end_id` that `get_next_work`'s evidence or `list_loose_ends` shows. A later sighting
+of the same work reopens it on its own; `reopen_loose_end` undoes a mistaken close.
+
 ## What to work on next
 
 When the user asks what to work on next, or you are about to propose new work, call
@@ -124,6 +128,9 @@ loose ends with `declare_loose_end` (one call per item, never "none"), then call
 | `get_session_work_items` | — | List what the current session is attached to. |
 | `get_next_work` | — | What the user should work on next, ranked, with because-clauses and evidence. `repo_hash` defaults to the current repository; `limit` defaults to 5 (max 20). |
 | `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `session_id` defaults to the current session. |
+| `list_loose_ends` | — | List loose ends with their `loose_end_id`: `status` open (default) or closed, `repo_hash` defaults to the current repository, `limit` 20 (max 50), `cursor` from `next_cursor`. |
+| `close_loose_end` | `loose_end_id` | Mark a finished loose end done. `session_id` defaults to the current session. |
+| `reopen_loose_end` | `loose_end_id` | Undo a close. |
 | `declare_work_breakdown` | `parent_id`, `part_ids` | Declare parent → parts. |
 | `retract_work_breakdown` | `parent_id`, `part_ids` | Detach parts from the parent. |
 | `declare_work_relation` | `from_id`, `to_id`, `relation_kind` (`blocks`\|`blocked_by`) | Declare a dependency. |

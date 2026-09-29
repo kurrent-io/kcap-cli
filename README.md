@@ -718,9 +718,9 @@ At SessionStart (Claude Code), `kcap` also injects a compact **index** of the me
 kcap mcp workitems
 ```
 
-Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, **declare that work item's structure** — its breakdown into parts and its blocks/blocked-by dependencies — read that structure back, and dismiss or restore next-work suggestions. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
+Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, **declare that work item's structure** — its breakdown into parts and its blocks/blocked-by dependencies — read that structure back, dismiss or restore next-work suggestions, and close or reopen loose ends. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
 
-It provides fourteen tools:
+It provides seventeen tools:
 
 - **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (a tracker key such as `"AI-1234"`, an issue number in the session's repository such as `"#123"`, a qualified `"owner/repo#123"`, or a GitHub issue URL), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
 - **`get_session_work_items`** — list the work items the current session is attached to.
@@ -736,6 +736,9 @@ It provides fourteen tools:
 - **`dismiss_next_work`** — record that the user turned down a presented next-work suggestion (`target_key`; `repo_hash` defaults to the repository the server runs in, same as `get_next_work`), so it stops being offered. Call it only after the user has said they won't do it; the response's `page_one` is what to offer next, rendered the same sanitised way as `get_next_work`'s rows, and a `not_presented` refusal surfaces as a tool error naming that code.
 - **`restore_next_work`** — undo a dismissal so the suggestion can be offered again (`repo_hash` defaults the same way); restoring something not dismissed succeeds and changes nothing.
 - **`list_dismissed_next_work`** — list the suggestions the user has dismissed, most recent first, with when and why each was dismissed, rendered the same sanitised way.
+- **`list_loose_ends`** — list the user's loose ends with the `loose_end_id` each close or reopen needs, open ones by default or `status: "closed"`, inside the same sanitised `<next-work-data>` block. `repo_hash` defaults to the repository the server runs in; `session_id` narrows to ends that session sighted; `limit` defaults to 20, max 50; pass the returned `next_cursor` back as `cursor` for the next page. `get_next_work` also names each loose end's `loose_end_id` in its evidence.
+- **`close_loose_end`** — mark a finished loose end done (`loose_end_id`), so it leaves the user's next work; a later sighting of the same work reopens it. `session_id` defaults to the session the server runs in and may be absent.
+- **`reopen_loose_end`** — undo a close (`loose_end_id`), putting the end back in the user's next work.
 
 `declare_work_item` / `get_session_work_items` / `declare_loose_end` / `detach_work_item` default `session_id` to the session the MCP server runs in (Claude Code's `CLAUDE_CODE_SESSION_ID`, else `KCAP_SESSION_ID` or Codex's `CODEX_THREAD_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
 

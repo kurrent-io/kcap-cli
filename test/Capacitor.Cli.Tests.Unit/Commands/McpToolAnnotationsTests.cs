@@ -66,6 +66,9 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-memory", "rescope_memory").Annotations.DestructiveHint).IsTrue();
         // The server keys a declaration on its normalized text, so re-declaring lands on the same end.
         await Assert.That(Tool("kcap-workitems", "declare_loose_end").Annotations.IdempotentHint).IsTrue();
+        await Assert.That(Tool("kcap-workitems", "list_loose_ends").Annotations).IsEqualTo(McpToolAnnotations.Read);
+        await Assert.That(Tool("kcap-workitems", "close_loose_end").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
+        await Assert.That(Tool("kcap-workitems", "reopen_loose_end").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
         // A status read acknowledges the pending messages it rendered, so it is not a pure read.
         await Assert.That(Tool("kcap-flows", "get_flow_status").Annotations.ReadOnlyHint).IsFalse();
         await Assert.That(Tool("kcap-flows", "get_review_flow_status").Annotations.ReadOnlyHint).IsFalse();

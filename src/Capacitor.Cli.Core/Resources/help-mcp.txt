@@ -157,6 +157,13 @@ mcp workitems:
                                 checkout).
       list_dismissed_next_work List the suggestions the user has dismissed,
                                 most recent first.
+      list_loose_ends          List the user's loose ends with their
+                                loose_end_id (status open or closed;
+                                repo_hash defaults to this checkout; pass
+                                next_cursor back as cursor).
+      close_loose_end          Mark a finished loose end done (loose_end_id);
+                                a later sighting reopens it.
+      reopen_loose_end         Undo a close (loose_end_id).
 
   Registered for every supported harness by `kcap setup` / `kcap plugin
   install` (Claude Code reads it from the plugin's `.mcp.json`).

@@ -114,7 +114,8 @@ public class McpWorkItemsServerTests {
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
             "merge_work_item", "detach_work_item",
-            "dismiss_next_work", "restore_next_work", "list_dismissed_next_work"
+            "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
+            "list_loose_ends", "close_loose_end", "reopen_loose_end"
         });
     }
 
@@ -175,6 +176,84 @@ public class McpWorkItemsServerTests {
         await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"   "}""")))
             .Throws<ArgumentException>()
             .WithMessageContaining("'text' must not be blank");
+    }
+
+    [Test]
+    public async Task Close_body_carries_the_id_and_the_current_session() {
+        var body = McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"loose_end_id":"le1","session_id":"s1"}"""), null);
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"loose_end_id":"le1","session_id":"s1"}""");
+    }
+
+    [Test]
+    public async Task Close_body_defaults_the_session_to_the_harness_session() {
+        var body = McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"loose_end_id":"le1"}"""), "9dc27753-7645-4e46-91ec-c2d69973c152");
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"loose_end_id":"le1","session_id":"9dc2775376454e4691ecc2d69973c152"}""");
+    }
+
+    [Test]
+    public async Task Close_body_outside_any_session_carries_only_the_id() {
+        var body = McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"loose_end_id":"le1"}"""), null);
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"loose_end_id":"le1"}""");
+    }
+
+    [Test]
+    public async Task Reopen_body_carries_only_the_id() {
+        var body = McpWorkItemsServer.BuildReopenLooseEndBody(Args("""{"loose_end_id":"le1","session_id":"s1"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"loose_end_id":"le1"}""");
+    }
+
+    [Test]
+    public async Task Close_and_reopen_bodies_require_the_id() {
+        await Assert.That(() => McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"session_id":"s1"}"""), null))
+            .Throws<ArgumentException>().WithMessageContaining("'loose_end_id' is required");
+        await Assert.That(() => McpWorkItemsServer.BuildReopenLooseEndBody(Args("{}")))
+            .Throws<ArgumentException>().WithMessageContaining("'loose_end_id' is required");
+    }
+
+    [Test]
+    public async Task Close_body_encodes_an_id_that_needs_escaping() {
+        var body = McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"loose_end_id":"a\"b","session_id":"s1"}"""), null);
+
+        await Assert.That(body["loose_end_id"]!.GetValue<string>()).IsEqualTo("a\"b");
+    }
+
+    [Test]
+    public async Task List_url_carries_status_repo_session_limit_and_cursor() {
+        var url = McpWorkItemsServer.BuildLooseEndsUrl("https://x", Args("""{"status":"closed","session_id":"s1","limit":5,"cursor":"abc"}"""), "r1");
+
+        await Assert.That(url).IsEqualTo("https://x/api/loose-ends?status=closed&repo_hash=r1&session_id=s1&limit=5&cursor=abc");
+    }
+
+    [Test]
+    public async Task List_url_escapes_values_and_omits_what_is_not_known() {
+        await Assert.That(McpWorkItemsServer.BuildLooseEndsUrl("https://x", null, null)).IsEqualTo("https://x/api/loose-ends");
+        await Assert.That(McpWorkItemsServer.BuildLooseEndsUrl("https://x", Args("""{"cursor":"a+b/c="}"""), "r/1"))
+            .IsEqualTo("https://x/api/loose-ends?repo_hash=r%2F1&cursor=a%2Bb%2Fc%3D");
+    }
+
+    [Test]
+    public async Task List_url_rejects_a_non_integer_limit() {
+        await Assert.That(() => McpWorkItemsServer.BuildLooseEndsUrl("https://x", Args("""{"limit":"5"}"""), null))
+            .Throws<ArgumentException>().WithMessageContaining("limit");
+    }
+
+    [Test]
+    public async Task Close_and_reopen_require_the_id_and_list_requires_nothing() {
+        var byName = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
+
+        await Assert.That(byName["list_loose_ends"].InputSchema.Required).IsEmpty();
+        await Assert.That(byName["close_loose_end"].InputSchema.Required).IsEquivalentTo(new[] { "loose_end_id" });
+        await Assert.That(byName["reopen_loose_end"].InputSchema.Required).IsEquivalentTo(new[] { "loose_end_id" });
+    }
+
+    [Test]
+    public async Task Instructions_name_the_close_and_reopen_tools() {
+        await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("close it with close_loose_end");
+        await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("reopen_loose_end undoes a mistaken close");
     }
 
     /// <summary>Pins that the loose end takes its session from McpSessionId like every other
@@ -564,6 +643,125 @@ public class McpWorkItemsServerTests {
         await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
         await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends/declare");
         await Assert.That(h.Body).IsEqualTo("""{"session_id":"s1","text":"Add the retry test"}""");
+    }
+
+    [Test]
+    public async Task Dispatch_list_loose_ends_carries_the_cursor_for_the_next_page() {
+        var h = await DispatchAsync("list_loose_ends", """{"cursor":"c2"}""");
+
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Get);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends?cursor=c2");
+    }
+
+    /// <summary>Answers 404 with <paramref name="code"/> to any close that names a session, and a
+    /// recorded close to one that does not.</summary>
+    sealed class SessionRefusingHandler(string code) : HttpMessageHandler {
+        public List<string> Bodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            Bodies.Add(body);
+
+            return body.Contains("session_id", StringComparison.Ordinal)
+                ? new HttpResponseMessage(System.Net.HttpStatusCode.NotFound) { Content = new StringContent($$"""{"code":"{{code}}","message":"x"}""") }
+                : new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("""{"loose_end_id":"le1","loose_end_ids":["le1"],"state":"closed"}""") };
+        }
+    }
+
+    async Task<(SessionRefusingHandler Handler, string Response)> DispatchCloseAsync(string argsJson, string refusal = "session_not_found") {
+        var handler = new SessionRefusingHandler(refusal);
+        using var client = new HttpClient(handler);
+        var request = new JsonObject {
+            ["params"] = new JsonObject {
+                ["name"]      = "close_loose_end",
+                ["arguments"] = JsonNode.Parse(argsJson)
+            }
+        };
+
+        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", NoRepo);
+
+        return (handler, response);
+    }
+
+    [Test, NotInParallel]
+    public async Task Close_defaults_the_session_to_the_harness_session() {
+        using var session = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "9dc27753-7645-4e46-91ec-c2d69973c152");
+        using var nested  = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+
+        var (h, _) = await DispatchCloseAsync("""{"loose_end_id":"le1"}""");
+
+        await Assert.That(h.Bodies[0]).IsEqualTo("""{"loose_end_id":"le1","session_id":"9dc2775376454e4691ecc2d69973c152"}""");
+    }
+
+    [Test, NotInParallel]
+    public async Task Close_retries_without_a_defaulted_session_the_server_cannot_attribute() {
+        using var session = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "9dc27753-7645-4e46-91ec-c2d69973c152");
+        using var nested  = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+
+        var (h, response) = await DispatchCloseAsync("""{"loose_end_id":"le1"}""");
+
+        await Assert.That(h.Bodies).IsEquivalentTo(new[] {
+            """{"loose_end_id":"le1","session_id":"9dc2775376454e4691ecc2d69973c152"}""",
+            """{"loose_end_id":"le1"}""",
+        });
+        await Assert.That(response).DoesNotContain("\"isError\":true");
+        await Assert.That(response).Contains("Closed loose end le1.");
+    }
+
+    [Test, NotInParallel]
+    public async Task Close_does_not_retry_a_defaulted_session_on_any_other_refusal() {
+        using var session = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "9dc27753-7645-4e46-91ec-c2d69973c152");
+        using var nested  = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+
+        var (h, response) = await DispatchCloseAsync("""{"loose_end_id":"le1"}""", refusal: "loose_end_not_found");
+
+        await Assert.That(h.Bodies).Count().IsEqualTo(1);
+        await Assert.That(response).Contains("\"isError\":true");
+    }
+
+    [Test]
+    public async Task Close_does_not_retry_an_explicit_session_the_server_cannot_attribute() {
+        var (h, response) = await DispatchCloseAsync("""{"loose_end_id":"le1","session_id":"s1"}""");
+
+        await Assert.That(h.Bodies).IsEquivalentTo(new[] { """{"loose_end_id":"le1","session_id":"s1"}""" });
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains("session_not_found");
+    }
+
+    async Task<string> DispatchWithStatusAsync(string toolName, string argsJson, System.Net.HttpStatusCode status, string body) {
+        using var client = new HttpClient(new FixedStatusHandler(status, body));
+        var request = new JsonObject {
+            ["params"] = new JsonObject {
+                ["name"]      = toolName,
+                ["arguments"] = JsonNode.Parse(argsJson)
+            }
+        };
+
+        return await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", NoRepo);
+    }
+
+    [Test]
+    [Arguments("close_loose_end", """{"code":"next_work_unavailable","message":"x"}""")]
+    [Arguments("reopen_loose_end", """{"code":"next_work_unavailable","message":"x"}""")]
+    [Arguments("close_loose_end", "")]
+    [Arguments("reopen_loose_end", "")]
+    [Arguments("reopen_loose_end", "<html>Not Found</html>")]
+    [Arguments("list_loose_ends", "")]
+    public async Task An_unavailable_or_routeless_ledger_reads_as_next_work_unavailable(string toolName, string body) {
+        var response = await DispatchWithStatusAsync(toolName, """{"loose_end_id":"le1","session_id":"s1"}""", System.Net.HttpStatusCode.NotFound, body);
+
+        var result = JsonNode.Parse(response)!["result"]!;
+        await Assert.That(result["content"]![0]!["text"]!.GetValue<string>()).IsEqualTo(McpWorkItemsServer.NextWorkUnavailableMessage);
+        await Assert.That(result["isError"]?.GetValue<bool>() is true).IsFalse();
+    }
+
+    [Test]
+    public async Task A_coded_not_found_on_close_stays_an_error() {
+        var response = await DispatchWithStatusAsync("close_loose_end", """{"loose_end_id":"le1","session_id":"s1"}""",
+            System.Net.HttpStatusCode.NotFound, """{"code":"loose_end_not_found","message":"x"}""");
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains("loose_end_not_found");
     }
 
     [Test]
