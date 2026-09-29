@@ -353,4 +353,16 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("coldStarts.delete(id)");
         await Assert.That(content).Contains("lastTitle.delete(id)");
     }
+
+    /// <summary>The dedupe entry is recorded only after the append succeeds: a write that throws (swallowed by the
+    /// handler's catch) must leave the title eligible for the next <c>session.updated</c>.</summary>
+    [Test]
+    public async Task Plugin_records_a_title_as_written_only_after_the_append() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch.IndexOf("lastTitle.set(id, title)", StringComparison.Ordinal))
+            .IsGreaterThan(branch.IndexOf("appendFileSync", StringComparison.Ordinal));
+    }
 }

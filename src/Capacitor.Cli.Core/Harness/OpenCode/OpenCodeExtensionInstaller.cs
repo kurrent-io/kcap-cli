@@ -455,12 +455,13 @@ public static class OpenCodeExtensionInstaller {
                   if (id && info?.parentID) { children.add(id); return }
                   if (!id || children.has(id) || typeof title !== "string" || /^New session - \d{4}-/.test(title)) return
                   if (lastTitle.get(id) === title) return
-                  lastTitle.set(id, title)
                   mkdirSync(dir, { recursive: true })
                   // time only when OpenCode supplied one: an invented time would outrank a later Regenerate.
                   const line: any = { type: "session_title", title }
                   if (typeof info?.time?.updated === "number") line.time = info.time.updated
                   appendFileSync(file(id), JSON.stringify(line) + "\n")
+                  // Only after the append succeeds, so a failed write is retried by the next update.
+                  lastTitle.set(id, title)
                   return
                 }
                 if (type === "session.deleted") {
