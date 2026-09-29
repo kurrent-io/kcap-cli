@@ -5,17 +5,17 @@ description: >-
   sessions. Triggers include: "read a previous session", "get session history",
   "recap session", "what happened in session X", "load context from a previous
   session", "continue from session", "what did we do last time", "catch me up
-  on session X", "summarize session", "show me what happened", "what have we
-  been working on", "recently we implemented", "what was done in this repo",
-  "recent changes", "recent sessions", or providing a session ID to review.
+  on session X", "what have we been working on", "recently we implemented",
+  "what was done in this repo", "recent changes", "recent sessions", or
+  providing a session ID to review.
+  Also covers work over a period: "what was I working on in the last two
+  weeks", "what did the team do yesterday", "who worked on this last week".
   Also covers search/recall asks: "find the session where we…", "which session
-  discussed X", "did we ever debug Y", "look up the session about Z", "recall
-  the session that…", "search past sessions for…".
+  discussed X", "did we ever debug Y", "search past sessions for…".
   Also covers declared plans: "continue the plan", "resume the plan", "what's
   left on the plan", "is the plan finished", "unfinished plans", "what was the
   last session working through".
-  Provides instructions for retrieving and searching session history via the
-  kcap CLI and the kcap-sessions MCP tools.
+  Uses the kcap CLI and the kcap-sessions MCP tools.
 ---
 
 > **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`, `list_repo_plans`, `get_declared_plans`) for retrieving past sessions and the plans they declared. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
@@ -70,6 +70,22 @@ Returns AI-generated summaries from the most recent ended sessions in the curren
 - Starting a new session and want to understand recent activity
 
 **Progressive disclosure:** Start with `--repo` for the overview. If a specific session's summary is relevant, drill into it with `kcap recap --full <sessionId>` to get the complete transcript. This avoids loading full transcripts for all sessions into context.
+
+## Work over a period
+
+For "what was I working on in the last two weeks" or "what did the team do yesterday", list the sessions worked on in that period instead of reading the most recent recaps:
+
+```bash
+# Your sessions on this repository, last 14 days
+kcap sessions --since 14d --mine
+
+# Everyone you can see, every repository, one day
+kcap sessions --repo all --since 2026-09-27 --until 2026-09-28
+```
+
+`--since` and `--until` each take an instant ending in `Z` or an offset, a date (the start of that day in this machine's time zone) or a duration back from now (`36h`, `14d`, `2w`). A session is listed when its span from start to end touches the period, so one that ran across it lists even if it was idle inside it. When the output ends with a `More:` line, run that command for the next page.
+
+**MCP agents:** call `list_repo_sessions` with `since` and/or `until`, `owner: "me"` for your own work, and `repo: "all"` to cover every repository. While the response carries `next_cursor`, call again with `cursor` and the same `repo`, and nothing else. Each row gives the title, owner, repository and times; read what a session did with `get_session_summary`.
 
 ## Default Output
 
@@ -155,6 +171,7 @@ The `KCAP_URL` environment variable overrides the default server URL (`http://lo
 ## Tips
 
 - **For "what have we been working on?"** — use `--repo` first, then drill into specific sessions.
+- **For "what did I, or the team, work on in a period?"** — use `kcap sessions --since … [--until …]`, adding `--repo all` for every repository, then drill into a session with `kcap recap <sessionId>`.
 - Start with the default summary + turn outline. Drill into a specific turn with `--get-turn <N>` before reaching for `--full`.
 - When continuing work from a previous session, use `--chain` to get summaries across continuations.
 - Summarize key decisions and changes for the user rather than echoing the full recap output verbatim.
