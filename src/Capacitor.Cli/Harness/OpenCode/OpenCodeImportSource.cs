@@ -3,13 +3,13 @@ using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.Titles;
+using Capacitor.Models.Transcripts.Harness.OpenCode;
 
 namespace Capacitor.Cli.Harness.OpenCode;
 
@@ -21,7 +21,7 @@ namespace Capacitor.Cli.Harness.OpenCode;
 /// server exposes no ended signal; repair replays above the server HWM (idempotent by
 /// prt_ id). See docs/superpowers/specs/2026-06-26-opencode-import-design.md.
 /// </summary>
-internal sealed partial class OpenCodeImportSource : IImportSource {
+internal sealed class OpenCodeImportSource : IImportSource {
     readonly string               _dbPath;
     readonly OpenCodeImportLedger _ledger;
     readonly object               _ledgerLock = new(); // routed imports may run concurrently
@@ -256,7 +256,7 @@ internal sealed partial class OpenCodeImportSource : IImportSource {
         //    new session carries nothing worth recording. A cancellation arriving DURING this
         //    call (rather than one already captured from step 3) is deferred the same way: the
         //    uncancellable re-close below must still run, and `ct` is rechecked after it.
-        if (cancellation is null && !string.IsNullOrWhiteSpace(title) && !PlaceholderTitle().IsMatch(title!)) {
+        if (cancellation is null && !string.IsNullOrWhiteSpace(title) && !OpenCodeTitleLine.IsPlaceholder(title!)) {
             try {
                 await ImportHarnessTitle.PostAsync(
                     ctx.HttpClient, _time, ctx.BaseUrl, c.SessionId,
@@ -510,7 +510,4 @@ internal sealed partial class OpenCodeImportSource : IImportSource {
             throw; // don't mask cancellation as a hook failure
         } catch { return false; }
     }
-
-    [GeneratedRegex(@"^New session - \d{4}-")]
-    private static partial Regex PlaceholderTitle();
 }
