@@ -3557,10 +3557,10 @@ partial class WatchCommand(
         // spends the same budget as the post. One that outlasts the budget is left running and picked up by the next
         // poll, so a stuck store never has more than one read in flight (the readers are not safe to run concurrently).
         var started = time.GetTimestamp();
-        var reading = state.HarnessTitleReadInFlight ??= StartRead(store);
+        var reading = state.HarnessTitleReadInFlight ??= StartRead(store, time);
         StoreTitle? read;
         try {
-            read = await reading.WaitAsync(budget, time, ct);
+            read = await reading.Reading.WaitAsync(budget, time, ct);
         } catch (TimeoutException) {
             log("Harness title read did not finish within its budget");
             return;
@@ -3574,8 +3574,10 @@ partial class WatchCommand(
 
         state.HarnessTitleReadInFlight = null;
 
+        // Timed by the read's start, not its finish: a read carried over from an earlier poll must not date a later
+        // change after something that happened while it ran.
         var now = time.GetUtcNow();
-        if (state.TitleTracker!.Observe(read, now) is not { } owed) return;
+        if (state.TitleTracker!.Observe(read, reading.StartedAt) is not { } owed) return;
 
         if (ReferenceEquals(owed, state.LastHarnessTitleAttempted) && now - state.LastHarnessTitlePostAttempt < HarnessTitleRetryGap) return;
 
@@ -3606,11 +3608,12 @@ partial class WatchCommand(
     }
 
     // Observed from the start: a read no poll ever awaits again must not surface as an unobserved task exception.
-    static Task<StoreTitle?> StartRead(IHarnessTitleStore store) {
-        var reading = Task.Run(store.Read, CancellationToken.None);
+    static HarnessTitleRead StartRead(IHarnessTitleStore store, TimeProvider time) {
+        var startedAt = time.GetUtcNow();
+        var reading   = Task.Run(store.Read, CancellationToken.None);
         reading.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        return reading;
+        return new HarnessTitleRead(reading, startedAt);
     }
 
     Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct, Action beat,

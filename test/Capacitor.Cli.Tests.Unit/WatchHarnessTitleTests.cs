@@ -311,11 +311,11 @@ public class WatchHarnessTitleTests {
         try {
             await Poll();
             await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
-            stuck = state.HarnessTitleReadInFlight!;
+            stuck = state.HarnessTitleReadInFlight!.Reading;
             await Poll();
 
             await Assert.That(stuck.IsCompleted).IsFalse();
-            await Assert.That(ReferenceEquals(state.HarnessTitleReadInFlight, stuck)).IsTrue();
+            await Assert.That(ReferenceEquals(state.HarnessTitleReadInFlight?.Reading, stuck)).IsTrue();
             await Assert.That(reads).IsEqualTo(1);
             await Assert.That(posts).IsEqualTo(0);
         } finally {
@@ -333,7 +333,9 @@ public class WatchHarnessTitleTests {
     }
 
     /// <summary>A read that timed out, then finished with A after the harness had moved on to B: the next poll (at
-    /// shutdown, the last one) must not settle for the stale A, but read the store again and send B.</summary>
+    /// shutdown, the last one) must not settle for the stale A, but read the store again and send B. B is timed by
+    /// the start of the read that last showed A — not by the poll that took that read up — so a Regenerate made in
+    /// between still outranks it.</summary>
     [Test]
     public async Task A_finished_stale_read_is_followed_by_a_fresh_one() {
         using var release = new ManualResetEventSlim();
@@ -345,22 +347,32 @@ public class WatchHarnessTitleTests {
             return current;
         });
         var state = StateFor(store);
-        var sent  = new List<string>();
+        var sent  = new List<HarnessTitlePost>();
+        var time  = new FakeTimeProvider(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero));
+        var t1    = time.GetUtcNow();
 
         Task Poll() => WatchCommand.PostHarnessTitleAsync(store, state,
-            (p, _, _) => { sent.Add(p.Title); return Task.FromResult(HarnessTitleOutcome.Posted); },
-            TimeSpan.FromSeconds(1), TimeProvider.System, () => { }, _ => { }, default);
+            (p, _, _) => { sent.Add(p); return Task.FromResult(HarnessTitleOutcome.Posted); },
+            TimeSpan.FromSeconds(1), time, () => { }, _ => { }, default);
 
-        await Poll();
+        var first = Poll();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        var stuck = state.HarnessTitleReadInFlight!;
+        var stuck = state.HarnessTitleReadInFlight!.Reading;
+        time.Advance(TimeSpan.FromSeconds(2)); // the first poll's budget runs out with the read still stuck
+        await first.WaitAsync(TimeSpan.FromSeconds(30));
+
         release.Set();
         await stuck.WaitAsync(TimeSpan.FromSeconds(30));
         current = Named with { Title = "B" };
+        time.Advance(TimeSpan.FromMinutes(1));
+        var regenerateAt = time.GetUtcNow();
+        time.Advance(TimeSpan.FromMinutes(1));
 
         await Poll();
 
         await Assert.That(reads).IsEqualTo(2);
-        await Assert.That(sent.Last()).IsEqualTo("B");
+        await Assert.That(sent.Last().Title).IsEqualTo("B");
+        await Assert.That(sent.Last().ChangedAt).IsEqualTo(t1);
+        await Assert.That(sent.Last().ChangedAt!.Value).IsLessThan(regenerateAt);
     }
 }

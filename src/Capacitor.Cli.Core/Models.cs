@@ -166,7 +166,7 @@ class WatchState {
     public HarnessTitlePost?    LastHarnessTitleAttempted   { get; set; }
     public DateTimeOffset       LastHarnessTitlePostAttempt { get; set; }
     // A store read that outlasted its poll's budget; the next poll waits on it rather than start another.
-    public Task<StoreTitle?>?   HarnessTitleReadInFlight    { get; set; }
+    public HarnessTitleRead?    HarnessTitleReadInFlight    { get; set; }
 
     // LLM titling stops for good once a harness title is known to be recorded, since it always wins on the server:
     // one the server took through /hooks/harness-title, or a transcript line every server records. A line only a
