@@ -245,6 +245,20 @@ public class PiReviewerLaunchTests {
 
     // ── launch order, readiness and the pre-registration verdict ──
 
+    /// <summary>The reviewer runs inside the repository under review, so a relative PATH entry would let a
+    /// file there be run as the kcap or git it spawns.</summary>
+    [Test]
+    public async Task The_reviewer_path_keeps_only_absolute_entries() {
+        var sep = Path.PathSeparator;
+        var abs = Path.GetFullPath("/usr/bin");
+
+        await Assert.That(PiLaunchEnvironment.AbsoluteEntries($".{sep}{abs}{sep}bin{sep}{sep}./tools"))
+            .IsEqualTo(abs);
+
+        var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(isReviewFlow: true), Paths, Tools);
+        await Assert.That(psi.Environment["PATH"]!.Split(sep).All(Path.IsPathFullyQualified)).IsTrue();
+    }
+
     // ── borrowed review: a daemon-owned snapshot, never the live checkout ──
 
     [Test]
