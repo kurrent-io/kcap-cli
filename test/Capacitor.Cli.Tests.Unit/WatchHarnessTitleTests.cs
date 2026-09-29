@@ -4,6 +4,7 @@ using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -111,6 +112,32 @@ public class WatchHarnessTitleTests {
         await Poll(store, StateFor(store), server, TimeProvider.System);
 
         await Assert.That(Posts(server)).IsEqualTo(0);
+    }
+
+    /// <summary>B's post fails, so it may have committed; when the store returns to the acknowledged A, A is sent
+    /// again rather than assumed to be what the server still holds.</summary>
+    [Test]
+    public async Task A_return_to_an_acknowledged_title_after_a_failed_post_is_sent() {
+        var current = Named;
+        var store   = new FixedStore(() => current);
+        var state   = StateFor(store);
+        var time    = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var sent    = new List<string>();
+        var answers = new Queue<HarnessTitleOutcome>([HarnessTitleOutcome.Posted, HarnessTitleOutcome.Failed, HarnessTitleOutcome.Posted]);
+
+        Task Poll() => WatchCommand.PostHarnessTitleAsync(store, state,
+            (post, _, _) => { sent.Add(post.Title); return Task.FromResult(answers.Dequeue()); },
+            TimeSpan.FromSeconds(10), time, () => { }, _ => { }, default);
+
+        await Poll();
+        current = Named with { Title = "B" };
+        time.Advance(TimeSpan.FromSeconds(1));
+        await Poll();
+        current = Named;
+        time.Advance(TimeSpan.FromSeconds(1));
+        await Poll();
+
+        await Assert.That(sent).IsEquivalentTo(["Store name", "B", "Store name"], CollectionOrdering.Matching);
     }
 
     static WatchState ReadyForLlmTitle(WatchState state) {

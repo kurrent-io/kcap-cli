@@ -309,6 +309,19 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("/^New session - \\d{4}-/");
     }
 
+    /// <summary>The title line carries <c>time</c> only when OpenCode supplied a numeric <c>info.time.updated</c>;
+    /// otherwise the field is omitted and the server records the rename untimed, never at a clock reading the
+    /// plugin invented.</summary>
+    [Test]
+    public async Task Plugin_emits_time_only_when_opencode_supplied_it() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch).Contains("if (typeof info?.time?.updated === \"number\") line.time = info.time.updated");
+        await Assert.That(branch).DoesNotContain("Date.now()");
+    }
+
     /// <summary>
     /// A subagent session carries <c>info.parentID</c>; one not yet classified must be classified here rather than
     /// get a title line appended to a top-level <c>&lt;dir&gt;/&lt;childId&gt;.jsonl</c> of its own.

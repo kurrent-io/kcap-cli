@@ -3530,13 +3530,16 @@ partial class WatchCommand(
         try {
             outcome = await post(owed, budget, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            state.TitleTracker.OutcomeUnknown();
             throw;
         } catch (Exception ex) {
+            state.TitleTracker.OutcomeUnknown();
             log($"Harness title post failed: {ex.Message}");
             return;
         }
 
         if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.Refused) state.TitleTracker.Settled(owed);
+        else if (outcome is HarnessTitleOutcome.Failed) state.TitleTracker.OutcomeUnknown();
         if (outcome is not HarnessTitleOutcome.Posted) log($"Harness title not recorded: {outcome}");
     }
 

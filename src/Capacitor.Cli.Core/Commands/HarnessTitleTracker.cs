@@ -43,5 +43,9 @@ internal sealed class HarnessTitleTracker(bool recordsChangeTime) {
         _pending = null;
     }
 
+    /// <summary>A post whose outcome is unknown (a transport fault, a timeout, a server fault) may still have
+    /// committed, so the server may no longer hold the settled value: a return to it must be sent again.</summary>
+    public void OutcomeUnknown() => _settled = null;
+
     static bool Same(HarnessTitlePost? post, StoreTitle read) => post is not null && post.Title == read.Title && post.Kind == read.Kind;
 }

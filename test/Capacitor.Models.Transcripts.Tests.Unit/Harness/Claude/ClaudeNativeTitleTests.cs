@@ -142,8 +142,8 @@ public class ClaudeNativeTitleTests {
         await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo(new string('r', 120));
     }
 
-    /// <summary>A line whose only timestamp is nested (inside <c>message</c>) does not time a rename; the stamp
-    /// resolved at the previous run start does, which is earlier.</summary>
+    /// <summary>A line whose only timestamp is nested (inside <c>message</c>) does not time a later rename run; the
+    /// last top-level stamp does.</summary>
     [Test]
     public async Task A_nested_timestamp_in_the_preceding_line_is_not_used() {
         var path = Transcript(
@@ -154,5 +154,21 @@ public class ClaudeNativeTitleTests {
 
         await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
             .IsEqualTo(new ClaudeTitle("B", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>A nested-only or malformed stamp line between the last top-level stamp and the first rename must not
+    /// displace that stamp.</summary>
+    [Test]
+    [Arguments("""{"type":"assistant","message":{"timestamp":"2026-09-29T10:30:00Z"}}""")]
+    [Arguments("""{"type":"assistant","timestamp":"2026-09-29T10:30:00Z" oops""")]
+    [Arguments("""{"type":"assistant","timestamp":"not a time"}""")]
+    public async Task A_first_rename_is_timed_by_the_last_valid_top_level_stamp(string between) {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            between,
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("A", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
     }
 }

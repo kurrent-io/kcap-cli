@@ -96,4 +96,17 @@ public class HarnessTitleTrackerTests {
         await Assert.That(tracker.Observe(Title("A", HarnessTitleKind.Rename), T0.AddSeconds(30)))
             .IsEqualTo(new HarnessTitlePost("A", HarnessTitleKind.Rename, T0));
     }
+
+    /// <summary>B's post failed but may have committed, so the server may hold B; the store's return to A must be
+    /// sent, timed by the read that still showed B.</summary>
+    [Test]
+    public async Task A_return_to_the_settled_value_after_an_unknown_outcome_is_sent() {
+        var tracker = new HarnessTitleTracker(recordsChangeTime: false);
+        tracker.Settled(tracker.Observe(Title("A"), T0)!);
+        tracker.Observe(Title("B"), T0.AddSeconds(30));
+        tracker.OutcomeUnknown();
+
+        await Assert.That(tracker.Observe(Title("A"), T0.AddSeconds(60)))
+            .IsEqualTo(new HarnessTitlePost("A", HarnessTitleKind.Rename, T0.AddSeconds(30)));
+    }
 }

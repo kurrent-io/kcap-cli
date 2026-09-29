@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace Capacitor.Models.Transcripts.Harness.Claude;
@@ -18,14 +20,12 @@ public static class ClaudeNativeTitle {
         TryExtractWithKind(transcriptPath)?.Title is { } title ? title.Length > 120 ? title[..120] : title : null;
 
     /// <summary>The title uncapped, so every sender of one rename sends the same value and the server's own clamp
-    /// is the only one applied. A rename is timed by the top-level <c>timestamp</c> of the last stamped line before
-    /// the start of its last contiguous run.</summary>
+    /// is the only one applied. A rename is timed by the last top-level <c>timestamp</c> before the start of its last
+    /// contiguous run.</summary>
     public static ClaudeTitle? TryExtractWithKind(string transcriptPath) {
-        // Only title lines are parsed. The most recent other line carrying a "timestamp" is kept raw and parsed
-        // only when a rename run starts; one whose only timestamp is nested falls back to the stamp resolved at
-        // the previous run start, which is earlier, so the error favours a Regenerate.
-        string?         lastStampLine   = null;
-        DateTimeOffset? lastResolved    = null;
+        // Only title lines are parsed into a document. Every other line mentioning "timestamp" is scanned for a
+        // top-level one without building a document, so a nested or malformed stamp never displaces a valid one.
+        DateTimeOffset? lastStamp       = null;
         string?         currentRename   = null;
         DateTimeOffset? renameChangedAt = null;
         string?         lastAutoTitle   = null;
@@ -47,9 +47,7 @@ public static class ClaudeNativeTitle {
                                 if (root.Str("customTitle") is { } custom && !string.IsNullOrWhiteSpace(custom)) {
                                     var trimmed = custom.Trim();
                                     if (!string.Equals(trimmed, currentRename, StringComparison.Ordinal)) {
-                                        lastResolved    = TopLevelTimestamp(lastStampLine) ?? lastResolved;
-                                        lastStampLine   = null;
-                                        renameChangedAt = lastResolved;
+                                        renameChangedAt = lastStamp;
                                         currentRename   = trimmed;
                                     }
                                 }
@@ -64,7 +62,7 @@ public static class ClaudeNativeTitle {
                     } catch (JsonException) { }
                 }
 
-                if (line.Contains("\"timestamp\"")) lastStampLine = line;
+                if (line.Contains("\"timestamp\"") && TopLevelTimestamp(line) is { } stamp) lastStamp = stamp;
             }
         } catch {
             return null;
@@ -76,17 +74,33 @@ public static class ClaudeNativeTitle {
         return auto is null ? null : new ClaudeTitle(auto, IsRename: false, null);
     }
 
-    static DateTimeOffset? TopLevelTimestamp(string? line) {
-        if (line is null) return null;
+    static DateTimeOffset? TopLevelTimestamp(string line) {
+        var buffer = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(line.Length));
 
         try {
-            using var doc = JsonDocument.Parse(line);
+            var reader = new Utf8JsonReader(buffer.AsSpan(0, Encoding.UTF8.GetBytes(line, buffer)));
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return null;
 
-            return DateTimeOffset.TryParse(doc.RootElement.Str("timestamp"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)
-                ? ts.ToUniversalTime()
-                : null;
+            DateTimeOffset? found = null;
+
+            // Read to the end even after a find: a line that is not whole JSON contributes nothing.
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName) {
+                var isStamp = reader.ValueTextEquals("timestamp"u8);
+                if (!reader.Read()) return null;
+
+                if (isStamp && reader.TokenType == JsonTokenType.String
+                 && DateTimeOffset.TryParse(reader.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)) {
+                    found = ts.ToUniversalTime();
+                }
+
+                reader.Skip();
+            }
+
+            return reader.TokenType == JsonTokenType.EndObject && !reader.Read() ? found : null;
         } catch (JsonException) {
             return null;
+        } finally {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 }

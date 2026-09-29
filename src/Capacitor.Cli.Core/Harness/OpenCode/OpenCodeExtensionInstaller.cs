@@ -457,7 +457,10 @@ public static class OpenCodeExtensionInstaller {
                   if (lastTitle.get(id) === title) return
                   lastTitle.set(id, title)
                   mkdirSync(dir, { recursive: true })
-                  appendFileSync(file(id), JSON.stringify({ type: "session_title", title, time: info?.time?.updated ?? Date.now() }) + "\n")
+                  // time only when OpenCode supplied one: an invented time would outrank a later Regenerate.
+                  const line: any = { type: "session_title", title }
+                  if (typeof info?.time?.updated === "number") line.time = info.time.updated
+                  appendFileSync(file(id), JSON.stringify(line) + "\n")
                   return
                 }
                 if (type === "session.deleted") {
