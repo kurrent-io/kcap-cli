@@ -21,6 +21,14 @@ namespace Capacitor.App.Tests.Unit;
 public class LauncherPaneViewSmokeTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
+    [Test]
+    public async Task Picker_search_matches_label_and_slug() {
+        var m = new ModelChoice("github-copilot/claude-opus-5", "Claude Opus 5 · github-copilot");
+        await Assert.That(LauncherPaneView.RowMatches(m, "opus")).IsTrue();
+        await Assert.That(LauncherPaneView.RowMatches(m, "GitHub-Copilot/")).IsTrue();
+        await Assert.That(LauncherPaneView.RowMatches(m, "anthropic")).IsFalse();
+    }
+
     /// Real-shaped agent ids (Guid("N"), 32 hex digits): a Started outcome carrying anything else
     /// is HomeViewModel's "launched but unopenable" error, which would keep StartErrorText visible.
     const string LaunchedId = "0123456789abcdef0123456789abcdef";

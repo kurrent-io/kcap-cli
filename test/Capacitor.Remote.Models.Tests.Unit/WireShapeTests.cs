@@ -19,6 +19,7 @@ public class WireShapeTests {
         "name", "platform", "repo_paths", "max_agents", "active_agents", "connected",
         "connected_at", "owner_user_id", "version", "supported_vendors", "machine_id",
         "unattended_vendors", "pr_review_vendors", "acp_preset_vendors", "permission_mode_vendors",
+        "vendor_models",
     ];
 
     // The property name IS the wire contract: deserialize a captured server-shaped payload and

@@ -2174,7 +2174,11 @@ public readonly record struct DaemonConnect(
         int                                         EvalProtocolVersion = 1,
         // Vendor tokens this daemon can host a single-pass PR review on. A daemon predating this
         // field sends nothing, which the server reads as Claude only.
-        string[]?                                   PrReviewVendors = null
+        string[]?                                   PrReviewVendors = null,
+        // Per-vendor launchable models probed from the installed CLI. Null from a daemon that
+        // predates the field; a missing key means no catalog for that vendor; an empty array
+        // means probed and nothing usable.
+        Dictionary<string, VendorModelOption[]>?    VendorModels = null
     );
 
 public sealed record UnattendedVendorCapability(

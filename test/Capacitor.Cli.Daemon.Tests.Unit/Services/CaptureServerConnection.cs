@@ -49,9 +49,11 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <c>ReRegisterAsync</c> lands here). No-op'd: there is no hub to register with.</summary>
     public int RegisterDaemonCalls => Volatile.Read(ref _registerDaemonCalls);
 
+    public Exception? RegisterDaemonThrow { get; init; }
+
     internal override Task RegisterDaemonAsync() {
         Interlocked.Increment(ref _registerDaemonCalls);
-        return Task.CompletedTask;
+        return RegisterDaemonThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 
     public override async Task LaunchFailedAsync(string agentId, string reason) {

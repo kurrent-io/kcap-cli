@@ -600,6 +600,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// rejection. See SingleFlightRefresh for why bare fire-and-forget was unsafe here.</summary>
     readonly SingleFlightRefresh _capabilityRefresh = new();
     int                          _republishRequested;
+    int                          _catalogProbeRequested;
 
     // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
     // reports these dims to the server right after the agent registers (and on
@@ -1455,7 +1456,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>
     /// Re-probes the vendors advertised at startup and re-registers when the advertisement changed
     /// — the one path through which a running daemon updates what the server knows about its CLI
-    /// versions. Returns at once; the work is single-flighted off the caller's stack so a burst of
+    /// versions and vendor model catalogs. Returns at once; the work is single-flighted off the caller's stack so a burst of
     /// requests coalesces and the last publication is always the newest probe.
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
@@ -1464,17 +1465,39 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Sticky rather than captured by the delegate: a request folded into a running pass reruns
         // THAT pass's delegate, which would otherwise carry the earlier caller's answer.
         if (republishUnchanged) Interlocked.Exchange(ref _republishRequested, 1);
+        // A republish-only caller has no reason to think a catalog changed, so it spawns no probe.
+        else Interlocked.Exchange(ref _catalogProbeRequested, 1);
 
         _capabilityRefresh.Trigger(
             async () => {
-                var republish = Interlocked.Exchange(ref _republishRequested, 0) == 1;
+                var republish    = Interlocked.Exchange(ref _republishRequested, 0) == 1;
+                var probeCatalog = Interlocked.Exchange(ref _catalogProbeRequested, 0) == 1;
                 var current   = _config.UnattendedVendorCapabilities;
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
                     DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
 
-                if (!republish && current is not null && current.SequenceEqual(fresh)) return;
+                var previousCatalog = _config.VendorModels;
+                var supported       = _config.SupportedVendors ?? [];
+                var catalogVendors  = !probeCatalog ? [] : _runtimeFactories.Values
+                    .Where(f => supported.Contains(f.Vendor, StringComparer.Ordinal))
+                    .Where(f => f.CatalogFingerprintPaths.Count > 0 || (previousCatalog?.ContainsKey(f.Vendor) ?? false))
+                    .Select(f => f.Vendor)
+                    .ToArray();
+                var mergedCatalog = catalogVendors.Length == 0
+                    ? previousCatalog
+                    : VendorModelCatalogs.Merge(previousCatalog,
+                        await VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token));
+                var catalogChanged = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog);
+
+                if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
 
                 _config.UnattendedVendorCapabilities = fresh;
+                // One reference swap: status serializers on other threads may be enumerating the old one.
+                // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
+                if (catalogChanged) {
+                    _config.VendorModels = mergedCatalog;
+                    _statusNotifier.Pulse();
+                }
                 LogReAdvertising(_logger, reason,
                     string.Join(", ", fresh.Select(c => $"{c.Vendor} {c.CliVersion ?? DaemonRunner.UnknownCliVersion}")));
                 await _server.ReRegisterAsync();
