@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Core.Telemetry;
@@ -164,6 +165,8 @@ class WatchState {
     public DateTimeOffset       LastHarnessTitleRead        { get; set; }
     public HarnessTitlePost?    LastHarnessTitleAttempted   { get; set; }
     public DateTimeOffset       LastHarnessTitlePostAttempt { get; set; }
+    // A store read that outlasted its poll's budget; the next poll waits on it rather than start another.
+    public Task<StoreTitle?>?   HarnessTitleReadInFlight    { get; set; }
 
     // LLM titling stops for good once a harness title is known to be recorded, since it always wins on the server:
     // one the server took through /hooks/harness-title, or a transcript line every server records. A line only a

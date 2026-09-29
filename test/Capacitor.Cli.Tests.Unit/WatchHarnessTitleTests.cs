@@ -287,4 +287,38 @@ public class WatchHarnessTitleTests {
             release.Set();
         }
     }
+
+    /// <summary>A read still stuck from an earlier poll is waited on, not joined by another: the store readers are not
+    /// safe to run concurrently, and a stuck store would otherwise pile up a blocked worker per poll.</summary>
+    [Test]
+    public async Task A_stuck_read_is_not_joined_by_another_until_it_finishes() {
+        using var release = new ManualResetEventSlim();
+        var reads = 0;
+        var store = new FixedStore(() => { if (Interlocked.Increment(ref reads) == 1) release.Wait(); return Named; });
+        var state = StateFor(store);
+        var posts = 0;
+
+        Task Poll() => WatchCommand.PostHarnessTitleAsync(store, state,
+            (_, _, _) => { posts++; return Task.FromResult(HarnessTitleOutcome.Posted); },
+            TimeSpan.FromSeconds(1), TimeProvider.System, () => { }, _ => { }, default);
+
+        try {
+            var started = TimeProvider.System.GetTimestamp();
+            await Poll();
+            await Poll();
+
+            await Assert.That(TimeProvider.System.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(10));
+            await Assert.That(reads).IsEqualTo(1);
+            await Assert.That(posts).IsEqualTo(0);
+        } finally {
+            release.Set();
+        }
+
+        await Poll(); // takes up the finished read
+        await Assert.That(reads).IsEqualTo(1);
+        await Assert.That(posts).IsEqualTo(1);
+
+        await Poll();
+        await Assert.That(reads).IsEqualTo(2);
+    }
 }
