@@ -71,4 +71,23 @@ public class CursorComposerTitleTests {
 
         await Assert.That(new CursorComposerTitle(db, SessionId).Read()!.Title).IsEqualTo("Live");
     }
+
+    /// <summary>A database the IDE holds an exclusive lock on reads as null after the short busy timeout, not after
+    /// SQLite's 30s default.</summary>
+    [Test]
+    public async Task A_locked_db_reads_null_promptly() {
+        var db = BuildStateDb(Tmp.PathTo("state.vscdb"), SessionId, "Live");
+        using var holder = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = db, Pooling = false }.ToString());
+        holder.Open();
+        using (var begin = holder.CreateCommand()) {
+            begin.CommandText = "BEGIN EXCLUSIVE";
+            begin.ExecuteNonQuery();
+        }
+
+        var started = TimeProvider.System.GetTimestamp();
+        var title   = new CursorComposerTitle(db, SessionId).Read();
+
+        await Assert.That(title).IsNull();
+        await Assert.That(TimeProvider.System.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(10));
+    }
 }

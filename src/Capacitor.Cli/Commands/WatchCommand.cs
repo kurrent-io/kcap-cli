@@ -3531,11 +3531,20 @@ partial class WatchCommand(
         ) {
         if (budget <= TimeSpan.Zero) return;
 
-        // The read can be a synchronous SQLite query, so it spends the same budget as the post.
-        var started = time.GetTimestamp();
+        // The read can be a synchronous SQLite query on a database the agent holds, so it runs off the loop and
+        // spends the same budget as the post; one that outlasts it is abandoned rather than awaited.
+        var         started = time.GetTimestamp();
+        var         reading = Task.Run(store.Read, CancellationToken.None);
         StoreTitle? read;
         try {
-            read = store.Read();
+            read = await reading.WaitAsync(budget, time, ct);
+        } catch (TimeoutException) {
+            Abandon(reading);
+            log("Harness title read did not finish within its budget");
+            return;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            Abandon(reading);
+            throw;
         } catch (Exception ex) {
             log($"Harness title read failed: {ex.Message}");
             return;
@@ -3571,6 +3580,11 @@ partial class WatchCommand(
         else if (outcome is HarnessTitleOutcome.Failed) state.TitleTracker.OutcomeUnknown();
         if (outcome is not HarnessTitleOutcome.Posted) log($"Harness title not recorded: {outcome}");
     }
+
+    // Observes a read left running, so its eventual fault is not reported as an unobserved task exception.
+    static void Abandon(Task reading) =>
+        reading.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
     Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct, Action beat,
             TimeSpan? budget = null) =>

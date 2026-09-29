@@ -265,4 +265,26 @@ public class WatchHarnessTitleTests {
 
         await Assert.That(granted).IsEqualTo(TimeSpan.FromSeconds(2));
     }
+
+    /// <summary>A read that never returns (a locked database) is abandoned at the budget: the call returns within it
+    /// and posts nothing, rather than hold the watcher past its shutdown deadline.</summary>
+    [Test]
+    public async Task A_read_that_never_returns_is_abandoned_at_the_budget() {
+        using var release = new ManualResetEventSlim();
+        var store = new FixedStore(() => { release.Wait(); throw new InvalidOperationException("released"); });
+        var state = StateFor(store);
+        var posts = 0;
+
+        try {
+            var started = TimeProvider.System.GetTimestamp();
+            await WatchCommand.PostHarnessTitleAsync(store, state,
+                (_, _, _) => { posts++; return Task.FromResult(HarnessTitleOutcome.Posted); },
+                TimeSpan.FromSeconds(3), TimeProvider.System, () => { }, _ => { }, default);
+
+            await Assert.That(TimeProvider.System.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(10));
+            await Assert.That(posts).IsEqualTo(0);
+        } finally {
+            release.Set();
+        }
+    }
 }

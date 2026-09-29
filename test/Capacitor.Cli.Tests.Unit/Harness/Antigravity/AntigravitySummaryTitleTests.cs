@@ -97,4 +97,23 @@ public class AntigravitySummaryTitleTests {
     public async Task ForTranscript_returns_null_for_an_unrecognized_shape() {
         await Assert.That(AntigravitySummaryTitle.ForTranscript(Tmp.PathTo("not-a-transcript.jsonl"))).IsNull();
     }
+
+    /// <summary>A database Antigravity holds an exclusive lock on reads as null after the short busy timeout, not after
+    /// SQLite's 30s default.</summary>
+    [Test]
+    public async Task A_locked_db_reads_null_promptly() {
+        var db = BuildDb("Locked");
+        using var holder = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = db, Pooling = false }.ToString());
+        holder.Open();
+        using (var begin = holder.CreateCommand()) {
+            begin.CommandText = "BEGIN EXCLUSIVE";
+            begin.ExecuteNonQuery();
+        }
+
+        var started = TimeProvider.System.GetTimestamp();
+        var title   = new AntigravitySummaryTitle(db, ConversationId).Read();
+
+        await Assert.That(title).IsNull();
+        await Assert.That(TimeProvider.System.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(10));
+    }
 }

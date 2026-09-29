@@ -26,6 +26,8 @@ public sealed class CursorComposerTitle(string stateDbPath, string dashedSession
                 Mode       = SqliteOpenMode.ReadOnly,
                 Cache      = SqliteCacheMode.Private,
                 Pooling    = false,
+                // The agent holds this database; a lock must not hold up the watcher for SQLite's 30s default.
+                DefaultTimeout = 1,
             }.ToString());
             conn.Open();
 
