@@ -459,17 +459,21 @@ public static class OpenCodeExtensionInstaller {
                   appendFileSync(file(id), JSON.stringify({ type: "session_title", title, time: info?.time?.updated ?? Date.now() }) + "\n")
                   return
                 }
+                if (type === "session.deleted") {
+                  // Unlike other events, session.deleted carries properties.info (a Session), not
+                  // properties.sessionID — fall back so this never skips cleanup below.
+                  const id = event?.properties?.info?.id ?? event?.properties?.sessionID
+                  if (!id) return
+                  // Drop this session's cached fragment promptly rather than waiting for the bounded
+                  // map to evict it. The bound is the guarantee; this is the tidy path.
+                  memory.delete(id)
+                  coldStarts.delete(id)
+                  lastTitle.delete(id)
+                  return
+                }
                 const sid = event?.properties?.sessionID
                 if (!sid) return
                 if (children.has(sid)) return  // known subagent — its parent streams it
-                if (type === "session.deleted") {
-                  // Drop this session's cached fragment promptly rather than waiting for the bounded
-                  // map to evict it. The bound is the guarantee; this is the tidy path.
-                  memory.delete(sid)
-                  coldStarts.delete(sid)
-                  lastTitle.delete(sid)
-                  return
-                }
                 if (type === "session.created") {
                   // START a top-level session only on a CONFIRMED classification — never on
                   // "unknown" (a session.get hiccup), which would misfile a child as both a

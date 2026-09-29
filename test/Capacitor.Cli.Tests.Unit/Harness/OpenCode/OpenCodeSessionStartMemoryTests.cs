@@ -208,7 +208,7 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("MEMORY_MAX_SESSIONS");
         await Assert.That(content).Contains("memory.size >= MEMORY_MAX_SESSIONS");
         // The prompt path for a deleted session is tidied rather than left to eviction.
-        await Assert.That(content).Contains("memory.delete(sid)");
+        await Assert.That(content).Contains("memory.delete(id)");
     }
 
     /// <summary>
@@ -281,7 +281,7 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("attempts < MEMORY_COLD_START_ATTEMPTS");
         await Assert.That(content).Contains("coldStarts.set(sid, attempts + 1)");
         // Cleared with the session, so a long-lived process does not accumulate counters.
-        await Assert.That(content).Contains("coldStarts.delete(sid)");
+        await Assert.That(content).Contains("coldStarts.delete(id)");
     }
 
     /// <summary>
@@ -308,5 +308,22 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("type === \"session.updated\"");
         await Assert.That(content).Contains("type: \"session_title\"");
         await Assert.That(content).Contains("/^New session - \\d{4}-/");
+    }
+
+    /// <summary>
+    /// EventSessionDeleted carries <c>properties.info</c> (a Session), not
+    /// <c>properties.sessionID</c> like the other events this handler reads — without the fallback,
+    /// the generic <c>if (!sid) return</c> would drop every session.deleted before the
+    /// memory/coldStarts/lastTitle cleanup below it ever runs, leaking one entry per session.
+    /// </summary>
+    [Test]
+    public async Task Session_deleted_id_falls_back_to_the_info_shape() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content)
+            .Contains("const id = event?.properties?.info?.id ?? event?.properties?.sessionID");
+        await Assert.That(content).Contains("memory.delete(id)");
+        await Assert.That(content).Contains("coldStarts.delete(id)");
+        await Assert.That(content).Contains("lastTitle.delete(id)");
     }
 }
