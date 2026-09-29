@@ -184,12 +184,15 @@ public class PiModelCatalogProbeTests {
         var cwdFile = Tmp.PathTo("cwd");
         var eofFile = Tmp.PathTo("eof");
         // A background reader marks stdin EOF; `read -t` cannot tell EOF from a timeout on bash 3.2.
+        // It reads a duplicate on fd 3 because a non-interactive sh (dash) gives a background job
+        // /dev/null as its stdin.
         var pi = Tmp.CreateExecutable("pi", $$"""
             #!/bin/sh
             pwd -P > "{{cwdFile}}"
             echo '{"type":"noise"}'
             read cmd || exit 3
-            { while read _; do :; done; : > "{{eofFile}}"; } 0<&0 &
+            exec 3<&0
+            { while read _ <&3; do :; done; : > "{{eofFile}}"; } &
             sleep 1
             [ -e "{{eofFile}}" ] && exit 4
             echo '{{Response}}'
