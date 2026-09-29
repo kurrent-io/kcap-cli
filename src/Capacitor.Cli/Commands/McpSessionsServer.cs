@@ -391,7 +391,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         var hasLimit = TryReadInt(args, "limit", out var limit);
 
         if (ReadString(args, "cursor", "`cursor` must be a string.") is { } cursor && !string.IsNullOrWhiteSpace(cursor)) {
-            var replaced = CursorReplaces.Where(key => args?[key] is not null).ToArray();
+            var replaced = CursorReplaces.Where(key => Sent(args, key)).ToArray();
 
             if (replaced.Length > 0)
                 throw new ArgumentException(
@@ -442,6 +442,10 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
     static string? TextOf(JsonObject? args, string key) =>
         args?[key] is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text) ? text : null;
+
+    // A client that fills every declared argument with a blank default is not narrowing the page.
+    static bool Sent(JsonObject? args, string key) =>
+        key == "offset" ? TryReadInt(args, key, out var offset) && offset != 0 : TextOf(args, key) is not null;
 
     internal const string RepoPlansUnsupportedMessage =
         "This server does not list a repository's plans yet. Read one session's plans with get_declared_plans instead.";

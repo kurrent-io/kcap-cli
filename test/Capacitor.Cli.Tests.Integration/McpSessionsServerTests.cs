@@ -305,6 +305,26 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     [Test]
+    public async Task List_repo_sessions_across_repositories_on_an_older_server_is_a_tool_error() {
+        _server.Given(Request.Create().WithPath("/api/sessions/listing").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        using var proc = SpawnMcpServer();
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var arguments = JsonNode.Parse("""{"repo":"all"}""")!.AsObject();
+            var response  = await SendRequest(proc, ToolsCallRequest(2, "list_repo_sessions", arguments));
+            var text      = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).Contains("does not list sessions across repositories yet");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
     public async Task Search_sessions_calls_server_and_passes_through_response() {
         const string stubbedBody = """{"hits":[{"session_id":"abc","title":"Batch import","snippet":"batch …"}]}""";
 

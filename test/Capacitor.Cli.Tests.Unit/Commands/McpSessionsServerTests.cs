@@ -144,6 +144,16 @@ public class McpSessionsServerTests {
     }
 
     [Test]
+    public async Task BuildRepoSessionsUrl_a_blank_argument_beside_a_cursor_is_not_a_filter() {
+        var url = McpSessionsServer.BuildRepoSessionsUrl(
+            "http://srv",
+            new JsonObject { ["repo"] = "all", ["cursor"] = "eyJ2IjoxfQ", ["owner"] = "", ["since"] = " ", ["state"] = "", ["offset"] = 0 },
+            null, Clock);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/listing?cursor=eyJ2IjoxfQ");
+    }
+
+    [Test]
     public async Task BuildRepoSessionsUrl_since_later_than_until_is_refused() {
         var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
                 "http://srv", new JsonObject { ["since"] = "2026-09-28", ["until"] = "2026-09-27" }, CwdHash, Clock))
