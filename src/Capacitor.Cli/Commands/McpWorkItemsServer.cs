@@ -529,8 +529,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 Line(sb, NextWorkEmitter.DataClose);
             }
 
-            var cursor = NextWorkUntrustedText.Render(root.Str("next_cursor"), TargetKeyFieldCap);
-            if (cursor.Length > 0) Line(sb, $"next page: pass cursor: {cursor}");
+            // The cursor must round-trip byte for byte, so it is relayed only in the server's own alphabet.
+            if (root.Str("next_cursor") is { } cursor && IsCursor(cursor)) Line(sb, $"next page: pass cursor: {cursor}");
 
             return sb.ToString().TrimEnd();
         } catch (JsonException) {
@@ -539,6 +539,11 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             return null;
         }
     }
+
+    /// <summary>The server mints unpadded base64url.</summary>
+    internal static bool IsCursor(string value) =>
+        value.Length is >= 1 and <= 1024
+     && value.All(c => c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-');
 
     static bool IsNextWorkTargetTool(string toolName) =>
         toolName is "dismiss_next_work" or "restore_next_work" or "list_dismissed_next_work";
