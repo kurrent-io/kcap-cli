@@ -4,6 +4,7 @@ using Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit;
 
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonRunnerVendorModelsTests {
     [TempDir] public required TempDir Tmp { get; init; }
 

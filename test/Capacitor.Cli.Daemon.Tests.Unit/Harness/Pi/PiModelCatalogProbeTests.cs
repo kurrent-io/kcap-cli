@@ -62,13 +62,32 @@ public class PiModelCatalogProbeTests {
     [Test]
     public async Task Deadline_expiry_terminates_the_child_and_returns_null() {
         var time = new FakeTimeProvider();
-        var fake = new FakePiRpcProcess { AutoStateResponse = null };
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fake = new FakePiRpcProcess { AutoStateResponse = null, OnWrite = _ => sent.TrySetResult() };
         var run  = Run(fake, PiModelCatalogProbe.DirectoryFor(Tmp.Path), time);
 
+        // Past the spawn, so the deadline lands on the running exchange rather than the start.
+        await sent.Task.WaitAsync(TimeSpan.FromSeconds(30));
         time.Advance(PiModelCatalogProbe.Deadline + TimeSpan.FromSeconds(1));
 
         await Assert.That(await run).IsNull();
         await Assert.That(fake.TerminateCalls).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task A_stalled_spawn_is_bounded_by_the_deadline_and_a_late_process_is_disposed() {
+        var time    = new FakeTimeProvider();
+        var release = new TaskCompletionSource<IPiRpcProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var late    = new FakePiRpcProcess { AutoStateResponse = null };
+        var run     = PiModelCatalogProbe.RunAsync("/opt/pi", PiModelCatalogProbe.DirectoryFor(Tmp.Path),
+            (_, _) => release.Task, time, NullLogger.Instance, CancellationToken.None);
+
+        time.Advance(PiModelCatalogProbe.Deadline + TimeSpan.FromSeconds(1));
+        await Assert.That(await run).IsNull();
+
+        release.SetResult(late);
+        for (var waited = 0; late.DisposeCalls == 0 && waited < 30_000; waited += 10) await Task.Delay(10);
+        await Assert.That(late.DisposeCalls).IsEqualTo(1);
     }
 
     [Test]
@@ -90,8 +109,8 @@ public class PiModelCatalogProbeTests {
         PiModelCatalogProbe.PrepareDirectory(dir);
         await Assert.That(Directory.Exists(dir)).IsTrue();
 
-        File.WriteAllText(Path.Combine(dir, "leftover"), "x");
-        Directory.CreateDirectory(Path.Combine(dir, ".pi", "commands"));
+        Tmp.CreateFile(["pi-probe", "leftover"], "x");
+        Tmp.CreateDir("pi-probe", ".pi", "commands");
         PiModelCatalogProbe.PrepareDirectory(dir);
 
         await Assert.That(Directory.Exists(dir)).IsTrue();

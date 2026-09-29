@@ -56,17 +56,30 @@ internal static partial class PiModelCatalogProbe {
             string piPath, string workingDirectory,
             Func<ProcessStartInfo, CancellationToken, Task<IPiRpcProcess>> processSource,
             TimeProvider time, ILogger logger, CancellationToken ct) {
+        using var deadline = new CancellationTokenSource(Deadline, time);
+        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        // The deadline covers the spawn too: a stalled start must not hold daemon startup.
         IPiRpcProcess process;
+        Task<IPiRpcProcess>? spawn = null;
         try {
             PrepareDirectory(workingDirectory);
-            process = await processSource(BuildStartInfo(piPath, workingDirectory), ct).ConfigureAwait(false);
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            var psi   = BuildStartInfo(piPath, workingDirectory);
+            var token = linked.Token;
+            spawn     = Task.Run(() => processSource(psi, token), CancellationToken.None);
+            process = await spawn.WaitAsync(linked.Token).ConfigureAwait(false);
+        } catch (OperationCanceledException) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested) {
+            LogNoResponse(logger, Deadline, "");
+            DisposeWhenStarted(spawn);
+            return null;
+        } catch (OperationCanceledException) {
+            DisposeWhenStarted(spawn);
+            throw;
+        } catch (Exception ex) {
             LogCouldNotStart(logger, ex);
             return null;
         }
 
-        using var deadline = new CancellationTokenSource(Deadline, time);
-        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
         try {
             // Stdin stays open until the response: Pi treats EOF as shutdown without awaiting an
             // in-flight command, so closing early races the answer.
@@ -94,6 +107,10 @@ internal static partial class PiModelCatalogProbe {
             await process.DisposeAsync().ConfigureAwait(false);
         }
     }
+
+    static void DisposeWhenStarted(Task<IPiRpcProcess>? spawn) =>
+        spawn?.ContinueWith(t => t.Result.DisposeAsync().AsTask(), CancellationToken.None,
+            TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
 
     static string Stderr(IPiRpcProcess process) =>
         process.Diagnostics is { } d ? d.Length > StderrLogCap ? d[..StderrLogCap] : d : "";
