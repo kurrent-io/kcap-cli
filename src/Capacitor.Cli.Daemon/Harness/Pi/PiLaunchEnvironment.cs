@@ -47,5 +47,13 @@ internal static class PiLaunchEnvironment {
         env.Remove("PI_PACKAGE_DIR");
         env.Remove("PI_EXPERIMENTAL");
         env.Remove("PI_CODING_AGENT_SESSION_DIR");
+
+        // The reviewer's working directory is the repository under review, so a relative PATH entry
+        // would let a file in it be run as the `kcap` or `git` the reviewer spawns.
+        if (env.TryGetValue("PATH", out var path) && path is not null)
+            env["PATH"] = AbsoluteEntries(path);
     }
+
+    internal static string AbsoluteEntries(string path) =>
+        string.Join(Path.PathSeparator, path.Split(Path.PathSeparator).Where(Path.IsPathFullyQualified));
 }

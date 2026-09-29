@@ -13,6 +13,10 @@ internal static class PiReviewerToolSurface {
     internal static readonly ImmutableArray<string> FileTools =
         ["read_file", "list_directory", "search_files", "git_log", "git_show", "git_diff"];
 
+    /// <summary>The one tool the borrowed-snapshot review-context server serves.</summary>
+    internal const string ReviewContextServer = "kcap-review-context";
+    internal const string ReviewContextTool   = "get_branch_authored_mcp_configs";
+
     /// <summary>Pi activates a built-in exactly when the allowlist names it, and an extension tool
     /// replaces a built-in of the same name — so no entry may be, or collide with, one of these.</summary>
     internal static readonly ImmutableArray<string> PiBuiltInNames =
@@ -37,6 +41,11 @@ internal static class PiReviewerToolSurface {
 
         foreach (var server in servers) {
             if (IsResultChannel(server.Name)) continue;
+
+            if (string.Equals(server.Name, ReviewContextServer, StringComparison.Ordinal)) {
+                tools.Add(new PiReviewerTool($"{server.Name.Replace('-', '_')}_{ReviewContextTool}", server.Name, ReviewContextTool));
+                continue;
+            }
 
             if (!KcapMcpRegistry.ReviewFlowUnattendedSafeTools.TryGetValue(server.Name, out var safe))
                 throw new InvalidOperationException(

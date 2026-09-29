@@ -153,6 +153,10 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
     readonly Lock                         _turnGate    = new();
     readonly List<TaskCompletionSource>   _idleWaiters = [];
+
+    // Prompts written but not yet started: between the write and Pi's agent_start the turn is already
+    // committed, so it counts as busy. A settle drains Pi's whole queue and clears it.
+    int                                   _promptsAwaitingStart;
     bool                                  _busy;
 
     /// <summary>Null for every launch but an unattended Pi review — see <see cref="PiReviewerGuards"/>.</summary>
@@ -366,6 +370,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         switch (frame.Type) {
             case "agent_start":
                 _ceiling?.AgentStarted();
+                lock (_turnGate) if (_promptsAwaitingStart > 0) _promptsAwaitingStart--;
                 SetBusy(true);
                 return;
 
@@ -574,11 +579,13 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         var waiter = RegisterPending(id);
 
         _ceiling?.PromptWriting(id);
+        lock (_turnGate) _promptsAwaitingStart++;
 
         try {
             await _process.WriteLineAsync(PiRpc.PromptCommand(id, text), _ownerToken).ConfigureAwait(false);
         } catch {
             _ceiling?.PromptWriteFailed(id);
+            PromptWillNotStart();
             _pending.TryRemove(id, out _);
 
             // Undo the echo memory: this message never reached Pi, so its echo can never arrive —
@@ -614,6 +621,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         try {
             var frame = await response.ConfigureAwait(false);
             if (frame.Success != false) return;
+
+            PromptWillNotStart();
 
             var reason = frame.Root.Str("error") ?? "pi rejected the message";
             EmitLocalEnvelope(new AcpEventEnvelope(
@@ -725,7 +734,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         TaskCompletionSource waiter;
 
         lock (_turnGate) {
-            if (!_busy) return Task.CompletedTask;
+            if (!_busy && _promptsAwaitingStart == 0) return Task.CompletedTask;
 
             waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _idleWaiters.Add(waiter);
@@ -762,6 +771,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
         lock (_turnGate) {
             _busy = busy;
+            if (!busy) _promptsAwaitingStart = 0;
 
             if (!busy && _idleWaiters.Count > 0) {
                 release = [.. _idleWaiters];
@@ -772,6 +782,24 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         // Both effects OUTSIDE the lock: the clock takes its own lock, and a waiter's continuation
         // can run inline. Neither belongs under a lock this runtime's own pump re-enters.
         ActivityClock?.SetTurnInFlight(busy);
+
+        if (release is null) return;
+
+        foreach (var waiter in release) waiter.TrySetResult();
+    }
+
+    /// <summary>A written prompt Pi refused, or one that never reached it, will produce no turn.</summary>
+    void PromptWillNotStart() {
+        TaskCompletionSource[]? release = null;
+
+        lock (_turnGate) {
+            if (_promptsAwaitingStart > 0) _promptsAwaitingStart--;
+
+            if (!_busy && _promptsAwaitingStart == 0 && _idleWaiters.Count > 0) {
+                release = [.. _idleWaiters];
+                _idleWaiters.Clear();
+            }
+        }
 
         if (release is null) return;
 

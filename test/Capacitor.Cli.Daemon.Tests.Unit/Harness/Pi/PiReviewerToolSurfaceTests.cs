@@ -36,6 +36,17 @@ public class PiReviewerToolSurfaceTests {
             TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
+    /// <summary>A borrowed-snapshot review injects the review-context server, which serves exactly one
+    /// read-only tool; it must be offered, not refused as an unclassified server.</summary>
+    [Test]
+    public async Task The_borrowed_snapshot_review_context_tool_is_offered() {
+        var tools = PiReviewerToolSurface.For([ResultChannel, Server("kcap-review-context")]);
+
+        var tool = tools.Single(t => t.ServerName == "kcap-review-context");
+        await Assert.That(tool.PiName).IsEqualTo("kcap_review_context_get_branch_authored_mcp_configs");
+        await Assert.That(tool.McpName).IsEqualTo("get_branch_authored_mcp_configs");
+    }
+
     [Test]
     public async Task An_unclassified_server_throws() {
         await Assert.That(() => PiReviewerToolSurface.For([ResultChannel, Server("kcap-mystery")]))
