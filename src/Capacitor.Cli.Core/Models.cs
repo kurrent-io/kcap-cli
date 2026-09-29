@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Core.Telemetry;
 
@@ -158,13 +159,14 @@ class WatchState {
     public string?            FirstAssistantText { get; set; }
     public int                EventCount         { get; set; }
 
-    // Non-null only when this vendor has its own title store the watcher polls (Codex, Copilot,
-    // Kiro, Cursor, Antigravity) for a top-level session watcher. HarnessTitleSeen also latches
-    // from a transcript line for vendors whose title arrives inline instead (TranscriptTitleLines)
-    // — either source stops LLM titling for good, since a harness-native title always wins.
-    public HarnessTitleTracker? TitleTracker         { get; set; }
-    public DateTimeOffset       LastHarnessTitleRead { get; set; }
-    public bool                 HarnessTitleSeen     { get; set; }
+    // Non-null only for a top-level session watcher whose vendor keeps a title store the watcher polls.
+    // HarnessTitleSeen latches from that store or from a title line in the transcript, and stops LLM
+    // titling for good: a harness-native title always wins on the server.
+    public HarnessTitleTracker? TitleTracker                { get; set; }
+    public DateTimeOffset       LastHarnessTitleRead        { get; set; }
+    public HarnessTitlePost?    LastHarnessTitleAttempted   { get; set; }
+    public DateTimeOffset       LastHarnessTitlePostAttempt { get; set; }
+    public bool                 HarnessTitleSeen            { get; set; }
 
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
@@ -290,14 +292,6 @@ record SessionTitlePayload {
     [JsonPropertyName("cache_write_tokens")]
     public long CacheWriteTokens { get; init; }
 }
-
-internal sealed record HarnessTitleHook(
-    [property: JsonPropertyName("session_id")] string          SessionId,
-    [property: JsonPropertyName("title")]      string          Title,
-    [property: JsonPropertyName("kind")]       string          Kind,
-    [property: JsonPropertyName("changed_at")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-                                               DateTimeOffset? ChangedAt);
 
 record WhatsDonePayload {
     [JsonPropertyName("session_id")]

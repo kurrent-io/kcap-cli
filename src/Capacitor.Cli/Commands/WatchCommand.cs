@@ -20,11 +20,10 @@ using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
-using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
-using Capacitor.Cli.Harness.Kiro;
 using Capacitor.Cli.Harness.OpenCode;
+using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -373,17 +372,7 @@ partial class WatchCommand(
         var state = new WatchState();
         state.LastActivityAt = time.GetUtcNow();
 
-        // Non-null only for a top-level session watcher (agentId is null) of a vendor that keeps
-        // its own title store the watcher can poll — the other vendors carry their title inline
-        // in the transcript instead (see the TranscriptTitleLines call in DrainNewLines).
-        IHarnessTitleStore? titleStore = agentId is not null ? null : vendor switch {
-            "codex"       => new CodexSessionIndexTitle(harnesses.Of<CodexHarness>().Paths.Home, sessionId),
-            "copilot"     => new CopilotWorkspaceTitle(Path.Combine(Path.GetDirectoryName(transcriptPath)!, "workspace.yaml")),
-            "kiro"        => new KiroSessionTitle(Path.ChangeExtension(transcriptPath, ".json")),
-            "cursor"      => CursorChatTitle.ForTranscript(harnesses.Of<CursorHarness>().Paths.ChatsDir, transcriptPath),
-            "antigravity" => AntigravitySummaryTitle.ForTranscript(transcriptPath),
-            _             => null,
-        };
+        var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses);
         if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
@@ -828,16 +817,22 @@ partial class WatchCommand(
                     state.LastSecondaryProbe = time.GetUtcNow();
                 }
 
+                // Read once before the first drain, so a store title latches HarnessTitleSeen before that
+                // drain can trigger LLM titling.
+                if (titleStore is not null && state.LastHarnessTitleRead == default) {
+                    state.LastHarnessTitleRead = time.GetUtcNow();
+                    await PostHarnessTitleAsync(titleStore, sessionId, state, cts.Token, TouchHeartbeat);
+                }
+
                 // gated so this can never interleave with a
                 // concurrently-running reconnect rewind (see cursorRewindGate's declaration above).
                 var drained = await DrainNewLinesGatedAsync(isFinalDrainLocal: false, cts.Token);
 
-                // Polled every drain that produced content, and otherwise on its own 30s cadence —
-                // a store some vendors write outside the transcript (Cursor's meta.json, Antigravity's
-                // sqlite row) would otherwise never be re-read on an idle transcript.
-                if (titleStore is not null && (drained.Count > 0 || time.GetUtcNow() - state.LastHarnessTitleRead >= TimeSpan.FromSeconds(30))) {
+                // Also polled on its own cadence: some stores (Cursor's meta.json, Antigravity's sqlite row) change
+                // while the transcript stays idle.
+                if (titleStore is not null && (drained.Count > 0 || time.GetUtcNow() - state.LastHarnessTitleRead >= HarnessTitleRetryGap)) {
                     state.LastHarnessTitleRead = time.GetUtcNow();
-                    await PostHarnessTitleAsync(titleStore, sessionId, state, cts.Token);
+                    await PostHarnessTitleAsync(titleStore, sessionId, state, cts.Token, TouchHeartbeat);
                 }
 
                 // Live subagent discovery: only the parent (agentId == null) watcher scans;
@@ -2225,9 +2220,7 @@ partial class WatchCommand(
                         }
                     }
 
-                    // A vendor whose title lives inline in the transcript (rather than a separate
-                    // store this watcher polls) — latches for good, same as a polled title.
-                    if (agentId is null && !state.HarnessTitleSeen && TranscriptTitleLines.CarriesHarnessTitle(vendor, line)) {
+                    if (!state.HarnessTitleSeen && TranscriptTitleLines.CarriesHarnessTitle(vendor, line)) {
                         state.HarnessTitleSeen = true;
                     }
                 }
@@ -2235,11 +2228,7 @@ partial class WatchCommand(
 
             // Generate LLM title after enough events have accumulated
             // (deferred until threshold is reached for session watchers)
-            if (state is { TitleGenerated: false, TitleInFlight: false, TitleAttempts: < 5, ThresholdReached: true }
-             && agentId is null
-             && !state.HarnessTitleSeen
-             && state.FirstUserText is not null
-             && state.EventCount >= 5) {
+            if (ShouldGenerateLlmTitle(state, agentId)) {
                 Log(time, $"Triggering LLM title generation (attempt {state.TitleAttempts + 1}/5, events: {state.EventCount})");
                 state.TitleInFlight = true;
                 state.TitleAttempts++;
@@ -3493,23 +3482,71 @@ partial class WatchCommand(
     // the PR probe share this much of it, leaving the rest for the drain-complete signal.
     static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
 
-    async Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct) {
-        if (state.TitleTracker!.Observe(store.Read(), time.GetUtcNow()) is not { } post) return;
+    // A value the server has not settled is re-sent no sooner than this, however often the transcript drains.
+    internal static readonly TimeSpan HarnessTitleRetryGap = TimeSpan.FromSeconds(30);
 
-        state.HarnessTitleSeen = true;
+    /// <summary>A harness-native title, from the store or the transcript, suppresses LLM titling for good.</summary>
+    internal static bool ShouldGenerateLlmTitle(WatchState state, string? agentId) =>
+        state is { TitleGenerated: false, TitleInFlight: false, TitleAttempts: < 5, ThresholdReached: true, HarnessTitleSeen: false, FirstUserText: not null, EventCount: >= 5 }
+     && agentId is null;
 
+    /// <summary>
+    /// Reads the store and sends what the tracker says is owed. Any title read latches
+    /// <see cref="WatchState.HarnessTitleSeen"/>, whether or not it is ever recorded. A post the server answered —
+    /// recorded or refused on its merits — settles the value; anything else is re-sent after
+    /// <see cref="HarnessTitleRetryGap"/>. The post runs inline in the watch loop, so it is bounded by
+    /// <paramref name="budget"/> and <paramref name="beat"/> is called before it.
+    /// </summary>
+    internal static async Task PostHarnessTitleAsync(
+            IHarnessTitleStore                                                        store,
+            WatchState                                                                state,
+            Func<HarnessTitlePost, TimeSpan, CancellationToken, Task<HarnessTitleOutcome>> post,
+            TimeSpan                                                                  budget,
+            TimeProvider                                                              time,
+            Action                                                                    beat,
+            Action<string>                                                            log,
+            CancellationToken                                                         ct
+        ) {
+        StoreTitle? read;
         try {
-            using var client  = await http.ForBackgroundAsync(ct);
-            var       outcome = await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, post, ct);
+            read = store.Read();
+        } catch (Exception ex) {
+            log($"Harness title read failed: {ex.Message}");
+            return;
+        }
 
-            if (outcome == HarnessTitleOutcome.Posted) state.TitleTracker.Posted(post);
-            else Log(time, $"Harness title not recorded yet: {outcome}");
+        if (read is not null) state.HarnessTitleSeen = true;
+
+        var now = time.GetUtcNow();
+        if (state.TitleTracker!.Observe(read, now) is not { } owed) return;
+
+        if (ReferenceEquals(owed, state.LastHarnessTitleAttempted) && now - state.LastHarnessTitlePostAttempt < HarnessTitleRetryGap) return;
+
+        state.LastHarnessTitleAttempted   = owed;
+        state.LastHarnessTitlePostAttempt = now;
+        beat();
+
+        HarnessTitleOutcome outcome;
+        try {
+            outcome = await post(owed, budget, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception ex) {
-            Log(time, $"Harness title post failed: {ex.Message}");
+            log($"Harness title post failed: {ex.Message}");
+            return;
         }
+
+        if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.Refused) state.TitleTracker.Settled(owed);
+        if (outcome is not HarnessTitleOutcome.Posted) log($"Harness title not recorded: {outcome}");
     }
+
+    Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct, Action beat) =>
+        PostHarnessTitleAsync(store, state,
+            async (owed, budget, token) => {
+                using var client = await http.ForBackgroundAsync(token);
+                return await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, owed, token, budget);
+            },
+            SecondaryProbeBudget, time, beat, message => Log(time, message), ct);
 
     async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
         try {

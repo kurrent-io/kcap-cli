@@ -19,7 +19,7 @@ public class HarnessTitleTrackerTests {
     [Test]
     public async Task Observed_change_is_timed_by_the_previous_read() {
         var tracker = new HarnessTitleTracker(recordsChangeTime: false);
-        tracker.Posted(tracker.Observe(Title("A"), T0)!);
+        tracker.Settled(tracker.Observe(Title("A"), T0)!);
         tracker.Observe(Title("A"), T0.AddSeconds(30));
 
         await Assert.That(tracker.Observe(Title("B"), T0.AddSeconds(60))).IsEqualTo(new HarnessTitlePost("B", HarnessTitleKind.Rename, T0.AddSeconds(30)));
@@ -35,7 +35,7 @@ public class HarnessTitleTrackerTests {
     [Test]
     public async Task An_unchanged_posted_value_is_not_posted_again() {
         var tracker = new HarnessTitleTracker(recordsChangeTime: false);
-        tracker.Posted(tracker.Observe(Title("A"), T0)!);
+        tracker.Settled(tracker.Observe(Title("A"), T0)!);
 
         await Assert.That(tracker.Observe(Title("A"), T0.AddSeconds(30))).IsNull();
     }
@@ -58,15 +58,42 @@ public class HarnessTitleTrackerTests {
     [Test]
     public async Task A_retried_post_keeps_its_original_change_time() {
         var tracker = new HarnessTitleTracker(recordsChangeTime: false);
-        tracker.Posted(tracker.Observe(Title("A"), T0)!);
+        tracker.Settled(tracker.Observe(Title("A"), T0)!);
         tracker.Observe(Title("A"), T0.AddSeconds(30));
 
         // B observed at T60, timed by the T30 read that still showed A; the post is never
-        // acknowledged (Posted is never called), so a re-read at T90 must not re-time it.
+        // acknowledged (Settled is never called), so a re-read at T90 must not re-time it.
         var first = tracker.Observe(Title("B"), T0.AddSeconds(60));
         var retry = tracker.Observe(Title("B"), T0.AddSeconds(90));
 
         await Assert.That(retry).IsEqualTo(first);
         await Assert.That(retry!.ChangedAt).IsEqualTo(T0.AddSeconds(30));
+    }
+
+    [Test]
+    public async Task Recorded_store_with_missing_time_falls_back_to_previous_read() {
+        var tracker = new HarnessTitleTracker(recordsChangeTime: true);
+        tracker.Settled(tracker.Observe(Title("A", at: T0.AddHours(-1)), T0)!);
+
+        await Assert.That(tracker.Observe(Title("B"), T0.AddSeconds(30))!.ChangedAt).IsEqualTo(T0);
+    }
+
+    [Test]
+    public async Task Return_to_posted_value_drops_stale_pending() {
+        var tracker = new HarnessTitleTracker(recordsChangeTime: false);
+        tracker.Settled(tracker.Observe(Title("A"), T0)!);
+        tracker.Observe(Title("B"), T0.AddSeconds(30));
+
+        await Assert.That(tracker.Observe(Title("A"), T0.AddSeconds(60))).IsNull();
+        await Assert.That(tracker.Observe(Title("B"), T0.AddSeconds(90))!.ChangedAt).IsEqualTo(T0.AddSeconds(60));
+    }
+
+    [Test]
+    public async Task Kind_only_change_is_posted_timed_by_previous_read() {
+        var tracker = new HarnessTitleTracker(recordsChangeTime: false);
+        tracker.Settled(tracker.Observe(Title("A", HarnessTitleKind.Auto), T0)!);
+
+        await Assert.That(tracker.Observe(Title("A", HarnessTitleKind.Rename), T0.AddSeconds(30)))
+            .IsEqualTo(new HarnessTitlePost("A", HarnessTitleKind.Rename, T0));
     }
 }
