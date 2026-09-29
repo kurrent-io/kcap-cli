@@ -37,6 +37,18 @@ public class LocalPermissionBridgeSubagentTests {
         public async ValueTask DisposeAsync() { await Bridge.DisposeAsync(); Client.Dispose(); }
     }
 
+    // A bridge on a fake clock times its bind retries and its shutdown waits on that clock, so its
+    // start and dispose move time forward in steps no longer than one bind-retry gap until they finish.
+    static async Task AdvancingUntilDoneAsync(FakeTimeProvider time, Task pending) {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!pending.IsCompleted) {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("bridge start or dispose did not finish");
+            time.Advance(TimeSpan.FromMilliseconds(60));
+            await Task.WhenAny(pending, Task.Delay(10));
+        }
+        await pending;
+    }
+
     // StopAsync's drain polls the bridge's own clock, which a FakeTimeProvider never advances on
     // its own.
     static async Task WaitUntilIdleAsync(LocalPermissionBridge bridge) {
@@ -190,7 +202,7 @@ public class LocalPermissionBridgeSubagentTests {
             entered.TrySetResult();
             return hold.Task;
         };
-        await bridge.StartAsync(CancellationToken.None);
+        await AdvancingUntilDoneAsync(time, bridge.StartAsync(CancellationToken.None));
         try {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             Task<HttpResponseMessage> Post(bool live) => client.PostAsync($"{bridge.BaseUrl}/claude/subagent",
@@ -213,7 +225,7 @@ public class LocalPermissionBridgeSubagentTests {
             await Assert.That(agent.ActivityClock.LiveSubagents).IsEqualTo(0);
         } finally {
             await WaitUntilIdleAsync(bridge);
-            await bridge.DisposeAsync();
+            await AdvancingUntilDoneAsync(time, bridge.DisposeAsync().AsTask());
         }
     }
 }
