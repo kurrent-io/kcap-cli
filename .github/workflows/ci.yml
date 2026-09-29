@@ -320,26 +320,28 @@ jobs:
           --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico
           --channel win-x64 --outputDir releases
 
-      - name: Assert the bundle
+      - name: Install the bundle
+        run: bash scripts/install-windows-setup.sh releases/KurrentCapacitor-win-x64-Setup.exe
+
+      - name: Assert the installed bundle
         run: |
           set -euo pipefail
-          mkdir -p extracted
-          unzip -q releases/KurrentCapacitor-win-x64-Portable.zip -d extracted
-          bash scripts/assert-app-cli-version.sh extracted/current/kcap.exe "${{ steps.version.outputs.VERSION }}"
-          bash scripts/assert-bundle-digest.sh extracted publish/daemon.sha256
-          extracted/current/kcap-daemon.exe --version
+          install="$(cygpath -u "$LOCALAPPDATA")/KurrentCapacitor"
+          bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "${{ steps.version.outputs.VERSION }}"
+          bash scripts/assert-bundle-digest.sh "$install" publish/daemon.sha256
+          "$install/current/kcap-daemon.exe" --version
           aliases="$(bash scripts/promote-desktop-aliases.sh releases/releases.win-x64.json "${{ steps.version.outputs.VERSION }}")"
           grep -qx beta <<<"$aliases"
 
       # The app must survive its own startup: a missing native library or a platform-only call
       # on the startup path ends the process within seconds.
-      - name: Smoke the packed app
+      - name: Smoke the installed app
         shell: pwsh
         run: |
           $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
           New-Item -ItemType Directory -Force $cfg | Out-Null
           $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
-          $p = Start-Process 'extracted/current/Kurrent Capacitor.exe' -PassThru
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\Kurrent Capacitor.exe') -PassThru
           Start-Sleep 15
           if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id -Force

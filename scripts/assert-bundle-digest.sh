@@ -8,7 +8,7 @@
 # 43 with daemon_start_reason=package_inconsistent. A copy beside a foreign daemon must be refused
 # and the bundled pair must get past the gate; the empty seed makes a daemon that does spawn refuse
 # to boot, and a stop follows either way.
-# Usage: assert-bundle-digest.sh <bundle.app | extracted Windows portable dir> <daemon.sha256-file>
+# Usage: assert-bundle-digest.sh <bundle.app | Windows install root> <daemon.sha256-file>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/hash.sh
@@ -19,7 +19,7 @@ digest_file="${2:?usage: assert-bundle-digest.sh <bundle.app> <daemon.sha256-fil
 expected="$(tr -d '[:space:]' < "$digest_file")"
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "recorded digest is not 64 hex chars: '$expected'" >&2; exit 1; }
 
-# A macOS .app keeps the binaries in Contents/MacOS; an extracted Velopack Windows package in current/.
+# A macOS .app keeps the binaries in Contents/MacOS; a Velopack Windows install in current/.
 if [ -d "$bundle/Contents/MacOS" ]; then bin="$bundle/Contents/MacOS"; exe=""; else bin="$bundle/current"; exe=".exe"; fi
 daemon="$bin/kcap-daemon$exe"
 cli="$bin/kcap$exe"
