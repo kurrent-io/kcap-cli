@@ -10,6 +10,7 @@ public class TranscriptTitleLinesTests {
     [Arguments("claude", """{"type":"ai-title","aiTitle":"x","sessionId":"other"}""", TranscriptTitleLineKind.None)]
     [Arguments("claude", """{"type":"summary","summary":"x","leafUuid":"u"}""", TranscriptTitleLineKind.RecordedWithHarnessTitles)]
     [Arguments("claude", """{"type":"summary","summary":"x","sessionId":"other"}""", TranscriptTitleLineKind.None)]
+    [Arguments("claude", """{"type": "summary", "summary": "x"}""", TranscriptTitleLineKind.RecordedWithHarnessTitles)]
     [Arguments("pi", """{"type":"session_info","name":"x"}""", TranscriptTitleLineKind.RecordedWithHarnessTitles)]
     [Arguments("pi", """{"type":"session_info","name":""}""", TranscriptTitleLineKind.None)]
     [Arguments("gemini", """{"$set":{"summary":"x"}}""", TranscriptTitleLineKind.RecordedWithHarnessTitles)]

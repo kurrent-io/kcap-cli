@@ -6,8 +6,8 @@ namespace Capacitor.Models.Transcripts.Harness.Claude;
 /// <c>ai-title</c>, which every server records; or a <c>custom-title</c> or a <c>{"type":"summary","summary":…}</c>
 /// line, which only a server with harness titles records (the summary ranking below the others). Stored transcripts
 /// can still carry the summary shape as their only title, so it must keep being recognized. Those two count only once
-/// that server is confirmed. The prefilter is the server extractor's own, byte for byte: a line it skips is not
-/// recorded, so it must not count here either.</summary>
+/// that server is confirmed. Like the server's extractor, a line is judged by its parsed
+/// <c>type</c>, never its spelling: one the server does not record must not count here either.</summary>
 public static class ClaudeTitleLine {
     /// <param name="sessionId">The session the line is recorded for. A title line copied in from another session names
     /// that session and does not count; a legacy summary names none and counts unless it names another.</param>
@@ -15,7 +15,7 @@ public static class ClaudeTitleLine {
     /// only by a server with harness titles.</param>
     public static bool CarriesTitle(string line, string sessionId, out bool recordedByEveryServer) {
         recordedByEveryServer = false;
-        if (!line.Contains("\"ai-title\"") && !line.Contains("\"custom-title\"") && !line.Contains("\"type\":\"summary\"")) return false;
+        if (!line.Contains("\"ai-title\"") && !line.Contains("\"custom-title\"") && !line.Contains("\"summary\"")) return false;
 
         try {
             using var doc  = JsonDocument.Parse(line);

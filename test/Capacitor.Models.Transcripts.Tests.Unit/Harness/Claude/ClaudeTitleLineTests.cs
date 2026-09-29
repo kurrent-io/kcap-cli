@@ -29,11 +29,11 @@ public class ClaudeTitleLineTests {
     public async Task Counts_only_a_title_line_of_the_watched_session(string line, bool expected) =>
         await Assert.That(ClaudeTitleLine.CarriesTitle(line, "5cdc4fccff9e4fdc8d93cf47ff5a140a", out _)).IsEqualTo(expected);
 
-    /// <summary>The server's extractor matches the summary type by its compact form, as Claude Code writes it, and skips
-    /// any other spelling; a line the server skips is not recorded, so it must not stop LLM titling either.</summary>
+    /// <summary>The server judges a summary line by its parsed <c>type</c>, so a spaced spelling is recorded like the
+    /// compact one and counts here too.</summary>
     [Test]
-    public async Task A_summary_the_server_extractor_skips_does_not_count() {
-        await Assert.That(ClaudeTitleLine.CarriesTitle("""{"type": "summary", "summary": "Title"}""", "s", out _)).IsFalse();
-        await Assert.That(ClaudeTitleLine.CarriesTitle("""{"type":"summary","summary":"Title"}""", "s", out _)).IsTrue();
-    }
+    [Arguments("""{"type": "summary", "summary": "Title"}""")]
+    [Arguments("""{"type":"summary","summary":"Title"}""")]
+    public async Task A_summary_counts_however_its_json_is_spaced(string line) =>
+        await Assert.That(ClaudeTitleLine.CarriesTitle(line, "s", out _)).IsTrue();
 }
