@@ -79,12 +79,14 @@ internal static partial class ProcessTree {
         var seen = new HashSet<int>();
 
         for (var rescan = 0; rescan <= MaxRescans; rescan++) {
-            var fresh    = false;
-            var children = Children(pid).ToList();
+            var fresh = false;
 
-            // A root proven to be a different incarnation after listing means the pid was reused, so the
-            // listed children may be the replacement's and are left alone. A root that merely exited
-            // (identity unreadable) still owned them when they were listed, so they are killed.
+            // The listing is trusted only when bracketed: the root must be the captured incarnation just
+            // before it and not proven a different one just after. A root that exited in between leaves
+            // its listed children to be killed, not orphaned; a pid proven reused leaves them alone. What
+            // remains is a reuse, plus the replacement spawning and exiting, inside one listing.
+            if (!ProcessIdentity.Matches(pid, identity)) break;
+            var children = Children(pid).ToList();
             if (ProcessIdentity.MatchesTri(pid, identity) == false) return;
 
             foreach (var child in children) {
