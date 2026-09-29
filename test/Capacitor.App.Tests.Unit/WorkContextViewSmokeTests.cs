@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Shapes;
@@ -196,8 +197,48 @@ public class WorkContextViewSmokeTests {
     static int VisibleChevrons(Control within) =>
         within.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Count(p => p.Classes.Contains("chevron") && p.IsEffectivelyVisible);
 
-    /// Folded, the section is one initial per person, each naming its person on hover; the header
-    /// swaps that row for the names.
+    static AutomationPeer Peer(Control control) => ControlAutomationPeer.CreatePeerForElement(control);
+
+    static bool IsAnnounced(Control control) => Peer(control).IsContentElement() || Peer(control).IsControlElement();
+
+    /// The letter inside stays out of the accessibility tree, or a screen reader reads each person twice.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_folded_initial_is_announced_as_its_person() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(CrowdedWhoRead());
+
+            var chips = Avatars(host.Find<ItemsControl>("ContributorStack"));
+            await Assert.That(chips.Select(c => Peer(c).GetName()))
+                .IsEquivalentTo(new[] { "Ada", "Bob", "Cyd", "Dee", "Eve" }, CollectionOrdering.Matching);
+            await Assert.That(chips.All(IsAnnounced)).IsTrue();
+            await Assert.That(chips.Select(c => c.GetVisualDescendants().OfType<TextBlock>().Single()).Any(IsAnnounced)).IsFalse();
+        });
+    }
+
+    /// Opened, the requester's name button speaks for the row, so the initial beside it goes quiet.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_requester_initial_is_announced_only_while_folded() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var read = KeyOnlyRead();
+            await host.ShowAsync(read with { Item = read.Item! with { Contributors = [] } });
+
+            var avatar = Avatars(host.Find<Grid>("RequesterRow")).Single();
+            await Assert.That(Peer(avatar).GetName()).IsEqualTo(host.Vm.Requester);
+            await Assert.That(IsAnnounced(avatar)).IsTrue();
+            await Assert.That(IsAnnounced(avatar.GetVisualDescendants().OfType<TextBlock>().Single())).IsFalse();
+
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            await Assert.That(IsAnnounced(avatar)).IsFalse();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Who_folds_to_initials_and_its_header_opens_the_names() {
@@ -255,7 +296,6 @@ public class WorkContextViewSmokeTests {
         });
     }
 
-    /// Until an item lists anyone the requester stands in, folded to an initial like anyone else.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_requester_fallback_folds_to_its_initial() {

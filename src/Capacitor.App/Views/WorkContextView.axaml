@@ -87,6 +87,11 @@
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         </Style>
+        <!-- A Border is outside the accessibility tree unless it asks in, so the folded initial
+             asks and carries the name; the letter stays out, or each person is read twice. -->
+        <Style Selector="Border.avatar.folded">
+            <Setter Property="AutomationProperties.AccessibilityView" Value="Content" />
+        </Style>
         <Style Selector="Border.avatar > Panel > TextBlock">
             <Setter Property="FontSize" Value="12" />
             <Setter Property="LineHeight" Value="12" />
@@ -95,6 +100,7 @@
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="AutomationProperties.AccessibilityView" Value="Raw" />
         </Style>
         <!-- Stretch wrapper around a card: the card is the chrome, so the wrapper paints nothing in
              any state — Fluent's hover fill lands on the presenter at the button's own radius and
@@ -495,7 +501,7 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
-                                            <Border Classes="avatar" ToolTip.Tip="{Binding Name}">
+                                            <Border Classes="avatar folded" ToolTip.Tip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
                                                 <Panel>
                                                     <TextBlock Text="{Binding Initial}" />
                                                 </Panel>
@@ -532,7 +538,8 @@
                                 </ItemsControl>
                             </Panel>
                             <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" IsVisible="{Binding !HasContributors}">
-                                <Border Classes="avatar" VerticalAlignment="Center" ToolTip.Tip="{Binding Requester}">
+                                <Border Classes="avatar" Classes.folded="{Binding !PeopleExpanded}" VerticalAlignment="Center"
+                                        ToolTip.Tip="{Binding Requester}" AutomationProperties.Name="{Binding Requester}">
                                     <Panel>
                                         <TextBlock Text="{Binding RequesterInitial}" />
                                     </Panel>
