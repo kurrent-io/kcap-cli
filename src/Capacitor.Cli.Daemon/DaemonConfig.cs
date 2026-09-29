@@ -141,6 +141,15 @@ public class DaemonConfig {
     /// probed from, taken before that probe; the vendor CLI watcher's starting point.</summary>
     public IReadOnlyDictionary<string, Services.CliBinaryStat?>? UnattendedVendorBaselines { get; set; }
 
+    /// <summary>Per-vendor launchable models probed from the installed CLIs. Replaced by reference on
+    /// every refresh, never mutated: serializers on other threads may be enumerating the current
+    /// instance.</summary>
+    public Dictionary<string, VendorModelOption[]>? VendorModels { get; set; }
+
+    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe; the
+    /// vendor CLI watcher's starting point for them.</summary>
+    public IReadOnlyDictionary<string, Services.CatalogPathStat[]>? VendorCatalogBaselines { get; set; }
+
     /// <summary>
     /// Vendor tokens this daemon accepts a launch-time ACP permission preset for — the installed
     /// hostable vendors (a subset of <see cref="SupportedVendors"/>) that route permissions through

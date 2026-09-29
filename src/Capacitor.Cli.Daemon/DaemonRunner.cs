@@ -633,12 +633,18 @@ public static partial class DaemonRunner {
         var unattendedStatuses = ClassifyUnattendedVendors(runtimeFactories);
 
         config.UnattendedVendors = AdvertisedUnattendedVendors(unattendedStatuses);
-        // Fingerprinted BEFORE the probe: a vendor that updates between the two then reads as a
+        // Fingerprinted BEFORE the probes: a vendor that updates between the two then reads as a
         // change to the watcher, instead of as the baseline the stale advertisement already matches.
+        // Every advertised vendor is recorded, since a catalog-only vendor is watched too.
         config.UnattendedVendorBaselines =
-            FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.UnattendedVendors);
+            FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.SupportedVendors);
+        config.VendorCatalogBaselines =
+            VendorModelCatalogs.FingerprintCatalogPaths(runtimeFactories, config.SupportedVendors);
         config.UnattendedVendorCapabilities =
             ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.UnattendedVendors);
+        config.VendorModels =
+            await VendorModelCatalogs.ProbeAsync(runtimeFactories, config.SupportedVendors, CancellationToken.None);
+        foreach (var (vendor, models) in config.VendorModels) LogVendorModels(logger, vendor, models.Length);
         LogStartupPhase(logger, "vendors probed");
 
         // Which build of each unattended vendor was installed when this daemon started. Recorded at
@@ -1941,4 +1947,7 @@ public static partial class DaemonRunner {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "startup phase: {Phase}")]
     static partial void LogStartupPhase(ILogger logger, string phase);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Vendor}: {Count} models")]
+    static partial void LogVendorModels(ILogger logger, string vendor, int count);
 }
