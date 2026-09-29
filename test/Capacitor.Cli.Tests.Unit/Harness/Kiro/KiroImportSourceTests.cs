@@ -13,19 +13,18 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Kiro;
 /// </summary>
 public class KiroImportSourceTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+    [TempDir] public required TempDir Tmp { get; init; }
 
     const string Dashed = "5f6c2b1a-9e3d-4a7c-bb12-1c2d3e4f5a6b";
 
     [Test]
     public async Task discovery_reads_jsonl_and_sibling_json_metadata() {
-        using var tmp = new TempDir();
-
-        tmp.CreateFile($"{Dashed}.jsonl",
+        Tmp.CreateFile($"{Dashed}.jsonl",
             """{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"hi"}]}}""" + "\n");
-        tmp.CreateFile($"{Dashed}.json",
+        Tmp.CreateFile($"{Dashed}.json",
             """{"cwd":"/work","title":"Hi there","created_at":"2026-06-17T10:30:00Z","session_state":{"rts_model_state":{"model_info":{"model_id":"auto"}}}}""");
 
-        var src = new KiroImportSource(Config.Root, tmp.Path, new KiroCrewPaths(tmp.Path, null), router: new GitProviderRouter(), time: TimeProvider.System);
+        var src = new KiroImportSource(Config.Root, Tmp.Path, new KiroCrewPaths(Tmp.Path, null), router: new GitProviderRouter(), time: TimeProvider.System);
         await Assert.That(src.IsAvailable).IsTrue();
 
         var found = await src.DiscoverAsync(new DiscoveryFilters(null, null, null, 1), CancellationToken.None);
@@ -42,10 +41,9 @@ public class KiroImportSourceTests {
 
     [Test]
     public async Task discovery_session_filter_matches_dashless_id() {
-        using var tmp = new TempDir();
-        tmp.CreateFile($"{Dashed}.jsonl", "{}\n");
+        Tmp.CreateFile($"{Dashed}.jsonl", "{}\n");
 
-        var src = new KiroImportSource(Config.Root, tmp.Path, new KiroCrewPaths(tmp.Path, null), router: new GitProviderRouter(), time: TimeProvider.System);
+        var src = new KiroImportSource(Config.Root, Tmp.Path, new KiroCrewPaths(Tmp.Path, null), router: new GitProviderRouter(), time: TimeProvider.System);
 
         var match = await src.DiscoverAsync(new DiscoveryFilters(null, Dashed.Replace("-", ""), null, 1), CancellationToken.None);
         await Assert.That(match.Count).IsEqualTo(1);
@@ -67,8 +65,7 @@ public class KiroImportSourceTests {
     /// <summary>The usage sidecar is Kiro's own file; the read must not deny it write access (mandatory on Windows).</summary>
     [Test]
     public async Task Usage_sidecar_reads_while_a_writer_holds_it() {
-        using var tmp = new TempDir();
-        var path = tmp.CreateFile($"{Dashed}.json", """{"title":"live"}""");
+        var path = Tmp.CreateFile($"{Dashed}.json", """{"title":"live"}""");
 
         using var writer = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
 
