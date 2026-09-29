@@ -282,6 +282,14 @@ record SessionTitlePayload {
     public long CacheWriteTokens { get; init; }
 }
 
+internal sealed record HarnessTitleHook(
+    [property: JsonPropertyName("session_id")] string          SessionId,
+    [property: JsonPropertyName("title")]      string          Title,
+    [property: JsonPropertyName("kind")]       string          Kind,
+    [property: JsonPropertyName("changed_at")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                                               DateTimeOffset? ChangedAt);
+
 record WhatsDonePayload {
     [JsonPropertyName("session_id")]
     public required string SessionId { get; init; }
@@ -1075,6 +1083,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(GitCacheEntry))]
 [JsonSerializable(typeof(TranscriptBatch))]
 [JsonSerializable(typeof(SessionTitlePayload))]
+[JsonSerializable(typeof(HarnessTitleHook))]
 [JsonSerializable(typeof(WhatsDonePayload))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareRequest))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareResponse))]
