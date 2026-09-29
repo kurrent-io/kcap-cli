@@ -265,9 +265,9 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(_stub.Requests("judge-facts")).IsEmpty();
         var payload = Payload();
         await Assert.That(payload.GetProperty("categories").GetArrayLength()).IsEqualTo(0);
-        await Assert.That(payload.GetProperty("overall_score").ValueKind).IsEqualTo(JsonValueKind.Null);
-        await Assert.That(payload.GetProperty("retrospective").ValueKind).IsEqualTo(JsonValueKind.Null);
-        await Assert.That(payload.GetProperty("retrospective_prompt_version").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(payload.GetProperty("overall_score").IsNull).IsTrue();
+        await Assert.That(payload.GetProperty("retrospective").IsNull).IsTrue();
+        await Assert.That(payload.GetProperty("retrospective_prompt_version").IsNull).IsTrue();
         await Assert.That(payload.GetProperty("facts_used").GetArrayLength()).IsEqualTo(0);
         foreach (var count in new[] { "assessed_questions", "unassessed_questions", "judged_questions" })
             await Assert.That(payload.GetProperty(count).GetInt32()).IsEqualTo(0);
@@ -342,6 +342,45 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(outcome.Assessment!.EvidenceCoverage!.Citations.Single().Digest).IsEqualTo(Digest);
         await Assert.That(setup.Scope.Refreshes).IsEqualTo(1);
         await Assert.That(_stub.Requests("evidence-citations").Single().RequestMessage.Body!.Contains("\"tok2\"")).IsTrue();
+    }
+
+    [Test]
+    public async Task An_all_failed_run_whose_scope_moved_before_finalize_posts_nothing() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var time   = new FakeTimeProvider(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+        var start  = time.GetUtcNow();
+        var scope  = Request.Create().WithPath($"/api/sessions/{Sid}/evidence-scope").WithParam("adopted_children", "false").UsingGet();
+        var first  = EvidenceServerStub.Manifest("v1", "tok", null, start, start.AddMinutes(30), [EvidenceServerStub.Source(Root, 0, 124_999, 1)]);
+        var moved  = EvidenceServerStub.Manifest("v2", "tok2", null, start.AddMinutes(30), start.AddMinutes(60), [EvidenceServerStub.Source(Root, 0, 125_010, 1)]);
+        _stub.Server.Given(scope).InScenario("finalize-move").WillSetStateTo("resolved").AtPriority(1).RespondWith(Response.Create().WithStatusCode(200).WithBody(first));
+        _stub.Server.Given(scope).InScenario("finalize-move").WhenStateIs("resolved").AtPriority(1).RespondWith(Response.Create().WithStatusCode(200).WithBody(moved));
+        ServeCatalog(); ServeScope(cutoff: 124_999);
+        var observer = new RecordingEvalObserver();
+        using var claude = Claude(Dir("c-final-move"), Verdict("q1"));
+        await using var setup = (await Prepare(claude, observer, time, Dir("root-final-move"), "q1"))!;
+        time.Advance(TimeSpan.FromMinutes(29.5));
+        EvalQuestionFailure[] failures = [new() { Category = "safety", QuestionId = "q1", Code = "spend_budget" }];
+
+        var result = await EvalService.FinalizeEvidenceAsync(setup, _http, _stub.Url, [], failures, "sonnet", observer, time, CancellationToken.None);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(observer.Failures).Contains(EvalService.EvidenceScopeMovedReason);
+        await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_run_with_no_result_and_a_repeated_question_reports_failure_without_throwing() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 124_999);
+        var observer = new RecordingEvalObserver();
+        using var claude = Claude(Dir("c-repeat"), Verdict("q1"));
+        await using var setup = (await Prepare(claude, observer, TimeProvider.System, Dir("root-repeat"), "q1", "q1"))!;
+
+        var result = await EvalService.FinalizeEvidenceAsync(setup, _http, _stub.Url, [], [], "sonnet", observer, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(observer.Failures).Contains("all judge invocations failed");
+        await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
     }
 
     // Answers the cursor re-opens in order: 200 for the first `ok` of them, then 500 for every later one.
