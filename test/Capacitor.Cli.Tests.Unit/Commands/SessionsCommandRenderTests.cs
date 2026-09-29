@@ -101,6 +101,22 @@ public class SessionsCommandRenderTests {
         await Assert.That(text).Contains("More: kcap sessions --repo acme/widgets --cursor eyJ2IjoxfQ --limit 20");
     }
 
+    /// <summary>The next-page line is pasted into a shell, so a value that is not a plain token is
+    /// never printed into it, whichever side it came from.</summary>
+    [Test]
+    [Arguments("acme/widgets", "x; rm -rf ~")]
+    [Arguments("acme;evil/widgets", "eyJ2IjoxfQ")]
+    [Arguments("$(evil)/widgets", "eyJ2IjoxfQ")]
+    public async Task A_value_that_is_not_a_token_is_not_printed_into_the_next_page_command(string repo, string cursor) {
+        var page = new RepoSessionsResponse([Row("s-1", "ended", "full", "main")], 5, 1, 0, Since, null, cursor);
+
+        var text = SessionsCommand.Render(page, repo, Options("all", repo, since: Since, limit: 1));
+
+        await Assert.That(text).Contains("More: rows follow; read next_cursor with --json and pass it as --cursor.");
+        await Assert.That(text).DoesNotContain("--cursor " + cursor);
+        await Assert.That(text).DoesNotContain("--repo " + repo);
+    }
+
     [Test]
     public async Task Listing_every_repository_shows_each_rows_repository() {
         var page = new RepoSessionsResponse(

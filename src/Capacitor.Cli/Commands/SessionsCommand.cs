@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
@@ -8,7 +9,7 @@ using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
-class SessionsCommand(
+partial class SessionsCommand(
         ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, GitProviderRouter router,
         WorkingDirectory workdir, TimeProvider time) {
     internal const string TimeFilterUnsupported = "The time filter needs a newer server; ask your admin to update.";
@@ -160,7 +161,7 @@ class SessionsCommand(
             sb.AppendLine("Details (full access): kcap recap --full <session-id>");
         }
 
-        if (page.NextCursor is { } next) sb.AppendLine($"More: {NextPage(options, repoLabel, next)}");
+        if (page.NextCursor is { } next) sb.AppendLine(NextPage(options, repoLabel, next));
 
         return sb.ToString();
     }
@@ -174,9 +175,18 @@ class SessionsCommand(
         return $"No {what} visible to you on {repoLabel}{when}.";
     }
 
-    // The line is meant to be pasted anywhere, so it names the repository even when this run took it from the checkout.
-    static string NextPage(SessionsOptions options, string repoLabel, string cursor) =>
-        $"kcap sessions --repo {options.Repo ?? repoLabel} --cursor {cursor} --limit {options.Limit}";
+    // The line is meant to be pasted anywhere: it names the repository even when this run took it from
+    // the checkout, and it is printed only from values a shell can read as nothing but arguments.
+    static string NextPage(SessionsOptions options, string repoLabel, string cursor) {
+        var repo = options.Repo ?? repoLabel;
+
+        return Token().IsMatch(repo) && Token().IsMatch(cursor)
+            ? $"More: kcap sessions --repo {repo} --cursor {cursor} --limit {options.Limit}"
+            : "More: rows follow; read next_cursor with --json and pass it as --cursor.";
+    }
+
+    [GeneratedRegex("^[A-Za-z0-9_./=-]+$")]
+    private static partial Regex Token();
 
     static string Repository(RepoSessionRepositoryDto? repo) =>
         repo switch {

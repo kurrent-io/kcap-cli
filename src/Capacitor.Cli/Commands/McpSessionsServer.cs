@@ -443,9 +443,15 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     static string? TextOf(JsonObject? args, string key) =>
         args?[key] is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text) ? text : null;
 
-    // A client that fills every declared argument with a blank default is not narrowing the page.
+    // A blank string or a zero offset is what a client sends for an argument it did not set; anything
+    // else that is present is a filter, whatever its type.
     static bool Sent(JsonObject? args, string key) =>
-        key == "offset" ? TryReadInt(args, key, out var offset) && offset != 0 : TextOf(args, key) is not null;
+        args?[key] switch {
+            null                                                                => false,
+            JsonValue v when v.TryGetValue(out string? text)                    => !string.IsNullOrWhiteSpace(text),
+            JsonValue v when key == "offset" && v.TryGetValue(out int offset)   => offset != 0,
+            _                                                                   => true
+        };
 
     internal const string RepoPlansUnsupportedMessage =
         "This server does not list a repository's plans yet. Read one session's plans with get_declared_plans instead.";

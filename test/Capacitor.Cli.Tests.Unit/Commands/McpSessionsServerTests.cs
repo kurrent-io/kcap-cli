@@ -154,6 +154,16 @@ public class McpSessionsServerTests {
     }
 
     [Test]
+    public async Task BuildRepoSessionsUrl_a_non_string_filter_beside_a_cursor_is_refused_by_name() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
+                "http://srv", new JsonObject { ["cursor"] = "eyJ2IjoxfQ", ["owner"] = 42, ["offset"] = 7 }, CwdHash, Clock))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("owner");
+        await Assert.That(ex.Message).Contains("offset");
+    }
+
+    [Test]
     public async Task BuildRepoSessionsUrl_since_later_than_until_is_refused() {
         var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
                 "http://srv", new JsonObject { ["since"] = "2026-09-28", ["until"] = "2026-09-27" }, CwdHash, Clock))
