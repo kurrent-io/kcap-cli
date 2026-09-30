@@ -72,7 +72,8 @@ public class PiReviewerLaunchTests {
             File.WriteAllText(Path.Combine(dir, "ready.json"), activeJson);
         };
 
-    const string AllFive = """{"active":["list_directory","read_file","search_files","send_flow_message","submit_review_result"]}""";
+    const string AllActive =
+        """{"active":["git_diff","git_log","git_show","list_directory","read_file","search_files","send_flow_message","submit_review_result"]}""";
 
     // ── BuildPsi: the reviewer launch vector ──
 
@@ -83,7 +84,7 @@ public class PiReviewerLaunchTests {
         await Assert.That(psi.ArgumentList).IsEquivalentTo(new[] {
             "--mode", "rpc",
             "--no-approve", "--no-extensions", "-e", Paths.Extension,
-            "--tools", "read_file,list_directory,search_files,submit_review_result,send_flow_message",
+            "--tools", "read_file,list_directory,search_files,git_log,git_show,git_diff,submit_review_result,send_flow_message",
             "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--system-prompt", Paths.SystemPrompt, "--append-system-prompt", "",
             "--offline",
@@ -244,10 +245,82 @@ public class PiReviewerLaunchTests {
 
     // ── launch order, readiness and the pre-registration verdict ──
 
+    /// <summary>The reviewer runs inside the repository under review, so a relative PATH entry would let a
+    /// file there be run as the kcap or git it spawns.</summary>
+    [Test]
+    public async Task The_reviewer_path_keeps_only_absolute_entries() {
+        var sep = Path.PathSeparator;
+        var abs = Path.GetFullPath("/usr/bin");
+
+        await Assert.That(PiLaunchEnvironment.AbsoluteEntries($".{sep}{abs}{sep}bin{sep}{sep}./tools"))
+            .IsEqualTo(abs);
+
+        var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(isReviewFlow: true), Paths, Tools);
+        await Assert.That(psi.Environment["PATH"]!.Split(sep).All(Path.IsPathFullyQualified)).IsTrue();
+    }
+
+    // ── borrowed review: a daemon-owned snapshot, never the live checkout ──
+
+    [Test]
+    [Arguments(true, true, "independent-snapshot")]
+    [Arguments(false, false, null)]
+    public async Task A_borrowed_review_is_advertised_only_while_the_reviewer_is_supported(
+            bool reviewerEnabled, bool advertised, string? containment) {
+        var config = ConfigWithState(reviewerEnabled);
+        PiRpcHostedAgentRuntimeFactory.VersionStoreFor(config).Affirm("0.85.1");
+        var factory = Factory(config, new FakePiRpcProcess());
+
+        await Assert.That(factory.SupportsBorrowedReviewFlow).IsEqualTo(advertised);
+        await Assert.That(factory.BorrowedReviewContainment).IsEqualTo(containment);
+        await Assert.That(factory.BorrowedReviewRequiresIndependentSnapshot).IsTrue();
+    }
+
+    static RuntimeStartContext SnapshotCtx() => Ctx(isReviewFlow: true) with {
+        Worktree                   = new WorktreeInfo(Path: "/abs/snap/sub", Branch: "b", SourceRepo: "/repo", SnapshotRoot: "/abs/snap"),
+        IsBorrowedSnapshot         = true,
+        ReviewContextCapabilityUrl = "http://127.0.0.1:1/review-context/token"
+    };
+
+    /// <summary>The snapshot's working directory can be a subdirectory of the requester's repository, but
+    /// the reviewer must be able to read the whole of it, so its tools are rooted at the snapshot root.</summary>
+    [Test]
+    public async Task A_borrowed_snapshot_review_roots_the_reviewer_at_the_snapshot_and_offers_the_review_context() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
+        var (config, process) = ReadyConfigAndProcess(
+            """{"active":["git_diff","git_log","git_show","kcap_review_context_get_branch_authored_mcp_configs","list_directory","read_file","search_files","send_flow_message","submit_review_result"]}""");
+        string? manifest = null;
+        var ready = process.OnWrite!;
+        process.OnWrite = json => {
+            ready(json);
+            manifest ??= File.ReadAllText(Path.Combine(Directory.EnumerateDirectories(LaunchRoot(config)).Single(), "manifest.json"));
+        };
+
+        var start = await Factory(config, process).StartAsync(SnapshotCtx(), CancellationToken.None);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(manifest!);
+        await Assert.That(doc.RootElement.GetProperty("root").GetString()).IsEqualTo("/abs/snap");
+        await Assert.That(doc.RootElement.GetProperty("servers").EnumerateArray()
+            .Any(s => s.GetProperty("id").GetString() == "kcap-review-context")).IsTrue();
+        await start.Runtime.DisposeAsync();
+    }
+
+    [Test]
+    public async Task A_snapshot_launch_without_a_snapshot_root_or_for_an_interactive_agent_is_refused() {
+        var config = ConfigWithState();
+        PiRpcHostedAgentRuntimeFactory.VersionStoreFor(config).Affirm("0.85.1");
+
+        var noRoot = SnapshotCtx() with { Worktree = new WorktreeInfo(Path: "/abs/snap/sub", Branch: "b", SourceRepo: "/repo") };
+        var interactive = SnapshotCtx() with { IsReviewFlow = false };
+
+        foreach (var ctx in new[] { noRoot, interactive })
+            await Assert.That(async () => await Factory(config, new FakePiRpcProcess()).StartAsync(ctx, CancellationToken.None))
+                .Throws<InvalidOperationException>().WithMessageContaining("borrowed_snapshot_containment_mismatch");
+    }
+
     [Test]
     public async Task The_first_prompt_is_written_only_after_the_tool_surface_is_confirmed() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
 
         var start = await Factory(config, process).StartAsync(Ctx(isReviewFlow: true, prompt: "review this"), CancellationToken.None);
 
@@ -259,7 +332,7 @@ public class PiReviewerLaunchTests {
 
     [Test]
     [Arguments("""{"active":["read_file"]}""")]
-    [Arguments("""{"active":["list_directory","read_file","search_files","send_flow_message","submit_review_result","bash"]}""")]
+    [Arguments("""{"active":["git_diff","git_log","git_show","list_directory","read_file","search_files","send_flow_message","submit_review_result","bash"]}""")]
     public async Task A_tool_surface_mismatch_refuses_the_launch_and_sends_no_prompt(string ready) {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
         var (config, process) = ReadyConfigAndProcess(ready);
@@ -274,7 +347,7 @@ public class PiReviewerLaunchTests {
     [Test]
     public async Task A_child_that_never_answers_is_refused_as_an_extension_failure_without_its_stderr() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
         process.AutoStateResponse = null;
         process.Diagnostics = "Failed to load extension: secret-looking text";
 
@@ -288,7 +361,7 @@ public class PiReviewerLaunchTests {
     [Test]
     public async Task A_guard_that_wins_before_StartAsync_returns_throws_its_coded_reason() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
         var ready = process.OnWrite!;
         process.OnWrite = json => {
             ready(json);
@@ -310,7 +383,7 @@ public class PiReviewerLaunchTests {
     [Test]
     public async Task The_launch_directory_is_removed_when_the_runtime_is_disposed() {
         Skip.Unless(!OperatingSystem.IsWindows(), "Owner-only launch directory.");
-        var (config, process) = ReadyConfigAndProcess(AllFive);
+        var (config, process) = ReadyConfigAndProcess(AllActive);
 
         var start = await Factory(config, process).StartAsync(Ctx(isReviewFlow: true), CancellationToken.None);
         await Assert.That(Directory.EnumerateDirectories(LaunchRoot(config))).Count().IsEqualTo(1);

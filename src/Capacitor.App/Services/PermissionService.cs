@@ -64,6 +64,10 @@ public sealed class PermissionService : IPermissionService {
         _cache.Connect()
             .QueryWhenChanged(q => Agents(q.Items))
             .StartWith(Agents(_cache.Items));
+    public IObservable<IReadOnlySet<string>> AgentsAwaitingAnswer =>
+        _cache.Connect()
+            .QueryWhenChanged(q => Agents(q.Items.Where(static p => p.IsQuestion)))
+            .StartWith(Agents(_cache.Items.Where(static p => p.IsQuestion)));
     public IObservable<PendingSummary> Summary =>
         _cache.Connect()
             .QueryWhenChanged(q => PendingSummary.From(q.Items))

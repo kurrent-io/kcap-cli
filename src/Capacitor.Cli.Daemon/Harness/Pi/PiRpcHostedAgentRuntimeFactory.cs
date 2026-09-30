@@ -3,6 +3,7 @@ using System.Text;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -56,6 +57,8 @@ namespace Capacitor.Cli.Daemon.Harness.Pi;
 /// <param name="posixHost">Test seam ONLY, for the platform half of the reviewer gate. Production
 /// passes null, which reads the ambient OS. Taken as an argument so every arm of the ladder is
 /// reachable from any host — the Windows arm is otherwise unassertable on POSIX.</param>
+/// <param name="paths">Pi's layout as the entry point resolved it, whose auth and models files
+/// fingerprint the model catalog. Null publishes no fingerprint paths.</param>
 internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         DaemonConfig                                                 config,
         ILoggerFactory                                                loggerFactory,
@@ -64,7 +67,8 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         Func<string, bool>?                                           binaryExists = null,
         TimeSpan?                                                     readyDeadline = null,
         Func<string, string?>?                                        resolveVersion = null,
-        bool?                                                         posixHost = null
+        bool?                                                         posixHost = null,
+        PiPaths?                                                      paths = null
     ) : IHostedAgentRuntimeFactory {
     readonly ILogger _logger = loggerFactory.CreateLogger<PiRpcHostedAgentRuntimeFactory>();
 
@@ -89,12 +93,31 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
     /// <summary>Advertising is the offer to review unattended, so it answers exactly what a launch would.</summary>
     public bool SupportsUnattended => DescribeUnattendedSupport().Supported;
 
+    /// <summary>A borrowed review runs in a daemon-owned copy of the requester's checkout, rebuilt before
+    /// every round, so the reviewer extension's own root-confined tools stay the whole containment — no
+    /// process sandbox is needed, and the live checkout is never the root.</summary>
+    public bool SupportsBorrowedReviewFlow => SupportsUnattended;
+
+    public string? BorrowedReviewContainment => SupportsBorrowedReviewFlow ? "independent-snapshot" : null;
+
+    public bool BorrowedReviewRequiresIndependentSnapshot => true;
+
     public UnattendedSupport DescribeUnattendedSupport() =>
         ReviewerRefusal() is { } reason ? new(false, reason) : new(true, null);
 
     /// <summary>Pi's model rides argv (<c>--model</c>), applied on every launch that resolves one —
     /// unlike a vendor whose model-selection hook is unverified.</summary>
     public bool SupportsModelSelection => true;
+
+    public IReadOnlyList<string> CatalogFingerprintPaths =>
+        paths is null ? [] : [paths.AuthJson, paths.ModelsJson];
+
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) =>
+        IsAvailable()
+            ? PiModelCatalogProbe.RunAsync(config.PiPath,
+                PiModelCatalogProbe.DirectoryFor(config.Store.StateDirectory(config.Name)),
+                _processSource, time, _logger, ct)
+            : Task.FromResult<IReadOnlyList<VendorModelOption>?>(null);
 
     /// <summary>The daemon-owned record of the oldest <c>pi</c> build this daemon will run — the same
     /// shared store the other gated reviewers use, keyed by vendor under this daemon's own state root.
@@ -150,6 +173,10 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 "pi_requires_owned_worktree: this runtime has no containment strategy for a borrowed "
               + "workspace, so it runs only in a daemon-owned worktree.");
+
+        // A borrowed checkout reaches this runtime only as a daemon-owned snapshot, and only for a reviewer.
+        if (ctx.IsBorrowedSnapshot && (!ctx.IsReviewFlow || ctx.Worktree.SnapshotRoot is null))
+            throw new InvalidOperationException("borrowed_snapshot_containment_mismatch");
 
         return ctx.IsReviewFlow
             ? await StartReviewerAsync(ctx, ct).ConfigureAwait(false)
@@ -247,7 +274,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         var state   = config.Store.StateDirectory(config.Name);
         var paths   = PiReviewerLaunchDir.Create(
             state, config.DaemonEpoch ?? "unpinned", ctx.AgentId,
-            PiReviewerManifest.Build(ctx.Worktree.Path, servers, tools), _logger);
+            PiReviewerManifest.Build(ReviewRoot(ctx), servers, tools), _logger);
 
         PiRpcHostedAgentRuntime? runtime = null;
         IPiRpcProcess?           process = null;
@@ -305,6 +332,11 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
               + "when a result server or a required tool is unavailable (stderr is in the daemon log).", ex);
         }
     }
+
+    /// <summary>The directory the reviewer's tools are confined to: the whole snapshot for a borrowed
+    /// review, whose working directory may be a subdirectory of it, else the owned worktree.</summary>
+    internal static string ReviewRoot(RuntimeStartContext ctx) =>
+        ctx.IsBorrowedSnapshot ? ctx.Worktree.SnapshotRoot! : ctx.Worktree.Path;
 
     /// <summary>The checks <see cref="AcpReviewFlowMcp.Build"/> assumes its caller made: a blank input
     /// or a rejected allowlist would launch a reviewer that can never report, and a first prompt Pi

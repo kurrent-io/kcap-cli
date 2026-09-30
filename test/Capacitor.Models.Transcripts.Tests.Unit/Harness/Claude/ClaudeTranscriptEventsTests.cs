@@ -162,10 +162,11 @@ public class ClaudeTranscriptEventsTests {
     }
 
     [Test]
-    public async Task An_attachment_that_is_not_a_task_notification_queued_command_is_ignored() {
+    public async Task An_attachment_that_is_not_a_queued_command_is_ignored() {
         foreach (var line in new[] {
             """{"type":"attachment","message":{"content":"x"}}""",
-            """{"type":"attachment","attachment":{"type":"queued_command","prompt":"go","commandMode":"prompt"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","prompt":"","commandMode":"prompt"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","prompt":"go","commandMode":"bash"}}""",
             """{"type":"attachment","attachment":{"type":"prompt_snapshot","prompt":"x","commandMode":"task-notification"}}""",
             """{"type":"attachment","attachment":{"type":"file","prompt":"x","commandMode":"task-notification"}}""",
             """{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification"}}""",
@@ -190,6 +191,20 @@ public class ClaudeTranscriptEventsTests {
         var slug = SchemaExtensions.Slug(e[0].Payload, "claude_code");
         await Assert.That(SchemaExtensions.Text(slug, "origin_kind")).IsEqualTo("task-notification");
         await Assert.That(slug!.Fields.ContainsKey("is_meta")).IsFalse();
+    }
+
+    /// A prompt typed while the agent is mid-turn has no user line: this attachment is its only
+    /// record, and its event id is the record's own uuid.
+    [Test]
+    public async Task A_queued_command_prompt_attachment_projects_the_users_message() {
+        var line = $$$"""{"parentUuid":"p1","attachment":{"type":"queued_command","prompt":"also check the toggle","commandMode":"prompt","origin":{"kind":"human"}},"type":"attachment","uuid":"{{{Uuid}}}"}""";
+        var e = E(line).Single();
+        await Assert.That(((UserMessageReceived)e.Payload).Content).IsEqualTo("also check the toggle");
+        await Assert.That(e.EventId).IsEqualTo(Guid.Parse(Uuid));
+        await Assert.That(SchemaExtensions.Text(SchemaExtensions.Slug(e.Payload, "claude_code"), "origin_kind")).IsEqualTo("human");
+
+        var blocks = E("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":[{"type":"text","text":"[Image #2] look"},{"type":"image","source":{}}]}}""").Single();
+        await Assert.That(((UserMessageReceived)blocks.Payload).Content).IsEqualTo("[Image #2] look");
     }
 
     [Test]

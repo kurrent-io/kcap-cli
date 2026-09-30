@@ -27,8 +27,27 @@ internal sealed record ImportHandoffFile(
 
         return new ImportHandoffFile(
             runId, now, offered, reason, outcome.Certainty, serverUrl.TrimEnd('/'), profile, cohort,
-            candidates is null ? [] : [.. candidates.Take(CohortCap)],
+            candidates is null ? [] : CappedCohort(candidates, outcome.SucceededIds),
             outcome.SucceededIds, unattributedOnDisk, background.Status, background.LogPath);
+    }
+
+    /// <summary>At most <see cref="CohortCap"/> candidates in run order, foreground sessions
+    /// first: a chain is selected whole, so a member can sit past the cap, and the watch cannot wait
+    /// on a session it never queries. A foreground set larger than the cap is itself cut at the cap,
+    /// which keeps the watch's per-poll query budget valid.</summary>
+    static List<string> CappedCohort(IReadOnlyList<string> candidates, IReadOnlyList<string> foreground) {
+        if (candidates.Count <= CohortCap) return [.. candidates];
+
+        var reserved = foreground.ToHashSet(StringComparer.Ordinal);
+        var room     = Math.Max(0, CohortCap - candidates.Count(reserved.Contains));
+        var cohort   = new List<string>(CohortCap);
+        foreach (var id in candidates) {
+            if (cohort.Count == CohortCap) break;
+            if (reserved.Contains(id)) cohort.Add(id);
+            else if (room > 0) { cohort.Add(id); room--; }
+        }
+
+        return cohort;
     }
 
     public static string PathFor(ConfigRoot config, string runId) => config.Path($"import-handoff-{runId}.json");

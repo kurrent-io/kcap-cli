@@ -17,8 +17,10 @@ internal static class TranscriptCapture {
         return lines;
     }
 
-    public static RedactionOutcome Encode(string rawLine) {
-        var outcome = SecretRedactor.RedactLineWithOutcome(rawLine);
+    public static RedactionOutcome Encode(string rawLine) => Encode(rawLine, TimeProvider.System);
+
+    internal static RedactionOutcome Encode(string rawLine, TimeProvider time) {
+        var outcome = SecretRedactor.RedactLineWithOutcome(rawLine, time);
         if (outcome.Loss is not { } reason) return outcome;
         var marker = new CaptureLossMarker {
             Reason = CaptureLossMarker.ReasonName(reason),

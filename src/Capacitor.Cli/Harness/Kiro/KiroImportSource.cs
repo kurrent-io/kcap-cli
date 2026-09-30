@@ -7,6 +7,8 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Kiro;
@@ -22,15 +24,21 @@ namespace Capacitor.Cli.Harness.Kiro;
 /// </summary>
 internal sealed class KiroImportSource : IImportSource {
     readonly string                                 _sessionsDir;
+    readonly KiroCrewPaths                          _crew;
     readonly TimeProvider                           _time;
+
+    IReadOnlyDictionary<Guid, string>?              _crewParents;
+    ILookup<Guid, Guid>?                            _crewChildren;
 
     public KiroImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
+        KiroCrewPaths                           crew,
         GitProviderRouter                        router,
         TimeProvider                            time
     ) {
         _sessionsDir  = sessionsDir;
+        _crew         = crew;
         _time         = time;
     }
 
@@ -228,6 +236,23 @@ internal sealed class KiroImportSource : IImportSource {
         var lifecycleId = dashed ?? classification.SessionId;
 
         var startPayload = BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp);
+        // Sessions import in parallel, so each side of a sub-agent link names the other.
+        _crewParents  ??= KiroCrewParentResolver.AllParents(_crew, _sessionsDir);
+        _crewChildren ??= _crewParents.ToLookup(kv => Guid.Parse(kv.Value), kv => kv.Key);
+
+        // The server takes a bounded batch per session-start, so children beyond it follow in repeat
+        // session-starts, which its deterministic ids make idempotent.
+        var childBatches = new List<string[]>();
+
+        if (Guid.TryParse(lifecycleId, out var self)) {
+            if (_crewParents.TryGetValue(self, out var parent)) startPayload["parent_session_id"] = parent;
+            // Sessions import in parallel, so each side of a continuation names the other too.
+            if (KiroCrewParentResolver.PreviousOf(_crew, lifecycleId) is { } previous) startPayload["previous_session_id"] = previous;
+            if (KiroCrewParentResolver.NextOf(_crew, lifecycleId) is { } next) startPayload["next_session_id"] = next;
+
+            childBatches = _crewChildren[self].Select(c => c.ToString("D")).Chunk(KiroCrewParentResolver.MaxChildrenPerStart).ToList();
+            if (childBatches.Count > 0) startPayload["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(childBatches[0]);
+        }
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
             startPayload["default_visibility"] = visibility;
         }
@@ -237,6 +262,14 @@ internal sealed class KiroImportSource : IImportSource {
             startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
+
+        foreach (var batch in childBatches.Skip(1)) {
+            var repeat = startPayload.DeepClone().AsObject();
+            repeat["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(batch);
+
+            if (!await PostSyntheticHookAsync(ctx.HttpClient, _time, ctx.BaseUrl, "session-start/kiro", repeat, ct))
+                return ImportOutcome.Failed;
+        }
 
         var startLine = classification.Status switch {
             ImportCommand.ClassificationStatus.Partial       => classification.ResumeFromLine,
@@ -255,7 +288,7 @@ internal sealed class KiroImportSource : IImportSource {
 
         if (anchors.Count > 0) {
             enrichedTemp = Path.Combine(Path.GetTempPath(), $"kcap-kiro-usage-{classification.SessionId}-{Guid.NewGuid():N}.jsonl");
-            var enriched = (await File.ReadAllLinesAsync(transcriptPath, ct))
+            var enriched = File.ReadLinesShared(transcriptPath)
                 .Select(l => string.IsNullOrWhiteSpace(l) ? l : KiroUsage.EnrichLine(l, anchors));
             await File.WriteAllLinesAsync(enrichedTemp, enriched, ct);
             sendPath = enrichedTemp;
@@ -280,12 +313,15 @@ internal sealed class KiroImportSource : IImportSource {
             catch { /* best effort */ }
         }
 
-        // Forward Kiro's own session title (best-effort — a title miss must not
-        // fail the import).
+        // Forward Kiro's own session title, waiting out the server's projection lag
+        // (best-effort — a title miss must not fail the import).
         if (classification.SourceMeta!.TryGetValue("Title", out var titleObj)
          && titleObj is string title
          && !string.IsNullOrWhiteSpace(title)) {
-            await PostSetTitleAsync(ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId, title, ct);
+            await ImportHarnessTitle.PostAsync(
+                ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId,
+                new HarnessTitlePost(title, HarnessTitleKind.Auto, null),
+                ctx.Progress, ct);
         }
 
         var endOk = await PostSyntheticHookAsync(
@@ -338,28 +374,12 @@ internal sealed class KiroImportSource : IImportSource {
         }
     }
 
-    static async Task PostSetTitleAsync(HttpClient client, TimeProvider time, string baseUrl, string sessionId, string title, CancellationToken ct) {
-        if (title.Length > 120) title = title[..120];
-
-        var payload = new JsonObject {
-            ["session_id"] = sessionId,
-            ["title"]      = title,
-        };
-
-        try {
-            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, ct: ct);
-        } catch {
-            // Best effort.
-        }
-    }
-
     static DateTimeOffset? TryGetLastWriteUtc(string path) {
         try { return File.GetLastWriteTimeUtc(path); } catch { return null; }
     }
 
-    static string SafeReadText(string path) {
-        try { return File.Exists(path) ? File.ReadAllText(path) : ""; }
+    internal static string SafeReadText(string path) {
+        try { return File.Exists(path) ? File.ReadAllTextShared(path) : ""; }
         catch { return ""; }
     }
 
@@ -443,7 +463,7 @@ internal sealed record KiroSessionMeta(string? Cwd, string? Title, string? Model
     public static KiroSessionMeta? TryRead(string jsonPath) {
         try {
             if (!File.Exists(jsonPath)) return null;
-            if (JsonNode.Parse(File.ReadAllText(jsonPath)) is not JsonObject root) return null;
+            if (JsonNode.Parse(File.ReadAllTextShared(jsonPath)) is not JsonObject root) return null;
 
             return new KiroSessionMeta(
                 Cwd:       root["cwd"]?.GetValue<string>(),

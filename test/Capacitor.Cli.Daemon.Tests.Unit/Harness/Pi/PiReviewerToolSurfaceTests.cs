@@ -14,7 +14,7 @@ public class PiReviewerToolSurfaceTests {
         var tools = PiReviewerToolSurface.For([ResultChannel]);
 
         await Assert.That(tools.Select(t => t.PiName)).IsEquivalentTo(
-            new[] { "read_file", "list_directory", "search_files", "submit_review_result", "send_flow_message" },
+            new[] { "read_file", "list_directory", "search_files", "git_log", "git_show", "git_diff", "submit_review_result", "send_flow_message" },
             TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
@@ -34,6 +34,17 @@ public class PiReviewerToolSurfaceTests {
         await Assert.That(names).Contains("kcap_review_get_pr_summary");
         await Assert.That(names).IsEquivalentTo(names.OrderBy(n => n, StringComparer.Ordinal),
             TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    /// <summary>A borrowed-snapshot review injects the review-context server, which serves exactly one
+    /// read-only tool; it must be offered, not refused as an unclassified server.</summary>
+    [Test]
+    public async Task The_borrowed_snapshot_review_context_tool_is_offered() {
+        var tools = PiReviewerToolSurface.For([ResultChannel, Server("kcap-review-context")]);
+
+        var tool = tools.Single(t => t.ServerName == "kcap-review-context");
+        await Assert.That(tool.PiName).IsEqualTo("kcap_review_context_get_branch_authored_mcp_configs");
+        await Assert.That(tool.McpName).IsEqualTo("get_branch_authored_mcp_configs");
     }
 
     [Test]
@@ -73,6 +84,6 @@ public class PiReviewerToolSurfaceTests {
         var tools = PiReviewerToolSurface.For([ResultChannel]);
 
         await Assert.That(PiReviewerToolSurface.AllowlistArg(tools))
-            .IsEqualTo("read_file,list_directory,search_files,submit_review_result,send_flow_message");
+            .IsEqualTo("read_file,list_directory,search_files,git_log,git_show,git_diff,submit_review_result,send_flow_message");
     }
 }

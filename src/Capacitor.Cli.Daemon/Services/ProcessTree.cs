@@ -50,13 +50,46 @@ internal static partial class ProcessTree {
         if (ProcessIdentity.Capture(pid) is { } identity) KillSubtree(pid, identity);
     }
 
+    /// <summary>Kills only while <paramref name="pid"/> still carries <paramref name="identity"/>. Use
+    /// when the caller captured the identity itself — otherwise the bare <see cref="Kill(int)"/> would
+    /// take a FRESH identity, and a pid recycled between the caller's capture and here would let it
+    /// signal the replacement process. A mismatch is a no-op, not a failure.</summary>
+    public static void Kill(int pid, string identity) {
+        if (pid <= 0) return;
+
+        if (OperatingSystem.IsWindows()) {
+            try {
+                // Open FIRST, then derive the token from the SAME handle we are about to kill —
+                // checking a pid-based token before opening would let a recycled pid slip through.
+                using var process = Process.GetProcessById(pid);
+                // Force the Process to retain its long-term SafeHandle: StartTime and Kill each
+                // otherwise open their OWN short-term handle, letting the pid be reused between
+                // them. Reading Handle pins one handle for both.
+                _ = process.Handle;
+                if ($"tk:{process.StartTime.ToUniversalTime().Ticks}" != identity) return;
+                Kill(process);
+            } catch (ArgumentException) { /* already gone */ }
+            return;
+        }
+
+        if (ProcessIdentity.Matches(pid, identity)) KillSubtree(pid, identity);
+    }
+
     static void KillSubtree(int pid, string identity) {
         var seen = new HashSet<int>();
 
         for (var rescan = 0; rescan <= MaxRescans; rescan++) {
             var fresh = false;
 
-            foreach (var child in Children(pid)) {
+            // The listing is trusted only when bracketed: the root must be the captured incarnation just
+            // before it and not proven a different one just after. A root that exited in between leaves
+            // its listed children to be killed, not orphaned; a pid proven reused leaves them alone. What
+            // remains is a reuse, plus the replacement spawning and exiting, inside one listing.
+            if (!ProcessIdentity.Matches(pid, identity)) break;
+            var children = Children(pid).ToList();
+            if (ProcessIdentity.MatchesTri(pid, identity) == false) return;
+
+            foreach (var child in children) {
                 if (!seen.Add(child)) continue; // handled on an earlier pass; a zombie stays listed until its parent dies
 
                 fresh = true;

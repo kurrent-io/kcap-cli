@@ -1,0 +1,165 @@
+using System.Collections.Frozen;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace Capacitor.Cli.Core.Harness.Kiro;
+
+/// <summary>
+/// Finds the Kiro session that spawned a Kiro Crew sub-agent. Crew gives the child's hooks nothing
+/// about its parent, so the link is joined from Crew's own files: the sub-agent's record names its
+/// Kiro session, its parent chat and when it started; the session map names that chat's current and
+/// previous Kiro sessions; and each Kiro session's metadata says when it was created.
+/// </summary>
+/// <remarks>
+/// A chat can move to a new Kiro session after spawning a child, so the parent is the newest of the
+/// chat's sessions created before the child started. When neither mapped session qualifies — the
+/// chat has moved more than once since — no parent is named rather than a wrong one.
+/// </remarks>
+public static class KiroCrewParentResolver {
+    /// <summary>Bounds the live hook's scan on a machine with a long sub-agent history; the newest are
+    /// checked first.</summary>
+    public const int LiveScanLimit = 256;
+
+    /// <summary>The most children the server takes on one session-start; more go out in further batches.</summary>
+    public const int MaxChildrenPerStart = 64;
+
+    /// <summary>The parent's dashed session id, or null when the session is not a Crew sub-agent or Crew
+    /// has not recorded it yet. Scans at most <see cref="LiveScanLimit"/> sub-agents.</summary>
+    public static string? ParentOf(KiroCrewPaths crew, string sessionsDir, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var child) || !crew.IsPresent()) return null;
+
+        foreach (var record in SubagentRecords(crew, LiveScanLimit)) {
+            if (record.Session != child) continue;
+
+            return ParentFor(record, KiroCrewRecords.Read(crew.SessionMapJson), sessionsDir);
+        }
+
+        return null;
+    }
+
+    /// <summary>A JSON array of session ids, built by parsing: assigning strings into a
+    /// <see cref="JsonArray"/> throws under NativeAOT.</summary>
+    public static JsonArray SessionIdArray(IEnumerable<string> ids) =>
+        (JsonArray)JsonNode.Parse("[" + string.Join(",", ids.Select(id => $"\"{JsonEncodedText.Encode(id)}\"")) + "]")!;
+
+    /// <summary>The dashed ids of the recorded sub-agents this session spawned, newest first. Scans at
+    /// most <see cref="LiveScanLimit"/> sub-agents.</summary>
+    public static IReadOnlyList<string> ChildrenOf(KiroCrewPaths crew, string sessionsDir, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var parent) || !crew.IsPresent()) return [];
+
+        var map      = KiroCrewRecords.Read(crew.SessionMapJson);
+        var children = new List<string>();
+
+        foreach (var record in SubagentRecords(crew, LiveScanLimit)) {
+            if (ParentFor(record, map, sessionsDir) is { } p && Guid.Parse(p) == parent) children.Add(record.Session.ToString("D"));
+        }
+
+        return children;
+    }
+
+    /// <summary>Every recorded sub-agent's parent, keyed by the child's session, for a historical import
+    /// that must reach records of any age.</summary>
+    public static IReadOnlyDictionary<Guid, string> AllParents(KiroCrewPaths crew, string sessionsDir) {
+        if (!crew.IsPresent()) return FrozenDictionary<Guid, string>.Empty;
+
+        var map     = KiroCrewRecords.Read(crew.SessionMapJson);
+        var parents = new Dictionary<Guid, string>();
+
+        foreach (var record in SubagentRecords(crew, int.MaxValue)) {
+            if (parents.ContainsKey(record.Session)) continue;
+            if (ParentFor(record, map, sessionsDir) is { } parent) parents[record.Session] = parent;
+        }
+
+        return parents;
+    }
+
+    /// <summary>
+    /// The dashed id of the Kiro session a Crew chat ran before this one, or null. Crew keeps only the
+    /// chat's latest move, so this is known only while the session is its chat's current one.
+    /// </summary>
+    public static string? PreviousOf(KiroCrewPaths crew, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var id) || !crew.IsPresent() || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return null;
+
+        foreach (var (_, node) in map) {
+            if (node is not JsonObject entry || KiroCrewRecords.GuidOf(entry, "sid") != id) continue;
+
+            return KiroCrewRecords.GuidOf(entry, "discarded_sid") is { } previous && previous != id ? previous.ToString("D") : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>The dashed id of the Kiro session that replaced this one in its Crew chat, or null. Known
+    /// only for the chat's latest move.</summary>
+    public static string? NextOf(KiroCrewPaths crew, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var id) || !crew.IsPresent() || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return null;
+
+        foreach (var (_, node) in map) {
+            if (node is not JsonObject entry || KiroCrewRecords.GuidOf(entry, "discarded_sid") != id) continue;
+
+            return KiroCrewRecords.GuidOf(entry, "sid") is { } next && next != id ? next.ToString("D") : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether the session is, or was, a Crew chat's own session rather than a sub-agent's.</summary>
+    public static bool IsChatSession(KiroCrewPaths crew, string sessionId) {
+        if (!Guid.TryParse(sessionId, out var id) || KiroCrewRecords.Read(crew.SessionMapJson) is not { } map) return false;
+
+        foreach (var (_, node) in map) {
+            if (node is not JsonObject entry) continue;
+            if (KiroCrewRecords.GuidOf(entry, "sid") == id || KiroCrewRecords.GuidOf(entry, "discarded_sid") == id) return true;
+        }
+
+        return false;
+    }
+
+    readonly record struct SubagentRecord(Guid Session, string Chat, DateTimeOffset Started);
+
+    static IEnumerable<SubagentRecord> SubagentRecords(KiroCrewPaths crew, int limit) {
+        List<DirectoryInfo> dirs;
+
+        try {
+            dirs = new DirectoryInfo(crew.SubagentsDir).EnumerateDirectories()
+                .OrderByDescending(d => d.LastWriteTimeUtc)
+                .Take(limit)
+                .ToList();
+        } catch {
+            yield break;
+        }
+
+        foreach (var dir in dirs) {
+            // A finished sub-agent keeps its state.json; tombstone.json covers one whose state is gone or incomplete.
+            if ((RecordFrom(Path.Combine(dir.FullName, "state.json")) ?? RecordFrom(Path.Combine(dir.FullName, "tombstone.json"))) is { } record)
+                yield return record;
+        }
+    }
+
+    static SubagentRecord? RecordFrom(string path) =>
+        KiroCrewRecords.Read(path) is { } obj
+     && KiroCrewRecords.GuidOf(obj, "session_id") is { } session
+     && KiroCrewRecords.StringOf(obj, "parent_session") is { Length: > 0 } chat
+     && KiroCrewRecords.EpochOf(obj, "started") is { } started
+            ? new SubagentRecord(session, chat, started)
+            : null;
+
+    static string? ParentFor(SubagentRecord record, JsonObject? map, string sessionsDir) {
+        if (map?[record.Chat] is not JsonObject entry) return null;
+
+        Guid?           parent  = null;
+        DateTimeOffset? created = null;
+
+        foreach (var candidate in new[] { KiroCrewRecords.GuidOf(entry, "sid"), KiroCrewRecords.GuidOf(entry, "discarded_sid") }) {
+            if (candidate is not { } id || id == record.Session) continue;
+            if (KiroCrewRecords.SessionCreatedAt(sessionsDir, id) is not { } at || at > record.Started) continue;
+            if (created is { } newest && at <= newest) continue;
+
+            parent  = id;
+            created = at;
+        }
+
+        return parent?.ToString("D");
+    }
+
+}

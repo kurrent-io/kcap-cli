@@ -41,7 +41,8 @@ public enum FrameType : byte {
     Error     = 67,
     AgentList = 68, // UTF-8 table payload: one `id\tstatus\trepo\tkind\tflowRunId\tflowRole` line per agent
     RestartAck = 69, // acknowledgement for Restart (Text = short status)
-    StopAck    = 70, // acknowledgement for Stop (Text = one `id\tstatus` line per agent; status is "stopped", "skipped", or "failed")
+    StopAck    = 70, // Text = one `id\tstatus` line per agent: "stopped", "skipped", "failed", or "missing".
+                    // StopV2 reports "missing" only when neither a live agent nor a PID record exists.
     AttachedReadOnly = 71, // Attached for a protected agent: id + reason + snapshot, no input accepted
     HelloReply = 75, // Text = HelloReplyDto JSON: protocol/daemon version, name, capabilities
     DaemonStatus = 76, // Text = DaemonStatusDto JSON: daemon block + full agent list snapshot

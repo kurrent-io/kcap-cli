@@ -4,9 +4,12 @@ using Capacitor.Cli.Core.Harness;
 namespace Capacitor.Cli.SessionStartMemory;
 
 internal enum SessionLifecycleReason { New, Resume, Reopen, Fork, Compact, RepeatedTurnCallback, Unknown }
-internal enum SessionMemoryLifecycleDecision { EligibleWithLease, EligibleOneShot, IneligibleNoCommit, RetryLaterNoCommit }
+internal enum SessionMemoryLifecycleDecision { EligibleWithLease, EligibleOneShot, EligibleEveryStart, IneligibleNoCommit, RetryLaterNoCommit }
 internal enum SessionStartMemoryDisposition { Ready, CompleteWithoutContext, RetryableFailure }
 
+/// <param name="HostKeepsContext">False when the host holds an injected fragment only for the life of
+/// the process that received it and persists none of it, so every start of the session needs its own
+/// copy and a once-per-session lease would leave each later start without one.</param>
 internal sealed record SessionMemoryLifecycle(
     HarnessId Harness,
     string SessionId,
@@ -14,7 +17,8 @@ internal sealed record SessionMemoryLifecycle(
     bool IsTopLevel,
     bool ClassificationAuthoritative,
     SessionLifecycleReason Reason,
-    bool CallbackMayRepeat);
+    bool CallbackMayRepeat,
+    bool HostKeepsContext = true);
 
 internal sealed record SessionStartMemoryEntry(
     [property: JsonPropertyName("memory_id")] string? MemoryId,

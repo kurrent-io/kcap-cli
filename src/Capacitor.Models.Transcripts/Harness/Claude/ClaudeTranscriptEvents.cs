@@ -32,14 +32,14 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
             if (!root.IsObject) return ProjectionResult.Reject("not a JSON object");
 
             // Only a record the projection reads needs a usable id; every other type is ignored
-            // whatever its uuid holds. A notification that lands mid-turn is one such record: an
-            // `attachment` rather than the `user` line it would otherwise be — and the attachments
-            // that are anything else are settled here, before the id is read, so they stay ignored.
+            // whatever its uuid holds. A prompt or notification that lands mid-turn is one such
+            // record: an `attachment` rather than the `user` line it would otherwise be — and the
+            // attachments that are anything else are settled here, before the id is read.
             var type = root.Str("type");
             if (type is not ("user" or "assistant" or "attachment")) return ProjectionResult.Empty;
 
-            var notification = type == "attachment" ? TaskNotification(root) : null;
-            if (type == "attachment" && notification is null) return ProjectionResult.Empty;
+            var queued = type == "attachment" ? QueuedCommand(root) : null;
+            if (type == "attachment" && queued is null) return ProjectionResult.Empty;
 
             Guid recordId;
             switch (root.Prop("uuid")) {
@@ -59,7 +59,7 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
             return ProjectionResult.Of(type switch {
                 "user"      => ProjectUser(root, record),
                 "assistant" => ProjectAssistant(root, record),
-                _           => ProjectAttachment(notification!, root, record),
+                _           => ProjectAttachment(queued!.Value, root, record),
             });
         }
     }
@@ -127,20 +127,26 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
     static UserMessageReceived UserMessage(string text, Record record) =>
         new() { Content = text, Timestamp = record.ProtoTimestamp };
 
-    /// The notification a <c>queued_command</c> attachment in task-notification mode carries: how
-    /// Claude Code delivers one that lands while the parent is mid-turn. Null for anything else an
-    /// attachment holds — a queued prompt, a snapshot, a file — which this leaf does not read.
-    static string? TaskNotification(JsonElement root) =>
-        root.Obj("attachment") is { } attachment
-        && attachment.Str("type") == "queued_command"
-        && attachment.Str("commandMode") == "task-notification"
-            ? attachment.Str("prompt")
-            : null;
+    /// What a <c>queued_command</c> attachment carries: how Claude Code delivers a task notification
+    /// or a typed prompt that lands while the parent is mid-turn. For such a prompt the attachment is
+    /// its only record. Null for anything else an attachment holds — a snapshot, a file.
+    static (string Text, string? OriginKind)? QueuedCommand(JsonElement root) {
+        if (root.Obj("attachment") is not { } attachment || attachment.Str("type") != "queued_command") return null;
+        switch (attachment.Str("commandMode")) {
+            case "task-notification":
+                return attachment.Str("prompt") is { } notification ? (notification, "task-notification") : null;
+            case "prompt":
+                var text = attachment.Str("prompt") ?? (attachment.Arr("prompt") is { } blocks ? JoinTextBlocks(blocks, "text") : null);
+                return text is { Length: > 0 } ? (text, attachment.Obj("origin")?.Str("kind")) : null;
+            default:
+                return null;
+        }
+    }
 
-    static IReadOnlyList<CanonicalEvent> ProjectAttachment(string notification, JsonElement root, Record record) {
+    static IReadOnlyList<CanonicalEvent> ProjectAttachment((string Text, string? OriginKind) queued, JsonElement root, Record record) {
         var emitter = new Emitter(record);
-        emitter.Add(0, UserMessage(notification, record),
-            ClaudeCodeExtension.Flags(record.IsSidechain, root.Bool("isMeta") == true, "task-notification"));
+        emitter.Add(0, UserMessage(queued.Text, record),
+            ClaudeCodeExtension.Flags(record.IsSidechain, root.Bool("isMeta") == true, queued.OriginKind));
         return emitter.Events;
     }
 

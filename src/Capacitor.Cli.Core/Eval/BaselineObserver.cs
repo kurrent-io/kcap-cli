@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Eval;
 
@@ -19,6 +22,7 @@ public sealed class BaselineObserver(
     readonly long                          _started   = time.GetTimestamp();
     BaselineRetrospectiveOutput?           _retrospective;
     string                                 _evalRunId = "";
+    EvalTreatment?                         _treatment;
 
     /// <summary>True once a terminal callback tried and failed to write the baseline file, so the
     /// caller can exit non-zero instead of reporting a success that produced no baseline.</summary>
@@ -82,6 +86,38 @@ public sealed class BaselineObserver(
         inner.OnFailed(reason);
     }
 
+    public void OnTreatment(EvalTreatment treatment) {
+        _treatment = treatment;
+        inner.OnTreatment(treatment);
+    }
+
+    public void OnQuestionLedger(int index, string questionId, string tempLedgerPath) {
+        var copied = CopyLedger(index, questionId, tempLedgerPath);
+        var at     = _questions.FindLastIndex(q => q.QuestionId == questionId && q.LedgerPath is null);
+        if (at >= 0) _questions[at] = _questions[at] with { LedgerPath = copied };
+        inner.OnQuestionLedger(index, questionId, tempLedgerPath);
+    }
+
+    // The question id is bounded only by length, so it never names a file: the ordinal keeps names distinct and the hash
+    // ties the copy to its question, whose id the ledger's header carries.
+    string? CopyLedger(int index, string questionId, string source) {
+        var directory = Path.GetFullPath(path + ".ledgers");
+        var hash      = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(questionId)))[..16];
+        var target    = Path.GetFullPath(Path.Combine(directory, $"{index:D3}-{hash}.jsonl"));
+        if (!target.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal)) {
+            inner.OnInfo($"refused to retain the ledger for question {index}: it would land outside {directory}");
+            return null;
+        }
+        try {
+            Directory.CreateDirectory(directory);
+            File.Copy(source, target, overwrite: true);
+            return target;
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+            inner.OnInfo($"failed to retain the ledger for question {index}: {e.Message}");
+            return null;
+        }
+    }
+
     void WriteBaseline() {
         var usages = new List<EvalUsage>(_questions.Select(q => q.Usage));
         if (_retrospective is not null) usages.Add(_retrospective.Usage);
@@ -95,7 +131,8 @@ public sealed class BaselineObserver(
             Failures       = _failures,
             Retrospective  = _retrospective,
             Totals         = EvalUsage.Sum(usages),
-            TotalElapsedMs = (long)time.GetElapsedTime(_started).TotalMilliseconds
+            TotalElapsedMs = (long)time.GetElapsedTime(_started).TotalMilliseconds,
+            Treatment      = _treatment
         };
 
         try {

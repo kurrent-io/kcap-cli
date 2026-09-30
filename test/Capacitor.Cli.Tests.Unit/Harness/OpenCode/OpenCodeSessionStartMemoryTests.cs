@@ -208,7 +208,7 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("MEMORY_MAX_SESSIONS");
         await Assert.That(content).Contains("memory.size >= MEMORY_MAX_SESSIONS");
         // The prompt path for a deleted session is tidied rather than left to eviction.
-        await Assert.That(content).Contains("memory.delete(sid)");
+        await Assert.That(content).Contains("memory.delete(id)");
     }
 
     /// <summary>
@@ -281,7 +281,7 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("attempts < MEMORY_COLD_START_ATTEMPTS");
         await Assert.That(content).Contains("coldStarts.set(sid, attempts + 1)");
         // Cleared with the session, so a long-lived process does not accumulate counters.
-        await Assert.That(content).Contains("coldStarts.delete(sid)");
+        await Assert.That(content).Contains("coldStarts.delete(id)");
     }
 
     /// <summary>
@@ -294,5 +294,86 @@ public class OpenCodeSessionStartMemoryTests {
 
         await Assert.That(content).Contains("res?.stdout");
         await Assert.That(content).Contains("rememberMemory(sid, (await runKcap(args)).trim())");
+    }
+
+    /// <summary>
+    /// <c>session.updated</c> appends a <c>session_title</c> line to the watched transcript, and OpenCode's
+    /// placeholder title (<c>New session - &lt;ISO date&gt;</c>) is filtered by the same pattern the server uses.
+    /// </summary>
+    [Test]
+    public async Task Plugin_writes_a_session_title_line_on_session_updated() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content).Contains("type === \"session.updated\"");
+        await Assert.That(content).Contains("type: \"session_title\"");
+        await Assert.That(content).Contains("/^New session - \\d{4}-/");
+    }
+
+    /// <summary>The title line carries <c>time</c> only when OpenCode supplied a numeric <c>info.time.updated</c>;
+    /// otherwise the field is omitted and the server records the rename untimed, never at a clock reading the
+    /// plugin invented.</summary>
+    [Test]
+    public async Task Plugin_emits_time_only_when_opencode_supplied_it() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch).Contains("if (typeof info?.time?.updated === \"number\") line.time = info.time.updated");
+        await Assert.That(branch).DoesNotContain("Date.now()");
+    }
+
+    /// <summary>
+    /// A subagent session carries <c>info.parentID</c>; one not yet classified must be classified here rather than
+    /// get a title line appended to a top-level <c>&lt;dir&gt;/&lt;childId&gt;.jsonl</c> of its own.
+    /// </summary>
+    [Test]
+    public async Task Plugin_skips_title_lines_for_child_sessions() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch).Contains("if (id && info?.parentID) { children.add(id); return }");
+        await Assert.That(branch.IndexOf("info?.parentID", StringComparison.Ordinal))
+            .IsLessThan(branch.IndexOf("appendFileSync", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// EventSessionDeleted carries <c>properties.info</c> (a Session), not
+    /// <c>properties.sessionID</c> like the other events this handler reads — without the fallback,
+    /// the generic <c>if (!sid) return</c> would drop every session.deleted before the
+    /// memory/coldStarts/lastTitle cleanup below it ever runs, leaking one entry per session.
+    /// </summary>
+    [Test]
+    public async Task Session_deleted_id_falls_back_to_the_info_shape() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content)
+            .Contains("const id = event?.properties?.info?.id ?? event?.properties?.sessionID");
+        await Assert.That(content).Contains("memory.delete(id)");
+        await Assert.That(content).Contains("coldStarts.delete(id)");
+        await Assert.That(content).Contains("lastTitle.delete(id)");
+    }
+
+    /// <summary>The dedupe entry is recorded only after the append succeeds: a write that throws (swallowed by the
+    /// handler's catch) must leave the title eligible for the next <c>session.updated</c>.</summary>
+    [Test]
+    public async Task Plugin_records_a_title_as_written_only_after_the_append() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch.IndexOf("rememberTitle(id, title)", StringComparison.Ordinal))
+            .IsGreaterThan(branch.IndexOf("appendFileSync", StringComparison.Ordinal));
+    }
+
+    /// <summary>The title dedupe map is bounded: most sessions end without a <c>session.deleted</c>, so a long-lived
+    /// plugin process would otherwise keep every session it ever titled.</summary>
+    [Test]
+    public async Task Plugin_bounds_the_title_dedupe_map() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content).Contains("const TITLE_MAX_SESSIONS = 64");
+        await Assert.That(content).Contains("lastTitle.size >= TITLE_MAX_SESSIONS");
+        await Assert.That(content.Split("lastTitle.set(").Length - 1).IsEqualTo(1); // only inside rememberTitle
     }
 }

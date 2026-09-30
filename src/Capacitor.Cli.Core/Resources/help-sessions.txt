@@ -1,18 +1,37 @@
-kcap sessions — Sessions on a repository
+kcap sessions — Sessions on a repository, or on all of them
 
-Usage: kcap sessions [--active | --ended | --all] [--repo <owner/name|hash>] [--mine] [--touching <path>] [--limit <n>] [--json]
+Usage: kcap sessions [--active | --ended | --all] [--repo <owner/name|hash|all>] [--mine]
+                     [--touching <path>] [--since <when>] [--until <when>]
+                     [--cursor <value>] [--limit <n>] [--json]
 
-Lists the sessions on a repository that you are allowed to see, running
-ones first, ordered by last activity. Below full access a row shows no
-branch, cwd, prompt or paths.
+Lists the sessions you are allowed to see. Without a period: running ones
+first, ordered by last activity. With --since or --until: the sessions
+worked on in that period, newest start first, running and ended alike.
+Below full access a row shows no branch, cwd, prompt or paths.
 
 Options:
-  --active                Running sessions only (default)
+  --active                Running sessions only (default without a period)
   --ended                 Ended sessions only
-  --all                   Both
-  --repo <owner/name|hash>  Another repository (default: the current checkout's origin)
+  --all                   Both (default with a period)
+  --repo <owner/name|hash|all>
+                          Another repository, or all for every repository
+                          (default: the current checkout's origin)
   --mine                  Only your own sessions
   --touching <path>       Only sessions with an Edit/Write attempt whose path contains <path>
                           (full-access rows only; shell-applied edits leave no evidence)
+  --since <when>          Sessions that ended, or while open were last active, at or after <when>
+  --until <when>          Sessions that started before <when>
+  --cursor <value>        The next page of a period listing. Takes the value the previous
+                          page printed and carries that page's filters, so it combines
+                          only with --repo, --limit and --json
   --limit <n>             Rows to show, 1-100 (default 20)
   --json                  Print the server response as JSON
+
+<when> is one of:
+  2026-09-27T09:00:00Z    an instant, ending in Z or an offset
+  2026-09-27              a date: the start of that day in this machine's time zone
+  36h, 14d, 2w            that long before now
+
+A session is in the period when its span from start to end touches it; it
+is not checked event by event. Yesterday, when today is the 28th:
+  kcap sessions --since 2026-09-27 --until 2026-09-28

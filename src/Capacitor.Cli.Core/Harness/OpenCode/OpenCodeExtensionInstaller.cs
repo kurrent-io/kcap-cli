@@ -88,6 +88,19 @@ public static class OpenCodeExtensionInstaller {
           // indefinitely. Found by review tracing the `!started.has(sid)` guard.
           const MEMORY_COLD_START_ATTEMPTS = 3
           const coldStarts = new Map<string, number>()
+          const TITLE_MAX_SESSIONS = 64
+          const lastTitle = new Map<string, string>()   // dedupes session.updated noise per session
+
+          // Bounded like the memory cache: most sessions end without a session.deleted. Re-inserting keeps the most
+          // recently titled sessions; an evicted one only writes its title line again.
+          function rememberTitle(id: string, title: string) {
+            lastTitle.delete(id)
+            if (lastTitle.size >= TITLE_MAX_SESSIONS) {
+              const oldest = lastTitle.keys().next()
+              if (!oldest.done) lastTitle.delete(oldest.value)
+            }
+            lastTitle.set(id, title)
+          }
 
           function rememberMemory(sid: string, fragment: string) {
             if (!fragment) return
@@ -447,16 +460,37 @@ public static class OpenCodeExtensionInstaller {
             event: async ({ event }: any) => {
               try {
                 const type = event?.type
+                if (type === "session.updated") {
+                  const info = event?.properties?.info
+                  const id = info?.id
+                  const title = info?.title
+                  if (id && info?.parentID) { children.add(id); return }
+                  if (!id || children.has(id) || typeof title !== "string" || /^New session - \d{4}-/.test(title)) return
+                  if (lastTitle.get(id) === title) return
+                  mkdirSync(dir, { recursive: true })
+                  // time only when OpenCode supplied one: an invented time would outrank a later Regenerate.
+                  const line: any = { type: "session_title", title }
+                  if (typeof info?.time?.updated === "number") line.time = info.time.updated
+                  appendFileSync(file(id), JSON.stringify(line) + "\n")
+                  // Only after the append succeeds, so a failed write is retried by the next update.
+                  rememberTitle(id, title)
+                  return
+                }
+                if (type === "session.deleted") {
+                  // Unlike other events, session.deleted carries properties.info (a Session), not
+                  // properties.sessionID — fall back so this never skips cleanup below.
+                  const id = event?.properties?.info?.id ?? event?.properties?.sessionID
+                  if (!id) return
+                  // Drop this session's cached fragment promptly rather than waiting for the bounded
+                  // map to evict it. The bound is the guarantee; this is the tidy path.
+                  memory.delete(id)
+                  coldStarts.delete(id)
+                  lastTitle.delete(id)
+                  return
+                }
                 const sid = event?.properties?.sessionID
                 if (!sid) return
                 if (children.has(sid)) return  // known subagent — its parent streams it
-                if (type === "session.deleted") {
-                  // Drop this session's cached fragment promptly rather than waiting for the bounded
-                  // map to evict it. The bound is the guarantee; this is the tidy path.
-                  memory.delete(sid)
-                  coldStarts.delete(sid)
-                  return
-                }
                 if (type === "session.created") {
                   // START a top-level session only on a CONFIRMED classification — never on
                   // "unknown" (a session.get hiccup), which would misfile a child as both a

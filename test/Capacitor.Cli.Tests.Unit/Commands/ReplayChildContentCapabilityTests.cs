@@ -101,7 +101,7 @@ public class ReplayChildContentCapabilityTests {
             "copilot"     => new CopilotImportSource(Config.Root, CopilotHarness.FromEnvironment(Home).Paths, router: new GitProviderRouter(), time: TimeProvider.System),
             "cursor"      => new CursorImportSource(Config.Root, scratch, scratch, router: new GitProviderRouter(), time: TimeProvider.System),
             "gemini"      => new GeminiImportSource(scratch, TimeProvider.System),
-            "kiro"        => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System),
+            "kiro"        => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System),
             "pi"          => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System),
             "opencode"    => new OpenCodeImportSource(Path.Combine(scratch, "db"), Path.Combine(scratch, "ledger"), TimeProvider.System),
             "antigravity" => new AntigravityImportSource(new(new(scratch), ""), TimeProvider.System),

@@ -47,6 +47,33 @@ public class ImportHandoffFileTests {
         await Assert.That(file.SessionIds[0]).IsEqualTo("c000");
     }
 
+    /// <summary>A foreground chain is taken whole, so a member can sit past the cap in candidate
+    /// order; the watch waits on the foreground sessions, so they take cohort slots ahead of the rest.</summary>
+    [Test]
+    public async Task Foreground_sessions_past_the_cap_are_kept_in_the_cohort() {
+        var file = Compose(Outcome(candidates: 600, "c000", "c001", "c599"));
+
+        await Assert.That(file.SessionIds.Count).IsEqualTo(500);
+        await Assert.That(file.SessionIds).Contains("c599");
+        await Assert.That(file.SessionIds[0]).IsEqualTo("c000");
+        await Assert.That(file.SessionIds[1]).IsEqualTo("c001");
+        await Assert.That(file.SessionIds[2]).IsEqualTo("c002");
+        await Assert.That(file.SessionIds).DoesNotContain("c499");
+        await Assert.That(file.SessionIds.Distinct().Count()).IsEqualTo(500);
+    }
+
+    /// <summary>The watch's query budget assumes at most 500 ids, so a foreground chain longer
+    /// than that is cut at the cap rather than carried whole.</summary>
+    [Test]
+    public async Task A_foreground_set_larger_than_the_cap_is_cut_at_the_cap() {
+        var foreground = Enumerable.Range(0, 501).Select(i => $"c{i:000}").ToArray();
+        var file = Compose(Outcome(candidates: 600, foreground));
+
+        await Assert.That(file.SessionIds.Count).IsEqualTo(500);
+        await Assert.That(file.SessionIds[499]).IsEqualTo("c499");
+        await Assert.That(file.ForegroundSucceededIds.Count).IsEqualTo(501);
+    }
+
     [Test]
     public async Task Unknown_candidates_write_an_unknown_cohort_with_no_ids() {
         var o = new ForegroundImportOutcome(ForegroundCertainty.Incomplete, 0, 0, 0, 0, true, null, []);

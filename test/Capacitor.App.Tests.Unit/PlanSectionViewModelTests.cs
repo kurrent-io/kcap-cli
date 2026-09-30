@@ -70,8 +70,102 @@ public class PlanSectionViewModelTests {
                 new[] { PlanTaskState.Completed, PlanTaskState.InProgress, PlanTaskState.Pending, PlanTaskState.Skipped }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Tasks[1].Note).IsEqualTo("half way");
             await Assert.That(h.Vm.DoneCount).IsEqualTo(2);
-            await Assert.That(h.Vm.OpenCount).IsEqualTo(2);
             await Assert.That(h.Vm.HeaderText).IsEqualTo("2 of 4 done");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// A skipped task counts as done, as it does in the expanded header, and a state nothing is
+    /// in is left out, so the numbers always add up to the list.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_counts_list_pending_in_progress_and_done_in_order_and_omit_the_empty_ones() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(h.Vm.Counts).IsEmpty();
+
+            h.Source.Enqueue(
+                Ready(Plan("p1", tasks: [
+                    Todo("t1", 1, "completed"), Todo("t2", 2, "in_progress"), Todo("t3", 3, "pending"), Todo("t4", 4, "skipped"), Todo("t5", 5, "pending"),
+                ])),
+                Ready(Plan("p1", tasks: [
+                    Todo("t1", 1, "completed"), Todo("t2", 2, "completed"), Todo("t3", 3, "pending"), Todo("t4", 4, "skipped"), Todo("t5", 5, "pending"),
+                ])));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.Counts).IsEquivalentTo(new PlanTaskCount[] {
+                new(PlanTaskState.Pending, 2), new(PlanTaskState.InProgress, 1), new(PlanTaskState.Completed, 2),
+            }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(h.Vm.Counts.Select(c => c.Label))
+                .IsEquivalentTo(new[] { "2 pending", "1 in progress", "2 done" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+            await h.RefreshAsync();
+
+            await Assert.That(h.Vm.Counts).IsEquivalentTo(new PlanTaskCount[] {
+                new(PlanTaskState.Pending, 2), new(PlanTaskState.Completed, 3),
+            }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_list_holds_the_tasks_in_progress_in_plan_order() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(h.Vm.HasInProgress).IsFalse();
+
+            h.Source.Enqueue(
+                Ready(Plan("p1", tasks: [
+                    Todo("t3", 3, "in_progress"), Todo("t1", 1, "completed"), Todo("t2", 2, "in_progress"), Todo("t4", 4, "pending"),
+                ])),
+                Ready(Plan("p1", tasks: [Todo("t1", 1, "completed"), Todo("t2", 2, "completed"), Todo("t3", 3, "completed"), Todo("t4", 4, "pending")])),
+                Ready(Plan("p1", tasks: Todo("t1", 1, "in_progress"))),
+                SessionPlansRead.Of(SessionPlansReadKind.Unavailable));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.HasInProgress).IsTrue();
+            await Assert.That(h.Vm.InProgressTasks.Select(t => t.TaskId)).IsEquivalentTo(new[] { "t2", "t3" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(ReferenceEquals(h.Vm.InProgressTasks[0], h.Vm.Tasks[1])).IsTrue();
+
+            await h.RefreshAsync();
+            await Assert.That(h.Vm.HasInProgress).IsFalse();
+            await Assert.That(h.Vm.InProgressTasks).IsEmpty();
+
+            await h.RefreshAsync();
+            await Assert.That(h.Vm.InProgressTasks.Count).IsEqualTo(1);
+
+            await h.RefreshAsync();
+            await Assert.That(h.Vm.HasPlan).IsFalse();
+            await Assert.That(h.Vm.InProgressTasks).IsEmpty();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Taking a row out and putting it back would rebuild its container and restart its pulse,
+    /// so a task that stays in progress is never touched while others join and leave.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_task_that_stays_in_progress_keeps_its_place_while_others_join_and_leave_the_collapsed_list() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(
+                Ready(Plan("p1", tasks: [Todo("t1", 1, "in_progress"), Todo("t2", 2, "in_progress"), Todo("t3", 3, "pending"), Todo("t4", 4, "in_progress")])),
+                Ready(Plan("p1", tasks: [Todo("t1", 1, "completed"), Todo("t2", 2, "in_progress"), Todo("t3", 3, "in_progress"), Todo("t4", 4, "in_progress")])));
+            await h.SwitchAsync(SessionA);
+            var moved = new List<PlanTaskRow>();
+            var resets = 0;
+            h.Vm.InProgressTasks.CollectionChanged += (_, e) => {
+                if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++;
+                moved.AddRange((e.OldItems ?? Array.Empty<object>()).OfType<PlanTaskRow>());
+                moved.AddRange((e.NewItems ?? Array.Empty<object>()).OfType<PlanTaskRow>());
+            };
+
+            await h.RefreshAsync();
+
+            await Assert.That(h.Vm.InProgressTasks.Select(t => t.TaskId)).IsEquivalentTo(new[] { "t2", "t3", "t4" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(resets).IsEqualTo(0);
+            await Assert.That(moved.Select(t => t.TaskId)).IsEquivalentTo(new[] { "t1", "t3" });
             await h.Vm.TeardownAsync();
         });
     }
@@ -118,7 +212,7 @@ public class PlanSectionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_status_the_app_does_not_know_presents_as_pending_and_counts_as_open() {
+    public async Task A_status_the_app_does_not_know_presents_as_pending_and_counts_as_pending() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             h.Source.Enqueue(Ready(Plan("p1", tasks: Todo("t1", 1, "parked"))));
@@ -126,7 +220,7 @@ public class PlanSectionViewModelTests {
             await h.SwitchAsync(SessionA);
 
             await Assert.That(h.Vm.Tasks.Single().State).IsEqualTo(PlanTaskState.Pending);
-            await Assert.That(h.Vm.OpenCount).IsEqualTo(1);
+            await Assert.That(h.Vm.Counts).IsEquivalentTo(new PlanTaskCount[] { new(PlanTaskState.Pending, 1) });
             await h.Vm.TeardownAsync();
         });
     }
@@ -265,6 +359,42 @@ public class PlanSectionViewModelTests {
             await Assert.That(rows[0].IsCompleted).IsTrue();
             await Assert.That(rows[1].IsInProgress).IsTrue();
             await Assert.That(h.Vm.DoneCount).IsEqualTo(1);
+            await Assert.That(ReferenceEquals(h.Vm.InProgressTasks.Single(), rows[1])).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// A plan the agent reshapes names most of its tasks again: a task it still names keeps its
+    /// row in both lists, so only what was added, dropped or moved is touched.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_task_the_reshaped_plan_still_names_keeps_its_row() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(
+                Ready(Plan("p1", tasks: [Todo("t1", 1, "in_progress"), Todo("t2", 2, "pending"), Todo("t3", 3, "pending")])),
+                Ready(Plan("p1", tasks: [Todo("t1", 1, "in_progress"), Todo("t4", 2, "pending"), Todo("t3", 3, "in_progress")])));
+            await h.SwitchAsync(SessionA);
+            var first = h.Vm.Tasks[0];
+            var third = h.Vm.Tasks[2];
+            var touched = new List<PlanTaskRow>();
+            var resets = 0;
+            void Record(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) {
+                if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) resets++;
+                touched.AddRange((e.OldItems ?? Array.Empty<object>()).OfType<PlanTaskRow>());
+                touched.AddRange((e.NewItems ?? Array.Empty<object>()).OfType<PlanTaskRow>());
+            }
+            h.Vm.Tasks.CollectionChanged += Record;
+            h.Vm.InProgressTasks.CollectionChanged += Record;
+
+            await h.RefreshAsync();
+
+            await Assert.That(h.Vm.Tasks.Select(t => t.TaskId)).IsEquivalentTo(new[] { "t1", "t4", "t3" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(ReferenceEquals(h.Vm.Tasks[0], first)).IsTrue();
+            await Assert.That(ReferenceEquals(h.Vm.Tasks[2], third)).IsTrue();
+            await Assert.That(h.Vm.InProgressTasks.Select(t => t.TaskId)).IsEquivalentTo(new[] { "t1", "t3" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(resets).IsEqualTo(0);
+            await Assert.That(touched).DoesNotContain(first);
             await h.Vm.TeardownAsync();
         });
     }
@@ -288,14 +418,14 @@ public class PlanSectionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_section_starts_expanded_and_the_toggle_folds_it() {
+    public async Task The_section_starts_collapsed_and_the_toggle_opens_it() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(h.Vm.IsExpanded).IsTrue();
+            await Assert.That(h.Vm.IsExpanded).IsFalse();
 
             h.Vm.ToggleCommand.Execute().Subscribe();
 
-            await Assert.That(h.Vm.IsExpanded).IsFalse();
+            await Assert.That(h.Vm.IsExpanded).IsTrue();
             await h.Vm.TeardownAsync();
         });
     }

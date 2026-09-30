@@ -260,6 +260,8 @@ internal sealed class AgentHookPoster(
         // never reap anything.
         lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
         transcript.ReapOlderThan(TimeSpan.FromDays(30));
+        SessionCommits.ReapOlderThan(config, TimeSpan.FromDays(30), time);
+        AgentSessions.OnThisMachine(config).Reap();
 
         // Distinct from the POST guards' diagnostic: a reader must be able to tell which guard fired,
         // and a test must be able to prove THIS one did.

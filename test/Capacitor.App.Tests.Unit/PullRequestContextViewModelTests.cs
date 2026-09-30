@@ -65,7 +65,7 @@ public class PullRequestContextViewModelTests {
         h.Source.OverviewResponses.Enqueue((_, _) => old.Task);
         h.Push(); h.Vm.SetForeground(true);
         await WaitUntilAsync(() => h.Source.Overviews == 1, what: "first overview request");
-        var a = h.Vm.Choices[0]; var b = h.Vm.Choices[1];
+        var a = h.Vm.Selected!; var b = h.Vm.Choices.Single(choice => choice != a);
         h.Vm.Selected = b;
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "B admitted");
         h.Source.OverviewTitle = "Current A";
@@ -114,14 +114,14 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task Explicit_selection_survives_list_refreshes_and_body_state_does_not_survive_PR_switches() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
-        h.Vm.Selected = h.Vm.Choices[1];
-        await WaitUntilAsync(() => h.Vm.CanReveal, what: "selected second PR");
+        h.Vm.Selected = h.Vm.Choices[0];
+        await WaitUntilAsync(() => h.Vm.CanReveal, what: "selected the older PR");
         await h.Vm.ShowSectionCommand.Execute("conversation");
         await WaitUntilAsync(() => h.Vm.Rows.Count == 1, what: "comment page loaded");
         h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "list refresh");
-        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
-        h.Vm.Selected = h.Vm.Choices[0];
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        h.Vm.Selected = h.Vm.Choices[1];
         await Assert.That(h.Vm.Rows).IsEmpty();
         await h.Dispose();
     });
@@ -196,17 +196,92 @@ public class PullRequestContextViewModelTests {
     public Task A_late_primary_repository_hint_corrects_the_default_without_changing_an_explicit_choice() => RunOnUiAsync(async () => {
         PullRequestRepository? primary = null;
         var h = new Harness(() => primary);
-        h.Source.Links[1] = h.Source.Links[1] with { RepoHash = "primary" };
+        h.Source.Links[0] = h.Source.Links[0] with { RepoHash = "primary" };
         h.Push(); await h.Show();
-        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
         primary = new("github", "github.com", "example", "repo", "primary");
         h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "primary repository selected");
-        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
-        h.Vm.Selected = h.Vm.Choices[0];
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        h.Vm.Selected = h.Vm.Choices[1];
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "explicit selection admitted");
         h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "explicit selection retained");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task The_default_is_the_newest_unmerged_pull_request() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Links = [Link(1, "open"), Link(2, "open"), Link(3, "merged")];
+        h.Push(); await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    /// The server's list carries no lifecycle, so the newest PR is tried first and its overview
+    /// decides: a merged one hands the default to the next candidate, and a later list refresh
+    /// remembers what it learned.
+    [Test]
+    public Task A_default_whose_overview_says_merged_advances_to_the_next_candidate() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Links = [Link(1), Link(2), Link(3)];
+        h.Source.Lifecycles[3] = "merged";
+        h.Push(); h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Selected?.Subject.Number == 2 && h.Vm.CanReveal, what: "merged default advanced");
+        await Assert.That(h.Source.Overviews).IsEqualTo(2);
+        h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list refresh");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task An_explicit_selection_stays_when_its_overview_says_merged() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Lifecycles[2] = "merged";
+        h.Push(); h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Selected?.Subject.Number == 1 && h.Vm.CanReveal, what: "merged default advanced");
+        h.Vm.Selected = h.Vm.Choices.Single(choice => choice.Subject.Number == 2);
+        await WaitUntilAsync(() => h.Vm.CanReveal, what: "explicit merged PR admitted");
+        h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list refresh");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    /// A live list row says open until the list's next refresh; the overview read in between is fresher.
+    [Test]
+    public Task A_learned_lifecycle_outranks_the_list_row_it_came_with() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Links = [Link(1, "open"), Link(2, "open")];
+        h.Source.Lifecycles[2] = "merged";
+        h.Push(); h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Selected?.Subject.Number == 1 && h.Vm.CanReveal, what: "merged default advanced past its open list row");
+        await h.Dispose();
+    });
+
+    /// The overview is re-read while the card is shown; a PR that merges meanwhile hands the
+    /// default over on that read, without waiting for a list refresh.
+    [Test]
+    public Task A_default_that_merges_while_shown_hands_over_on_its_next_overview() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        h.Source.Lifecycles[2] = "merged";
+        h.Time.Advance(TimeSpan.FromSeconds(26)); Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => h.Vm.Selected?.Subject.Number == 1 && h.Vm.CanReveal, what: "merged default handed over");
+        await Assert.That(h.Source.Lists).IsEqualTo(1);
+        await h.Dispose();
+    });
+
+    /// Among unmerged PRs in the primary repository the checked-out branch's PR outranks a newer one.
+    [Test]
+    public Task The_branch_pull_request_outranks_a_newer_one_in_the_same_repository() => RunOnUiAsync(async () => {
+        var primary = new PullRequestRepository("github", "github.com", "example", "repo", "hash");
+        var h = new Harness(() => primary);
+        h.Source.Links = [Link(1, "open"), Link(2, "open") with { HeadRef = "other" }];
+        h.Push(); await h.Show();
         await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
         await h.Dispose();
     });
@@ -214,15 +289,15 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task An_unlinked_explicit_selection_stays_unavailable_until_it_returns_or_the_user_selects_another_PR() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
-        h.Vm.Selected = h.Vm.Choices[1];
+        h.Vm.Selected = h.Vm.Choices[0];
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "explicit PR admitted");
-        var removed = h.Source.Links[1];
-        h.Source.Links = [h.Source.Links[0]];
+        var removed = h.Source.Links[0];
+        h.Source.Links = [h.Source.Links[1]];
         var overviews = h.Source.Overviews;
         for (var refresh = 0; refresh < 2; refresh++) {
             h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
             await WaitUntilAsync(() => !h.Vm.IsReading, what: "missing selection applied");
-            await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+            await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
             await Assert.That(h.Vm.Selected.IsAvailable).IsFalse();
             await Assert.That(h.Vm.Description).IsNull();
             await Assert.That(h.Vm.CanReveal).IsFalse();
@@ -230,24 +305,24 @@ public class PullRequestContextViewModelTests {
         }
         await h.Vm.OpenGitHubCommand.Execute();
         await Assert.That(h.Opener.Opened).IsEmpty();
-        h.Source.Links = [h.Source.Links[0], removed];
+        h.Source.Links = [removed, h.Source.Links[0]];
         h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "relinked selection admitted");
-        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
         await Assert.That(h.Vm.Selected.IsAvailable).IsTrue();
-        h.Source.Links = [h.Source.Links[0]];
+        h.Source.Links = [h.Source.Links[1]];
         h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "selection removed again");
-        h.Vm.Selected = h.Vm.Choices.Single(choice => choice.Subject.Number == 1);
+        h.Vm.Selected = h.Vm.Choices.Single(choice => choice.Subject.Number == 2);
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "replacement explicitly selected");
-        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
         await h.Dispose();
     });
 
     [Test]
     public Task An_unlinked_explicit_selection_does_not_count_as_a_linked_PR() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
-        h.Vm.Selected = h.Vm.Choices[1];
+        h.Vm.Selected = h.Vm.Choices[0];
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "explicit PR admitted");
         h.Source.Links = [];
         h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
@@ -278,13 +353,35 @@ public class PullRequestContextViewModelTests {
     [Arguments("https://github.com/example/repo/pull/1", true)]
     public Task The_main_GitHub_action_opens_only_the_selected_PR(string url, bool accepted) => RunOnUiAsync(async () => {
         var h = new Harness();
-        h.Source.Links[0] = h.Source.Links[0] with { Url = url };
+        h.Source.Links = [h.Source.Links[0] with { Url = url }];
         h.Push(); await h.Show();
         await h.Vm.OpenGitHubCommand.Execute();
         await Assert.That(h.Opener.Opened.Count).IsEqualTo(accepted ? 1 : 0);
         if (accepted) await Assert.That(h.Opener.Opened[0]).IsEqualTo(url);
         await h.Dispose();
     });
+
+    /// A borrowed reviewer's snapshot is detached. Discovery has to read the checkout being reviewed.
+    [Test]
+    public Task A_borrowed_reviewer_opens_the_pull_request_on_the_reviewed_checkout() => RunOnUiAsync(async () => {
+        using var tmp = new TempDir();
+        var reviewed = tmp.CreateDir("reviewed");
+        var snapshot = tmp.CreateDir("snapshot");
+        tmp.CreateFile(["reviewed", ".git", "HEAD"], "ref: refs/heads/reviewed\n");
+        tmp.CreateFile(["snapshot", ".git", "HEAD"], new string('a', 40) + "\n");
+        var h = new Harness(() => new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        h.Source.Links = [
+            FakePullRequestSource.Link(1) with { HeadRef = "other" },
+            FakePullRequestSource.Link(2) with { HeadRef = "reviewed" },
+        ];
+        h.Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session",
+            worktreePath: snapshot, workLocation: "borrowed", borrowedFrom: reviewed));
+        await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    static PullRequestLinkDto Link(int number, string? lifecycle = null) => FakePullRequestSource.Link(number) with { Lifecycle = lifecycle };
 
     sealed class Harness {
         internal BehaviorSubject<AgentStatusDto?> Presence { get; } = new(null);

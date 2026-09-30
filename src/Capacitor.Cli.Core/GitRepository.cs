@@ -93,6 +93,21 @@ public static class GitRepository {
         }
     }
 
+    /// <summary>The branch checked out in <paramref name="startDir"/>'s working tree, read from its
+    /// <c>HEAD</c> with no git process; null when detached or unreadable. A checkout can switch
+    /// branch after launch, so a branch recorded at creation is not this.</summary>
+    public static string? CurrentBranch(string? startDir) {
+        if (string.IsNullOrEmpty(startDir) || ResolveGitDir(startDir) is not { } gitDir) return null;
+
+        try {
+            const string prefix = "ref: refs/heads/";
+            var head = File.ReadAllTextShared(Path.Combine(gitDir, "HEAD")).Trim();
+            return head.StartsWith(prefix, StringComparison.Ordinal) && head.Length > prefix.Length ? head[prefix.Length..] : null;
+        } catch {
+            return null;
+        }
+    }
+
     static string StripAgentWorktreeTail(string path) {
         var normalized = path.Replace('\\', '/');
         foreach (var infra in (string[])["/.claude/worktrees/", "/.capacitor/worktrees/"]) {

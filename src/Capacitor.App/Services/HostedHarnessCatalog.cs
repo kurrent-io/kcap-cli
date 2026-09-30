@@ -154,6 +154,11 @@ public static class HostedHarnessCatalog {
     public static string LabelFor(IReadOnlyList<HarnessOption> options, string vendor) =>
         options.FirstOrDefault(o => string.Equals(o.Vendor, vendor, StringComparison.OrdinalIgnoreCase))?.Label ?? vendor;
 
+    /// Display name for a vendor token with no option list in hand. An unknown token stays as given.
+    public static string LabelFor(string vendor) =>
+        HarnessRegistry.Identities.FirstOrDefault(i =>
+            string.Equals(i.VendorId, vendor, StringComparison.OrdinalIgnoreCase))?.Label ?? vendor;
+
     public static string DescriptionFor(HarnessOption option) => option.TransportFamily switch {
         "pty" => "PTY · terminal + chat",
         "acp" => "ACP · chat",

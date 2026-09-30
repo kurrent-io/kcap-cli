@@ -43,7 +43,7 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(rt.AcpSessionId).IsEqualTo(SessionId);
+        await Assert.That(rt.AcpSessionId).IsEqualTo(PiSessionId);
         await Assert.That(rt.ResolvedModel).IsEqualTo(StateModelId);
         await Assert.That(rt.Cwd).IsEqualTo("/w");
 
@@ -63,7 +63,7 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(rt.AcpSessionId).IsEqualTo(SessionId);
+        await Assert.That(rt.AcpSessionId).IsEqualTo(PiSessionId);
         await Assert.That(rt.ResolvedModel).IsNull();
     }
 
@@ -369,6 +369,52 @@ public class PiRpcHostedAgentRuntimeTests {
         await idle.WaitAsync(HangGuard);
     }
 
+    /// <summary>Between writing a prompt and Pi's agent_start the turn is already committed, so a
+    /// caller waiting for idleness — a borrowed snapshot's refresh, which rewrites the files the turn
+    /// reads — must not be let through in that window.</summary>
+    [Test]
+    public async Task A_written_prompt_counts_as_busy_until_its_turn_settles() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await rt.SendUserInputAsync("review this").WaitAsync(HangGuard);
+        var idle = rt.WaitForTurnIdleAsync(CancellationToken.None);
+        await Assert.That(idle.IsCompleted).IsFalse();
+
+        proc.Push(AgentStart);
+        proc.Push(AgentSettled);
+        await idle.WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_prompt_pi_refuses_does_not_leave_the_runtime_busy() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        proc.OnWrite = json => {
+            if (!json.Contains("\"type\":\"prompt\"")) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            proc.Push(PromptResponse(doc.RootElement.GetProperty("id").GetString()!, success: false, error: "busy"));
+        };
+
+        await rt.SendUserInputAsync("review this").WaitAsync(HangGuard);
+
+        await rt.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_prompt_that_never_reached_pi_does_not_leave_the_runtime_busy() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        proc.FailWrites = true;
+
+        await Assert.That(async () => await rt.SendUserInputAsync("review this")).Throws<IOException>();
+
+        await Assert.That(rt.WaitForTurnIdleAsync(CancellationToken.None).IsCompleted).IsTrue();
+    }
+
     [Test]
     public async Task An_already_streaming_session_is_busy_from_the_handshake() {
         var (rt, proc) = NewRuntime(stateResponse: GetStateResponse(isStreaming: true));
@@ -452,6 +498,40 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await Assert.That(proc.Writes.Any(w => w.Contains("\"type\":\"abort\"", StringComparison.Ordinal))).IsTrue();
         await Assert.That(proc.TerminateCalls).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task RequestGracefulStopAsync_lets_a_child_that_exits_on_closed_stdin_exit_cleanly() {
+        var (rt, proc) = NewRuntime(stopGrace: TimeSpan.FromMilliseconds(50));
+        await using var _ = rt;
+        proc.ExitsOnInputClose = true;
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await rt.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        await Assert.That(proc.InputCloseCalls).IsEqualTo(1);
+        await Assert.That(proc.TerminateCalls).IsEqualTo(0);
+        await Assert.That(rt.ExitCode).IsEqualTo(0);
+    }
+
+    /// <summary>A stop is followed by a terminate that cancels the read pump, so the stop must not
+    /// return before the pump has read what Pi wrote on its way out.</summary>
+    [Test]
+    public async Task RequestGracefulStopAsync_returns_after_reading_what_pi_wrote_before_exiting() {
+        var (rt, proc) = NewRuntime(stopGrace: TimeSpan.FromSeconds(5));
+        await using var _ = rt;
+        proc.ExitsOnInputClose  = true;
+        proc.LinesOnInputClose = [PiRpcRuntimeFakes.AssistantText("final words")];
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        while (rt.Envelopes.TryRead(out var _)) { }
+
+        await rt.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        var read = new List<AcpEventEnvelope>();
+        while (rt.Envelopes.TryRead(out var env)) read.Add(env);
+
+        await Assert.That(read.Any(e => e is { Kind: AcpEventKind.AssistantText, Text: "final words" })).IsTrue();
     }
 
     // ---- Terminal ----

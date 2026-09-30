@@ -21,4 +21,5 @@ public sealed record DaemonInfo {
     [JsonPropertyName("pr_review_vendors")]       public string[]? PrReviewVendors { get; init; }
     [JsonPropertyName("acp_preset_vendors")]      public string[]? AcpPresetVendors { get; init; }
     [JsonPropertyName("permission_mode_vendors")] public string[]? PermissionModeVendors { get; init; }
+    [JsonPropertyName("vendor_models")]           public Dictionary<string, VendorModelOptionDto[]>? VendorModels { get; init; }
 }

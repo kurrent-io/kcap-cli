@@ -3,11 +3,11 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="Avalonia" Version="12.1.2" />
-    <PackageVersion Include="Avalonia.Desktop" Version="12.1.2" />
-    <PackageVersion Include="Avalonia.Headless" Version="12.1.2" />
+    <PackageVersion Include="Avalonia" Version="12.1.3" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.1.3" />
+    <PackageVersion Include="Avalonia.Headless" Version="12.1.3" />
     <PackageVersion Include="Avalonia.Labs.Notifications" Version="12.0.2" />
-    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.3" />
     <PackageVersion Include="Duende.IdentityModel.OidcClient" Version="7.1.0" />
     <PackageVersion Include="Duende.IdentityModel" Version="8.1.0" />
     <PackageVersion Include="DotNext" Version="6.7.1" />
@@ -32,15 +32,16 @@
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
     <PackageVersion Include="ReactiveUI.Avalonia.Reactive" Version="12.1.2" />
     <PackageVersion Include="Spectre.Console" Version="0.57.2" />
-    <PackageVersion Include="SvcSystems.UI.Terminal" Version="1.1.4" />
+    <PackageVersion Include="SvcSystems.UI.Terminal" Version="2.0.0" />
     <PackageVersion Include="Tomlyn" Version="2.10.1" />
     <!-- Must stay on the Microsoft.Testing.Platform version TUnit.Engine resolves (2.4.0):
          an MTP extension only loads against its own platform version. -->
     <PackageVersion Include="Microsoft.Testing.Extensions.GitHubActionsReport" Version="2.4.0" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.HangDump" Version="2.4.0" />
     <PackageVersion Include="TUnit" Version="1.68.4" />
     <PackageVersion Include="TUnit.Core" Version="1.68.4" />
     <PackageVersion Include="Velopack" Version="1.2.0" />
     <PackageVersion Include="WireMock.Net" Version="2.15.0" />
-    <PackageVersion Include="XTerm.NET" Version="1.2.0" />
+    <PackageVersion Include="XTerm.NET" Version="2.0.2" />
   </ItemGroup>
 </Project>

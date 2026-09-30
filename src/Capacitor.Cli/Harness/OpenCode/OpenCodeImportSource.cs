@@ -7,6 +7,9 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.OpenCode;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Titles;
+using Capacitor.Models.Transcripts.Harness.OpenCode;
 
 namespace Capacitor.Cli.Harness.OpenCode;
 
@@ -247,10 +250,20 @@ internal sealed class OpenCodeImportSource : IImportSource {
             descendantsOk = false;
         }
 
-        // 4. native title (best-effort, like Copilot/Kiro). Skipped on cancellation — no new
-        //    outbound work once cancelled — but the terminal re-close in step 5 still runs.
-        if (cancellation is null && !string.IsNullOrWhiteSpace(title))
-            await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, title!, ct);
+        // 4. native title (best-effort, like Copilot/Kiro), waiting out the server's projection
+        //    lag. Skipped on cancellation — no new outbound work once cancelled — but the
+        //    terminal re-close in step 5 still runs. The seed placeholder OpenCode gives every
+        //    new session carries nothing worth recording. A cancellation arriving DURING this
+        //    call (rather than one already captured from step 3) is deferred the same way: the
+        //    uncancellable re-close below must still run, and `ct` is rechecked after it.
+        if (cancellation is null && !string.IsNullOrWhiteSpace(title) && !OpenCodeTitleLine.IsPlaceholder(title!)) {
+            try {
+                await ImportHarnessTitle.PostAsync(
+                    ctx.HttpClient, _time, ctx.BaseUrl, c.SessionId,
+                    new HarnessTitlePost(title!, HarnessTitleKind.Rename, null),
+                    ctx.Progress, ct);
+            } catch (OperationCanceledException) { /* deferred — see the comment above */ }
+        }
 
         // 5. session-end — posted regardless of step 3's outcome, INCLUDING cancellation (see
         //    the finally contract above). Uses CancellationToken.None deliberately: `ct` may
@@ -496,14 +509,5 @@ internal sealed class OpenCodeImportSource : IImportSource {
         } catch (OperationCanceledException) {
             throw; // don't mask cancellation as a hook failure
         } catch { return false; }
-    }
-
-    async Task PostSetTitleAsync(HttpClient client, string baseUrl, string sid, string title, CancellationToken ct) {
-        if (title.Length > 120) title = title[..120];
-        var payload = new JsonObject { ["session_id"] = sid, ["title"] = title };
-        try {
-            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _ = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, _time, ct: ct);
-        } catch { /* best effort */ }
     }
 }

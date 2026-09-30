@@ -1,0 +1,13 @@
+{
+  "state": "built", "scope_version": "v1", "scope_complete": true, "scope_incomplete_reasons": [],
+  "requested_strategy": "completion", "strategy": "completion", "strategy_version": "completion-v1",
+  "guidance": "Judge each obligation separately.", "index_state": null, "budget_bytes": 100000,
+  "sections": [{"purpose": "opening_turns", "kind": "turns", "operation": "ReadTurnsAsync", "budget_bytes": 65536,
+                "turns": {"scope_version": "v1", "source_id": "AgentSession-abc", "from_index": 0, "take": 30, "budget_bytes": 65536, "turns_available": true,
+                          "generation": 3, "turns": [], "supplied": {"items": 0, "bytes": null}, "has_more": false, "over_budget": false, "next_cursor": null},
+                "events": null, "calls": null, "authorizations": null}],
+  "omitted_sections": [{"purpose": "closing_events", "kind": "events", "operation": "ReadEventsAsync", "share_percent": 33,
+                        "tools": [], "classes": [], "statuses": [], "outcomes": [], "source_id": "AgentSession-abc", "from_index": null, "take": null,
+                        "reference": "AgentSession-abc@0-41"}],
+  "limitations": [{"kind": "section_omitted", "detail": null}]
+}

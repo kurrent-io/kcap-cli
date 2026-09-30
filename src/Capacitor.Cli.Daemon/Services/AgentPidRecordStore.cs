@@ -60,6 +60,38 @@ internal sealed class AgentPidRecordStore(string stateDir, ILogger logger) {
         }
     }
 
+    /// <summary>Read one stop target. A successful null result means both its record and its
+    /// quarantine file are absent. Unreadable, malformed or mismatched records return false, since
+    /// none proves that the agent's process has stopped.</summary>
+    public bool TryRead(string agentId, out AgentPidRecord? record) {
+        record = null;
+        try {
+            string[] paths;
+            try {
+                paths = Directory.GetFileSystemEntries(_agentsDir);
+            } catch (DirectoryNotFoundException) {
+                // Walk to an enumerable ancestor to distinguish a missing directory from an
+                // obstructing file. Existence probes alone also hide permission and I/O errors.
+                for (var directory = _agentsDir; Path.GetDirectoryName(directory) is { } parent; directory = parent) {
+                    try { return !Directory.EnumerateFileSystemEntries(parent).Contains(directory, StringComparer.Ordinal); }
+                    catch (DirectoryNotFoundException) { }
+                }
+                return false;
+            }
+
+            var path = PathFor(agentId);
+            if (!paths.Contains(path, StringComparer.Ordinal))
+                return !paths.Contains(path + ".corrupt", StringComparer.Ordinal);
+
+            if (ReadRecord(path) is not { } found || found.AgentId != agentId) return false;
+            record = found;
+            return true;
+        } catch (Exception ex) {
+            logger.LogWarning(ex, "AgentPidRecordStore: could not read stop target {AgentId}", agentId);
+            return false;
+        }
+    }
+
     /// <summary>All parseable leftover records. An unparseable or agent-id-less file is renamed
     /// <c>.corrupt</c> (retained for the operator, never acted on) and excluded.</summary>
     public IReadOnlyList<AgentPidRecord> ReadAll() {
@@ -68,69 +100,73 @@ internal sealed class AgentPidRecordStore(string stateDir, ILogger logger) {
         var results = new List<AgentPidRecord>();
 
         foreach (var path in Directory.EnumerateFiles(_agentsDir, "*.json")) {
-            AgentPidRecord record;
-            try {
-                record = JsonSerializer.Deserialize(File.ReadAllText(path), CapacitorJsonContext.Default.AgentPidRecord);
-            } catch (Exception ex) {
-                logger.LogWarning(ex, "AgentPidRecordStore: unparseable record {Path}; quarantining as .corrupt", path);
-                TryQuarantine(path);
-                continue;
-            }
-
-            if (string.IsNullOrEmpty(record.AgentId)) {
-                logger.LogWarning("AgentPidRecordStore: record {Path} has no agent id; quarantining as .corrupt", path);
-                TryQuarantine(path);
-                continue;
-            }
-
-            // A parseable record whose `start_identity` deserialized to NULL (the wire had an
-            // explicit `null`, which System.Text.Json happily binds to the non-nullable positional
-            // parameter) is malformed — quarantine it. Guard BEFORE the .Length checks below so a
-            // null token can never NRE and abort the whole sweep (OrphanReaper enumerates ReadAll()
-            // directly, so one bad record must not take down reaping for every other agent).
-            if (record.StartIdentity is null) {
-                logger.LogWarning("AgentPidRecordStore: record {Path} has a null start_identity; quarantining as .corrupt", path);
-                TryQuarantine(path);
-                continue;
-            }
-
-            var token = record.StartIdentity;
-
-            // An UNKNOWN numeric identity_kind (e.g. a corrupt `identity_kind: 99`, or a value a
-            // future daemon writes) deserializes to an out-of-range enum that is NEITHER Present
-            // NOR IdentityUnavailable, so it slips past BOTH consistency predicates below and would
-            // be treated as a valid new shape. Reject any undefined value outright. NOTE: a LEGACY
-            // record with no identity_kind key decodes to Present (the zero value), which IS defined
-            // — so this never fires on the backward-compat path.
-            if (!Enum.IsDefined(record.IdentityKind)) {
-                logger.LogWarning(
-                    "AgentPidRecordStore: record {Path} has an unknown identity_kind ({Kind}); quarantining as .corrupt",
-                    path, (int)record.IdentityKind);
-                TryQuarantine(path);
-                continue;
-            }
-
-            // M1-A (spec §4.3): the only rejected shapes are NEW-schema-inconsistent combinations —
-            // Present claiming a comparable identity with an empty token, or IdentityUnavailable
-            // claiming NO comparable identity while still carrying a nonempty one. A LEGACY record
-            // (no identity_kind key at all) always decodes as Present (PidIdentityKind's zero value)
-            // and is never rejected here, however old its token scheme.
-            var inconsistent =
-                (record.IdentityKind == PidIdentityKind.Present && token.Length == 0) ||
-                (record.IdentityKind == PidIdentityKind.IdentityUnavailable && token.Length != 0);
-
-            if (inconsistent) {
-                logger.LogWarning(
-                    "AgentPidRecordStore: record {Path} has an inconsistent identity_kind/start_identity combination ({Kind}, token length {Len}); quarantining as .corrupt",
-                    path, record.IdentityKind, record.StartIdentity.Length);
-                TryQuarantine(path);
-                continue;
-            }
-
-            results.Add(record);
+            if (ReadRecord(path) is { } record) results.Add(record);
         }
 
         return results;
+    }
+
+    AgentPidRecord? ReadRecord(string path) {
+        AgentPidRecord record;
+        try {
+            record = JsonSerializer.Deserialize(File.ReadAllText(path), CapacitorJsonContext.Default.AgentPidRecord);
+        } catch (Exception ex) {
+            logger.LogWarning(ex, "AgentPidRecordStore: unparseable record {Path}; quarantining as .corrupt", path);
+            TryQuarantine(path);
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(record.AgentId)) {
+            logger.LogWarning("AgentPidRecordStore: record {Path} has no agent id; quarantining as .corrupt", path);
+            TryQuarantine(path);
+            return null;
+        }
+
+        // A parseable record whose `start_identity` deserialized to NULL (the wire had an
+        // explicit `null`, which System.Text.Json happily binds to the non-nullable positional
+        // parameter) is malformed — quarantine it. Guard BEFORE the .Length checks below so a
+        // null token can never NRE and abort the whole sweep (OrphanReaper enumerates ReadAll()
+        // directly, so one bad record must not take down reaping for every other agent).
+        if (record.StartIdentity is null) {
+            logger.LogWarning("AgentPidRecordStore: record {Path} has a null start_identity; quarantining as .corrupt", path);
+            TryQuarantine(path);
+            return null;
+        }
+
+        var token = record.StartIdentity;
+
+        // An UNKNOWN numeric identity_kind (e.g. a corrupt `identity_kind: 99`, or a value a
+        // future daemon writes) deserializes to an out-of-range enum that is NEITHER Present
+        // NOR IdentityUnavailable, so it slips past BOTH consistency predicates below and would
+        // be treated as a valid new shape. Reject any undefined value outright. NOTE: a LEGACY
+        // record with no identity_kind key decodes to Present (the zero value), which IS defined
+        // — so this never fires on the backward-compat path.
+        if (!Enum.IsDefined(record.IdentityKind)) {
+            logger.LogWarning(
+                "AgentPidRecordStore: record {Path} has an unknown identity_kind ({Kind}); quarantining as .corrupt",
+                path, (int)record.IdentityKind);
+            TryQuarantine(path);
+            return null;
+        }
+
+        // M1-A (spec §4.3): the only rejected shapes are NEW-schema-inconsistent combinations —
+        // Present claiming a comparable identity with an empty token, or IdentityUnavailable
+        // claiming NO comparable identity while still carrying a nonempty one. A LEGACY record
+        // (no identity_kind key at all) always decodes as Present (PidIdentityKind's zero value)
+        // and is never rejected here, however old its token scheme.
+        var inconsistent =
+            (record.IdentityKind == PidIdentityKind.Present && token.Length == 0) ||
+            (record.IdentityKind == PidIdentityKind.IdentityUnavailable && token.Length != 0);
+
+        if (inconsistent) {
+            logger.LogWarning(
+                "AgentPidRecordStore: record {Path} has an inconsistent identity_kind/start_identity combination ({Kind}, token length {Len}); quarantining as .corrupt",
+                path, record.IdentityKind, record.StartIdentity.Length);
+            TryQuarantine(path);
+            return null;
+        }
+
+        return record;
     }
 
     // Hash the (untrusted) agent id into the filename so no id can escape _agentsDir via path separators.

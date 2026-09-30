@@ -763,6 +763,27 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// The header status reads the card type. Replacing a question with a permission leaves the
+    /// collection nonempty, so the word has to move without waiting for the poll.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Resolving_a_question_beside_a_permission_updates_the_header_status() {
+        await RunOnUiAsync(async () => {
+            var h = Claude(p => p.Add(PermissionEntries.Entry("r1", "a1")));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the permission");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 2, what: "the question");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Answer);
+
+            h.Permissions.Remove("q1");
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the question resolved");
+            await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_request_with_an_id_marks_its_row_in_either_order_and_clears_on_resolve() {
@@ -1343,9 +1364,9 @@ public class ChatTabViewModelTests {
             File.AppendAllText(path, UserLine + "\n");
             h.Chat.ComposerText = "hello";
             var send = h.Chat.SendCommand.Execute().ToTask();
-            await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
             input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
+            await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
             h.Chat.ComposerText = "hello";
             send = h.Chat.SendCommand.Execute().ToTask();
             input.Pending!.SetResult(ChatSendOutcome.Accepted);
@@ -1359,6 +1380,60 @@ public class ChatTabViewModelTests {
             await h.TickAsync();
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
             await h.TeardownAsync();
+        });
+    }
+
+    /// The channel holds an attachment send while the daemon fetches the files: until the channel
+    /// takes it, the prompt is in the composer and nowhere else.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_attachment_send_waiting_on_the_channel_shows_only_in_the_composer() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var uploader = new HoldingUploader();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, uploader: uploader);
+            try {
+                var path = Tmp.CreateFile("pasted.jsonl", []);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "look at this";
+                h.Chat.Tray.AddAll([new StagedAttachment("shot.png", "image/png", new byte[] { 1 })]);
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                await uploader.Started.Task;
+                uploader.Release.SetResult(new UploadOutcome(UploadKind.Uploaded, ["file-1"], null));
+                await WaitUntilAsync(() => input.Pending is not null, what: "the send reaching the channel");
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("look at this");
+
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// A prompt Claude Code takes up mid-turn is recorded only as a queued_command attachment:
+    /// that record is its echo, and the chat shows it as the user's turn.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_taken_up_mid_turn_leaves_the_queue_and_shows_as_a_user_turn() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("absorbed.jsonl", []);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "also check the toggle";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
+
+                File.AppendAllText(path, """{"type":"attachment","attachment":{"type":"queued_command","prompt":"also check the toggle","commandMode":"prompt","origin":{"kind":"human"}}}""" + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Single().Text).IsEqualTo("also check the toggle");
+            } finally { await h.TeardownAsync(); }
         });
     }
 
@@ -1721,12 +1796,11 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A cache removal is the other way a session ends: the footer has to say so — the daemon's
-    /// vocabulary has no word for an agent it has already dropped — and a send that can never be
-    /// echoed must stop claiming it is still queued.
+    /// A cache removal ends the session. The visible word is Done — the daemon has already
+    /// dropped the agent — and a send that can never be echoed stops claiming it is queued.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_removed_agent_reads_as_Completed_and_unconfirms_the_queue() {
+    public async Task A_removed_agent_reads_as_done_and_unconfirms_the_queue() {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();
             var h = new Harness(TranscriptChat.Journal, input: input);
@@ -1740,7 +1814,7 @@ public class ChatTabViewModelTests {
                 await Assert.That(h.Chat.QueuedMessages.Single().IsUnconfirmed).IsFalse();
 
                 h.Daemon.Agents.Remove("a1");
-                await Assert.That(h.Chat.StatusText).IsEqualTo("Completed");
+                await Assert.That(h.Chat.StatusText).IsEqualTo("Done");
                 await Assert.That(h.Chat.QueuedMessages.Single().IsUnconfirmed).IsTrue();
             } finally { await h.TeardownAsync(); }
         });

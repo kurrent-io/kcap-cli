@@ -1,0 +1,67 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.AgentStatusMark"
+             x:DataType="vm:AgentStatusPresentation"
+             ClipToBounds="False"
+             IsVisible="{Binding HasLabel, FallbackValue=False}"
+             AutomationProperties.Name="{Binding AccessibleName}">
+    <ToolTip.Tip>
+        <views:AgentStatusTip DataContext="{Binding}" />
+    </ToolTip.Tip>
+    <UserControl.Resources>
+        <StreamGeometry x:Key="IdleClockIcon">M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zM12.75 7h-1.5v5.25h4.2v-1.5H12.75z</StreamGeometry>
+    </UserControl.Resources>
+    <UserControl.Styles>
+        <Style Selector="TextBlock.statusWord">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="LineHeight" Value="16" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.statusWord.inflight">
+            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+        </Style>
+        <Style Selector="TextBlock.statusWord.warning">
+            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+        </Style>
+        <Style Selector="TextBlock.statusWord.danger">
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
+        <Style Selector="Panel.glyph">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="Height" Value="12" />
+        </Style>
+    </UserControl.Styles>
+    <!-- A DockPanel, not a horizontal StackPanel, so the word is width-bounded and trims when a
+         raw daemon status outgrows its column; the tooltip carries the full text. -->
+    <DockPanel VerticalAlignment="Center">
+        <!-- The ring's stroke is centered on its edge, so a margin keeps it inside the box. -->
+        <Panel x:Name="Glyph" Classes="glyph" DockPanel.Dock="Left" Margin="0,0,5,0"
+               VerticalAlignment="Center" ClipToBounds="False"
+               Classes.pulsing="{Binding Pulses}">
+            <Ellipse Stretch="Uniform" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5" Margin="1"
+                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsPulse}" />
+            <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowsPulse}" />
+            <Path Stretch="Uniform" Data="{StaticResource IdleClockIcon}"
+                  Fill="{StaticResource KcapWarningBrush}" IsVisible="{Binding ShowsClock}"
+                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+            <TextBlock Text="?" FontSize="13" FontWeight="Bold" Foreground="{StaticResource KcapWarningBrush}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowsAsk}" />
+            <TextBlock Text="!" FontSize="12" FontWeight="Bold" Foreground="{StaticResource KcapWarningBrush}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowsBang}" />
+            <Path Stretch="Uniform" Stroke="{StaticResource KcapDangerBrush}"
+                  StrokeThickness="1.6" StrokeLineCap="Round" Data="M3,3 L9,9 M9,3 L3,9"
+                  IsVisible="{Binding ShowsCross}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+            <Path Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}"
+                  StrokeThickness="1.6" StrokeLineCap="Round" Data="M2,6 H10"
+                  IsVisible="{Binding ShowsDash}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+        </Panel>
+        <TextBlock x:Name="StatusWord" Classes="statusWord" Text="{Binding Label}"
+                   Classes.inflight="{Binding IsInFlight}" Classes.warning="{Binding IsWarning}"
+                   Classes.danger="{Binding IsDanger}" TextTrimming="CharacterEllipsis" />
+    </DockPanel>
+</UserControl>
