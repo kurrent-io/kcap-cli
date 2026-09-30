@@ -234,8 +234,16 @@ public sealed class ClaudeHookCommand(
             // Surface 3: the degraded arm spools via this path and bypasses HandleCore's stamp, so a
             // replayed session-start must still carry the harness inventory (the hook-ingest carrier).
             if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+            DefaultLastAssistantMessage(node, command);
             return node.ToJsonString();
         } catch { return body; }
+    }
+
+    // Claude omits the key when a subagent ends on a tool call (SubagentHandback), and the server's
+    // stop contract requires it: without one the stop is rejected and the subagent never completes.
+    static void DefaultLastAssistantMessage(JsonNode node, string command) {
+        if (command == "subagent-stop" && node["last_assistant_message"] is null)
+            node["last_assistant_message"] = "";
     }
 
     // Await repo enrichment but never past the remaining hook budget. If it can't finish in time,
@@ -379,6 +387,8 @@ public sealed class ClaudeHookCommand(
                 // Surface 3: attach this machine's harness inventory, session-start only (the
                 // injections above apply to every event; the inventory is a session-start signal).
                 if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+
+                DefaultLastAssistantMessage(node, command);
 
                 body = node.ToJsonString();
             }
