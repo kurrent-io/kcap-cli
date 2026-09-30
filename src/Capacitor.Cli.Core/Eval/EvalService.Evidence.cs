@@ -69,10 +69,11 @@ public static partial class EvalService {
         var root = tempRoot ?? Path.GetTempPath();
         EvidenceRunContext.SweepStale(root, time, observer.OnInfo);
         var context  = EvidenceRunContext.Create(evalRunId, root);
+        var scope    = new EvidenceScopeClient(httpClient, baseUrl, sessionId, time, holds: ad.ScopeHolds == true);
         var prepared = false;
         try {
-            var scope  = new EvidenceScopeClient(httpClient, baseUrl, sessionId, time);
             var status = await scope.ResolveAsync(ct);
+            if (scope.HoldRefused) observer.OnInfo("the server could not hold this evidence scope; a session that grows during the run can end it");
             if (status != EvidenceScopeStatus.Ok) {
                 observer.OnFailed(status switch {
                     EvidenceScopeStatus.NotVisible => "session not found or not visible",
@@ -113,6 +114,7 @@ public static partial class EvalService {
             };
         } finally {
             if (!prepared) {
+                await scope.DisposeAsync();
                 try { await context.DisposeAsync(); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { observer.OnInfo($"could not remove {context.RunDirectory}: {e.Message}"); }
             }

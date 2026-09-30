@@ -551,6 +551,55 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(NoRunDirectory(root)).IsTrue();
     }
 
+    void ServeHeld(long cutoff) {
+        var issued   = DateTimeOffset.UtcNow;
+        var manifest = EvidenceServerStub.Manifest("v1", "tok", null, issued, issued + TimeSpan.FromMinutes(30), [EvidenceServerStub.Source(Root, 0, cutoff, 1)]);
+        var held     = manifest[..^1] + ",\"held\":true}";
+        _stub.Route("POST", "evidence-scope/holds", 200, held);
+        _stub.Route("DELETE", "evidence-scope/hold", 204, "");
+        _stub.CursorPage("tok", held);
+        _stub.Route("GET", "evidence-turns", 200, EvidenceServerStub.TurnsPage(Root, [(0, 0, cutoff)]));
+        _stub.Route("GET", "evidence-calls/summary", 200, EvidenceServerStub.Summary());
+        _stub.Route("POST", "evals/v4", 200, "{}");
+        _stub.Route("POST", "judge-facts", 200, "{}");
+    }
+
+    [Test]
+    public async Task A_run_on_a_server_offering_holds_holds_its_scope_and_releases_it_once_finished() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var (_, tmp) = TempRoot();
+        using var tmpScope = tmp;
+        _stub.Catalog(Ad[..^1] + ",\"scope_holds\":true}", "[]", CatalogQuestions);
+        ServeHeld(cutoff: 1); ServeEvents("hello", "world"); Certify($"{Root}@0");
+        using var claude = Claude(Dir("held"), Verdict("q1", "e0"));
+
+        var result = await Run(claude, ["q1"], new RecordingEvalObserver());
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(_stub.Requests("evidence-scope/holds").Count).IsEqualTo(1);
+        await Assert.That(_stub.Requests("evidence-scope").Count(e => e.RequestMessage.Method == "GET" && e.RequestMessage.Query?.ContainsKey("cursor") != true)).IsEqualTo(0);
+        var released = _stub.Requests("evidence-scope/hold").Single();
+        await Assert.That(JsonDocument.Parse(released.RequestMessage.Body!).RootElement.GetProperty("token").GetString()).IsEqualTo("tok");
+        await Assert.That(released.RequestMessage.DateTime).IsGreaterThanOrEqualTo(_stub.Requests("evals/v4").Single().RequestMessage.DateTime);
+    }
+
+    [Test]
+    public async Task A_held_run_that_fails_to_prepare_releases_its_hold() {
+        var (root, tmp) = TempRoot();
+        using var tmpScope = tmp;
+        ServeHeld(cutoff: -1);
+        using var claude = Claude(Dir("held-fail"), Verdict("q1"));
+        var catalog = JsonSerializer.Deserialize(
+            $$"""{"retrospective_prompt":"Retro","retrospective_prompt_version":"7","questions":{{CatalogQuestions}},"evidence_retrieval":{{Ad[..^1] + ",\"scope_holds\":true}"}} }""",
+            CapacitorJsonContext.Default.EvalCatalogDto)!;
+
+        var setup = await EvalService.PrepareEvidenceAsync(_stub.Url, _http, null, TestHarnesses.Under(Home, BinaryProbe.Searching(claude.BinDirectory)), Sid, Questions("q1"), catalog, "sonnet",
+            new RecordingEvalObserver(), TimeProvider.System, CancellationToken.None, "run-fixed", root);
+
+        await Assert.That(setup).IsNull();
+        await Assert.That(_stub.Requests("evidence-scope/hold").Count).IsEqualTo(1);
+    }
+
     [Test]
     public async Task The_threshold_has_no_effect_on_the_evidence_route() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");

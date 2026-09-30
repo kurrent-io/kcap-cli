@@ -4,7 +4,8 @@ using Capacitor.Cli.Core.Harness;
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
 /// <summary>One evidence-route run as prepared: its private directory, the bound scope and its clients, the route, the fitting
-/// one-shot trace (empty on retrieval), the orientation and the reconciled questions. Disposing it deletes the directory.</summary>
+/// one-shot trace (empty on retrieval), the orientation and the reconciled questions. Disposing it releases the scope's
+/// hold, if the server holds it, and deletes the directory.</summary>
 public sealed class EvidenceRunSetup : IAsyncDisposable {
     public required EvidenceRunContext             Context                    { get; init; }
     public required EvidenceScopeClient            Scope                      { get; init; }
@@ -39,5 +40,8 @@ public sealed class EvidenceRunSetup : IAsyncDisposable {
     public EvidenceRunBudgets Budgets  => new(Advertisement.MaxToolCalls, Advertisement.JudgeByteBudgetBytes, Advertisement.PageBudgetBytes);
     public int                MaxTurns => EvidenceBudgets.MaxTurns(Advertisement.MaxToolCalls);
 
-    public ValueTask DisposeAsync() => Context.DisposeAsync();
+    public async ValueTask DisposeAsync() {
+        await Scope.DisposeAsync();
+        await Context.DisposeAsync();
+    }
 }
