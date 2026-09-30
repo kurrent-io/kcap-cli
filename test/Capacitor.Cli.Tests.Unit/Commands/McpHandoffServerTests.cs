@@ -80,6 +80,45 @@ public class McpHandoffServerTests {
         await Assert.That(IsError(response)).IsTrue();
     }
 
+    [Test]
+    public async Task An_unauthorized_summary_is_a_tool_error_with_the_login_notice() {
+        var response = await Call($$"""{"session_id":"{{Previous}}"}""", new Answers(_ => (401, "{}")));
+
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(Text(response)).IsNotEmpty();
+    }
+
+    [Test]
+    public async Task A_failing_summary_is_a_tool_error() {
+        var response = await Call($$"""{"session_id":"{{Previous}}"}""", new Answers(_ => (500, "boom")));
+
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(Text(response)).StartsWith("Error:");
+    }
+
+    [Test]
+    public async Task Every_write_failing_is_a_tool_error_carrying_the_outcome() {
+        var handler = new Answers(req => req.RequestUri!.AbsolutePath switch {
+            $"/api/sessions/{Previous}/summary"   => (200, """{"status":"ended"}"""),
+            $"/api/work-items/session/{Previous}" => (200, """[{"work_item_id":"w1","label":"W1"}]"""),
+            "/api/work-items/declare"             => (500, "boom"),
+            _                                     => (200, "[]"),
+        });
+
+        var response = await Call($$"""{"session_id":"{{Previous}}"}""", handler);
+
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(JsonNode.Parse(Text(response))!["continued_from"]!.GetValue<string>()).IsEqualTo(Previous);
+    }
+
+    [Test]
+    public async Task A_missing_session_id_is_a_tool_error() {
+        var response = await Call("{}", new Answers(_ => (200, "{}")));
+
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(Text(response)).Contains("session_id");
+    }
+
     sealed class Answers(Func<HttpRequestMessage, (int Status, string Body)> answer) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var (status, body) = answer(request);

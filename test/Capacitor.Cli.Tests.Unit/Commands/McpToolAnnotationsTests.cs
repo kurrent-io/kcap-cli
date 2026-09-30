@@ -14,6 +14,7 @@ public class McpToolAnnotationsTests {
         ("kcap-memory",         McpMemoryServer.BuildToolsList()),
         ("kcap-workitems",      McpWorkItemsServer.BuildToolsList()),
         ("kcap-plans",          McpPlansServer.BuildToolsList()),
+        ("kcap-handoff",        McpHandoffServer.BuildToolsList()),
         ("kcap-artefacts",      McpArtefactsServer.BuildToolsList()),
         ("kcap-knowledge",      McpKnowledgeServer.BuildToolsList()),
         ("kcap-flows",          McpFlowsServer.BuildToolsList()),
