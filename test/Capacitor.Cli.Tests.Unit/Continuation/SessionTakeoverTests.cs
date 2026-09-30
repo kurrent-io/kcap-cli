@@ -151,7 +151,7 @@ public class SessionTakeoverTests {
         var r = await Run(routes);
 
         await Assert.That(r).IsTypeOf<TakeoverResult.Completed>();
-        await Assert.That(((TakeoverResult.Completed)r).AllWritesFailed).IsFalse();
+        await Assert.That(((TakeoverResult.Completed)r).Unsuccessful).IsFalse();
         await Assert.That(Outcome(r)["work_items"]!["status"]!.GetValue<string>()).IsEqualTo("not_in_plan");
         await Assert.That(Outcome(r)["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
     }
@@ -295,7 +295,7 @@ public class SessionTakeoverTests {
 
         var r = (TakeoverResult.Completed)await Run(routes);
 
-        await Assert.That(r.AllWritesFailed).IsFalse();
+        await Assert.That(r.Unsuccessful).IsFalse();
         var item = r.Outcome["work_items"]!["items"]!.AsArray()[0]!;
         await Assert.That(item["attached"]!.GetValue<bool>()).IsFalse();
         await Assert.That(item["error"]!.GetValue<string>()).Contains("500");
@@ -320,7 +320,33 @@ public class SessionTakeoverTests {
 
         var r = (TakeoverResult.Completed)await Run(routes);
 
-        await Assert.That(r.AllWritesFailed).IsTrue();
+        await Assert.That(r.Unsuccessful).IsTrue();
+    }
+
+    [Test]
+    public async Task Nothing_to_attach_is_a_success() {
+        var r = (TakeoverResult.Completed)await Run(Server(Ended()));
+        await Assert.That(r.Unsuccessful).IsFalse();
+    }
+
+    [Test]
+    public async Task A_failed_work_items_read_with_nothing_attached_is_a_failure() {
+        var routes = Server(Ended(), items: null);
+        routes.Throw($"/api/work-items/session/{Previous}");
+
+        var r = (TakeoverResult.Completed)await Run(routes);
+
+        await Assert.That(r.Unsuccessful).IsTrue();
+    }
+
+    [Test]
+    public async Task A_failed_plans_read_with_nothing_attached_is_a_failure() {
+        var routes = Server(Ended(), plans: null);
+        routes.Get($"/api/sessions/{Previous}/plans", 500, "boom");
+
+        var r = (TakeoverResult.Completed)await Run(routes);
+
+        await Assert.That(r.Unsuccessful).IsTrue();
     }
 
     [Test]

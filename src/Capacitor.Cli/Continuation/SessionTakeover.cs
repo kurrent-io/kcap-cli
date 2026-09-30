@@ -68,7 +68,10 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
         await AdoptPlansAsync(client, baseUrl, plans, plansError, currentWire, outcome, writes, ct);
 
-        return new TakeoverResult.Completed(outcome, writes.Attempted > 0 && writes.Failed == writes.Attempted);
+        var readFailed   = Str(outcome["work_items"]?["status"]) == "failed" || outcome["plans_error"] is not null;
+        var unsuccessful = writes.Failed == writes.Attempted && (writes.Attempted > 0 || readFailed);
+
+        return new TakeoverResult.Completed(outcome, unsuccessful);
     }
 
     (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, bool force) {

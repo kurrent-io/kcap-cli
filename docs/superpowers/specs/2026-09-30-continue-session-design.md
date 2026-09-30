@@ -116,7 +116,8 @@ Steps:
    ```
 
    `plans_error` appears only when the plans read fails. A failed write carries `"attached": false, "error": "<status or message>"` on its entry. The
-   takeover fails only when every attempted write failed. `current_plan_id` is the last plan
+   takeover fails when every attempted write failed, or when no write succeeded and a read (work
+   items or plans) failed; X having nothing to attach is still a success. `current_plan_id` is the last plan
    attached successfully, omitted when none. A 401 surfaces the existing not-logged-in message.
 
 ### 3. `kcap recap <X> --continue [--force]`

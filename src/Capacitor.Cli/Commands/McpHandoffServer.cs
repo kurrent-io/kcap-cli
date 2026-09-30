@@ -156,7 +156,7 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
                 .RunAsync(client, baseUrl, previous, currentSessionId, force);
 
             return result switch {
-                TakeoverResult.Completed c    => BuildToolResult(id, c.Outcome.ToJsonString(), isError: c.AllWritesFailed),
+                TakeoverResult.Completed c    => BuildToolResult(id, c.Outcome.ToJsonString(), isError: c.Unsuccessful),
                 TakeoverResult.Refused r      => BuildToolResult(id, $"Error: {r.Reason}", isError: true),
                 TakeoverResult.Failed f       => BuildToolResult(id, $"Error: {f.Reason}", isError: true),
                 TakeoverResult.Unauthorized   => BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true),

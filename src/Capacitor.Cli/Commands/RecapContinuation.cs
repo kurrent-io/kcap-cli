@@ -44,7 +44,7 @@ sealed class RecapContinuation(ConfigRoot config, ProfileContext profiles, Token
         switch (result) {
             case TakeoverResult.Completed c:
                 await Console.Out.WriteLineAsync(TakeoverReport.Render(c.Outcome));
-                return c.AllWritesFailed ? 1 : 0;
+                return c.Unsuccessful ? 1 : 0;
             case TakeoverResult.Refused r:
                 await Console.Error.WriteLineAsync(r.Reason);
                 return Refused;
