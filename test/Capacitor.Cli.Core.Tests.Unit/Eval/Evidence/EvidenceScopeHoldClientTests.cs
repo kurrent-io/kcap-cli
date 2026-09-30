@@ -124,4 +124,21 @@ public class EvidenceScopeHoldClientTests : IDisposable {
         await Assert.That(_stub.Requests("evidence-scope/hold")).IsEmpty();
         await Assert.That(client.State!.Held).IsFalse();
     }
+
+    sealed class ThrowingOnDelete : DelegatingHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            request.Method == HttpMethod.Delete ? throw new InvalidOperationException("credential store unavailable") : base.SendAsync(request, cancellationToken);
+    }
+
+    [Test]
+    public async Task A_release_that_throws_anything_is_contained() {
+        ServeHold();
+        using var http = new HttpClient(new ThrowingOnDelete { InnerHandler = new HttpClientHandler() });
+        var client = new EvidenceScopeClient(http, _stub.Url, EvidenceServerStub.SessionId, new FakeTimeProvider(S0), holds: true);
+        await client.ResolveAsync(CancellationToken.None);
+
+        await client.DisposeAsync();
+
+        await Assert.That(client.LastError).Contains("credential store unavailable");
+    }
 }

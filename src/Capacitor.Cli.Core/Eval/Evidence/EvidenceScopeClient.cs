@@ -87,15 +87,15 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
         return EvidenceScopeStatus.Ok;
     }
 
-    /// <summary>Releases the hold this client took, if any, within <see cref="ReleaseTimeout"/>; a release that fails leaves
-    /// the hold to expire on the server.</summary>
+    /// <summary>Releases the hold this client took, if any, within <see cref="ReleaseTimeout"/>. Never throws: a release
+    /// that fails for any reason leaves the hold to expire on the server, and the run's own cleanup still runs.</summary>
     public async ValueTask DisposeAsync() {
         if (Interlocked.Exchange(ref _heldToken, null) is not { } token) return;
         using var timeout = new CancellationTokenSource(ReleaseTimeout, time);
         try {
             using var request = new HttpRequestMessage(HttpMethod.Delete, Route("hold")) { Content = HoldBody(token) };
             using var resp    = await http.SendAsync(request, timeout.Token);
-        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
+        } catch (Exception e) {
             LastError = $"could not release the evidence scope hold: {e.Message}";
         }
     }

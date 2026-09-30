@@ -41,7 +41,7 @@ public sealed class EvidenceRunSetup : IAsyncDisposable {
     public int                MaxTurns => EvidenceBudgets.MaxTurns(Advertisement.MaxToolCalls);
 
     public async ValueTask DisposeAsync() {
-        await Scope.DisposeAsync();
-        await Context.DisposeAsync();
+        try { await Scope.DisposeAsync(); }
+        finally { await Context.DisposeAsync(); }
     }
 }
