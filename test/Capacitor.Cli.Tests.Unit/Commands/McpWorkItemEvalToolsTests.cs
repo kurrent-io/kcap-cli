@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -11,9 +12,9 @@ public class McpWorkItemEvalToolsTests {
 
     const string RunId = "0123456789abcdef0123456789abcdef";
 
-    McpWorkItemsServer Server() =>
+    McpWorkItemsServer Server(TimeProvider? time = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup,
-            new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
+            new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory), time ?? TimeProvider.System);
 
     sealed class Handler(HttpStatusCode status, string body) : HttpMessageHandler {
         public int         Calls  { get; private set; }
@@ -224,5 +225,57 @@ public class McpWorkItemEvalToolsTests {
         await Assert.That(text).Contains("(3 more questions not shown)");
         await Assert.That(text).Contains("c9 (session s1); and 15 more");
         await Assert.That(text).DoesNotContain("c10 (session");
+    }
+
+    /// <summary>Headers that arrive with a body that never does: the shared deadline ends the call as a tool error rather than
+    /// holding the one-call-at-a-time loop.</summary>
+    [Test]
+    public async Task A_body_that_never_arrives_ends_at_the_deadline() {
+        var time    = new FakeTimeProvider();
+        var sent    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = new HttpClient(new StalledBodyHandler(sent));
+        var request = new JsonObject {
+            ["params"] = new JsonObject { ["name"] = "get_work_item_eval", ["arguments"] = JsonNode.Parse($$"""{"work_item_id":"wi-1","run_id":"{{RunId}}"}""") }
+        };
+
+        var call = Server(time).HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", () => ValueTask.FromResult<string?>(null));
+        await sent.Task;
+        time.Advance(McpWorkItemsServer.NextWorkRequestDeadline - TimeSpan.FromSeconds(1));
+        await Assert.That(call.IsCompleted).IsFalse();
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        var result = JsonNode.Parse(await call.WaitAsync(TimeSpan.FromSeconds(30)))!["result"]!;
+        await Assert.That(result["content"]![0]!["text"]!.GetValue<string>()).IsEqualTo(WorkItemEvalToolResults.DeadlineMessage);
+        await Assert.That(result["isError"]?.GetValue<bool>()).IsTrue();
+    }
+
+    sealed class StalledBodyHandler(TaskCompletionSource sent) : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            sent.TrySetResult();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StalledContent() });
+        }
+    }
+
+    sealed class StalledContent : HttpContent {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) => Task.Delay(Timeout.Infinite);
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(new StalledStream());
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
+
+    sealed class StalledStream : Stream {
+        public override bool CanRead  => true;
+        public override bool CanSeek  => false;
+        public override bool CanWrite => false;
+        public override long Length   => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) {
+            await Task.Delay(Timeout.Infinite, ct);
+            return 0;
+        }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

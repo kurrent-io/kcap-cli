@@ -17,6 +17,7 @@ static partial class WorkItemEvalToolResults {
 
     internal const string UnavailableMessage = "Work-item evaluations are not enabled on this server.";
     internal const string TooLargeMessage    = "Error: the work-item evaluation response is too large to read.";
+    internal const string DeadlineMessage    = "Error: the server did not answer in time; try again in a moment.";
 
     /// <summary>A run of every catalog question with full findings comes to a few hundred KiB; the stdio loop serves one
     /// call at a time, so nothing larger is read.</summary>

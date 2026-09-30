@@ -191,6 +191,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (toolName is "dismiss_next_work" or "restore_next_work")
                 nextWorkRepoHash = McpToolArguments.OptionalString(arguments, "repo_hash") ?? await cwdRepoHash();
 
+            // A headers-first read leaves the body outside HttpClient's timeout, so one deadline bounds both.
+            using var evalDeadline = IsWorkItemEvalTool(toolName) ? new CancellationTokenSource(NextWorkRequestDeadline, time) : null;
+            var       evalToken    = evalDeadline?.Token ?? CancellationToken.None;
+
             using var httpResponse = toolName switch {
                 "declare_work_item"      => await client.PostAsync($"{baseUrl}/api/work-items/declare", ToJsonContent(BuildDeclareBody(arguments))),
                 "get_session_work_items" => await client.GetAsync(BuildSessionUrl(baseUrl, arguments)),
@@ -226,13 +230,13 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                     ItemUrl(baseUrl, arguments, "work_item_id", "detach"), ToJsonContent(BuildDetachBody(arguments))),
 
                 "list_work_item_evals"   => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
-                    WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor"))), HttpCompletionOption.ResponseHeadersRead),
+                    WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor"))), HttpCompletionOption.ResponseHeadersRead, evalToken),
                 "get_work_item_eval"     => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
-                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"))), HttpCompletionOption.ResponseHeadersRead),
+                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"))), HttpCompletionOption.ResponseHeadersRead, evalToken),
                 "request_work_item_eval" => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id", "evals/runs"),
-                    new StringContent(WorkItemEvalToolResults.RequestBody(McpToolArguments.OptionalString(arguments, "mode")), Encoding.UTF8, "application/json")),
+                    new StringContent(WorkItemEvalToolResults.RequestBody(McpToolArguments.OptionalString(arguments, "mode")), Encoding.UTF8, "application/json"), evalToken),
                 "cancel_work_item_eval"  => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id",
-                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"), "cancel")), ToJsonContent(new JsonObject())),
+                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"), "cancel")), ToJsonContent(new JsonObject()), evalToken),
 
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
@@ -240,7 +244,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (IsWorkItemEvalTool(toolName)) {
                 if (httpResponse.StatusCode == HttpStatusCode.Unauthorized)
                     return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
-                var bytes = await BoundedHttpContent.ReadAsync(httpResponse.Content, WorkItemEvalToolResults.MaxResponseBytes, CancellationToken.None);
+                var bytes = await BoundedHttpContent.ReadAsync(httpResponse.Content, WorkItemEvalToolResults.MaxResponseBytes, evalToken);
                 if (bytes is null) return BuildToolResult(id, WorkItemEvalToolResults.TooLargeMessage, isError: true);
                 var (text, isError) = WorkItemEvalToolResults.Render(toolName, httpResponse.StatusCode, Encoding.UTF8.GetString(bytes));
                 return BuildToolResult(id, text, isError);
@@ -264,6 +268,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             }
 
             return BuildToolResult(id, body);
+        } catch (OperationCanceledException) when (IsWorkItemEvalTool(toolName)) {
+            return BuildToolResult(id, WorkItemEvalToolResults.DeadlineMessage, isError: true);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
