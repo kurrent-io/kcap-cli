@@ -29,7 +29,7 @@ public class KiroCrewParentResolverTests {
 
     void SeedKiroSession(string sessionId, DateTimeOffset createdAt) {
         Tmp.CreateFile(["sessions", "cli", $"{sessionId}.json"],
-            $"{{\"session_id\": \"{sessionId}\", \"created_at\": \"{createdAt.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}");
+            string.Create(CultureInfo.InvariantCulture, $"{{\"session_id\": \"{sessionId}\", \"created_at\": \"{createdAt.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}"));
     }
 
     void SeedSubagent(string file, string? sessionId = Child, string id = "65eed35b") {
