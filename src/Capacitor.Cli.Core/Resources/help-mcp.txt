@@ -164,6 +164,15 @@ mcp workitems:
       close_loose_end          Mark a finished loose end done (loose_end_id);
                                 a later sighting reopens it.
       reopen_loose_end         Undo a close (loose_end_id).
+      list_work_item_evals     List the evaluations of a work item you can
+                                read (work_item_id; pass next_cursor back as
+                                cursor).
+      get_work_item_eval       Read one evaluation run's results and
+                                retrospective (work_item_id, run_id).
+      request_work_item_eval   Queue an evaluation of a work item
+                                (work_item_id; mode process or root_cause).
+      cancel_work_item_eval    Cancel your own still-queued run
+                                (work_item_id, run_id).
 
   Registered for every supported harness by `kcap setup` / `kcap plugin
   install` (Claude Code reads it from the plugin's `.mcp.json`).

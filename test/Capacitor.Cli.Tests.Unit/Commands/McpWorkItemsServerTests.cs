@@ -115,7 +115,8 @@ public class McpWorkItemsServerTests {
             "get_work_item_topology",
             "merge_work_item", "detach_work_item",
             "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
-            "list_loose_ends", "close_loose_end", "reopen_loose_end"
+            "list_loose_ends", "close_loose_end", "reopen_loose_end",
+            "list_work_item_evals", "get_work_item_eval", "request_work_item_eval", "cancel_work_item_eval"
         });
     }
 

@@ -225,6 +225,15 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "detach_work_item"       => await client.PostAsync(
                     ItemUrl(baseUrl, arguments, "work_item_id", "detach"), ToJsonContent(BuildDetachBody(arguments))),
 
+                "list_work_item_evals"   => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
+                    WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor")))),
+                "get_work_item_eval"     => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
+                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id")))),
+                "request_work_item_eval" => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id", "evals/runs"),
+                    new StringContent(WorkItemEvalToolResults.RequestBody(McpToolArguments.OptionalString(arguments, "mode")), Encoding.UTF8, "application/json")),
+                "cancel_work_item_eval"  => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id",
+                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"), "cancel")), ToJsonContent(new JsonObject())),
+
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -240,6 +249,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (IsNextWorkTargetTool(toolName)) return RenderNextWorkTargetResult(id, toolName, httpResponse.StatusCode, body);
             if (toolName == "list_loose_ends") return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
             if (toolName is "close_loose_end" or "reopen_loose_end") return RenderLooseEndChangeResult(id, toolName, httpResponse.StatusCode, body);
+            if (IsWorkItemEvalTool(toolName)) {
+                var (text, isError) = WorkItemEvalToolResults.Render(toolName, httpResponse.StatusCode, body);
+                return BuildToolResult(id, text, isError);
+            }
 
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
@@ -543,6 +556,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static bool IsCursor(string value) =>
         value.Length is >= 1 and <= 1024
      && value.All(c => c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-');
+
+    static bool IsWorkItemEvalTool(string toolName) =>
+        toolName is "list_work_item_evals" or "get_work_item_eval" or "request_work_item_eval" or "cancel_work_item_eval";
 
     static bool IsNextWorkTargetTool(string toolName) =>
         toolName is "dismiss_next_work" or "restore_next_work" or "list_dismissed_next_work";
@@ -1036,6 +1052,37 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             "Undo close_loose_end: put a closed loose end back in the user's next work.",
             new("object", new() {
                 ["loose_end_id"] = new("string", "The closed end's loose_end_id, as list_loose_ends with status closed shows it.")
-            }, ["loose_end_id"]), McpToolAnnotations.Upsert)
+            }, ["loose_end_id"]), McpToolAnnotations.Upsert),
+
+        new("list_work_item_evals",
+            "List the evaluations of a work item you can read, newest first, with each run's run_id, mode, state "
+          + "and counts. A run you may not read is absent. Pass next_cursor back as cursor for the next page.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The work item whose evaluations to list."),
+                ["cursor"]       = new("string", "The next_cursor from a previous page.")
+            }, ["work_item_id"]), McpToolAnnotations.Read),
+
+        new("get_work_item_eval",
+            "Read one evaluation run of a work item: each question's outcome, score, finding and cited evidence, the "
+          + "requirements the completion question judged, and the run's retrospective.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The evaluated work item."),
+                ["run_id"]       = new("string", "The run_id from list_work_item_evals or request_work_item_eval.")
+            }, ["work_item_id", "run_id"]), McpToolAnnotations.Read),
+
+        new("request_work_item_eval",
+            "Queue an evaluation of a work item across its sessions. While your own run of the item is still queued "
+          + "or running, the server returns that run instead of queuing another.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The work item to evaluate."),
+                ["mode"]         = new("string", "process (default) or root_cause.")
+            }, ["work_item_id"]), McpToolAnnotations.Additive),
+
+        new("cancel_work_item_eval",
+            "Cancel your own evaluation run while it is still queued. A run that already started cannot be cancelled.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The evaluated work item."),
+                ["run_id"]       = new("string", "The queued run's run_id.")
+            }, ["work_item_id", "run_id"]), McpToolAnnotations.Destructive)
     ];
 }

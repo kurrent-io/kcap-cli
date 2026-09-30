@@ -739,6 +739,8 @@ It provides seventeen tools:
 - **`get_work_item_topology`** — read a work item's parent, parts, and dependencies (scoped to what the caller can see).
 - **`merge_work_item`** — merge a duplicate item into another (`work_item_id` → `into_work_item_id`): its sessions and links move to the survivor. Refused when a user marked either item standalone, rejected the pairing, or the items sit in different tracker hierarchies.
 - **`detach_work_item`** — detach a session from a work item it was wrongly attached to; durable against automated re-attach, and unable to remove a user-pinned attachment.
+- **`list_work_item_evals`** / **`get_work_item_eval`** — list a work item's evaluation runs you can read and read one run's results, judged requirements and retrospective.
+- **`request_work_item_eval`** / **`cancel_work_item_eval`** — queue an evaluation of a work item (`mode` `process` or `root_cause`), or cancel your own run while it is still queued.
 - **`dismiss_next_work`** — record that the user turned down a presented next-work suggestion (`target_key`; `repo_hash` defaults to the repository the server runs in, same as `get_next_work`), so it stops being offered. Call it only after the user has said they won't do it; the response's `page_one` is what to offer next, rendered the same sanitised way as `get_next_work`'s rows, and a `not_presented` refusal surfaces as a tool error naming that code.
 - **`restore_next_work`** — undo a dismissal so the suggestion can be offered again (`repo_hash` defaults the same way); restoring something not dismissed succeeds and changes nothing.
 - **`list_dismissed_next_work`** — list the suggestions the user has dismissed, most recent first, with when and why each was dismissed, rendered the same sanitised way.

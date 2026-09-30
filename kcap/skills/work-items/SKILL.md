@@ -138,6 +138,10 @@ loose ends with `declare_loose_end` (one call per item, never "none"), then call
 | `get_work_item_topology` | `work_item_id` | Read parent, parts, and dependencies (visibility-scoped). |
 | `merge_work_item` | `work_item_id`, `into_work_item_id` | Merge a duplicate into the survivor (prefer the keyed item as survivor). |
 | `detach_work_item` | `work_item_id` | Detach the session from a wrongly attached item. `session_id` defaults to the current session. |
+| `list_work_item_evals` | `work_item_id` | List the item's evaluation runs you can read, newest first; `cursor` from `next_cursor`. |
+| `get_work_item_eval` | `work_item_id`, `run_id` | Read one run's per-question results, judged requirements and retrospective. |
+| `request_work_item_eval` | `work_item_id` | Queue an evaluation (`mode` `process`, the default, or `root_cause`); returns your still-active run instead of a second one. |
+| `cancel_work_item_eval` | `work_item_id`, `run_id` | Cancel your own run while it is still queued. |
 
 ## Requirements
 
