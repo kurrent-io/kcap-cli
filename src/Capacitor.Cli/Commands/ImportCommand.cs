@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7,6 +8,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Http;
@@ -23,6 +25,10 @@ class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
         ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time) {
     static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
+
+    // One pass over Codex's shared session index for the whole import; it only grows, so a per-session read is a full rescan.
+    readonly Lazy<FrozenDictionary<string, StoreTitle>> _codexIndexTitles =
+        new(() => CodexSessionIndexTitle.ReadAll(harnesses.Of<CodexHarness>().Paths.Home));
 
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
@@ -1732,6 +1738,13 @@ class ImportCommand(
         } else {
             importResult = new(0, 0, 0);
         }
+
+        // Chains carry only New/Partial sessions; a Codex session loaded by an earlier import still takes the name
+        // Codex has given it since.
+        await PostAlreadyLoadedCodexTitlesAsync(
+            httpClient, baseUrl,
+            classifications.Where(c => c.Status == ClassificationStatus.AlreadyLoaded && (selectedIds is null || selectedIds.Contains(c.SessionId))),
+            CancellationToken.None);
 
         // --- Routed-source import phase (every non-chain source) ---
         // Sessions without a FilePath are imported directly via the source's
@@ -3453,23 +3466,42 @@ class ImportCommand(
     /// the harness-title route, where it outranks a generated title; an older server's fallback route only fills an
     /// untitled session, so a generated title is still owed there. A cancellation skips it so session-end still runs.</summary>
     async Task<bool> PostCodexHarnessTitleAsync(
-            HttpClient                 httpClient,
-            string                     baseUrl,
-            SessionClassification      session,
-            IProgress<ImportProgress>  progress,
-            CancellationToken          ct
+            HttpClient                  httpClient,
+            string                      baseUrl,
+            SessionClassification       session,
+            IProgress<ImportProgress>?  progress,
+            CancellationToken           ct
         ) {
         if (session.Vendor is not HarnessId.Codex) return false;
+        if (!_codexIndexTitles.Value.TryGetValue(ImportCommand.NormalizeGuid(session.SessionId), out var title)) return false;
 
         try {
-            var outcome = await ImportHarnessTitle.PostFromStoreAsync(
-                new CodexSessionIndexTitle(harnesses.Of<CodexHarness>().Paths.Home, session.SessionId),
-                httpClient, time, baseUrl, session.SessionId, progress, ct);
+            var outcome = await ImportHarnessTitle.PostAsync(
+                httpClient, time, baseUrl, session.SessionId,
+                new HarnessTitlePost(title.Title, title.Kind, title.RecordedChangeAt),
+                progress, ct);
 
             return outcome is HarnessTitleOutcome.Posted;
         } catch (OperationCanceledException) {
             return false;
         }
+    }
+
+    /// <summary>Title-only pass for Codex sessions the server already holds: no transcript, lifecycle or generated
+    /// title, only the index name when there is one.</summary>
+    internal async Task PostAlreadyLoadedCodexTitlesAsync(
+            HttpClient                         httpClient,
+            string                             baseUrl,
+            IEnumerable<SessionClassification> sessions,
+            CancellationToken                  ct
+        ) {
+        var codex = sessions.Where(s => s.Vendor is HarnessId.Codex && s.Status == ClassificationStatus.AlreadyLoaded).ToList();
+        if (codex.Count == 0) return;
+
+        await Parallel.ForEachAsync(
+            codex,
+            new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount, CancellationToken = ct },
+            async (session, token) => await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, null, token));
     }
 
     sealed class CallbackProgress(Action<ImportProgress> onReport) : IProgress<ImportProgress> {

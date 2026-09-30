@@ -455,4 +455,59 @@ public class ImportChainsTests : IDisposable {
         await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost()).Count).IsEqualTo(0);
         await Assert.That(titleTasks).IsEqualTo(1);
     }
+
+    /// <summary>A Codex session the server already holds gets only its index name: no transcript, no lifecycle.</summary>
+    [Test]
+    public async Task PostAlreadyLoadedCodexTitles_posts_only_the_index_title() {
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+        const string unnamed = "0199a2b3c4d5e6f708192a3b4c5d6e70";
+
+        using var client = new HttpClient();
+        await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
+            CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+            MakeNewNoGit(unnamed, 3) with { Vendor = HarnessId.Codex, Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+        ], CancellationToken.None);
+
+        var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST").ToList();
+        await Assert.That(posts.Select(e => e.RequestMessage.Path)).IsEquivalentTo(["/hooks/harness-title"]);
+
+        var body = JsonNode.Parse(posts[0].RequestMessage.Body!)!;
+        await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo(CodexSid);
+        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo("Fix the flaky test");
+        await Assert.That(body["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(body["changed_at"]!.GetValue<DateTimeOffset>()).IsEqualTo(new DateTimeOffset(2026, 5, 1, 10, 20, 30, TimeSpan.Zero));
+    }
+
+    [Test]
+    public async Task PostAlreadyLoadedCodexTitles_posts_nothing_for_a_session_the_index_does_not_name() {
+        WriteCodexIndex("Someone else", "2026-05-01T10:20:30Z");
+
+        using var client = new HttpClient();
+        await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
+            MakeNewNoGit("0199a2b3c4d5e6f708192a3b4c5d6e70", 3) with { Vendor = HarnessId.Codex, Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+        ], CancellationToken.None);
+
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+    }
+
+    /// <summary>The index is read once per import: a later change to the file is not seen by the same run.</summary>
+    [Test]
+    public async Task Codex_index_is_read_once_per_import() {
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Before", "2026-05-01T10:20:30Z");
+
+        var import = Import();
+        var loaded = CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded };
+        using var client = new HttpClient();
+
+        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], CancellationToken.None);
+        WriteCodexIndex("After", "2026-05-02T10:20:30Z");
+        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], CancellationToken.None);
+
+        var titles = _server.LogEntries.Select(e => JsonNode.Parse(e.RequestMessage.Body!)!["title"]!.GetValue<string>()).ToList();
+        await Assert.That(titles).IsEquivalentTo(["Before", "Before"]);
+    }
 }

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Text.Json;
 using Capacitor.Cli.Core.Harness.Titles;
@@ -42,6 +43,28 @@ public sealed class CodexSessionIndexTitle(string codexHome, string sessionId) :
         }
     }
 
+    /// <summary>Every session's current index title, keyed by the dashless session id, from one pass over the
+    /// index. Empty when the index is missing or unreadable.</summary>
+    public static FrozenDictionary<string, StoreTitle> ReadAll(string codexHome) {
+        var path = Path.Combine(codexHome, "session_index.jsonl");
+
+        try {
+            if (!File.Exists(path)) return FrozenDictionary<string, StoreTitle>.Empty;
+
+            var latest = new Dictionary<string, StoreTitle>(StringComparer.Ordinal);
+
+            foreach (var line in File.ReadLinesShared(path)) {
+                if (Parse(line) is ({ } id, { } title)) latest[id.ToString("N")] = title;
+            }
+
+            return latest.ToFrozenDictionary(StringComparer.Ordinal);
+        } catch (IOException) {
+            return FrozenDictionary<string, StoreTitle>.Empty;
+        } catch (UnauthorizedAccessException) {
+            return FrozenDictionary<string, StoreTitle>.Empty;
+        }
+    }
+
     static StoreTitle? Scan(string path, Guid id) {
         var         prefix = id.ToString("D")[..8];
         StoreTitle? last   = null;
@@ -49,21 +72,29 @@ public sealed class CodexSessionIndexTitle(string codexHome, string sessionId) :
         foreach (var line in File.ReadLinesShared(path)) {
             if (!line.Contains(prefix, StringComparison.OrdinalIgnoreCase)) continue;
 
-            try {
-                using var doc  = JsonDocument.Parse(line);
-                var       root = doc.RootElement;
-
-                if (!Guid.TryParse(root.Str("id"), out var lineId) || lineId != id) continue;
-                if (root.Str("thread_name") is not { } name || string.IsNullOrWhiteSpace(name)) continue;
-
-                DateTimeOffset? at = DateTimeOffset.TryParse(root.Str("updated_at"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)
-                    ? ts.ToUniversalTime()
-                    : null;
-
-                last = new StoreTitle(name.Trim(), HarnessTitleKind.Rename, at);
-            } catch (JsonException) { }
+            if (Parse(line) is ({ } lineId, { } title) && lineId == id) last = title;
         }
 
         return last;
+    }
+
+    // A line naming no session or no title parses to nulls.
+    static (Guid? Id, StoreTitle? Title) Parse(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object) return (null, null);
+            if (!Guid.TryParse(root.Str("id"), out var id)) return (null, null);
+            if (root.Str("thread_name") is not { } name || string.IsNullOrWhiteSpace(name)) return (null, null);
+
+            DateTimeOffset? at = DateTimeOffset.TryParse(root.Str("updated_at"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)
+                ? ts.ToUniversalTime()
+                : null;
+
+            return (id, new StoreTitle(name.Trim(), HarnessTitleKind.Rename, at));
+        } catch (JsonException) {
+            return (null, null);
+        }
     }
 }
