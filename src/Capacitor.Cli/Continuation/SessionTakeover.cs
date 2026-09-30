@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.Cli.Continuation;
 
@@ -26,9 +27,19 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         if (previousId == SessionId.Parse(current))
             return new TakeoverResult.Refused("A session cannot continue itself: name the session whose work this one takes over.");
 
-        var escaped = Uri.EscapeDataString(previous);
+        if (WorkContextIds.CanonicalSessionId(previous) is not { } previousWire)
+            return new TakeoverResult.Refused($"'{previous}' is not a session id.");
 
-        using var summary = await client.GetAsync($"{baseUrl}/api/sessions/{escaped}/summary", ct);
+        if (WorkContextIds.CanonicalSessionId(current) is not { } currentWire)
+            return new TakeoverResult.Refused($"'{current}' is not a session id.");
+
+        var escaped = Uri.EscapeDataString(previousWire);
+
+        var (summary, summaryError) = await ReadAsync(client, $"{baseUrl}/api/sessions/{escaped}/summary", ct);
+        using var summaryResponse = summary;
+
+        if (summary is null)
+            return new TakeoverResult.Failed($"Reading session {previous} failed: {summaryError}");
 
         if (summary.StatusCode == HttpStatusCode.Unauthorized) return new TakeoverResult.Unauthorized();
         if (summary.StatusCode == HttpStatusCode.NotFound)
@@ -41,19 +52,21 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         var (liveness, refusal) = Judge(previous, local.Liveness(previousId), ParseObject(await summary.Content.ReadAsStringAsync(ct)), force);
         if (refusal is not null) return new TakeoverResult.Refused(refusal);
 
-        var itemsRead = client.GetAsync($"{baseUrl}/api/work-items/session/{escaped}", ct);
-        var plansRead = client.GetAsync($"{baseUrl}/api/sessions/{escaped}/plans", ct);
-        using var items = await itemsRead;
-        using var plans = await plansRead;
+        var itemsRead = ReadAsync(client, $"{baseUrl}/api/work-items/session/{escaped}", ct);
+        var plansRead = ReadAsync(client, $"{baseUrl}/api/sessions/{escaped}/plans", ct);
+        var (items, itemsError) = await itemsRead;
+        var (plans, plansError) = await plansRead;
+        using var itemsResponse = items;
+        using var plansResponse = plans;
 
         var writes  = new WriteCount();
         var outcome = new JsonObject {
-            ["continued_from"] = previous,
+            ["continued_from"] = previousWire,
             ["liveness"]       = liveness,
-            ["work_items"]     = await AttachWorkItemsAsync(client, baseUrl, items, current, writes, ct),
+            ["work_items"]     = await AttachWorkItemsAsync(client, baseUrl, items, itemsError, currentWire, writes, ct),
         };
 
-        await AdoptPlansAsync(client, baseUrl, plans, current, outcome, writes, ct);
+        await AdoptPlansAsync(client, baseUrl, plans, plansError, currentWire, outcome, writes, ct);
 
         return new TakeoverResult.Completed(outcome, writes.Attempted > 0 && writes.Failed == writes.Attempted);
     }
@@ -79,7 +92,10 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
     }
 
     static async Task<JsonObject> AttachWorkItemsAsync(
-            HttpClient client, string baseUrl, HttpResponseMessage read, string current, WriteCount writes, CancellationToken ct) {
+            HttpClient client, string baseUrl, HttpResponseMessage? read, string? readError, string current, WriteCount writes, CancellationToken ct) {
+        if (read is null)
+            return new JsonObject { ["status"] = "failed", ["error"] = readError, ["items"] = new JsonArray() };
+
         var body = await read.Content.ReadAsStringAsync(ct);
 
         if (read.StatusCode == HttpStatusCode.Forbidden && Str(ParseObject(body)?["code"]) == NotInPlanCode)
@@ -104,14 +120,14 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
     }
 
     static async Task AdoptPlansAsync(
-            HttpClient client, string baseUrl, HttpResponseMessage read, string current, JsonObject outcome, WriteCount writes, CancellationToken ct) {
+            HttpClient client, string baseUrl, HttpResponseMessage? read, string? readError, string current, JsonObject outcome, WriteCount writes, CancellationToken ct) {
         var adopted = new JsonArray();
         var skipped = new JsonArray();
         outcome["plans"]         = adopted;
         outcome["skipped_plans"] = skipped;
 
-        if (!read.IsSuccessStatusCode) {
-            outcome["plans_error"] = $"HTTP {(int)read.StatusCode}";
+        if (read is null || !read.IsSuccessStatusCode) {
+            outcome["plans_error"] = read is null ? readError : $"HTTP {(int)read.StatusCode}";
             return;
         }
 
@@ -152,7 +168,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
             // Status and note both go back unchanged: the server compares the two, so anything less
             // would record a change, and a dropped note would erase it.
             var update = new JsonObject { ["session_id"] = current, ["status"] = status };
-            if (Str(task["note"]) is { } note) update["note"] = note;
+            if (task["note"] is JsonValue noteValue && noteValue.TryGetValue(out string? note) && note is not null) update["note"] = note;
 
             var url = $"{baseUrl}/api/plans/{Uri.EscapeDataString(planId)}/tasks/{Uri.EscapeDataString(taskId)}";
             if (await WriteAsync(client, url, update, entry, writes, ct)) currentPlan = planId;
@@ -190,7 +206,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
             }
 
             entry["error"] = $"HTTP {(int)response.StatusCode}";
-        } catch (HttpRequestException ex) {
+        } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException && !ct.IsCancellationRequested) {
             entry["error"] = ex.Message;
         }
 
@@ -198,6 +214,14 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         writes.Failed++;
 
         return false;
+    }
+
+    static async Task<(HttpResponseMessage? Response, string? Error)> ReadAsync(HttpClient client, string url, CancellationToken ct) {
+        try {
+            return (await client.GetAsync(url, ct), null);
+        } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException && !ct.IsCancellationRequested) {
+            return (null, ex.Message);
+        }
     }
 
     static JsonObject Skip(string planId, string reason) => new() { ["plan_id"] = planId, ["reason"] = reason };

@@ -50,8 +50,11 @@ public class SessionTakeoverTests {
 
     [Test]
     public async Task Refuses_to_continue_itself_across_id_forms() {
-        var r = await Run(new Routes(), previous: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", current: Previous);
+        var routes = new Routes();
+        var r = await Run(routes, previous: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", current: Previous);
         await Assert.That(r).IsTypeOf<TakeoverResult.Refused>();
+        await Assert.That(((TakeoverResult.Refused)r).Reason).Contains("cannot continue itself");
+        await Assert.That(routes.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -216,7 +219,73 @@ public class SessionTakeoverTests {
         await Assert.That(o["current_plan_id"]!.GetValue<string>()).IsEqualTo("cur");
     }
 
+    [Test]
+    public async Task A_dashed_guid_reaches_the_server_in_canonical_form() {
+        var routes = Server(Ended());
+
+        var r = await Run(routes, previous: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+
+        await Assert.That(routes.Requests).Contains($"/api/sessions/{Previous}/summary");
+        await Assert.That(Outcome(r)["continued_from"]!.GetValue<string>()).IsEqualTo(Previous);
+    }
+
+    [Test]
+    public async Task An_empty_note_is_resent() {
+        var routes = Server(Ended(), plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending", note: "")}]")}]");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        await Run(routes);
+
+        await Assert.That(routes.Posts.Single().Body!["note"]!.GetValue<string>()).IsEqualTo("");
+    }
+
     // ── failures ──
+
+    [Test]
+    public async Task A_summary_read_that_throws_is_a_failure() {
+        var routes = new Routes();
+        routes.Throw($"/api/sessions/{Previous}/summary");
+
+        var r = await Run(routes);
+
+        await Assert.That(r).IsTypeOf<TakeoverResult.Failed>();
+    }
+
+    [Test]
+    public async Task A_work_items_read_that_throws_is_reported_and_plans_are_still_adopted() {
+        var routes = Server(Ended(), items: null, plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
+        routes.Throw($"/api/work-items/session/{Previous}");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        var o = Outcome(await Run(routes));
+
+        await Assert.That(o["work_items"]!["status"]!.GetValue<string>()).IsEqualTo("failed");
+        await Assert.That(o["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
+    }
+
+    [Test]
+    public async Task A_plans_read_that_throws_is_reported_and_work_items_are_still_attached() {
+        var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One"}]""", plans: null);
+        routes.Throw($"/api/sessions/{Previous}/plans");
+        routes.Post("/api/work-items/declare", 200, "{}");
+
+        var o = Outcome(await Run(routes));
+
+        await Assert.That(o["plans_error"]!.GetValue<string>()).IsNotEmpty();
+        await Assert.That(o["work_items"]!["items"]!.AsArray()[0]!["attached"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_timed_out_write_is_reported_and_the_rest_continue() {
+        var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One"}]""", plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
+        routes.Timeout("/api/work-items/declare");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        var r = (TakeoverResult.Completed)await Run(routes);
+
+        await Assert.That(r.Outcome["work_items"]!["items"]!.AsArray()[0]!["attached"]!.GetValue<bool>()).IsFalse();
+        await Assert.That(r.Outcome["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
+    }
 
     [Test]
     public async Task A_failed_write_is_reported_on_its_entry_and_is_not_a_failure_overall() {
@@ -269,21 +338,27 @@ public class SessionTakeoverTests {
     sealed class Routes : HttpMessageHandler {
         readonly Dictionary<(HttpMethod, string), (int Status, string Body)> _routes = [];
         readonly HashSet<string> _throwing = [];
+        readonly HashSet<string> _timingOut = [];
+
+        public List<string> Requests { get; } = [];
 
         public List<(string Path, JsonObject? Body)> Posts { get; } = [];
 
         public void Get(string path, int status, string body)  => _routes[(HttpMethod.Get, path)]  = (status, body);
         public void Post(string path, int status, string body) => _routes[(HttpMethod.Post, path)] = (status, body);
         public void Throw(string path) => _throwing.Add(path);
+        public void Timeout(string path) => _timingOut.Add(path);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var path = request.RequestUri!.AbsolutePath;
+            Requests.Add(path);
 
             if (request.Method == HttpMethod.Post) {
                 var text = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
                 Posts.Add((path, text is null ? null : JsonNode.Parse(text) as JsonObject));
             }
 
+            if (_timingOut.Contains(path)) throw new TaskCanceledException("timed out");
             if (_throwing.Contains(path)) throw new HttpRequestException("connection reset");
 
             return _routes.TryGetValue((request.Method, path), out var r)
