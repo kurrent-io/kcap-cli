@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
+using Capacitor.Cli.Continuation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
@@ -892,9 +893,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 var total      = IntOrZero(progress?["total"]);
                 var totalKnown = IsTrue(progress?["total_known"]);
                 var isComplete = IsTrue(plan["is_complete"]);
-                var finished   = progress?["finished"] is JsonValue sent && sent.TryGetValue(out bool fromServer)
-                    ? fromServer
-                    : totalKnown && completed == total && isComplete;
+                var finished   = DeclaredPlanState.IsFinished(plan);
 
                 if (count++ > 0) sb.Append(',');
 
