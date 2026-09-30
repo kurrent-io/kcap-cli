@@ -127,4 +127,17 @@ public class BearerRejectionReportHandlerTests {
         await Assert.That(reports).Count().IsEqualTo(1);
         await Assert.That(reports[0]).Contains("bearer is not a readable JWT");
     }
+
+    [Test]
+    public async Task Control_characters_from_the_server_or_the_bearer_cannot_break_the_line() {
+        var token = Token(exp: Now.AddMinutes(5).ToUnixTimeSeconds(), iat: Now.ToUnixTimeSeconds(), sub: "user_1\\nFAKE line");
+
+        var (_, reports) = await SendAsync(
+            HttpStatusCode.Unauthorized, """{"error":"invalid_token\r\nFAKE: granted"}""", token);
+
+        await Assert.That(reports[0]).DoesNotContain("\n");
+        await Assert.That(reports[0]).DoesNotContain("\r");
+        await Assert.That(reports[0]).Contains("server error=invalid_token??FAKE: granted");
+        await Assert.That(reports[0]).Contains("sub=user_1?FAKE line");
+    }
 }

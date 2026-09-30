@@ -43,9 +43,7 @@ public class HubBearerRejectionReportTests : IDisposable {
 
         try {
             await hub.StartAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
-        } catch (Exception) {
-            // Refused at negotiate, as stubbed.
-        }
+        } catch (Exception) { }
 
         await Assert.That(reports).Count().IsEqualTo(1);
         await Assert.That(reports[0]).Contains("server error=invalid_token; bearer sub=user_hub");
@@ -74,9 +72,7 @@ public class HubBearerRejectionReportTests : IDisposable {
 
         try {
             await hub.StartAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
-        } catch (Exception) {
-            // Refused at the upgrade, as stubbed.
-        }
+        } catch (Exception) { }
 
         await Assert.That(reports).Count().IsEqualTo(1);
         await Assert.That(reports[0]).Contains("401 from GET /hubs/sessions: server error=-; bearer sub=user_ws");

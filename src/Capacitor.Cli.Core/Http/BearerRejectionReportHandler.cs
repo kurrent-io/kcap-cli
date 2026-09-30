@@ -77,8 +77,18 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
     }
 
     internal static string Describe(string method, Uri? uri, string? errorCode, string? bearer, DateTimeOffset now) =>
-        $"401 from {method} {uri?.AbsolutePath}: server error={errorCode ?? "-"}; "
+        $"401 from {method} {uri?.AbsolutePath}: server error={Printable(errorCode ?? "-")}; "
       + $"{(bearer is null ? "no bearer sent" : DescribeBearer(bearer, now))}; local_now={now:o}";
+
+    // The error code and the bearer's subject come from outside; a control character would let either
+    // forge what reads as a further log line.
+    internal static string Printable(string value) {
+        const int max = 200;
+
+        var clipped = value.Length > max ? value[..max] + "…" : value;
+
+        return clipped.Any(char.IsControl) ? string.Concat(clipped.Select(c => char.IsControl(c) ? '?' : c)) : clipped;
+    }
 
     static string DescribeBearer(string token, DateTimeOffset now) {
         var exp = JwtClaims.TryGetTime(token, "exp");
@@ -89,7 +99,7 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
 
         var expiresIn = exp is { } e ? $" ({(long)(e - now).TotalSeconds}s from now)" : "";
 
-        return $"bearer sub={sub ?? "-"} iat={iat?.ToString("o") ?? "-"} exp={exp?.ToString("o") ?? "-"}{expiresIn}";
+        return $"bearer sub={Printable(sub ?? "-")} iat={iat?.ToString("o") ?? "-"} exp={exp?.ToString("o") ?? "-"}{expiresIn}";
     }
 
     // The server answers a refused bearer with {"error": "...", "message": "..."}. Reads at most one byte
@@ -126,11 +136,7 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
         try {
             using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(head, 0, read));
 
-            return doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("error", out var error)
-                && error.ValueKind == JsonValueKind.String
-                    ? error.GetString()
-                    : null;
+            return doc.RootElement.Str("error");
         } catch (JsonException) {
             return null;
         }
