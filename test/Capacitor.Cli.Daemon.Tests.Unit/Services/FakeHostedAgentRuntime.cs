@@ -30,7 +30,17 @@ sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : I
 
     public Task SendUserInputAsync(string  text) => Task.CompletedTask;
     public Task SendSpecialKeyAsync(string key) => Task.CompletedTask;
-    public Task SendRawInputAsync(byte[]   data) => Task.CompletedTask;
+    public List<byte[]> RawInputs       { get; } = [];
+    public bool         ThrowOnRawInput { get; init; }
+
+    public Task SendRawInputAsync(byte[] data) {
+        if (ThrowOnRawInput) throw new NotSupportedException("no raw-input surface");
+
+        lock (RawInputs) RawInputs.Add(data);
+
+        return Task.CompletedTask;
+    }
+
     public void Resize(ushort              cols, ushort rows) { }
     public Task RequestGracefulStopAsync() => Task.CompletedTask;
     public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;

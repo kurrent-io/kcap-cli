@@ -1116,6 +1116,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(FindRepoForRemoteRequest))]
 [JsonSerializable(typeof(BorrowProbeResult))]
 [JsonSerializable(typeof(SendInputCommand))]
+[JsonSerializable(typeof(SendRawInputCommand))]
 [JsonSerializable(typeof(ResizeTerminalCommand))]
 [JsonSerializable(typeof(PrepareEvalCommand))]
 [JsonSerializable(typeof(RunQuestionCommand))]
@@ -2093,6 +2094,14 @@ public readonly record struct SendInputCommand(
         Guid?     DispatchId = null
     );
 
+/// Raw bytes for a hosted agent's PTY, base64 in <c>Data</c>. Sent only to a daemon whose
+/// connect advertised <see cref="DaemonConnect.SupportsRawInput"/>.
+public readonly record struct SendRawInputCommand(
+        string AgentId,
+        string Data,
+        Guid   DispatchId
+    );
+
 public readonly record struct ResizeTerminalCommand(
         string AgentId,
         int    Cols,
@@ -2182,7 +2191,10 @@ public readonly record struct DaemonConnect(
         // Per-vendor launchable models probed from the installed CLI. Null from a daemon that
         // predates the field; a missing key means no catalog for that vendor; an empty array
         // means probed and nothing usable.
-        Dictionary<string, VendorModelOption[]>?    VendorModels = null
+        Dictionary<string, VendorModelOption[]>?    VendorModels = null,
+        // Advertises the SendRawInput handler. False from a daemon predating it; the server then
+        // never sends raw input.
+        bool                                        SupportsRawInput = false
     );
 
 public sealed record UnattendedVendorCapability(

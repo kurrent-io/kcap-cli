@@ -69,6 +69,62 @@ public class WorktreeManagerTests {
     }
 
     [Test]
+    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote() {
+        using var repo = GitRepo.Create("local-only");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var first = repo.Head;
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("second");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
+            await Assert.That(worktree.FetchedRef).IsNull();
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_an_unknown_sha_falls_back_to_the_origin_fetch() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/9/head", out _);
+
+        // Committed after the clone, so the clone's object store cannot have it.
+        repo.Upstream.CreateFile("late.txt", "late");
+        repo.Upstream.CommitAll("late commit");
+        var lateSha = repo.Upstream.Head;
+        repo.Upstream.Do("update-ref", "refs/pull/10/head", lateSha);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "remote-sha", baseRef: lateSha);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(lateSha);
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-sha");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_ref_name_keeps_the_fetch_path() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/8/head", out _);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "ref-name", baseRef: "refs/pull/8/head");
+
+        try {
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/ref-name");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
 

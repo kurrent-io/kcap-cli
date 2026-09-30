@@ -238,6 +238,17 @@ public partial class WorktreeManager(
 
             var noHooks = NoBranchHooks();
             if (!string.IsNullOrEmpty(baseRef)) {
+                // A commit that exists only locally (a fork's unpushed head) has nothing to fetch.
+                if (IsFullSha(baseRef) && await CommitExistsLocallyAsync(repoPath, baseRef)) {
+                    await WithWorktreeMetadataGate(repoPath, time, () =>
+                        RunGit(repoPath, GitTimeout, time, noHooks,
+                            "worktree", "add", "--no-checkout", "-B", branch, worktreePath, baseRef));
+                    var local = new WorktreeInfo(worktreePath, branch, repoPath);
+                    await StripOrRollBackAsync(local);
+
+                    return local;
+                }
+
                 // Fetch into a per-worktree ref instead of the shared FETCH_HEAD
                 // so concurrent review launches in the same source repo can't
                 // race on each other's fetches. The unique ref carries the
@@ -1485,6 +1496,15 @@ public partial class WorktreeManager(
 
             return proc.ExitCode == 0;
         } catch { return false; }
+    }
+
+    static bool IsFullSha(string value) =>
+        value.Length == 40 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    async Task<bool> CommitExistsLocallyAsync(string repoPath, string sha) {
+        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [], "cat-file", "-e", $"{sha}^{{commit}}");
+
+        return result.ExitCode == 0;
     }
 
     static Task RunGit(string cwd, TimeSpan timeout, TimeProvider time, params string[] args) =>
