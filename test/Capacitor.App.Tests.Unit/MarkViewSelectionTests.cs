@@ -92,7 +92,7 @@ public class MarkViewSelectionTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_double_click_selects_the_paragraph_under_the_pointer() {
+    public async Task A_double_click_selects_the_line_under_the_pointer() {
         await RunOnUiAsync(async () => {
             var (window, view, _) = Show("First paragraph here.\n\nSecond one, clicked.\n\nThird.");
             try {
