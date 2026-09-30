@@ -5,10 +5,9 @@ description: >-
   sessions. Triggers include: "read a previous session", "get session history",
   "recap session", "what happened in session X", "load context from a previous
   session", "continue from session", "recap session X and continue working",
-  "resume the killed session", "what did we do last time", "catch me up
-  on session X", "what have we been working on", "recently we implemented",
-  "what was done in this repo", "recent changes", "recent sessions", or
-  providing a session ID to review.
+  "what did we do last time", "catch me up on session X", "what have we been
+  working on", "recently we implemented", "what was done in this repo",
+  "recent changes", "recent sessions", or providing a session ID to review.
   Also covers work over a period: "what was I working on in the last two
   weeks", "what did the team do yesterday", "who worked on this last week".
   Also covers search/recall asks: "find the session where we…", "which session
@@ -16,7 +15,6 @@ description: >-
   Also covers declared plans: "continue the plan", "resume the plan", "what's
   left on the plan", "is the plan finished", "unfinished plans", "what was the
   last session working through".
-  Uses the kcap CLI and the kcap-sessions MCP tools.
 ---
 
 > **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`, `list_repo_plans`, `get_declared_plans`) for retrieving past sessions and the plans they declared. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
