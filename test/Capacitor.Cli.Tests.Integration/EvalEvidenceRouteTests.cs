@@ -276,6 +276,8 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(payload.GetProperty("summary").GetString()).IsEqualTo("Not evaluated: all 1 questions failed (spend_budget ×1)");
         await Assert.That(payload.GetProperty("coverage_policy_version").GetString()).IsEqualTo("coverage-v2");
         await Assert.That(payload.GetProperty("evidence_scope_version").GetString()).IsEqualTo("v1");
+        await Assert.That(payload.GetProperty("evidence_scope_token").GetString()).IsEqualTo("tok");
+        await Assert.That(result.EvidenceScopeToken).IsNull();
     }
 
     [Test]
@@ -431,6 +433,83 @@ public class EvalEvidenceRouteTests : IDisposable {
         };
         await Assert.That(string.Join("\n", notes)).IsEqualTo(string.Join("\n", expected));
         await Assert.That(outcome.Assessment!.EvidenceCoverage!.Citations.Count).IsEqualTo(loss == "handle" ? 1 : 0);
+    }
+
+    static string WithFact(string verdict, string fact) =>
+        verdict.Replace("\"retain_fact\":null", $"\"retain_fact\":\"{fact}\"", StringComparison.Ordinal);
+
+    /// <summary>Each write names the scope token it was judged under, so the server can refuse it once the token no
+    /// longer opens; the aggregate handed back to the caller never carries the token.</summary>
+    [Test]
+    public async Task Both_writes_name_the_scope_token_and_the_returned_aggregate_does_not() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
+        using var claude = Claude(Dir("c-token"), WithFact(Verdict("q1"), "a recurring pattern"));
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q1"], observer);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.EvidenceScopeToken).IsNull();
+        await Assert.That(observer.Finished!.EvidenceScopeToken).IsNull();
+        await Assert.That(JsonDocument.Parse(_stub.Requests("judge-facts").Single().RequestMessage.Body!).RootElement.GetProperty("evidence_scope_token").GetString()).IsEqualTo("tok");
+        await Assert.That(Payload().GetProperty("evidence_scope_token").GetString()).IsEqualTo("tok");
+    }
+
+    /// <summary>The server refused a fact because its scope no longer opens: nothing after it is written — no second
+    /// fact, no result — and the run ends as a moved scope.</summary>
+    [Test]
+    [Arguments(409, """{"error":"moved","code":"scope_moved"}""")]
+    [Arguments(404, "")]
+    public async Task A_fact_refused_for_its_scope_ends_the_run_with_nothing_else_written(int status, string body) {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
+        _stub.Route("POST", "judge-facts", status, body, priority: 1);
+        using var claude = Claude(Dir($"c-fact-{status}"), WithFact(Verdict("q1"), "first pattern"),
+            special: Envelope(WithFact(Verdict("q-special"), "second pattern")));
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q1", "q-special"], observer);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(observer.Failures).Contains(EvalService.EvidenceScopeMovedReason);
+        await Assert.That(observer.FactsRetained).IsEmpty();
+        await Assert.That(_stub.Requests("judge-facts").Count).IsEqualTo(1);
+        await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
+    }
+
+    /// <summary>The fact route's other 409s — a session not yet projected, one with no repository — carry no scope
+    /// code: the fact is lost as before and the result is still written.</summary>
+    [Test]
+    public async Task A_fact_conflict_without_the_scope_code_still_writes_the_result() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
+        _stub.Route("POST", "judge-facts", 409, """{"error":"session has no detected repository"}""", priority: 1);
+        using var claude = Claude(Dir("c-fact-norepo"), WithFact(Verdict("q1"), "a recurring pattern"));
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q1"], observer);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(observer.Failures).IsEmpty();
+        await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments(409)]
+    [Arguments(404)]
+    public async Task A_result_refused_for_its_scope_ends_the_run_as_a_moved_scope(int status) {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
+        _stub.Route("POST", "evals/v4", status, status == 409 ? """{"code":"scope_moved","current_version":"v2"}""" : "", priority: 1);
+        using var claude = Claude(Dir($"c-v4-{status}"), Verdict("q1"));
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q1"], observer);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(observer.Finished).IsNull();
+        await Assert.That(observer.Failures).IsEquivalentTo([EvalService.EvidenceScopeMovedReason]);
     }
 
     [Test]
