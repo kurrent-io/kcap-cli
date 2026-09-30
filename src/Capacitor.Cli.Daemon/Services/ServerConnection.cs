@@ -5,6 +5,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Http;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -209,7 +210,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _tokens          = tokens;
         _logger          = logger;
         _statusNotifier  = statusNotifier ?? new();
-        _eventQueue      = new(config, tokens, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient());
+
+        // A refused bearer is logged with its expiry and the server's error code on both lanes that
+        // carry it, so a 401 can be told apart from a lapsed token without the server's log.
+        void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
+
+        _eventQueue = new(
+            config, tokens, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
+            new HttpClient(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() }));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
@@ -220,6 +228,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
                         return resolution.Tokens?.AccessToken;
                     };
+                    options.HttpMessageHandlerFactory = inner =>
+                        new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner };
+                    options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
+                        context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
                 }
             )
             .WithAutomaticReconnect(new RetryPolicy())
