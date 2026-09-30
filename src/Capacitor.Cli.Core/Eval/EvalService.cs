@@ -789,9 +789,10 @@ public static partial class EvalService {
             SessionEvalCompletedPayloadV4 aggregate,
             IEvalObserver                 observer,
             TimeProvider                  time,
-            CancellationToken             ct
+            CancellationToken             ct,
+            string?                       scopeToken = null
         ) {
-        if (!await PersistAggregateV4Async(httpClient, baseUrl, encodedSessionId, aggregate, observer, time, ct)) return null;
+        if (!await PersistAggregateV4Async(httpClient, baseUrl, encodedSessionId, aggregate, observer, time, ct, scopeToken)) return null;
 
         observer.OnFailed(aggregate.Summary);
 
@@ -922,6 +923,8 @@ public static partial class EvalService {
     /// failures and evidence coverage). Public seam for the daemon's wire-format contract test,
     /// mirroring <see cref="PersistAggregateV3Async"/>.
     /// </summary>
+    /// <param name="scopeToken">The evidence scope the aggregate was judged under; a 404, or a 409 naming
+    /// <c>scope_moved</c>, is then that scope refusing the write, reported as a moved scope.</param>
     public static async Task<bool> PersistAggregateV4Async(
             HttpClient                    httpClient,
             string                        baseUrl,
@@ -929,14 +932,19 @@ public static partial class EvalService {
             SessionEvalCompletedPayloadV4 aggregate,
             IEvalObserver                 observer,
             TimeProvider                  time,
-            CancellationToken             ct
+            CancellationToken             ct,
+            string?                       scopeToken = null
         ) {
         var       postUrl     = $"{baseUrl}/api/sessions/{encodedSessionId}/evals/v4";
-        var       payloadJson = JsonSerializer.Serialize(aggregate, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV4);
+        var       payloadJson = JsonSerializer.Serialize(aggregate with { EvidenceScopeToken = scopeToken }, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV4);
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
             using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, time, ct: ct);
+            if (scopeToken is not null && await IsScopeRefusalAsync(postResp, ct)) {
+                observer.OnFailed(EvidenceScopeMovedReason);
+                return false;
+            }
             if (!postResp.IsSuccessStatusCode) {
                 observer.OnFailed($"failed to persist eval result: HTTP {(int)postResp.StatusCode}");
                 return false;
@@ -1768,14 +1776,17 @@ public static partial class EvalService {
             string[]?         appliesToSessionKinds,
             IEvalObserver     observer,
             TimeProvider      time,
-            CancellationToken ct
+            CancellationToken ct,
+            string?           scopeToken       = null,
+            Action?           onScopeRefused   = null
         ) {
         var payload = new JudgeFactPayload {
             Category              = category,
             Fact                  = fact,
             SourceEvalRunId       = evalRunId,
             AppliesToVendors      = appliesToVendors,
-            AppliesToSessionKinds = appliesToSessionKinds
+            AppliesToSessionKinds = appliesToSessionKinds,
+            EvidenceScopeToken    = scopeToken
         };
 
         var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.JudgeFactPayload);
@@ -1783,6 +1794,12 @@ public static partial class EvalService {
 
         try {
             using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/api/sessions/{encodedSessionId}/judge-facts", content, time, ct: ct);
+            if (scopeToken is not null && await IsScopeRefusalAsync(resp, ct)) {
+                observer.OnInfo($"fact for category {category} not retained: {EvidenceScopeMovedReason}");
+                onScopeRefused?.Invoke();
+
+                return false;
+            }
             if (!resp.IsSuccessStatusCode) {
                 observer.OnInfo($"failed to retain fact for category {category}: HTTP {(int)resp.StatusCode}");
 
@@ -1793,6 +1810,19 @@ public static partial class EvalService {
         } catch (HttpRequestException ex) {
             observer.OnInfo($"failed to retain fact for category {category}: {ex.Message}");
 
+            return false;
+        }
+    }
+
+    /// <summary>A 404 means the token no longer opens for this caller; a 409 is a scope refusal only when it names
+    /// <c>scope_moved</c>, since the fact route answers 409 for a session not yet projected or without a repository.</summary>
+    static async Task<bool> IsScopeRefusalAsync(HttpResponseMessage resp, CancellationToken ct) {
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return true;
+        if (resp.StatusCode != System.Net.HttpStatusCode.Conflict) return false;
+        try {
+            using var body = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            return body.RootElement.Str("code") == "scope_moved";
+        } catch (JsonException) {
             return false;
         }
     }

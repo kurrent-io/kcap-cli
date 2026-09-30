@@ -233,6 +233,26 @@ public class EvalRunnerEvidenceTests : IDisposable {
         await Assert.That(NoRunDirectory()).IsTrue();
     }
 
+    /// <summary>The server refuses the fact because its scope no longer opens: the daemon writes nothing more and its
+    /// finalize answers failure, naming the moved scope.</summary>
+    [Test]
+    public async Task A_fact_the_server_refuses_for_its_scope_fails_the_finalize_with_no_eval_posted() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        Serve(1);
+        _stub.Route("POST", "judge-facts", 409, """{"error":"moved","code":"scope_moved"}""", priority: 1);
+        using var claude = Claude(Verdict("a recurring pattern"));
+        var (_, connection, _) = Daemon(claude);
+        await connection.PrepareEvalHandler!(Prepare());
+        var question = await connection.RunQuestionV2Handler!(Question());
+
+        var finalize = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [question.Assessment!], [], "sonnet"));
+
+        await Assert.That(finalize.Success).IsFalse();
+        await Assert.That(JsonDocument.Parse(_stub.Requests("judge-facts").Single().RequestMessage.Body!).RootElement.GetProperty("evidence_scope_token").GetString()).IsEqualTo("tok");
+        await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
+        await Assert.That(NoRunDirectory()).IsTrue();
+    }
+
     [Test]
     public async Task A_scope_moved_at_the_retrospective_posts_neither_the_fact_nor_the_eval() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");

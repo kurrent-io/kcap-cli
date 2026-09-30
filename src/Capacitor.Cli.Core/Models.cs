@@ -638,6 +638,11 @@ record JudgeFactPayload {
     [JsonPropertyName("applies_to_session_kinds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string[]? AppliesToSessionKinds { get; init; }
+
+    /// <summary>The scope token the fact was judged under; the server refuses the write once it no longer opens.</summary>
+    [JsonPropertyName("evidence_scope_token")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvidenceScopeToken { get; init; }
 }
 
 public record JudgeFact {

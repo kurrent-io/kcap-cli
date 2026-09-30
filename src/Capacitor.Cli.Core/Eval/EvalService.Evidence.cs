@@ -306,7 +306,8 @@ public static partial class EvalService {
                 return null;
             }
             if (await setup.Scope.EnsureScopeAsync(EvidenceScopeClient.PreDrainHeadroom, ct) == EvidenceScopeStatus.Moved) return ScopeMoved(setup, observer);
-            return await PersistFailureOnlyAsync(httpClient, baseUrl, setup.EncodedSessionId, EvidenceAggregate(setup, assessments, failures, model), observer, time, ct);
+            return await PersistFailureOnlyAsync(httpClient, baseUrl, setup.EncodedSessionId, EvidenceAggregate(setup, assessments, failures, model), observer, time, ct,
+                setup.Scope.State!.Token);
         }
 
         var aggregate = EvidenceAggregate(setup, assessments, failures, model);
@@ -335,13 +336,19 @@ public static partial class EvalService {
             observer.OnInfo($"retained facts discarded: the pre-drain admission check failed ({setup.Scope.LastError ?? admitted.ToString()})");
             clean = false;
         }
+        // The writes name the scope they were judged under, so the server refuses them once it no longer opens; a
+        // refused fact ends the run before anything else is written.
+        var scopeToken = setup.Scope.State!.Token;
+        var refused    = false;
         if (clean)
-            await setup.Context.DrainRetainedFactsAsync((category, fact, token) => PostJudgeFactAsync(httpClient, baseUrl, setup.EncodedSessionId, category, fact.Fact,
-                setup.EvalRunId, fact.AppliesToVendors, fact.AppliesToSessionKinds, observer, time, token), observer, ct);
+            await setup.Context.DrainRetainedFactsAsync((category, fact, token) => refused ? Task.FromResult(false)
+                : PostJudgeFactAsync(httpClient, baseUrl, setup.EncodedSessionId, category, fact.Fact, setup.EvalRunId, fact.AppliesToVendors,
+                    fact.AppliesToSessionKinds, observer, time, token, scopeToken, () => refused = true), observer, ct);
         else
             setup.Context.DiscardRetainedFacts();
+        if (refused) return ScopeMoved(setup, observer);
 
-        if (!await PersistAggregateV4Async(httpClient, baseUrl, setup.EncodedSessionId, aggregate, observer, time, ct)) return null;
+        if (!await PersistAggregateV4Async(httpClient, baseUrl, setup.EncodedSessionId, aggregate, observer, time, ct, scopeToken)) return null;
         observer.OnFinished(aggregate);
         return aggregate;
     }
