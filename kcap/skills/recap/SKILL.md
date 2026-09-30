@@ -27,11 +27,16 @@ Retrieve session history recorded by Kurrent Capacitor. Supports single-session 
 
 When the user asks you to recap a session **and carry on with it** ("recap session X and continue", "pick up where X left off", "resume the killed agent"), this session takes over that session's work. Reading the old session is not enough: Capacitor links sessions to work items and plans only when you declare the link, so you also need to take over the old session's records. Do all three steps before starting the work:
 
-1. **Read it.** Call `get_session_summary(session_id: X)` for the narrative and `declared_plans`, then drill into turns as below.
+1. **Read it.** Call `get_session_summary(session_id: X)` for the narrative, then drill into turns as below. Get X's plans from `get_declared_plans(session_id: X)`, not from the summary's `declared_plans`: the summary omits that field when its plan lookup fails, which looks the same as having no plan.
 2. **Attach to its work items.** Call `get_session_work_items(session_id: X)`, then call `declare_work_item(work_item_id: …)` once for each item it returns, without passing `session_id`, so the current session is the one attached. If X has no work items, do nothing here: do not create a new item just to have one.
-3. **Adopt its plan.** For each open plan in `declared_plans` (see "Judging whether a plan is done" below), follow "Resuming a plan" in the `plans` skill. That procedure ends with `update_plan_task(plan_id: …, task_id: …, status: "in_progress")` on the task you resume, and that call is what attaches this session to the plan and shows it in the app. Make it even when the task is already `in_progress`, and make it before you dispatch subagents to work through the plan: they report progress through this session, which must already be on the plan. Never re-declare the plan's document from this checkout to "link" it, because that starts a second, empty plan.
+3. **Adopt its plan.** For each open plan (see "Judging whether a plan is done" below), follow "Resuming a plan" in the `plans` skill. It ends with `update_plan_task(plan_id: …, task_id: …, status: "in_progress")` on the task you resume. That call is what attaches this session to the plan and shows it in the app, so make it even when the task is already `in_progress`, and before you dispatch subagents: they report through this session, which must already be on the plan. When no visible task is left to resume, attach anyway:
+   - If the plan has visible tasks, re-send any one of them with `update_plan_task`, with its current `status` and its current `note` (omitting the note clears it). Nothing changes on the task, but the session is attached.
+   - If it has no tasks and `is_complete` is `true`, declare them from the document with `set_plan_tasks(plan_id: …)`, which attaches the session too.
+   - If it has no visible tasks and `is_complete` is `false`, you cannot attach it. Say so.
 
-Tell the user which work items and which plan task you attached to. If X is still `active` and was touched recently, ask the user before doing steps 2 and 3, because it may still be running.
+   Never re-declare the plan's document from this checkout to "link" it, because that starts a second, empty plan. When you adopt more than one plan, pass `plan_id` on every later plan call, because only the last one adopted becomes this session's current plan.
+
+The user's request to continue X is the go-ahead to take over X's records, even when X still reads `active`: a killed session often does. If another session is also on the plan and was touched recently, ask the user before adopting it, as the `plans` skill says. Steps 2 and 3 need the `kcap-workitems` and `kcap-plans` MCP tools; `kcap recap` cannot make these links. When those tools are unavailable, tell the user that this session is not linked. Afterwards, tell the user which work items and which plan task you attached to.
 
 ## Usage
 
