@@ -923,8 +923,8 @@ public static partial class EvalService {
     /// failures and evidence coverage). Public seam for the daemon's wire-format contract test,
     /// mirroring <see cref="PersistAggregateV3Async"/>.
     /// </summary>
-    /// <param name="scopeToken">The evidence scope the aggregate was judged under; a 404 or 409 is then that scope
-    /// refusing the write, reported as a moved scope.</param>
+    /// <param name="scopeToken">The evidence scope the aggregate was judged under; a 404, or a 409 naming
+    /// <c>scope_moved</c>, is then that scope refusing the write, reported as a moved scope.</param>
     public static async Task<bool> PersistAggregateV4Async(
             HttpClient                    httpClient,
             string                        baseUrl,
@@ -941,7 +941,7 @@ public static partial class EvalService {
 
         try {
             using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, time, ct: ct);
-            if (scopeToken is not null && (int)postResp.StatusCode is 404 or 409) {
+            if (scopeToken is not null && await IsScopeRefusalAsync(postResp, ct)) {
                 observer.OnFailed(EvidenceScopeMovedReason);
                 return false;
             }
@@ -1814,8 +1814,8 @@ public static partial class EvalService {
         }
     }
 
-    /// <summary>A 404 means the token no longer opens for this caller; the route's other 409s (session not yet
-    /// projected, no repository) carry no <c>scope_moved</c> code and are not a scope refusal.</summary>
+    /// <summary>A 404 means the token no longer opens for this caller; a 409 is a scope refusal only when it names
+    /// <c>scope_moved</c>, since the fact route answers 409 for a session not yet projected or without a repository.</summary>
     static async Task<bool> IsScopeRefusalAsync(HttpResponseMessage resp, CancellationToken ct) {
         if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return true;
         if (resp.StatusCode != System.Net.HttpStatusCode.Conflict) return false;

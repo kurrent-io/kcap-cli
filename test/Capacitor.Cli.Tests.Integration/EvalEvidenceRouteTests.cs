@@ -513,6 +513,20 @@ public class EvalEvidenceRouteTests : IDisposable {
     }
 
     [Test]
+    public async Task A_result_conflict_that_names_no_moved_scope_is_reported_as_the_http_failure() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
+        _stub.Route("POST", "evals/v4", 409, """{"error":"conflict"}""", priority: 1);
+        using var claude = Claude(Dir("c-v4-other"), Verdict("q1"));
+        var observer = new RecordingEvalObserver();
+
+        var result = await Run(claude, ["q1"], observer);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(observer.Failures).IsEquivalentTo(["failed to persist eval result: HTTP 409"]);
+    }
+
+    [Test]
     public async Task A_pre_drain_check_that_fails_discards_the_buffered_fact() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
         ServeCatalog(); ServeScope(cutoff: 1); ServeEvents("hello", "world");
