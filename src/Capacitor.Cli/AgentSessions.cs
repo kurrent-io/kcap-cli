@@ -87,17 +87,6 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
       : File.Exists(ExitRecord(session)) ? SessionLiveness.Exited
       : SessionLiveness.Unknown;
 
-    /// <summary>When this machine saw <paramref name="session"/>'s agent exit; null without a readable record.</summary>
-    public DateTimeOffset? ExitedAt(SessionId session) {
-        try {
-            var record = ExitRecord(session);
-
-            return File.Exists(record) && TryParseTime(File.ReadAllText(record), out var at) ? at : null;
-        } catch {
-            return null;
-        }
-    }
-
     /// <summary>
     /// The session of the nearest agent process at or above <paramref name="pid"/>.
     /// </summary>
@@ -142,15 +131,12 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
         try {
             foreach (var record in Directory.EnumerateFiles(config.Path("agent-sessions", "exited"))) {
                 try {
-                    if (!TryParseTime(File.ReadAllText(record), out var at) || at < cutoff)
+                    if (!DateTimeOffset.TryParse(File.ReadAllText(record), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) || at < cutoff)
                         File.Delete(record);
                 } catch { }
             }
         } catch { }
     }
-
-    static bool TryParseTime(string text, out DateTimeOffset at) =>
-        DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out at);
 
     string ExitRecord(SessionId session) => config.Path("agent-sessions", "exited", session.Value);
 

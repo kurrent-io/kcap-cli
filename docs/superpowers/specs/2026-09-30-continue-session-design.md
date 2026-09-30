@@ -79,13 +79,11 @@ Steps:
 2. **Liveness**, unless `force`. Run `AgentSessions.Reap()` first so the answer does not depend on
    whether a hook has drained yet, then:
    - `Running` → refuse: "X is still running on this machine". Continue only if the user confirms.
-   - `Exited` → proceed, when the exit record is no older than the summary's `last_event_at` (or
-     there is none). An older record means X was resumed elsewhere since: fall through to the
-     server rule below.
+   - `Exited` → proceed.
    - `Unknown` → use the summary's `status` and `last_event_at`: proceed when `Ended`, or when the
      last event is older than 1 hour (the server's own `SessionStaleness.Threshold`). Otherwise
-     refuse: "X still looks active (last event …) and this machine has no record of its agent
-     exiting since; if its agent is gone, ask the user and retry with force."
+     refuse: "X still looks active (last event …) and did not run on this machine; if its agent is
+     gone, ask the user and retry with force."
 3. **Read** in parallel: `GET /api/work-items/session/{X}` and `GET /api/sessions/{X}/plans` (the
    latter follows X's continuation chain server-side).
 4. **Work items**: for each, `POST /api/work-items/declare {session_id: C, work_item_id}`. On a tier
