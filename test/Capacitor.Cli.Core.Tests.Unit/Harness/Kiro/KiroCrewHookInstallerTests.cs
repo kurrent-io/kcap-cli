@@ -7,6 +7,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Harness.Kiro;
 public class KiroCrewHookInstallerTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
+    // Install writes the script in this process, so a child a concurrent test forks can hold it open
+    // for writing; exec'ing it directly then fails with ETXTBSY on Linux. The shell only reads it.
     string Script => Tmp.PathTo("hooks", "kcap-spawn.sh");
 
     /// <summary>Crew skips a script without a recognised <c># event:</c> header in its first five
@@ -62,7 +64,7 @@ public class KiroCrewHookInstallerTests {
 
         KiroCrewHookInstaller.Install(Script, bin);
 
-        var psi = new ProcessStartInfo(Script) { RedirectStandardInput = true, UseShellExecute = false };
+        var psi = new ProcessStartInfo("/bin/sh", [Script]) { RedirectStandardInput = true, UseShellExecute = false };
         psi.Environment["PATH"] = "/usr/bin:/bin";
 
         using var process = Process.Start(psi)!;
@@ -113,7 +115,7 @@ public class KiroCrewHookInstallerTests {
 
         KiroCrewHookInstaller.Install(Script, bin);
 
-        var psi = new ProcessStartInfo(Script) { RedirectStandardInput = true, UseShellExecute = false, WorkingDirectory = Tmp.Path };
+        var psi = new ProcessStartInfo("/bin/sh", [Script]) { RedirectStandardInput = true, UseShellExecute = false, WorkingDirectory = Tmp.Path };
         psi.Environment["PATH"] = "/usr/bin:/bin";
 
         using var process = Process.Start(psi)!;
