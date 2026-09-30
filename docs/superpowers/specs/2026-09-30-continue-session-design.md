@@ -91,10 +91,13 @@ Steps:
    `not_in_plan` and the takeover goes on. Plans carry no tier gate.
 5. **Plans**: skip finished plans, using the same `finished` rule `get_session_summary` projects
    (server `finished` if present, else `total_known && completed == total && is_complete`). For each
-   remaining plan pick the first `in_progress` task by ordinal, else the first `pending`; none →
-   skip with reason `no_open_task`. Then
-   `POST /api/plans/{plan_id}/tasks/{task_id} {session_id: C, status: <the task's current status>}`.
-   Re-sending the current status changes nothing but the attachment, and the server makes the plan
+   remaining plan pick the first `in_progress` task by ordinal, else the first `pending`, skipping
+   tasks whose `source` is `user`: an `mcp` write cannot override a user-set status, so the server
+   would answer 409 even for an unchanged one. No open task → skip with reason `no_open_task`; open
+   tasks that are all user-set → `user_owned`. Then
+   `POST /api/plans/{plan_id}/tasks/{task_id} {session_id: C, status, note}` carrying the task's
+   current status and note. The server compares both, so re-sending them unchanged records only the
+   attachment; omitting the note would record a change that erases it. The server makes the plan
    C's current plan. The plan with `is_current: true` on X is adopted last, so it ends up current
    on C.
 6. **Outcome**:
@@ -106,12 +109,13 @@ Steps:
      "work_items": { "status": "ok | not_in_plan | failed",
                      "items": [{ "work_item_id": "…", "label": "…", "attached": true }] },
      "plans": [{ "plan_id": "…", "task_id": "…", "title": "…", "status": "in_progress", "attached": true }],
-     "skipped_plans": [{ "plan_id": "…", "reason": "finished | no_open_task" }],
+     "skipped_plans": [{ "plan_id": "…", "reason": "finished | no_open_task | user_owned" }],
+     "plans_error": "HTTP 500",
      "current_plan_id": "…"
    }
    ```
 
-   A failed write carries `"attached": false, "error": "<status or message>"` on its entry. The
+   `plans_error` appears only when the plans read fails. A failed write carries `"attached": false, "error": "<status or message>"` on its entry. The
    takeover fails only when every attempted write failed. `current_plan_id` is the last plan
    attached successfully, omitted when none. A 401 surfaces the existing not-logged-in message.
 
