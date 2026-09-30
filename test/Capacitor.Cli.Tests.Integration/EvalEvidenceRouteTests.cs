@@ -48,13 +48,12 @@ public class EvalEvidenceRouteTests : IDisposable {
     static string Verdict(string id, params string[] citations) =>
         $$"""{"category":"safety","question_id":"{{id}}","outcome":"assessed","score":4,"verdict":"pass","finding":"ok","evidence":null,"recommendation":null,"retain_fact":null,"citations":[{{string.Join(",", citations.Select(c => "\"" + c + "\""))}}]}""";
 
-    string Dir(string name) => Tmp.PathTo(name);
+    TempDirHandle Dir(string name) => Tmp.CreateDir(name);
 
-    static FakeClaudeOnPath Claude(string dir, string verdict, string? special = null, string before = "") {
-        Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, "verdict.json"), Envelope(verdict));
-        File.WriteAllText(Path.Combine(dir, "retro.json"), Envelope(Retro));
-        if (special is not null) File.WriteAllText(Path.Combine(dir, "special.json"), special);
+    static FakeClaudeOnPath Claude(TempDirHandle dir, string verdict, string? special = null, string before = "") {
+        dir.CreateFile("verdict.json", Envelope(verdict));
+        dir.CreateFile("retro.json", Envelope(Retro));
+        if (special is not null) dir.CreateFile("special.json", special);
         return new FakeClaudeOnPath($"""
             #!/bin/sh
             d='{dir}'
@@ -103,7 +102,6 @@ public class EvalEvidenceRouteTests : IDisposable {
             time ?? TimeProvider.System, ct, "run-fixed", Questions(ids));
 
     Task<EvidenceRunSetup?> Prepare(FakeClaudeOnPath claude, IEvalObserver observer, TimeProvider time, string tempRoot, params string[] ids) {
-        Directory.CreateDirectory(tempRoot);
         var catalog = JsonSerializer.Deserialize(
             $$"""{"retrospective_prompt":"Retro {SESSION_META} {VERDICTS_JSON} {TRACE_JSON}","retrospective_prompt_version":"7","questions":{{CatalogQuestions}},"evidence_retrieval":{{Ad}} }""",
             CapacitorJsonContext.Default.EvalCatalogDto)!;
@@ -119,8 +117,7 @@ public class EvalEvidenceRouteTests : IDisposable {
 
     (string Root, EnvScope Scope) TempRoot() {
         var root = Dir("tmp-root");
-        Directory.CreateDirectory(root);
-        return (root, EnvScope.Exclusive("TMPDIR", root + Path.DirectorySeparatorChar));
+        return (root, EnvScope.Exclusive("TMPDIR", root.Path + Path.DirectorySeparatorChar));
     }
 
     static bool NoRunDirectory(string root) => Directory.GetDirectories(root, EvidenceRunContext.DirectoryPrefix + "*").Length == 0;
@@ -304,7 +301,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         const string footer = """{"kind":"footer","tool_calls":3,"delivered_bytes":600000,"stop_reason":"byte_budget","sources_refused":[],"ended_at":"2026-09-23T12:00:00+00:00"}""";
         using var claude = Claude(Dir("c7"), Verdict("q1"),
             before: $"printf '%s\\n' '{footer}' >> \"$(ls -d '{Dir("root-7")}'/{EvidenceRunContext.DirectoryPrefix}*)/q1.ledger.jsonl\"");
-        File.WriteAllText(Path.Combine(Dir("c7"), "verdict.json"), """{"type":"result","subtype":"success","is_error":false,"num_turns":5,"result":"I could not decide."}""");
+        Dir("c7").CreateFile("verdict.json", """{"type":"result","subtype":"success","is_error":false,"num_turns":5,"result":"I could not decide."}""");
         await using var setup = (await Prepare(claude, observer, TimeProvider.System, Dir("root-7"), "q1"))!;
 
         var outcome = await EvalService.RunEvidenceQuestionAsync(setup, _stub.Url, setup.Questions[0], "sonnet", 1, 1, observer, TimeProvider.System, CancellationToken.None);
@@ -599,7 +596,7 @@ public class EvalEvidenceRouteTests : IDisposable {
         using var tmpScope = tmp;
         ServeCatalog(); ServeScope(cutoff); ServeEvents("hello", "world");
         using var claude = Claude(Dir("c11"), Verdict("q1"));
-        var outPath  = Dir("baseline.json");
+        var outPath  = Tmp.PathTo("baseline.json");
         var baseline = new BaselineObserver(new RecordingEvalObserver(), outPath, Sid, "sonnet", chain: false, TimeProvider.System);
 
         await Run(claude, ["q1"], baseline);
@@ -642,6 +639,55 @@ public class EvalEvidenceRouteTests : IDisposable {
         await Assert.That(result).IsNull();
         await Assert.That(observer.Failures.Count).IsEqualTo(1);
         await Assert.That(NoRunDirectory(root)).IsTrue();
+    }
+
+    void ServeHeld(long cutoff) {
+        var issued   = DateTimeOffset.UtcNow;
+        var manifest = EvidenceServerStub.Manifest("v1", "tok", null, issued, issued + TimeSpan.FromMinutes(30), [EvidenceServerStub.Source(Root, 0, cutoff, 1)]);
+        var held     = manifest[..^1] + ",\"held\":true}";
+        _stub.Route("POST", "evidence-scope/holds", 200, held);
+        _stub.Route("DELETE", "evidence-scope/hold", 204, "");
+        _stub.CursorPage("tok", held);
+        _stub.Route("GET", "evidence-turns", 200, EvidenceServerStub.TurnsPage(Root, [(0, 0, cutoff)]));
+        _stub.Route("GET", "evidence-calls/summary", 200, EvidenceServerStub.Summary());
+        _stub.Route("POST", "evals/v4", 200, "{}");
+        _stub.Route("POST", "judge-facts", 200, "{}");
+    }
+
+    [Test]
+    public async Task A_run_on_a_server_offering_holds_holds_its_scope_and_releases_it_once_finished() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        var (_, tmp) = TempRoot();
+        using var tmpScope = tmp;
+        _stub.Catalog(Ad[..^1] + ",\"scope_holds\":true}", "[]", CatalogQuestions);
+        ServeHeld(cutoff: 1); ServeEvents("hello", "world"); Certify($"{Root}@0");
+        using var claude = Claude(Dir("held"), Verdict("q1", "e0"));
+
+        var result = await Run(claude, ["q1"], new RecordingEvalObserver());
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(_stub.Requests("evidence-scope/holds").Count).IsEqualTo(1);
+        await Assert.That(_stub.Requests("evidence-scope").Count(e => e.RequestMessage.Method == "GET" && e.RequestMessage.Query?.ContainsKey("cursor") != true)).IsEqualTo(0);
+        var released = _stub.Requests("evidence-scope/hold").Single();
+        await Assert.That(JsonDocument.Parse(released.RequestMessage.Body!).RootElement.GetProperty("token").GetString()).IsEqualTo("tok");
+        await Assert.That(released.RequestMessage.DateTime).IsGreaterThanOrEqualTo(_stub.Requests("evals/v4").Single().RequestMessage.DateTime);
+    }
+
+    [Test]
+    public async Task A_held_run_that_fails_to_prepare_releases_its_hold() {
+        var (root, tmp) = TempRoot();
+        using var tmpScope = tmp;
+        ServeHeld(cutoff: -1);
+        using var claude = Claude(Dir("held-fail"), Verdict("q1"));
+        var catalog = JsonSerializer.Deserialize(
+            $$"""{"retrospective_prompt":"Retro","retrospective_prompt_version":"7","questions":{{CatalogQuestions}},"evidence_retrieval":{{Ad[..^1] + ",\"scope_holds\":true}"}} }""",
+            CapacitorJsonContext.Default.EvalCatalogDto)!;
+
+        var setup = await EvalService.PrepareEvidenceAsync(_stub.Url, _http, null, TestHarnesses.Under(Home, BinaryProbe.Searching(claude.BinDirectory)), Sid, Questions("q1"), catalog, "sonnet",
+            new RecordingEvalObserver(), TimeProvider.System, CancellationToken.None, "run-fixed", root);
+
+        await Assert.That(setup).IsNull();
+        await Assert.That(_stub.Requests("evidence-scope/hold").Count).IsEqualTo(1);
     }
 
     [Test]

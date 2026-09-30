@@ -69,10 +69,11 @@ public static partial class EvalService {
         var root = tempRoot ?? Path.GetTempPath();
         EvidenceRunContext.SweepStale(root, time, observer.OnInfo);
         var context  = EvidenceRunContext.Create(evalRunId, root);
+        var scope    = new EvidenceScopeClient(httpClient, baseUrl, sessionId, time, holds: ad.ScopeHolds == true);
         var prepared = false;
         try {
-            var scope  = new EvidenceScopeClient(httpClient, baseUrl, sessionId, time);
             var status = await scope.ResolveAsync(ct);
+            if (scope.HoldRefused) observer.OnInfo("the server could not hold this evidence scope; a session that grows during the run can end it");
             if (status != EvidenceScopeStatus.Ok) {
                 observer.OnFailed(status switch {
                     EvidenceScopeStatus.NotVisible => "session not found or not visible",
@@ -113,6 +114,8 @@ public static partial class EvalService {
             };
         } finally {
             if (!prepared) {
+                await scope.DisposeAsync();
+                if (scope.ReleaseFailure is { } failure) observer.OnInfo(failure);
                 try { await context.DisposeAsync(); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { observer.OnInfo($"could not remove {context.RunDirectory}: {e.Message}"); }
             }
@@ -353,10 +356,11 @@ public static partial class EvalService {
         return aggregate;
     }
 
-    /// <summary>Deletes the run directory, logging rather than throwing when it cannot be removed.</summary>
+    /// <summary>Releases the scope's hold and deletes the run directory, reporting rather than throwing when either fails.</summary>
     public static async Task DisposeSetupAsync(EvidenceRunSetup setup, IEvalObserver observer) {
         try { await setup.DisposeAsync(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { observer.OnInfo($"could not remove {setup.Context.RunDirectory}: {e.Message}"); }
+        if (setup.Scope.ReleaseFailure is { } failure) observer.OnInfo(failure);
     }
 
     static SessionEvalCompletedPayloadV4 EvidenceAggregate(EvidenceRunSetup setup, IReadOnlyList<EvalQuestionAssessment> assessments,

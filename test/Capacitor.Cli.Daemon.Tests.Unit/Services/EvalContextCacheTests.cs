@@ -31,13 +31,17 @@ public class EvalContextCacheTests : IDisposable {
 
     int RunDirectories() => Directory.Exists(RunRoot) ? Directory.GetDirectories(RunRoot, EvidenceRunContext.DirectoryPrefix + "*").Length : 0;
 
-    (ServerConnection Connection, EvalContextCache Cache) Daemon() {
+    (ServerConnection Connection, EvalContextCache Cache) Daemon(TimeSpan? heldReleaseDelay = null) {
         const string ad = """{"max_tool_calls":48,"judge_byte_budget_bytes":600000,"page_budget_bytes":65536,"one_shot_limit_chars":400000,"retrospective_evidence_bytes":200000,"coverage_policy_version":"coverage-v2"}""";
-        _stub.Catalog(ad, "[]", """[{"category":"safety","id":"q1","title":"t","question_text":"q","prompt":"P {TRACE_JSON}","prompt_version":"3","needs_tools":false}]""");
+        _stub.Catalog(heldReleaseDelay is null ? ad : ad[..^1] + ",\"scope_holds\":true}", "[]", """[{"category":"safety","id":"q1","title":"t","question_text":"q","prompt":"P {TRACE_JSON}","prompt_version":"3","needs_tools":false}]""");
         var issued   = _time.GetUtcNow();
         var manifest = EvidenceServerStub.Manifest("v1", "tok", null, issued, issued.AddMinutes(30), [EvidenceServerStub.Source(EvidenceServerStub.RootSource, 0, 124_999, 1)]);
         _stub.FreshScope(manifest);
         _stub.CursorPage("tok", manifest);
+        if (heldReleaseDelay is { } delay) {
+            _stub.Route("POST", "evidence-scope/holds", 200, manifest[..^1] + ",\"held\":true}");
+            _stub.Route("DELETE", "evidence-scope/hold", 204, "", delay: delay);
+        }
         _stub.Route("GET", "evidence-turns", 200, EvidenceServerStub.TurnsPage(EvidenceServerStub.RootSource, [(0, 0, 124_999)]));
         _stub.Route("GET", "evidence-calls/summary", 200, EvidenceServerStub.Summary());
         _stub.Route("POST", "evals/v4", 200, "{}");
@@ -121,6 +125,22 @@ public class EvalContextCacheTests : IDisposable {
         await Assert.That(Directory.Exists(first)).IsFalse();
         await Assert.That(RunDirectoryOf(cache, "run-1")).IsNotEqualTo(first);
         await Assert.That(RunDirectories()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_slow_hold_release_never_holds_up_retiring_the_run() {
+        var (connection, cache) = Daemon(heldReleaseDelay: TimeSpan.FromSeconds(5));
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+        await Assert.That(_stub.Requests("evidence-scope/holds").Count).IsEqualTo(1);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        await connection.CancelEvalHandler!(new CancelEvalCommand("run-1"));
+
+        await Assert.That(started.Elapsed).IsLessThan(TimeSpan.FromSeconds(3));
+        await Assert.That(RunDirectories()).IsEqualTo(0);
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (_stub.Requests("evidence-scope/hold").Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(50);
+        await Assert.That(_stub.Requests("evidence-scope/hold").Count).IsEqualTo(1);
     }
 
     [Test]
