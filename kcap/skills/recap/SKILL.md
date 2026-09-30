@@ -4,10 +4,10 @@ description: >-
   This skill should be used to read, search, or recall past Kurrent Capacitor
   sessions. Triggers include: "read a previous session", "get session history",
   "recap session", "what happened in session X", "load context from a previous
-  session", "continue from session", "what did we do last time", "catch me up
-  on session X", "what have we been working on", "recently we implemented",
-  "what was done in this repo", "recent changes", "recent sessions", or
-  providing a session ID to review.
+  session", "continue from session", "recap session X and continue working",
+  "what did we do last time", "catch me up on session X", "what have we been
+  working on", "recently we implemented", "what was done in this repo",
+  "recent changes", "recent sessions", or providing a session ID to review.
   Also covers work over a period: "what was I working on in the last two
   weeks", "what did the team do yesterday", "who worked on this last week".
   Also covers search/recall asks: "find the session where we…", "which session
@@ -15,7 +15,6 @@ description: >-
   Also covers declared plans: "continue the plan", "resume the plan", "what's
   left on the plan", "is the plan finished", "unfinished plans", "what was the
   last session working through".
-  Uses the kcap CLI and the kcap-sessions MCP tools.
 ---
 
 > **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`, `list_repo_plans`, `get_declared_plans`) for retrieving past sessions and the plans they declared. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
@@ -23,6 +22,21 @@ description: >-
 # Session Recap
 
 Retrieve session history recorded by Kurrent Capacitor. Supports single-session recap, continuation chains, and **repository-wide session summaries** for understanding recent work across multiple sessions.
+
+## Continuing another session's work
+
+When the user asks you to recap a session **and carry on with it** ("recap session X and continue", "pick up where X left off", "resume the killed agent"), this session takes over that session's work. Reading the old session is not enough: Capacitor links sessions to work items and plans only when you declare the link, so you also need to take over the old session's records. Do all three steps before starting the work:
+
+1. **Read it.** Call `get_session_summary(session_id: X)` for the narrative, then drill into turns as below. Get X's plans from `get_declared_plans(session_id: X)`, not from the summary's `declared_plans`: the summary omits that field when its plan lookup fails, which looks the same as having no plan.
+2. **Attach to its work items.** Call `get_session_work_items(session_id: X)`, then call `declare_work_item(work_item_id: …)` once for each item it returns, without passing `session_id`, so the current session is the one attached. If X has no work items, do nothing here: do not create a new item just to have one.
+3. **Adopt its plan.** For each open plan (see "Judging whether a plan is done" below), follow "Resuming a plan" in the `plans` skill. It ends with `update_plan_task(plan_id: …, task_id: …, status: "in_progress")` on the task you resume. That call is what attaches this session to the plan and shows it in the app, so make it even when the task is already `in_progress`, and before you dispatch subagents: they report through this session, which must already be on the plan. When no visible task is left to resume, attach anyway:
+   - If the plan has visible tasks, re-send any one of them with `update_plan_task`, with its current `status` and its current `note` (omitting the note clears it). Nothing changes on the task, but the session is attached.
+   - If it has no tasks and `is_complete` is `true`, declare them from the document with `set_plan_tasks(plan_id: …)`, which attaches the session too.
+   - If it has no visible tasks and `is_complete` is `false`, you cannot attach it. Say so.
+
+   Never re-declare the plan's document from this checkout to "link" it, because that starts a second, empty plan. When you adopt more than one plan, pass `plan_id` on every later plan call, because only the last one adopted becomes this session's current plan.
+
+The user's request to continue X is the go-ahead to take over X's records, even when X still reads `active`: a killed session often does. If another session is also on the plan and was touched recently, ask the user before adopting it, as the `plans` skill says. Steps 2 and 3 need the `kcap-workitems` and `kcap-plans` MCP tools; `kcap recap` cannot make these links. When those tools are unavailable, tell the user that this session is not linked. Afterwards, tell the user which work items and which plan task you attached to.
 
 ## Usage
 
@@ -173,7 +187,7 @@ The `KCAP_URL` environment variable overrides the default server URL (`http://lo
 - **For "what have we been working on?"** — use `--repo` first, then drill into specific sessions.
 - **For "what did I, or the team, work on in a period?"** — use `kcap sessions --since … [--until …]`, adding `--repo all` for every repository, then drill into a session with `kcap recap <sessionId>`.
 - Start with the default summary + turn outline. Drill into a specific turn with `--get-turn <N>` before reaching for `--full`.
-- When continuing work from a previous session, use `--chain` to get summaries across continuations.
+- When continuing work from a previous session, use `--chain` to get summaries across continuations, and follow "Continuing another session's work" above so this session inherits the old session's work items and plan.
 - Summarize key decisions and changes for the user rather than echoing the full recap output verbatim.
 - The `kcap` CLI must be available on PATH (typically installed at `~/.local/bin/kcap`).
 
