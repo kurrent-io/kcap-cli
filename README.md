@@ -447,7 +447,11 @@ kcap recap --chain <sessionId>      # summaries across continuation chain
 kcap recap --chain --full <sessionId>  # full transcript across chain
 kcap recap --per-turn <sessionId>   # compact per-turn index (prompt, tools, files, tokens, time)
 kcap recap --get-turn <N> <sessionId>  # full event transcript for a single turn
+kcap recap 3f2a… --continue         # take over the session's work items and plans, then print the recap
+kcap recap 3f2a… --continue --force # same, even when the session looks live
 ```
+
+`--continue` (run inside the session that takes over, with an explicit session id) attaches the current session to the continued session's work items and unfinished plans, then prints the recap. It refuses with exit code 2, and prints no recap, while the continued session may still be running; `--force` overrides that, and should be used only after confirming it is not.
 
 `--per-turn` prints a one-block-per-turn index — useful for orienting in a long session before drilling into a specific turn with `--get-turn <N>` (the turn number shown in the `--per-turn` index). `--get-turn` takes the turn number as its value; the session id is the usual positional (or comes from the current session), so `kcap recap <sessionId> --get-turn <N>` works too.
 

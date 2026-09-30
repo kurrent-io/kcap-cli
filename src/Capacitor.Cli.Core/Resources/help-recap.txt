@@ -10,6 +10,12 @@ Options:
                           files, tokens, time) — one block per turn
   --get-turn <N>          Show the full event transcript for turn N
                           (use the turn number from --per-turn)
+  --continue              Take over the session's work: attach this session to
+                          its work items and unfinished plans, then print the
+                          recap. Needs an explicit sessionId. Refuses (exit 2,
+                          no recap) while that session may still be running
+  --force                 With --continue: take over even when the session
+                          looks live. Only after confirming it is not
 
 Arguments:
   sessionId               Session ID (defaults to KCAP_SESSION_ID
