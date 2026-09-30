@@ -510,4 +510,49 @@ public class ImportChainsTests : IDisposable {
         var titles = _server.LogEntries.Select(e => JsonNode.Parse(e.RequestMessage.Body!)!["title"]!.GetValue<string>()).ToList();
         await Assert.That(titles).IsEquivalentTo(["Before", "Before"]);
     }
+
+    /// <summary>Cancels the import the moment the harness-title request goes out, and lets every other request
+    /// through to the stub server.</summary>
+    sealed class CancelOnHarnessTitle(CancellationTokenSource cts) : DelegatingHandler(new HttpClientHandler()) {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            if (request.RequestUri!.AbsolutePath != "/hooks/harness-title") return base.SendAsync(request, ct);
+
+            cts.Cancel();
+            ct.ThrowIfCancellationRequested();
+
+            throw new OperationCanceledException(cts.Token);
+        }
+    }
+
+    /// <summary>A cancellation during the title post still closes the session, then surfaces instead of reporting the
+    /// session loaded and queueing a generated title.</summary>
+    [Test]
+    public async Task ImportChainsAsync_codex_title_cancellation_sends_session_end_then_propagates() {
+        StubAllHookEndpoints();
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var titleTasks = 0;
+        var ended      = 0;
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionWarning      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => Interlocked.Increment(ref ended),
+            OnTitleTaskReady      = _ => Interlocked.Increment(ref titleTasks),
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var cts    = new CancellationTokenSource();
+        using var client = new HttpClient(new CancelOnHarnessTitle(cts));
+
+        await Assert.That(async () => await Import().ImportChainsAsync(client, _server.Url!, [[CodexSession()]], events, cts.Token))
+                    .Throws<OperationCanceledException>();
+
+        await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/session-end/codex")).IsEqualTo(1);
+        await Assert.That(titleTasks).IsEqualTo(0);
+        await Assert.That(ended).IsEqualTo(0);
+    }
 }

@@ -8,14 +8,13 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
-using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
-using Capacitor.Cli.Harness.Titles;
 using Spectre.Console;
 using Capacitor.Cli.PrDetection;
 
@@ -26,9 +25,7 @@ class ImportCommand(
         ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time) {
     static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
 
-    // One pass over Codex's shared session index for the whole import; it only grows, so a per-session read is a full rescan.
-    readonly Lazy<FrozenDictionary<string, StoreTitle>> _codexIndexTitles =
-        new(() => CodexSessionIndexTitle.ReadAll(harnesses.Of<CodexHarness>().Paths.Home));
+    readonly CodexImportTitles _codexTitles = new(harnesses.Of<CodexHarness>().Paths.Home, time);
 
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
@@ -3261,7 +3258,7 @@ class ImportCommand(
                     failOnError: true
                 );
 
-                await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
+                var (_, resumeTitleCancelled) = await TryPostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
 
                 // End-only reassertion: session-end has server-side idempotency guards,
                 // whereas the generic SessionStarted uses random ids — re-asserting start
@@ -3279,7 +3276,10 @@ class ImportCommand(
 
                 using var endContent = new StringContent(resumeEndHook.ToJsonString(), Encoding.UTF8, "application/json");
                 using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
+                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time,
+                    ct: resumeTitleCancelled ? CancellationToken.None : ct, retryStatuses: true);
+
+                if (resumeTitleCancelled) ct.ThrowIfCancellationRequested();
 
                 if (!endResp.IsSuccessStatusCode) {
                     events.OnSessionErrored(slot, session.SessionId, $"resume session-end failed: HTTP {(int)endResp.StatusCode}");
@@ -3425,7 +3425,7 @@ class ImportCommand(
             return (SessionImportOutcome.Errored, 0);
         }
 
-        var harnessTitled = await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
+        var (harnessTitled, titleCancelled) = await TryPostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
 
         var lastTs = ExtractLastTimestamp(session.FilePath);
 
@@ -3446,7 +3446,8 @@ class ImportCommand(
         try {
             using var endContent = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
             using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
+                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time,
+                    ct: titleCancelled ? CancellationToken.None : ct, retryStatuses: true);
 
             if (endResp.IsSuccessStatusCode) {
                 try {
@@ -3461,36 +3462,40 @@ class ImportCommand(
             /* best effort */
         }
 
+        if (titleCancelled) ct.ThrowIfCancellationRequested();
+
         if (!harnessTitled) events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
         events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone, session.Vendor));
 
         return (SessionImportOutcome.Loaded, importResult.LinesSent);
     }
 
-    /// <summary>Posts the title Codex keeps for a session in its own index. True only when the server took it through
-    /// the harness-title route, where it outranks a generated title; an older server's fallback route only fills an
-    /// untitled session, so a generated title is still owed there. A cancellation skips it so session-end still runs.</summary>
-    async Task<bool> PostCodexHarnessTitleAsync(
+    // A cancellation during the title post is held until session-end has been sent, which then runs uncancelled and is
+    // bounded by its own retry budget: a session whose transcript fully landed must not be left open.
+    async Task<(bool Posted, bool Cancelled)> TryPostCodexHarnessTitleAsync(
             HttpClient                  httpClient,
             string                      baseUrl,
             SessionClassification       session,
             IProgress<ImportProgress>?  progress,
             CancellationToken           ct
         ) {
-        if (session.Vendor is not HarnessId.Codex) return false;
-        if (!_codexIndexTitles.Value.TryGetValue(ImportCommand.NormalizeGuid(session.SessionId), out var title)) return false;
-
         try {
-            var outcome = await ImportHarnessTitle.PostAsync(
-                httpClient, time, baseUrl, session.SessionId,
-                new HarnessTitlePost(title.Title, title.Kind, title.RecordedChangeAt),
-                progress, ct);
-
-            return outcome is HarnessTitleOutcome.Posted;
-        } catch (OperationCanceledException) {
-            return false;
+            return (await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, progress, ct), false);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return (false, true);
         }
     }
+
+    Task<bool> PostCodexHarnessTitleAsync(
+            HttpClient                  httpClient,
+            string                      baseUrl,
+            SessionClassification       session,
+            IProgress<ImportProgress>?  progress,
+            CancellationToken           ct
+        ) =>
+        session.Vendor is HarnessId.Codex
+            ? _codexTitles.PostAsync(httpClient, baseUrl, session.SessionId, progress, ct)
+            : Task.FromResult(false);
 
     /// <summary>Title-only pass for Codex sessions the server already holds: no transcript, lifecycle or generated
     /// title, only the index name when there is one.</summary>
