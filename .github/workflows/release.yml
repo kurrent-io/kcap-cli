@@ -932,7 +932,9 @@ jobs:
         run: |
           set -euo pipefail
           DMG="releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg"
-          bash scripts/build-dmg.sh "extracted/Kurrent Capacitor.app" "$DMG"
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --only-binary :all: --require-hashes -r scripts/dmg/requirements.txt
+          PATH="$RUNNER_TEMP/dmgbuild/bin:$PATH" bash scripts/build-dmg.sh "extracted/Kurrent Capacitor.app" "$DMG"
           codesign --force --timestamp --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" --keychain "$KEYCHAIN" "$DMG"
           xcrun notarytool submit "$DMG" --keychain-profile kcap-notary --keychain "$KEYCHAIN" --wait --timeout 45m
           xcrun stapler staple "$DMG"

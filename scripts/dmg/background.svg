@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+  <defs>
+    <radialGradient id="glow" cx="320" cy="220" r="260" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#29233E" stop-opacity="0.9" />
+      <stop offset="1" stop-color="#0B0D12" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="640" height="480" fill="#0B0D12" />
+  <rect width="640" height="480" fill="url(#glow)" />
+
+  <text x="320" y="80" text-anchor="middle" fill="#F1F3F7"
+        font-family="SF Pro Display, Helvetica Neue, Helvetica, sans-serif"
+        font-size="20" font-weight="600" letter-spacing="-0.2">Install Kurrent Capacitor</text>
+  <text x="320" y="106" text-anchor="middle" fill="#B0B7C6"
+        font-family="SF Pro Text, Helvetica Neue, Helvetica, sans-serif"
+        font-size="13.5">Drag the app onto the Applications folder.</text>
+
+  <!-- Icons sit centred at (170, 220) and (470, 220); settings.py places them there. -->
+  <!-- Finder draws icon labels black over a background picture, in dark mode too, and a DMG
+       cannot recolour them; the light plates keep them readable on the dark canvas. -->
+  <rect x="98" y="283" width="144" height="24" rx="12" fill="#B0B7C6" />
+  <rect x="414" y="283" width="112" height="24" rx="12" fill="#B0B7C6" />
+
+  <path d="M262,220 L370,220" fill="none" stroke="#A994FF" stroke-width="2.5"
+        stroke-linecap="round" stroke-dasharray="1 9" />
+  <path d="M366,210 L378,220 L366,230" fill="none" stroke="#A994FF" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round" />
+
+  <text x="320" y="360" text-anchor="middle" fill="#949BAA"
+        font-family="SF Pro Text, Helvetica Neue, Helvetica, sans-serif"
+        font-size="12">Then open it from Applications or Spotlight.</text>
+</svg>
