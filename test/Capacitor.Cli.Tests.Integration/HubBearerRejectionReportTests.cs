@@ -55,7 +55,7 @@ public class HubBearerRejectionReportTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
                 .WithBody("""{"negotiateVersion":1,"connectionId":"c1","connectionToken":"t1","availableTransports":[{"transport":"WebSockets","transferFormats":["Text","Binary"]}]}"""));
         _server.Given(Request.Create().WithPath("/hubs/sessions").UsingGet())
-            .RespondWith(Response.Create().WithStatusCode(401));
+            .RespondWith(Response.Create().WithStatusCode(401).WithHeader("WWW-Authenticate", "Bearer error=\"token_expired\""));
 
         var reports = new List<string>();
         void Report(string r) { lock (reports) reports.Add(r); }
@@ -75,7 +75,7 @@ public class HubBearerRejectionReportTests : IDisposable {
         } catch (Exception) { }
 
         await Assert.That(reports).Count().IsEqualTo(1);
-        await Assert.That(reports[0]).Contains("401 from GET /hubs/sessions: server error=-; bearer sub=user_ws");
+        await Assert.That(reports[0]).Contains("401 from GET /hubs/sessions: server error=token_expired; bearer sub=user_ws");
 
         var upgrade = _server.LogEntries.Single(e => e.RequestMessage.Method == "GET");
 

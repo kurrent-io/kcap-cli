@@ -140,4 +140,12 @@ public class BearerRejectionReportHandlerTests {
         await Assert.That(reports[0]).Contains("server error=invalid_token??FAKE: granted");
         await Assert.That(reports[0]).Contains("sub=user_1?FAKE line");
     }
+
+    [Test]
+    [Arguments("Bearer error=\"invalid_token\"", "invalid_token")]
+    [Arguments("Bearer realm=\"kcap\", error=\"token_expired\", error_description=\"x\"", "token_expired")]
+    [Arguments("Bearer", null)]
+    [Arguments(null, null)]
+    public async Task The_challenge_header_yields_its_error(string? challenge, string? error) =>
+        await Assert.That(BearerRejectionReportHandler.ChallengeError(challenge)).IsEqualTo(error);
 }

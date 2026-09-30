@@ -26,7 +26,8 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
             : null;
 
         try {
-            var errorCode = await ReadErrorCodeAsync(response, ct);
+            var errorCode = await ReadErrorCodeAsync(response, ct)
+                         ?? ChallengeError(response.Headers.WwwAuthenticate.FirstOrDefault()?.ToString());
 
             report(Describe(request.Method.Method, request.RequestUri, errorCode, bearer, time.GetUtcNow()));
         } catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -60,7 +61,11 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
         } catch (WebSocketException) {
             if (webSocket.HttpStatusCode == HttpStatusCode.Unauthorized) {
                 try {
-                    report(Describe("GET", uri, errorCode: null, string.IsNullOrWhiteSpace(bearer) ? null : bearer, time.GetUtcNow()));
+                    var challenge = webSocket.HttpResponseHeaders?.TryGetValue("WWW-Authenticate", out var values) == true
+                        ? values.FirstOrDefault()
+                        : null;
+
+                    report(Describe("GET", uri, ChallengeError(challenge), string.IsNullOrWhiteSpace(bearer) ? null : bearer, time.GetUtcNow()));
                 } catch {
                     // A diagnostic must never change the exception the caller sees.
                 }
@@ -74,6 +79,24 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
 
             throw;
         }
+    }
+
+    // The server names the error in an RFC 6750 challenge too: `Bearer error="invalid_token"`. It is the
+    // only place a refused WebSocket upgrade carries it, since the client never sees that response's body.
+    internal static string? ChallengeError(string? challenge) {
+        if (challenge is null) return null;
+
+        const string marker = "error=\"";
+
+        var start = challenge.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+
+        if (start < 0) return null;
+
+        start += marker.Length;
+
+        var end = challenge.IndexOf('"', start);
+
+        return end > start ? challenge[start..end] : null;
     }
 
     internal static string Describe(string method, Uri? uri, string? errorCode, string? bearer, DateTimeOffset now) =>
