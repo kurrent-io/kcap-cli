@@ -261,7 +261,7 @@ static partial class WorkItemEvalToolResults {
 
     static string? Joined(JsonElement? values, int cap) =>
         values is { } arr
-            ? string.Join(", ", arr.EnumerateArray().Select(v => v.IsString ? Text(v.GetString(), cap) : "").Where(s => s.Length > 0))
+            ? string.Join(", ", arr.EnumerateArray().Take(MaxListItems).Select(v => v.IsString ? Text(v.GetString(), cap) : "").Where(s => s.Length > 0))
             : null;
 
     static void More(StringBuilder sb, int omitted, string what, bool indent = false) {
