@@ -230,6 +230,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     };
                     options.HttpMessageHandlerFactory = inner =>
                         new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner };
+                    options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
+                        context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
                 }
             )
             .WithAutomaticReconnect(new RetryPolicy())

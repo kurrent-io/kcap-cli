@@ -14,9 +14,19 @@ namespace Capacitor.Cli.Core.Tests.Unit.Http;
 public class BearerRejectionReportHandlerTests {
     static readonly DateTimeOffset Now = new(2026, 9, 29, 22, 0, 0, TimeSpan.Zero);
 
-    sealed class Answer(HttpStatusCode status, string body) : HttpMessageHandler {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-            Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+    sealed class Answer(HttpStatusCode status, string body, bool unknownLength = false) : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            HttpContent content = unknownLength
+                ? new StreamContent(new ForwardOnly(Encoding.UTF8.GetBytes(body)))
+                : new StringContent(body, Encoding.UTF8, "application/json");
+
+            return Task.FromResult(new HttpResponseMessage(status) { Content = content });
+        }
+    }
+
+    // A chunked body: no Content-Length, readable once.
+    sealed class ForwardOnly(byte[] bytes) : MemoryStream(bytes) {
+        public override bool CanSeek => false;
     }
 
     static string Token(long exp, long iat, string sub) {
@@ -27,10 +37,10 @@ public class BearerRejectionReportHandlerTests {
     }
 
     static async Task<(HttpResponseMessage response, List<string> reports)> SendAsync(
-            HttpStatusCode status, string body, string? bearer) {
+            HttpStatusCode status, string body, string? bearer, bool unknownLength = false) {
         var reports = new List<string>();
         var client  = new HttpClient(new BearerRejectionReportHandler(new FakeTimeProvider(Now), reports.Add) {
-            InnerHandler = new Answer(status, body)
+            InnerHandler = new Answer(status, body, unknownLength)
         });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://tenant.example/hubs/sessions/negotiate?negotiateVersion=1");
@@ -83,5 +93,27 @@ public class BearerRejectionReportHandlerTests {
         var (_, reports) = await SendAsync(status, "{}", bearer: "opaque");
 
         await Assert.That(reports).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_small_body_of_unknown_length_yields_the_code_and_stays_readable() {
+        var (response, reports) = await SendAsync(
+            HttpStatusCode.Unauthorized, """{"error":"invalid_token"}""", bearer: null, unknownLength: true);
+
+        await Assert.That(reports[0]).Contains("server error=invalid_token");
+        await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo("""{"error":"invalid_token"}""");
+    }
+
+    [Test]
+    public async Task An_oversized_body_of_unknown_length_reaches_the_caller_intact() {
+        var body = "{\"error\":\"invalid_token\",\"pad\":\"" + new string('x', 10_000) + "\"}";
+
+        var (response, reports) = await SendAsync(HttpStatusCode.Unauthorized, body, bearer: null, unknownLength: true);
+
+        await Assert.That(reports).Count().IsEqualTo(1);
+        await Assert.That(reports[0]).Contains("server error=-")
+            .Because("a body past the cap is not parsed");
+        await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo(body)
+            .Because("the bytes read while probing must be put back in front of the rest");
     }
 }
