@@ -1,5 +1,6 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.App"
              Name="Kurrent Capacitor"
              RequestedThemeVariant="Dark">
@@ -72,6 +73,13 @@
             <Setter Property="MaxHeight" Value="10000" />
             <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
             <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+        </Style>
+        <Style Selector="TextBox">
+            <Setter Property="ContextFlyout" Value="{x:Static views:TextContextMenu.ForTextBox}" />
+        </Style>
+        <!-- Fluent sets its menu under [IsEnabled=True], and a triggered style outranks a plain one. -->
+        <Style Selector="SelectableTextBlock[IsEnabled=True]">
+            <Setter Property="ContextFlyout" Value="{x:Static views:TextContextMenu.ForSelectableTextBlock}" />
         </Style>
         <!-- A TextBox inside one of our cards: the card is its boundary, so the theme's focused
              ring and fill would read as a second box. Fluent's default placeholder follows the
