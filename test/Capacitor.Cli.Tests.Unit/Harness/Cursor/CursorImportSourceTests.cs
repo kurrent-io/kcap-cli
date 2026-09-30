@@ -472,7 +472,7 @@ public class CursorImportSourceTests {
         await Assert.That(endNode["reason"]!.GetValue<string>()).IsEqualTo("historical-import");
     }
 
-    async Task<List<(string Path, string Body)>> ImportWithChatTitle(string? chatTitle) {
+    async Task<List<(string Path, string Body)>> ImportWithChatTitle(string? chatTitle, string? composerName = null) {
         using var fx    = new ProjectsDirFixture();
         var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n");
 
@@ -480,6 +480,11 @@ public class CursorImportSourceTests {
         if (chatTitle is not null) {
             var chatDir = Directory.CreateDirectory(Path.Combine(titlePaths.ChatsDir, "ws-hash", "11111111-1111-1111-1111-111111111111"));
             File.WriteAllText(Path.Combine(chatDir.FullName, "meta.json"), new JsonObject { ["title"] = chatTitle }.ToJsonString());
+        }
+        if (composerName is not null) {
+            var stateDb = titlePaths.GlobalStateDb!;
+            Directory.CreateDirectory(Path.GetDirectoryName(stateDb)!);
+            CursorComposerTitleTests.BuildStateDb(stateDb, "11111111-1111-1111-1111-111111111111", composerName);
         }
 
         var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System, titlePaths: titlePaths);
@@ -525,6 +530,31 @@ public class CursorImportSourceTests {
         await Assert.That(title["title"]!.GetValue<string>()).IsEqualTo("Refactor the auth flow");
         await Assert.That(title["kind"]!.GetValue<string>()).IsEqualTo("rename");
         await Assert.That(title.ContainsKey("changed_at")).IsFalse();
+    }
+
+    /// <summary>With no chat title, the IDE's composer record in state.vscdb names the chat, keyed by the dashed
+    /// transcript id.</summary>
+    // Windows puts state.vscdb under the real Roaming AppData, which no test home redirects.
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task import_session_posts_the_ide_composer_name_when_the_chat_has_none() {
+        var posted = await ImportWithChatTitle(null, composerName: "Repository project overview");
+
+        var titles = posted.Where(p => p.Path == "/hooks/harness-title").ToList();
+        await Assert.That(titles.Count).IsEqualTo(1);
+
+        var title = JsonNode.Parse(titles[0].Body)!.AsObject();
+        await Assert.That(title["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(title["title"]!.GetValue<string>()).IsEqualTo("Repository project overview");
+        await Assert.That(title["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(title.ContainsKey("changed_at")).IsFalse();
+    }
+
+    // Windows puts state.vscdb under the real Roaming AppData, which no test home redirects.
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task import_session_posts_no_title_for_the_default_composer_name() {
+        var posted = await ImportWithChatTitle(null, composerName: "New Agent");
+
+        await Assert.That(posted.Any(p => p.Path == "/hooks/harness-title")).IsFalse();
     }
 
     [Test]
