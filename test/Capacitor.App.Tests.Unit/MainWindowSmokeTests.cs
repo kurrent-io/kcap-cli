@@ -710,10 +710,10 @@ public class MainWindowSmokeTests {
     }
 
     /// The vendor mark, the status word, and the age share one baseline. The age has no extra
-    /// padding, or it sits below that line.
+    /// padding, or it sits below that line. The model is named only in the vendor mark's tip.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Vendor_mark_model_chip_and_running_time_share_the_status_line() {
+    public async Task Vendor_mark_and_running_time_share_the_status_line() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var seen = await AvaloniaSession.DispatchAsync(() => {
                 var (_, window) = RailWindow(model: "opus");
@@ -722,8 +722,6 @@ public class MainWindowSmokeTests {
                 var mark = row.GetVisualDescendants().OfType<AgentStatusMark>().First();
                 var word = mark.FindControl<TextBlock>("StatusWord")!;
                 var vendor = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("vendorMark"));
-                var chip = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("railChip"));
-                var label = chip.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railChipLabel"));
                 var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
                 ToolTip.SetIsOpen(vendor, true);
                 Dispatcher.UIThread.RunJobs();
@@ -743,17 +741,15 @@ public class MainWindowSmokeTests {
                     MetaBaseline: Baseline(meta),
                     Vendor: Center(vendor),
                     Glyph: Center(glyph),
-                    Model: Center(label),
                     Meta: Center(meta),
                     VendorName: AutomationProperties.GetName(vendor),
                     VendorLeft: Left(vendor),
                     MarkLeft: Left(mark),
                     MetaGap: row.Bounds.Width - Right(meta),
-                    ChipToMeta: Left(meta) - Right(chip),
+                    ModelInRow: row.GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text == "opus"),
                     TipVendor: tipLines[0],
                     TipModel: tipLines[1],
                     HasMark: vendor.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Any(),
-                    ChipAlign: chip.VerticalAlignment,
                     MetaAlign: meta.VerticalAlignment);
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -764,14 +760,12 @@ public class MainWindowSmokeTests {
             await Assert.That(seen.TipModel).IsEqualTo("opus");
             await Assert.That(seen.VendorLeft).IsLessThan(seen.MarkLeft);
             await Assert.That(seen.MetaGap).IsLessThan(16);
-            await Assert.That(seen.ChipToMeta).IsGreaterThan(24);
+            await Assert.That(seen.ModelInRow).IsFalse();
             await Assert.That(seen.HasMark).IsTrue();
             await Assert.That(Math.Abs(seen.WordBaseline - seen.MetaBaseline)).IsLessThan(1);
             await Assert.That(Math.Abs(seen.Word - seen.Vendor)).IsLessThan(2);
             await Assert.That(Math.Abs(seen.Word - seen.Glyph)).IsLessThan(2);
-            await Assert.That(Math.Abs(seen.Word - seen.Model)).IsLessThan(2);
             await Assert.That(Math.Abs(seen.Word - seen.Meta)).IsLessThan(2);
-            await Assert.That(seen.ChipAlign).IsEqualTo(VerticalAlignment.Center);
             await Assert.That(seen.MetaAlign).IsEqualTo(VerticalAlignment.Center);
         });
     }
