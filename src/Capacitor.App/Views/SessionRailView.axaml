@@ -326,7 +326,7 @@
                                                                                        Foreground="{StaticResource KcapTextBrush}"
                                                                                        TextTrimming="CharacterEllipsis"
                                                                                        ToolTip.Tip="{Binding Primary}" />
-                                                                            <!-- The age sits on the right. Vendor, status and chips stay on the left
+                                                                            <!-- The age sits on the right. Vendor, status and machine stay on the left
                                                                                  and wrap rather than overflow the 330px rail. A WrapPanel measures
                                                                                  each child unconstrained, and the age column is measured first, so
                                                                                  each has a cap. The tips keep the full text. -->
@@ -349,13 +349,6 @@
                                                                                 </Border>
                                                                                 <views:AgentStatusMark DataContext="{Binding Status}" MaxWidth="160"
                                                                                                        Margin="0,0,6,0" VerticalAlignment="Center" />
-                                                                                <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
-                                                                                        Padding="6,2" Margin="0,0,6,0"
-                                                                                        Background="{StaticResource KcapInfoDimBrush}">
-                                                                                    <TextBlock Text="{Binding ModelLabel}" Classes="railChipLabel"
-                                                                                               Foreground="{StaticResource KcapInfoBrush}"
-                                                                                               TextTrimming="CharacterEllipsis" />
-                                                                                </Border>
                                                                                 <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
                                                                                         Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
                                                                                         CornerRadius="3" Padding="4,2" Margin="0,0,6,0">
