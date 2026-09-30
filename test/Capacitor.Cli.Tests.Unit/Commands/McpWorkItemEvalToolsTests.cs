@@ -53,7 +53,7 @@ public class McpWorkItemEvalToolsTests {
          "questions":[{"ordinal":1,"category":"process","question_id":"wi_requirements_delivered","outcome":"assessed","score":4,"verdict":"pass",
            "finding":{{{JsonValue.Create(Injection).ToJsonString()}}},"evidence":"Tests were added","recommendation":null,
            "citations":[{"ref":"ev1","session_id":"s1","agent_id":null}],"strategy":"completion",
-           "requirements":[{"title":"Store issue bodies","origin":"seed","status":"verified","anchor":null,"citations":[{"ref":"ev2","session_id":"s2","agent_id":"a1"}],"note":"done"}],
+           "requirements":[{"title":"Store issue bodies","origin":"seed","status":"verified","anchor":{"ref":"ev9","session_id":"s3","agent_id":null},"citations":[{"ref":"ev2","session_id":"s2","agent_id":"a1"}],"note":"done"}],
            "failure_code":null}],
          "retrospective":{"overall":"Solid run","strengths":["Tests first"],"issues":["Slow review"],"suggestions":[{"text":"Run the source scan first","audience":"agent"}]}}
         """;
@@ -174,7 +174,7 @@ public class McpWorkItemEvalToolsTests {
         await Assert.That(text).Contains("assessed 2/3, insufficient evidence 1, not applicable 0, failed 0");
         await Assert.That(text).Contains("sessions 2, sources 3, scope incomplete (session_moved), facts complete");
         await Assert.That(text).Contains("Q1 [process] wi_requirements_delivered: assessed score 4 verdict pass (strategy completion)");
-        await Assert.That(text).Contains("requirement [verified] Store issue bodies (seed) — done cites ev2 (session s2, agent a1)");
+        await Assert.That(text).Contains("requirement [verified] Store issue bodies (seed) — done stated at ev9 (session s3) cites ev2 (session s2, agent a1)");
         await Assert.That(text).Contains("cites ev1 (session s1)");
         await Assert.That(text).Contains("suggestion (agent): Run the source scan first");
     }
@@ -199,5 +199,30 @@ public class McpWorkItemEvalToolsTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("unreadable");
+    }
+
+    [Test]
+    public async Task A_response_past_the_read_bound_is_an_error_and_is_not_rendered() {
+        var huge = $$$"""{"runs":[],"next_cursor":null,"pad":"{{{new string('x', WorkItemEvalToolResults.MaxResponseBytes)}}}"}""";
+        var (_, text, isError) = await DispatchAsync("list_work_item_evals", """{"work_item_id":"wi-1"}""", body: huge);
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).IsEqualTo(WorkItemEvalToolResults.TooLargeMessage);
+    }
+
+    /// <summary>Questions and citations past their caps are counted, not rendered. The first question and first citation
+    /// still render, so the caps are what cut the rest.</summary>
+    [Test]
+    public async Task Questions_and_citations_past_their_caps_are_counted_not_rendered() {
+        var citations = string.Join(",", Enumerable.Range(0, 25).Select(i => $$$"""{"ref":"c{{{i}}}","session_id":"s1","agent_id":null}"""));
+        var questions = string.Join(",", Enumerable.Range(0, WorkItemEvalToolResults.MaxQuestions + 3).Select(i =>
+            $$$"""{"ordinal":{{{i}}},"category":"p","question_id":"q{{{i}}}","outcome":"assessed","citations":[{{{citations}}}]}"""));
+        var text = WorkItemEvalToolResults.RenderRun($$$"""{"run":{{{Summary()}}},"session_count":1,"source_count":1,"questions":[{{{questions}}}]}""")!;
+
+        await Assert.That(text).Contains("Q0 [p] q0: assessed");
+        await Assert.That(text).DoesNotContain($"q{WorkItemEvalToolResults.MaxQuestions}:");
+        await Assert.That(text).Contains("(3 more questions not shown)");
+        await Assert.That(text).Contains("c9 (session s1); and 15 more");
+        await Assert.That(text).DoesNotContain("c10 (session");
     }
 }

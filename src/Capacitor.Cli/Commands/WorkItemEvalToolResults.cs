@@ -16,6 +16,16 @@ static partial class WorkItemEvalToolResults {
     internal const string DataClose = "</work-item-eval-data>";
 
     internal const string UnavailableMessage = "Work-item evaluations are not enabled on this server.";
+    internal const string TooLargeMessage    = "Error: the work-item evaluation response is too large to read.";
+
+    /// <summary>A run of every catalog question with full findings comes to a few hundred KiB; the stdio loop serves one
+    /// call at a time, so nothing larger is read.</summary>
+    internal const int MaxResponseBytes = 1024 * 1024;
+
+    internal const int MaxRows         = 100;
+    internal const int MaxQuestions    = 50;
+    internal const int MaxRequirements = 50;
+    internal const int MaxListItems    = 20;
 
     const int LongTextCap  = 1000;
     const int ShortTextCap = 300;
@@ -99,7 +109,7 @@ static partial class WorkItemEvalToolResults {
             if (root.Arr("runs") is not { } runs) return null;
 
             var rows = new List<string>();
-            foreach (var run in runs.EnumerateArray())
+            foreach (var run in runs.EnumerateArray().Take(MaxRows))
                 if (SummaryLine(run) is { } line) rows.Add(line);
 
             var sb = new StringBuilder();
@@ -133,9 +143,10 @@ static partial class WorkItemEvalToolResults {
             Line(sb, scope.ToString());
             if (Text(root.Str("reason"), ShortTextCap) is { Length: > 0 } reason) Line(sb, $"reason: {reason}");
 
-            if (root.Arr("questions") is { } questions)
-                foreach (var q in questions.EnumerateArray())
-                    AppendQuestion(sb, q);
+            if (root.Arr("questions") is { } questions) {
+                foreach (var q in questions.EnumerateArray().Take(MaxQuestions)) AppendQuestion(sb, q);
+                More(sb, questions.GetArrayLength() - MaxQuestions, "questions");
+            }
 
             if (root.Obj("retrospective") is { } retro) AppendRetrospective(sb, retro);
 
@@ -187,15 +198,18 @@ static partial class WorkItemEvalToolResults {
         Field(sb, "evidence", q.Str("evidence"), LongTextCap);
         Field(sb, "recommendation", q.Str("recommendation"), LongTextCap);
 
-        if (q.Arr("requirements") is { } requirements)
-            foreach (var r in requirements.EnumerateArray()) {
+        if (q.Arr("requirements") is { } requirements) {
+            foreach (var r in requirements.EnumerateArray().Take(MaxRequirements)) {
                 if (!r.IsObject || Text(r.Str("title"), ShortTextCap) is not { Length: > 0 } title) continue;
 
                 var line = new StringBuilder($"  requirement [{Text(r.Str("status"), CodeCap)}] {title} ({Text(r.Str("origin"), CodeCap)})");
                 if (Text(r.Str("note"), ShortTextCap) is { Length: > 0 } note) line.Append($" — {note}");
+                if (r.Obj("anchor") is { } anchor && Citation(anchor) is { Length: > 0 } stated) line.Append($" stated at {stated}");
                 if (Citations(r.Arr("citations")) is { Length: > 0 } cited) line.Append($" cites {cited}");
                 Line(sb, line.ToString());
             }
+            More(sb, requirements.GetArrayLength() - MaxRequirements, "requirements", indent: true);
+        }
 
         if (Citations(q.Arr("citations")) is { Length: > 0 } citations) Line(sb, $"  cites {citations}");
     }
@@ -208,7 +222,7 @@ static partial class WorkItemEvalToolResults {
 
         if (retro.Arr("suggestions") is not { } suggestions) return;
 
-        foreach (var s in suggestions.EnumerateArray())
+        foreach (var s in suggestions.EnumerateArray().Take(MaxListItems))
             if (s.IsObject && Text(s.Str("text"), LongTextCap) is { Length: > 0 } text)
                 Line(sb, $"  suggestion ({Text(s.Str("audience"), CodeCap)}): {text}");
     }
@@ -216,7 +230,7 @@ static partial class WorkItemEvalToolResults {
     static void Items(StringBuilder sb, string label, JsonElement? items) {
         if (items is not { } arr) return;
 
-        foreach (var item in arr.EnumerateArray())
+        foreach (var item in arr.EnumerateArray().Take(MaxListItems))
             if (item.IsString && Text(item.GetString(), LongTextCap) is { Length: > 0 } text)
                 Line(sb, $"  {label}: {text}");
     }
@@ -224,25 +238,35 @@ static partial class WorkItemEvalToolResults {
     static string Citations(JsonElement? citations) {
         if (citations is not { } arr) return "";
 
-        var rendered = arr.EnumerateArray()
-            .Where(c => c.IsObject)
-            .Select(c => {
-                var r       = Text(c.Str("ref"), ShortTextCap);
-                var session = Text(c.Str("session_id"), CodeCap);
-                var agent   = Text(c.Str("agent_id"), CodeCap);
-                return r.Length == 0 ? "" : agent.Length > 0 ? $"{r} (session {session}, agent {agent})" : $"{r} (session {session})";
-            })
-            .Where(s => s.Length > 0)
-            .ToList();
+        var shown = new List<string>(CitationCap);
+        var more  = 0;
+        foreach (var c in arr.EnumerateArray()) {
+            if (shown.Count == CitationCap) {
+                if (c.IsObject && c.Str("ref") is { Length: > 0 }) more++;
+                continue;
+            }
+            if (Citation(c) is { Length: > 0 } rendered) shown.Add(rendered);
+        }
+        return more > 0 ? $"{string.Join("; ", shown)}; and {more} more" : string.Join("; ", shown);
+    }
 
-        var shown = string.Join("; ", rendered.Take(CitationCap));
-        return rendered.Count > CitationCap ? $"{shown}; and {rendered.Count - CitationCap} more" : shown;
+    static string Citation(JsonElement c) {
+        if (!c.IsObject) return "";
+
+        var r       = Text(c.Str("ref"), ShortTextCap);
+        var session = Text(c.Str("session_id"), CodeCap);
+        var agent   = Text(c.Str("agent_id"), CodeCap);
+        return r.Length == 0 ? "" : agent.Length > 0 ? $"{r} (session {session}, agent {agent})" : $"{r} (session {session})";
     }
 
     static string? Joined(JsonElement? values, int cap) =>
         values is { } arr
             ? string.Join(", ", arr.EnumerateArray().Select(v => v.IsString ? Text(v.GetString(), cap) : "").Where(s => s.Length > 0))
             : null;
+
+    static void More(StringBuilder sb, int omitted, string what, bool indent = false) {
+        if (omitted > 0) Line(sb, $"{(indent ? "  " : "")}({omitted.ToString(CultureInfo.InvariantCulture)} more {what} not shown)");
+    }
 
     static void Field(StringBuilder sb, string label, string? value, int cap) {
         if (Text(value, cap) is { Length: > 0 } text) Line(sb, $"  {label}: {text}");

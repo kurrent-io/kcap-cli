@@ -226,9 +226,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                     ItemUrl(baseUrl, arguments, "work_item_id", "detach"), ToJsonContent(BuildDetachBody(arguments))),
 
                 "list_work_item_evals"   => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
-                    WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor")))),
+                    WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor"))), HttpCompletionOption.ResponseHeadersRead),
                 "get_work_item_eval"     => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
-                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id")))),
+                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"))), HttpCompletionOption.ResponseHeadersRead),
                 "request_work_item_eval" => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id", "evals/runs"),
                     new StringContent(WorkItemEvalToolResults.RequestBody(McpToolArguments.OptionalString(arguments, "mode")), Encoding.UTF8, "application/json")),
                 "cancel_work_item_eval"  => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id",
@@ -236,6 +236,15 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
+
+            if (IsWorkItemEvalTool(toolName)) {
+                if (httpResponse.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+                var bytes = await BoundedHttpContent.ReadAsync(httpResponse.Content, WorkItemEvalToolResults.MaxResponseBytes, CancellationToken.None);
+                if (bytes is null) return BuildToolResult(id, WorkItemEvalToolResults.TooLargeMessage, isError: true);
+                var (text, isError) = WorkItemEvalToolResults.Render(toolName, httpResponse.StatusCode, Encoding.UTF8.GetString(bytes));
+                return BuildToolResult(id, text, isError);
+            }
 
             var body = await httpResponse.Content.ReadAsStringAsync();
 
@@ -249,10 +258,6 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (IsNextWorkTargetTool(toolName)) return RenderNextWorkTargetResult(id, toolName, httpResponse.StatusCode, body);
             if (toolName == "list_loose_ends") return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
             if (toolName is "close_loose_end" or "reopen_loose_end") return RenderLooseEndChangeResult(id, toolName, httpResponse.StatusCode, body);
-            if (IsWorkItemEvalTool(toolName)) {
-                var (text, isError) = WorkItemEvalToolResults.Render(toolName, httpResponse.StatusCode, body);
-                return BuildToolResult(id, text, isError);
-            }
 
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);

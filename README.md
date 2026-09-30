@@ -726,7 +726,7 @@ kcap mcp workitems
 
 Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, **declare that work item's structure** — its breakdown into parts and its blocks/blocked-by dependencies — read that structure back, dismiss or restore next-work suggestions, and close or reopen loose ends. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
 
-It provides seventeen tools:
+It provides twenty-one tools:
 
 - **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (a tracker key such as `"AI-1234"`, an issue number in the session's repository such as `"#123"`, a qualified `"owner/repo#123"`, or a GitHub issue URL), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
 - **`get_session_work_items`** — list the work items the current session is attached to.
