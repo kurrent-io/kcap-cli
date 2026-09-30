@@ -55,8 +55,16 @@ public sealed class MarkdownView : ContentControl {
             e.Handled = true;
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
+        MarkViewSelection.Attach(this, _viewer);
+        ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
+
+    public bool HasSelection => MarkViewSelection.HasSelection(_viewer);
+
+    public Task CopySelectionAsync() => MarkViewSelection.CopyAsync(_viewer);
+
+    public void SelectAll() => _viewer.SelectAll();
 
     /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
     /// a change, and the markdown it already holds is not one.
